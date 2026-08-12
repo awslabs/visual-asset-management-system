@@ -17,7 +17,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 
 # Set environment variable for S3 client configuration
 # 'regional' set to add region descriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
@@ -37,12 +37,21 @@ s3_client = boto3.client('s3', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 logger = safeLogger(service_name="StreamAuxiliaryPreviewAsset")
 
+# Delivery mode toggle. When True, every file is delivered by 307-redirecting to a short-lived
+# S3 presigned URL (the browser fetches bytes directly from S3, which is CORS-enabled). When
+# False, only files larger than MAX_STREAMING_SIZE redirect and smaller files are streamed
+# inline as a base64-encoded body through API Gateway. Redirecting for all sizes avoids the
+# base64 round-trip and the API-level binaryMediaTypes requirement; the inline path is kept so
+# this can be toggled back in the future.
+ALWAYS_REDIRECT_TO_PRESIGNED = True
+
 try:
-    auxasset_bucket_name = os.environ["ASSET_AUXILIARY_BUCKET_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    auxasset_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -166,9 +175,11 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return general_error(body={'message': message}, status_code=404, event=event)
     
-    # Resolve the full S3 key
-    object_key = resolve_asset_file_path(assetLocationKey, object_key)
-    
+    # Auxiliary preview objects live under the database-scoped per-file layout
+    # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
+    # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
+    object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+
     try:
         # Use head_object to get metadata without downloading file content
         head_response = s3_client.head_object(
@@ -347,7 +358,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     error_response['headers'].update(streaming_headers)
                     return error_response
 
-                object_key = resolve_asset_file_path(assetLocationKey, object_key)
+                # Auxiliary preview objects live under the database-scoped per-file layout
+                # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
+                # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
+                object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
 
                 # Prepare the S3 GetObject request parameters
                 s3_params = {
@@ -382,15 +396,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 
                 # Set conservative limit for streaming (4.4MB raw = ~5.87MB base64 encoded, safely under 6MB Lambda limit)
                 MAX_STREAMING_SIZE = int(4.4 * 1024 * 1024)  # 4.4MB
-                
-                # If file is larger than 4.4MB, generate presigned URL and redirect
-                if content_length > MAX_STREAMING_SIZE:
-                    logger.info(f"File size ({content_length / (1024*1024):.2f}MB) exceeds streaming limit. Generating presigned URL.")
-                    
-                    # Generate presigned URL
+
+                # Redirect to a presigned URL either when the delivery mode forces it for all
+                # files, or (in inline mode) when the file exceeds the base64 streaming limit.
+                if ALWAYS_REDIRECT_TO_PRESIGNED or content_length > MAX_STREAMING_SIZE:
+                    logger.info(f"Delivering file ({content_length / (1024*1024):.2f}MB) via presigned URL redirect.")
+
+                    # Generate presigned URL WITHOUT the Range header. A Range in the presigned
+                    # params is added to SignedHeaders, forcing the client to send that exact
+                    # Range and 403ing otherwise. Signing without it (SignedHeaders=host) lets the
+                    # client (and range-based octree / 3D tile streaming viewers) send any Range
+                    # on the follow-up request to S3, which serves partial content natively.
+                    presigned_params = {k: v for k, v in s3_params.items() if k != 'Range'}
                     presigned_url = s3_client.generate_presigned_url(
                         'get_object',
-                        Params=s3_params,
+                        Params=presigned_params,
                         ExpiresIn=int(token_timeout)
                     )
                     
@@ -496,7 +516,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

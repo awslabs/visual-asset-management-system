@@ -82,8 +82,12 @@ def list_objects_with_prefix(bucket_name, prefix):
     """
     logger.info(f"Listing objects: {bucket_name}/{prefix}")
     try:
-        response = client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-        keys = [obj["Key"] for obj in response.get("Contents", [])]
+        # Paginate: a single page caps at 1,000 keys, so a prefix holding more
+        # objects than that would be silently truncated.
+        keys = []
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+            keys.extend(obj["Key"] for obj in page.get("Contents", []))
         logger.info(f"Found {len(keys)} objects with prefix: {prefix}")
         return keys
     except ClientError as e:

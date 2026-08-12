@@ -1,6 +1,5 @@
 """Create/Update role handler for VAMS API."""
 
-import os
 import boto3
 import uuid
 from datetime import datetime
@@ -8,11 +7,13 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_changes
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2,
     internal_error,
     success,
@@ -40,15 +41,13 @@ logger = safeLogger(service_name="CreateRole")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
 try:
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
+    roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving roles table name")
+    roles_table_name = None
 
-# Initialize DynamoDB tables
-roles_table = dynamodb.Table(roles_table_name)
+roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
 
 #######################
 # Business Logic Functions
@@ -242,7 +241,7 @@ def handle_post_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -306,7 +305,7 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -344,7 +343,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

@@ -18,13 +18,14 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.search import (
     SearchRequestModel, SimpleSearchRequestModel, SearchResponseModel, SearchHitModel, SearchHitExplanationModel,
     AggregationModel, IndexMappingResponseModel
@@ -47,14 +48,14 @@ claims_and_roles = {}
 
 # Load environment variables with error handling
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Get SSM parameter values
@@ -485,12 +486,15 @@ class FieldClassifier:
         
         # Characters that need escaping in OpenSearch query_string
         # NOTE: Hyphen (-) is NOT escaped as it's commonly used in identifiers and should match literally
+        # The backslash MUST be escaped first; otherwise the backslashes inserted for the
+        # other special characters would themselves be re-escaped, doubling them and
+        # corrupting the query.
         if preserve_wildcards:
             # Don't escape * and ? if user wants wildcards
-            special_chars = r'+=&|><!(){}[]^"~:\/'
+            special_chars = r'\+=&|><!(){}[]^"~:/'
         else:
-            special_chars = r'+=&|><!(){}[]^"~*?:\/'
-        
+            special_chars = r'\+=&|><!(){}[]^"~*?:/'
+
         escaped = query
         for char in special_chars:
             escaped = escaped.replace(char, f'\\{char}')
@@ -1265,19 +1269,25 @@ class DualIndexQueryBuilder:
                     
                     # Extract field name with backward compatibility
                     prefix, field_name = self._extract_metadata_field_name(field_part)
-                    
+
+                    # Escape the field name too — it is user-controlled and interpolated
+                    # into the query_string text, so an unescaped special character could
+                    # otherwise alter the parsed query. Wildcards are never meaningful in a
+                    # field name, so do not preserve them here.
+                    escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+
                     # Check if user provided wildcards
                     has_wildcards = '*' in value_part or '?' in value_part
-                    
+
                     # Escape the value part (preserve wildcards if user provided them)
                     escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-                    
+
                     # Build flat object query
                     if has_wildcards:
-                        query_str = f"{prefix}.{field_name}:{escaped_value}"
+                        query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
                     else:
                         # Exact match - quote the value for phrase matching
-                        query_str = f'{prefix}.{field_name}:"{escaped_value}"'
+                        query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
                     
                     # Build query for this specific field:value pair
                     pair_queries.append({
@@ -1318,19 +1328,22 @@ class DualIndexQueryBuilder:
             
             # Extract field name with backward compatibility
             prefix, field_name = self._extract_metadata_field_name(field_part)
-            
+
+            # Escape the user-controlled field name so it cannot alter the parsed query.
+            escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+
             # Check if user provided wildcards
             has_wildcards = '*' in value_part or '?' in value_part
-            
+
             # Escape the value part for query_string (preserve wildcards if user provided them)
             escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-            
+
             # Build flat object query
             if has_wildcards:
-                query_str = f"{prefix}.{field_name}:{escaped_value}"
+                query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
             else:
                 # Exact match - quote the value for phrase matching
-                query_str = f'{prefix}.{field_name}:"{escaped_value}"'
+                query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
             
             # Build query for specific field:value pair
             return {
@@ -1957,7 +1970,7 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2025,7 +2038,7 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2091,7 +2104,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

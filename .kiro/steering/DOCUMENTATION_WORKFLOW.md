@@ -235,6 +235,20 @@ VAMS requires Python 3.12.
 6. **Tables**: Use for comparisons, feature lists, field references
 7. **Never reference other AWS solutions** by name
 8. **Match the surrounding page's level of detail and form**: When adding to an existing page, mirror its density and structure. If the section uses descriptive prose, describe how the behavior works rather than introducing "requirement"/"must" line-item checklists. Reserve upgrade/migration framing for the upgrade and revision-history pages; do not narrate "upgrades" on conceptual or architecture pages.
+9. **Use present-tense framing — describe current behavior, not history**: Document what VAMS does **now**. Do not reference past behavior, version-relative changes, or how something used to work. Avoid phrasings such as "previously", "earlier releases", "no longer", "now defaults to", "used to", "as of version X", "prior to vX", "matches the historical layout", "changed from … to …", or "this used to". State the current behavior directly and, where relevant, the action the reader should take. The **only** exceptions are the upgrade and revision-history pages, where change/version framing is expected: `deployment/update-the-solution.md` (the migration guide) and `additional/revisions.md` (the document revision history). Everywhere else (overview, concepts, architecture, configuration reference, deployment, user guide, CLI, pipelines, API, developer, troubleshooting) must read as if the current behavior had always been the behavior.
+
+    ```text
+    # WRONG (architecture/config/reference page) — references the past
+    The VPC is no longer auto-enabled. availabilityZoneCount now defaults to 2 (previously 3).
+
+    # CORRECT — states current behavior and the action to take
+    A VPC is required for these features; set app.useGlobalVpc.enabled to true. availabilityZoneCount
+    defaults to 2 and must be 2 or 3.
+
+    # ALLOWED only in update-the-solution.md / revisions.md
+    availabilityZoneCount now defaults to 2 (earlier releases built 3 AZs); on upgrade the unused
+    third AZ subnet is removed.
+    ```
 
 ### **Rule 7: Include Language Tags in All Code Blocks**
 
@@ -336,28 +350,36 @@ Use standard Markdown or Docusaurus components instead of raw HTML.
 
 ### **Rule 12: Update Steering Files When Documentation Standards Change**
 
-When documentation standards, patterns, or structure change, update both locations:
+When documentation standards, patterns, or structure change, update all affected locations:
 
 1. `documentation/CLAUDE.md` -- documentation steering document
 2. `.kiro/steering/DOCUMENTATION_WORKFLOW.md` -- this file
+3. The documentation-related Claude Code skills `.claude/commands/update-docs.md` and `.claude/commands/verify-docs.md`, which restate the writing style and source-to-doc mappings (see root `CLAUDE.md` Rule 12)
 
 ---
 
 ## 📋 **When to Update Documentation**
 
-| Change Type             | Documentation to Update                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| New API endpoint        | `api/` relevant page, `VAMS_API.yaml`, `cli/command-reference.md` (if CLI updated)             |
-| New config option       | `deployment/configuration-reference.md`                                                        |
-| New pipeline            | `pipelines/` new page + `pipelines/overview.md` table + `overview/features.md` + `sidebars.ts` |
-| New viewer plugin       | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`          |
-| New DynamoDB table      | `architecture/aws-resources.md`, `architecture/data-model.md`                                  |
-| Permission model change | `concepts/permissions-model.md`, `user-guide/permissions.md`                                   |
-| New CLI command         | `cli/command-reference.md`, `cli/automation.md` (if new patterns)                              |
-| UI navigation change    | `user-guide/web-interface.md`, `user-guide/getting-started.md`                                 |
-| Breaking change         | `additional/revisions.md`, `deployment/update-the-solution.md`                                 |
-| New feature             | `overview/features.md`, relevant user guide page                                               |
-| New sidebar page        | `sidebars.ts` -- add the page to the appropriate category                                      |
+| Change Type                                      | Documentation to Update                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New or changed API endpoint (incl. path renames) | **Both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md` for `/auth/*`) -- these are two separate sources of truth and both must be kept in sync. Also `cli/command-reference.md` if the CLI changed.                                                                                                                                                                                                                                                                                                                                        |
+| New config option                                | `deployment/configuration-reference.md` + the **ConfigBuilder** component (`src/components/ConfigBuilder/`, embedded in `deployment/config-builder.mdx`) -- then run `infra/test/configBuilderSync.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                   |
+| New/changed pipeline                             | `pipelines/` new page + `pipelines/overview.md` table + `sidebars.ts`; `overview/features.md` table **and its spelled-out built-in-pipeline count** (bump "VAMS includes _fourteen_ built-in processing pipelines…" to match the row count); and, when the pipeline adds/changes a third-party model, base image, or licensed dependency, the license entries in **both** `additional/notices.md` (per-pipeline license paragraph + closing attribution list) and the repo-root `NOTICE.md` (per-pipeline dependency table + attribution note). Record the exact license and any required attribution string. |
+| New viewer plugin                                | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| New DynamoDB table                               | `architecture/aws-resources.md`, `architecture/data-model.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Permission model change                          | `concepts/permissions-model.md`, `user-guide/permissions.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| New CLI command                                  | `cli/commands/<group>.md` (the command-group page), `cli/troubleshooting/<group>.md` (if error scenarios changed), `cli/command-reference.md` (if a new group), `cli/automation.md` (if new patterns), and `sidebars.ts` (if a new page). The `cli/` section is the single source of truth — the legacy `tools/VamsCLI/docs/` is deprecated.                                                                                                                                                                                                                                                                  |
+| UI navigation change                             | `user-guide/web-interface.md`, `user-guide/getting-started.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Breaking change                                  | `additional/revisions.md`, `deployment/update-the-solution.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| New feature                                      | `overview/features.md`, relevant user guide page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| New sidebar page                                 | `sidebars.ts` -- add the page to the appropriate category                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+> **API changes live in two places.** The VAMS API is documented in **two** independent
+> sources that must always be updated together: (1) `documentation/VAMS_API.yaml` (the OpenAPI
+> specification -- paths + component schemas), and (2) the human-readable Docusaurus reference
+> page `documentation/docusaurus-site/docs/api/<domain>.md` (e.g. `api/auth.md`, `api/assets.md`).
+> When you add, remove, rename, or change the request/response shape of an endpoint, update
+> **both**. Updating only the YAML (or only the Markdown) leaves the documentation inconsistent.
 
 ---
 
@@ -365,21 +387,22 @@ When documentation standards, patterns, or structure change, update both locatio
 
 When writing or verifying documentation, cross-reference these source files to ensure accuracy:
 
-| Documentation Topic  | Source Files                                                                  |
-| -------------------- | ----------------------------------------------------------------------------- |
-| Config options       | `infra/config/config.ts` (ConfigPublic interface)                             |
-| API endpoints        | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml` |
-| DynamoDB tables      | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                |
-| Feature flags        | `infra/common/vamsAppFeatures.ts`                                             |
-| Backend handlers     | `backend/backend/handlers/`                                                   |
-| Pydantic models      | `backend/backend/models/`                                                     |
-| CLI commands         | `tools/VamsCLI/vamscli/commands/`                                             |
-| Viewer plugins       | `web/src/visualizerPlugin/config/viewerConfig.json`                           |
-| Lambda builders      | `infra/lib/lambdaBuilder/`                                                    |
-| Pipeline configs     | `infra/lib/nestedStacks/pipelines/`                                           |
-| Frontend routes      | `web/src/routes.tsx`                                                          |
-| Synonyms             | `web/src/synonyms.tsx`                                                        |
-| Permission templates | `documentation/permissionsTemplates/`                                         |
+| Documentation Topic                                       | Source Files                                                                                                                                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config options                                            | `infra/config/config.ts` (ConfigPublic interface)                                                                                                                                  |
+| ConfigBuilder component (`src/components/ConfigBuilder/`) | `infra/config/config.ts` (`ConfigPublic` + `getConfig()`), `infra/config/config.template.{commercial,govcloud}.json` — mirror is guarded by `infra/test/configBuilderSync.test.ts` |
+| API endpoints                                             | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml`                                                                                                      |
+| DynamoDB tables                                           | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                                                                                                     |
+| Feature flags                                             | `infra/common/vamsAppFeatures.ts`                                                                                                                                                  |
+| Backend handlers                                          | `backend/backend/handlers/`                                                                                                                                                        |
+| Pydantic models                                           | `backend/backend/models/`                                                                                                                                                          |
+| CLI commands                                              | `tools/VamsCLI/vamscli/commands/`                                                                                                                                                  |
+| Viewer plugins                                            | `web/src/visualizerPlugin/config/viewerConfig.json`                                                                                                                                |
+| Lambda builders                                           | `infra/lib/lambdaBuilder/`                                                                                                                                                         |
+| Pipeline configs                                          | `infra/lib/nestedStacks/pipelines/`                                                                                                                                                |
+| Frontend routes                                           | `web/src/routes.tsx`                                                                                                                                                               |
+| Synonyms                                                  | `web/src/synonyms.tsx`                                                                                                                                                             |
+| Permission templates                                      | `documentation/permissionsTemplates/`                                                                                                                                              |
 
 ---
 

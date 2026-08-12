@@ -81,15 +81,26 @@ class Asset:
 
 @dataclass
 class AssetFile:
-    """Parsed file entry from vamscli file list."""
+    """Parsed file entry from vamscli file list.
+
+    ``content_type`` is not part of the file listing response — it is only returned by
+    ``vamscli file info`` for a single file. It stays on this dataclass so callers that
+    enrich a listing entry from ``get_file_info`` have somewhere to put it, and is left
+    empty by ``list_asset_files``.
+    """
     file_name: str = ""
     relative_path: str = ""
+    key: str = ""
     size: int = 0
     is_folder: bool = False
     is_archived: bool = False
     primary_type: str = ""
     content_type: str = ""
-    last_modified: str = ""
+    # Creation date of the file's current version, from the listing's
+    # dateCreatedCurrentVersion field.
+    date_created_current_version: str = ""
+    version_id: str = ""
+    etag: str = ""
     preview_file: str = ""
 
 
@@ -110,10 +121,46 @@ class DownloadResult:
 class Workflow:
     """Parsed workflow entry from vamscli workflow list."""
     workflow_id: str = ""
+    workflow_name: str = ""
     database_id: str = ""
+    category: str = ""
     description: str = ""
     workflow_arn: str = ""
-    auto_trigger_extensions: str = ""
+    enabled: bool = True
+    archived: bool = False
+    # The workflow's stored systemConfig, which carries the input gates (inputFileArity, assetScope)
+    # the service validates an execute request against.
+    system_config: Dict[str, Any] = field(default_factory=dict)
+    specified_pipelines: List[Dict[str, Any]] = field(default_factory=list)
+    trigger_count: int = 0
+    triggers_enabled_count: int = 0
+
+    @property
+    def is_runnable(self) -> bool:
+        """A disabled or archived workflow is rejected at execute time."""
+        return self.enabled and not self.archived
+
+    @property
+    def input_file_arity(self) -> str:
+        """The declared inputFileArity — 'none', 'one' or 'multi'; 'one' when absent."""
+        return self.system_config.get("inputFileArity") or "one"
+
+    @property
+    def allows_whole_asset(self) -> bool:
+        """Whether a whole-asset ('/') selection passes this workflow's assetScope gate.
+
+        The gate is only enforced on a scope that declares the key, and the pipeline registration
+        schemas spell it ``wholeAsset`` while the canonical record vocabulary uses
+        ``wholeAssetAllowed``; both are accepted and evaluate identically. An arity of 'none' takes
+        no input file at all, so no selection is offered for it.
+        """
+        if self.input_file_arity == "none":
+            return False
+        scope = self.system_config.get("assetScope") or {}
+        for key in ("wholeAssetAllowed", "wholeAsset"):
+            if key in scope:
+                return bool(scope[key])
+        return True
 
 
 @dataclass
@@ -123,6 +170,8 @@ class WorkflowExecution:
     workflow_id: str = ""
     workflow_database_id: str = ""
     execution_status: str = ""
+    trigger_type: str = ""
+    execution_group_id: str = ""
     start_date: str = ""
     stop_date: str = ""
     input_file_key: str = ""
@@ -613,13 +662,17 @@ class VamsCliService:
             AssetFile(
                 file_name=item.get("fileName", ""),
                 relative_path=item.get("relativePath", ""),
-                size=item.get("size", 0),
+                key=item.get("key", ""),
+                size=item.get("size") or 0,
                 is_folder=item.get("isFolder", False),
                 is_archived=item.get("isArchived", False),
-                primary_type=item.get("primaryType", ""),
-                content_type=item.get("contentType", ""),
-                last_modified=item.get("lastModified", ""),
-                preview_file=item.get("previewFile", ""),
+                primary_type=item.get("primaryType") or "",
+                # The listing carries the current version's creation date; contentType and
+                # lastModified are file-info-only fields and are not present here.
+                date_created_current_version=item.get("dateCreatedCurrentVersion", ""),
+                version_id=item.get("versionId") or "",
+                etag=item.get("etag") or "",
+                preview_file=item.get("previewFile") or "",
             )
             for item in items
         ]
@@ -767,13 +820,18 @@ class VamsCliService:
     # Workflow Operations
     # -------------------------------------------------------------------------
 
-    def list_workflows(self, database_id: Optional[str] = None) -> List[Workflow]:
+    def list_workflows(self, database_id: Optional[str] = None,
+                       include_unrunnable: bool = False) -> List[Workflow]:
         """
         List available workflows, optionally filtered by database.
 
         Args:
             database_id: Optional database ID to filter workflows.
                          If None, lists all workflows across all databases.
+            include_unrunnable: Keep disabled workflows in the result. The listing already omits
+                                archived workflows unless ``--include-archived`` is passed, which
+                                this wrapper never does; a disabled workflow is still returned by
+                                the API and is dropped here because executing one is rejected.
 
         Returns:
             List of Workflow objects.
@@ -788,16 +846,26 @@ class VamsCliService:
         data = self._parse_json(output)
 
         items = data.get("Items", [])
-        return [
+        workflows = [
             Workflow(
                 workflow_id=item.get("workflowId", ""),
+                workflow_name=item.get("workflowName", ""),
                 database_id=item.get("databaseId", ""),
+                category=item.get("category", ""),
                 description=item.get("description", ""),
                 workflow_arn=item.get("workflow_arn", ""),
-                auto_trigger_extensions=item.get("autoTriggerOnFileExtensionsUpload", ""),
+                enabled=item.get("enabled", True),
+                archived=item.get("archived", False),
+                system_config=item.get("systemConfig") or {},
+                specified_pipelines=item.get("specifiedPipelines", []) or [],
+                trigger_count=item.get("triggerCount") or 0,
+                triggers_enabled_count=item.get("triggersEnabledCount") or 0,
             )
             for item in items
         ]
+        if include_unrunnable:
+            return workflows
+        return [wf for wf in workflows if wf.is_runnable]
 
     def list_workflow_executions(
         self,
@@ -834,12 +902,14 @@ class VamsCliService:
         items = data.get("Items", [])
         return [
             WorkflowExecution(
-                execution_id=item.get("executionId", ""),
+                execution_id=item.get("workflowExecutionId", ""),
                 workflow_id=item.get("workflowId", ""),
                 workflow_database_id=item.get("workflowDatabaseId", ""),
                 execution_status=item.get("executionStatus", ""),
-                start_date=item.get("startDate", ""),
-                stop_date=item.get("stopDate", ""),
+                trigger_type=item.get("triggerType", ""),
+                execution_group_id=item.get("executionGroupId", ""),
+                start_date=item.get("executionStartDate", item.get("startDate", "")),
+                stop_date=item.get("executionStopDate", item.get("stopDate", "")),
                 input_file_key=item.get("inputAssetFileKey", ""),
             )
             for item in items
@@ -854,28 +924,35 @@ class VamsCliService:
         file_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a workflow on an asset.
+        Execute a workflow on one input file, or on an entire asset.
+
+        Inputs are addressed as 'databaseId:assetId:relativeFileKey' references rather
+        than an asset plus a file key; a relativeFileKey of "/" selects the whole asset.
+        This wrapper covers the single-asset case Isaac Sim drives; a workflow can take
+        input files spanning several assets.
 
         Args:
             database_id: The database ID containing the asset.
             asset_id: The asset ID to run the workflow on.
             workflow_id: The workflow ID to execute.
             workflow_database_id: The database ID that owns the workflow.
-            file_key: Optional file key within the asset. Defaults to "/"
-                      (top-level asset) if not specified.
+            file_key: Optional relative file key within the asset. Defaults to "/"
+                      (the whole asset) when not specified.
 
         Returns:
-            Raw JSON dict with execution result (includes execution ID).
+            Raw JSON dict with execution result (includes executionId).
         """
         self.ensure_authenticated()
 
+        relative_file_key = file_key or "/"
+        if not relative_file_key.startswith("/"):
+            relative_file_key = f"/{relative_file_key}"
+
         cmd = ["workflow", "execute",
-               "-d", database_id, "-a", asset_id,
-               "-w", workflow_id,
                "--workflow-database-id", workflow_database_id,
+               "-w", workflow_id,
+               "--input-file", f"{database_id}:{asset_id}:{relative_file_key}",
                "--json-output"]
-        if file_key:
-            cmd += ["--file-key", file_key]
 
         output = self._execute_command(cmd)
         return self._parse_json(output)

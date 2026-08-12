@@ -118,6 +118,11 @@ class AssetAlreadyArchivedError(AssetError):
     pass
 
 
+class AssetNotArchivedError(AssetError):
+    """Raised when trying to unarchive an asset that is not archived"""
+    pass
+
+
 class AssetDeletionError(AssetError):
     """Raised when asset deletion operations fail"""
     pass
@@ -257,6 +262,37 @@ class AssetNotDistributableError(FileError):
 
 class DownloadTreeError(FileError):
     """Raised when asset tree traversal fails."""
+    pass
+
+
+# Sync-related business logic exceptions
+class SyncError(BusinessLogicError):
+    """Base class for sync-related errors."""
+    pass
+
+
+class SyncPlanError(SyncError):
+    """Raised when a sync plan cannot be computed."""
+    pass
+
+
+class SyncPushError(SyncError):
+    """Raised when a sync push operation fails."""
+    pass
+
+
+class SyncPullError(SyncError):
+    """Raised when a sync pull operation fails."""
+    pass
+
+
+class SyncConfirmationRequiredError(SyncError):
+    """Raised when a destructive sync operation is not confirmed."""
+    pass
+
+
+class InvalidSyncIgnoreFileError(SyncError):
+    """Raised when an ignore file cannot be read or parsed."""
     pass
 
 
@@ -433,6 +469,85 @@ class WorkflowAlreadyRunningError(WorkflowError):
 
 class InvalidWorkflowDataError(WorkflowError):
     """Raised when workflow data is invalid."""
+    pass
+
+
+# Pipeline-related business logic exceptions
+class PipelineError(BusinessLogicError):
+    """Base class for pipeline-related errors."""
+    pass
+
+
+class PipelineNotFoundError(PipelineError):
+    """Raised when a pipeline is not found."""
+    pass
+
+
+class PipelineAlreadyExistsError(PipelineError):
+    """Raised when a pipeline already exists."""
+    pass
+
+
+class InvalidPipelineDataError(PipelineError):
+    """Raised when pipeline data is invalid."""
+    pass
+
+
+# Pipeline template-related business logic exceptions
+class PipelineTemplateError(BusinessLogicError):
+    """Base class for pipeline-template-related errors."""
+    pass
+
+
+class PipelineTemplateNotFoundError(PipelineTemplateError):
+    """Raised when a pipeline template is not found."""
+    pass
+
+
+class PipelineTemplateAlreadyExistsError(PipelineTemplateError):
+    """Raised when a pipeline template already exists."""
+    pass
+
+
+class InvalidPipelineTemplateDataError(PipelineTemplateError):
+    """Raised when pipeline template data (config body, tag schema) is invalid."""
+    pass
+
+
+# Workflow trigger-related business logic exceptions
+class WorkflowTriggerError(BusinessLogicError):
+    """Base class for workflow-trigger-related errors."""
+    pass
+
+
+class WorkflowTriggerNotFoundError(WorkflowTriggerError):
+    """Raised when a workflow trigger is not found."""
+    pass
+
+
+class InvalidWorkflowTriggerDataError(WorkflowTriggerError):
+    """Raised when workflow trigger data is invalid (e.g. unsupported trigger type)."""
+    pass
+
+
+# Execution-operations business logic exceptions
+class ExecutionError(BusinessLogicError):
+    """Base class for workflow-execution-operation errors."""
+    pass
+
+
+class ExecutionNotFoundError(ExecutionError):
+    """Raised when a workflow execution is not found."""
+    pass
+
+
+class ExecutionInProgressError(ExecutionError):
+    """Raised when an operation is blocked because the execution is still in progress."""
+    pass
+
+
+class InvalidExecutionDataError(ExecutionError):
+    """Raised when execution-operation request data is invalid."""
     pass
 
 

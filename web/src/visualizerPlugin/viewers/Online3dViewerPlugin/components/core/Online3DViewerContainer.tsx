@@ -61,7 +61,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                                 databaseId: databaseId,
                                 key: key,
                                 versionId: versionId,
-                                assetVersionId: assetVersionId,
+                                assetVersionId: assetVersionId as any,
                                 downloadType: "assetFile",
                             });
 
@@ -87,7 +87,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                         databaseId: databaseId,
                         key: assetKey || "",
                         versionId: versionId,
-                        assetVersionId: assetVersionId,
+                        assetVersionId: assetVersionId as any,
                         downloadType: "assetFile",
                     });
 

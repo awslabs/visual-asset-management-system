@@ -9,6 +9,8 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as sns from "aws-cdk-lib/aws-sns";
+import * as events from "aws-cdk-lib/aws-events";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -24,62 +26,8 @@ import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
-import {
-    grantReadWritePermissionsToAllAssetBuckets,
-    grantReadPermissionsToAllAssetBuckets,
-} from "../../../../../helper/security";
+import { grantReadPermissionsToAllAssetBuckets } from "../../../../../helper/security";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
-
-export function buildSqsExecuteSplatToolboxPipelineFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    assetAuxiliaryBucket: s3.IBucket,
-    openPipelineLambdaFunction: lambda.IFunction,
-    storageResources: storageResources,
-    bucketName: string,
-    bucketPrefix: string,
-    index: number,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    kmsKey?: kms.IKey
-): lambda.Function {
-    const name = "sqsExecuteSplatToolboxPipeline";
-    const fun = new lambda.Function(scope, name + "-" + index, {
-        code: lambda.Code.fromAsset(
-            path.join(
-                __dirname,
-                `../../../../../../../backendPipelines/3dRecon/splatToolbox/lambda`
-            )
-        ),
-        handler: `${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(5),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {
-            OPEN_PIPELINE_FUNCTION_NAME: openPipelineLambdaFunction.functionName,
-            S3_ASSETAUXILIARY_BUCKET_NAME: assetAuxiliaryBucket.bucketName,
-        },
-    });
-
-    grantReadPermissionsToAllAssetBuckets(fun);
-    openPipelineLambdaFunction.grantInvoke(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
-
-    suppressCdkNagLambda(fun);
-    return fun;
-}
 
 export function buildVamsExecuteSplatToolboxPipelineFunction(
     scope: Construct,
@@ -124,6 +72,16 @@ export function buildVamsExecuteSplatToolboxPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    const stateTaskPolicy = new iam.PolicyStatement({
+        actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+        resources: [
+            `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${config.env.account}:*`,
+        ],
+    });
+    fun.addToRolePolicy(stateTaskPolicy);
+
     suppressCdkNagLambda(fun);
     return fun;
 }
@@ -137,6 +95,8 @@ export function buildOpenPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -167,12 +127,16 @@ export function buildOpenPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
+    orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);

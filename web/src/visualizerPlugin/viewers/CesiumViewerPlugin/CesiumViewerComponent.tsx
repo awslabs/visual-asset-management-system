@@ -8,6 +8,7 @@ import { getDualValidAccessToken } from "../../../utils/authTokenUtils";
 import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { CesiumDependencyManager } from "./dependencies";
+import CesiumSceneGraph from "./components/CesiumSceneGraph";
 
 // Cesium will be loaded dynamically and accessed from window
 // No imports needed - we'll use window.Cesium directly
@@ -71,6 +72,20 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         memory: number;
     } | null>(null);
     const [measurementMode, setMeasurementMode] = useState<"none" | "distance" | "area">("none");
+    const [sceneMode, setSceneMode] = useState<"3d" | "2d" | "columbus">("3d");
+    const [allTilesetsGeolocated, setAllTilesetsGeolocated] = useState(true);
+    const [activePanelTab, setActivePanelTab] = useState<"sceneGraph" | "controls">("controls");
+    const [selectedTiles, setSelectedTiles] = useState<any[]>([]);
+    // Bumped whenever per-tile visibility changes so the scene graph re-renders
+    const [sceneVersion, setSceneVersion] = useState(0);
+    // Hidden/selected tiles live in refs so the per-frame tileVisible listener
+    // reads current state without re-subscribing
+    const hiddenTilesRef = useRef<Set<any>>(new Set());
+    const selectedTilesRef = useRef<Set<any>>(new Set());
+    const [pickedFeatureInfo, setPickedFeatureInfo] = useState<{
+        title: string;
+        properties: Array<[string, string]>;
+    } | null>(null);
     const [measurementPoints, setMeasurementPoints] = useState<any[]>([]);
     const [measurementEntities, setMeasurementEntities] = useState<any[]>([]);
     const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
@@ -162,40 +177,56 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         console.log("No Cesium Ion token provided - using basic features only");
                     }
 
-                    // Create viewer with error handling
-                    viewerRef.current = new Cesium.Viewer(cesiumContainer.current!, {
-                        timeline: false,
-                        animation: false,
-                        geocoder: false,
-                        homeButton: true,
-                        sceneModePicker: true,
-                        baseLayerPicker: false,
-                        navigationHelpButton: false,
-                        fullscreenButton: viewerMode === "fullscreen",
-                        vrButton: false,
-                        infoBox: true,
-                        selectionIndicator: true,
-                    });
+                    // Create widget with error handling; UI controls (home, scene mode,
+                    // fullscreen, picked-feature info) are provided by the custom panel below.
+                    // Render errors surface through the VAMS error banner instead of the
+                    // widget's blocking overlay panel
+                    const widgetOptions: any = { showRenderLoopErrors: false };
 
-                    // Set a simple imagery provider if no Ion token to prevent image decode errors
+                    // Without an Ion token there is no imagery to show — skip the default
+                    // base layer (avoids Ion request errors) and hide the globe surface,
+                    // atmosphere, and skybox/sun/moon so the model renders against the
+                    // configurable background color instead of a blue ellipsoid or starfield
                     if (!hasValidToken) {
-                        const simpleImageryProvider = new Cesium.SingleTileImageryProvider({
-                            url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-                            rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90),
-                            tileWidth: 256,
-                            tileHeight: 256,
-                        });
-                        viewerRef.current.imageryLayers.removeAll();
-                        viewerRef.current.imageryLayers.add(
-                            new Cesium.ImageryLayer(simpleImageryProvider)
-                        );
+                        widgetOptions.baseLayer = false;
                     }
 
-                    // Add error event listeners
+                    viewerRef.current = new Cesium.CesiumWidget(
+                        cesiumContainer.current!,
+                        widgetOptions
+                    );
+
+                    // Globe/sky visibility is decided per tileset once content loads
+                    // (shown for geo-referenced content, hidden for local-coordinate
+                    // models); start hidden so nothing occludes the model meanwhile
+                    const initScene = viewerRef.current.scene;
+                    initScene.globe.show = false;
+                    if (initScene.skyAtmosphere) initScene.skyAtmosphere.show = false;
+                    if (initScene.skyBox) initScene.skyBox.show = false;
+                    if (initScene.sun) initScene.sun.show = false;
+                    if (initScene.moon) initScene.moon.show = false;
+                    initScene.backgroundColor = Cesium.Color.fromCssColorString(backgroundColor);
+                    if (!hasValidToken) {
+                        // No imagery without an Ion token — use a neutral surface color
+                        // for geographic context instead of the default bright blue
+                        initScene.globe.baseColor = Cesium.Color.fromCssColorString("#2a2d33");
+                    }
+
+                    // Add error event listeners; the widget stops its render loop on a
+                    // render error, so recover by snapping back to 3D and restarting it
                     viewerRef.current.scene.renderError.addEventListener(
                         (scene: any, error: any) => {
                             console.error("Cesium render error:", error);
                             setInitError(`Render error: ${error.message || error}`);
+                            try {
+                                if (viewerRef.current) {
+                                    viewerRef.current.scene.morphTo3D(0);
+                                    setSceneMode("3d");
+                                    viewerRef.current.useDefaultRenderLoop = true;
+                                }
+                            } catch (recoveryError) {
+                                console.warn("Cesium render loop recovery failed:", recoveryError);
+                            }
                         }
                     );
 
@@ -309,16 +340,22 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     }, [viewerMode, customParameters, cesiumLoaded]);
 
     // Helper function to configure camera for tileset viewing
-    const configureCameraForTileset = useCallback((tileset: any) => {
+    const configureCameraForTileset = useCallback((tileset: any, geolocated: boolean) => {
         if (!viewerRef.current) return;
 
         const viewer = viewerRef.current;
-        const controller = viewer.scene.screenSpaceCameraController;
+        const scene = viewer.scene;
+        const controller = scene.screenSpaceCameraController;
         const boundingSphere = tileset.boundingSphere;
         const radius = boundingSphere.radius;
 
-        // Adjust camera controller settings based on tileset scale
-        if (radius < 100) {
+        if (geolocated) {
+            // Globe-referenced content: allow close inspection of the model but keep
+            // the maximum zoom at globe scale so the camera can pull out for context
+            controller.minimumZoomDistance = Math.max(radius * 0.01, 0.5);
+            controller.maximumZoomDistance = 50000000.0;
+            controller.minimumCollisionTerrainHeight = 15000;
+        } else if (radius < 100) {
             // Small architectural models
             controller.minimumZoomDistance = Math.max(radius * 0.01, 0.1);
             controller.maximumZoomDistance = radius * 50;
@@ -335,7 +372,38 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             controller.minimumCollisionTerrainHeight = radius * 0.5;
         }
 
-        console.log(`Configured camera for tileset with radius: ${radius.toFixed(2)}m`);
+        // Terrain collision only makes sense for globe-relative content; for a
+        // local-coordinate model it clamps the camera against an ellipsoid the
+        // model does not sit on, blocking movement and hiding the model
+        controller.enableCollisionDetection = geolocated;
+
+        // The globe and atmosphere provide geographic context for globe-referenced
+        // content but occlude local-coordinate models sitting at the earth's center
+        scene.globe.show = geolocated;
+        if (scene.skyAtmosphere) {
+            scene.skyAtmosphere.show = geolocated;
+        }
+        if (scene.skyBox) {
+            scene.skyBox.show = geolocated;
+        }
+        if (scene.sun) {
+            scene.sun.show = geolocated;
+        }
+        if (scene.moon) {
+            scene.moon.show = geolocated;
+        }
+
+        // Globe-referenced content uses free globe controls; release any turntable
+        // lookAt lock a previously viewed local-coordinate tileset left behind
+        if (geolocated) {
+            viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+        }
+
+        console.log(
+            `Configured camera for ${
+                geolocated ? "geo-referenced" : "local-coordinate"
+            } tileset with radius: ${radius.toFixed(2)}m`
+        );
     }, []);
 
     // Helper function to create appropriate camera offset for tileset
@@ -372,6 +440,151 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
         return new Cesium.HeadingPitchRange(heading, pitch, distance);
     }, []);
+
+    // Geo-located content sits within ~100km of the WGS84 surface; local-coordinate
+    // models sit near the earth's center instead
+    const isTilesetGeolocated = useCallback((tileset: any) => {
+        const center = tileset?.boundingSphere?.center;
+        if (!center) return false;
+        const magnitude = Cesium.Cartesian3.magnitude(center);
+        return Math.abs(magnitude - 6378137.0) < 100000.0;
+    }, []);
+
+    // Point the camera at a tileset. Geo-located tilesets fly with globe-relative
+    // controls; local-coordinate models get a lookAt transform so the camera orbits
+    // and zooms around the model itself (turntable controls) instead of the globe
+    const focusCameraOnTileset = useCallback(
+        (tileset: any, offset?: any) => {
+            if (!viewerRef.current) return;
+
+            const cameraOffset = offset || createCameraOffset(tileset);
+            if (isTilesetGeolocated(tileset)) {
+                viewerRef.current.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+                viewerRef.current.zoomTo(tileset, cameraOffset);
+            } else {
+                viewerRef.current.camera.lookAt(tileset.boundingSphere.center, cameraOffset);
+            }
+        },
+        [createCameraOffset, isTilesetGeolocated]
+    );
+
+    // Zoom the camera to an individual tile within a tileset (scene graph double-click)
+    const zoomToTile = useCallback(
+        (tile: any) => {
+            if (!viewerRef.current || !tile?.boundingSphere) return;
+
+            const sphere = tile.boundingSphere;
+            const range = Math.max(sphere.radius * 2.5, 5);
+            const offset = new Cesium.HeadingPitchRange(
+                Cesium.Math.toRadians(30),
+                Cesium.Math.toRadians(-30),
+                range
+            );
+            if (allTilesetsGeolocated) {
+                viewerRef.current.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+                viewerRef.current.camera.flyToBoundingSphere(sphere, {
+                    duration: 1.0,
+                    offset,
+                });
+            } else {
+                viewerRef.current.camera.lookAt(sphere.center, offset);
+            }
+        },
+        [allTilesetsGeolocated]
+    );
+
+    // Per-tile visibility/selection uses tile color (Cesium has no per-tile show):
+    // alpha 0 hides, yellow tint highlights the selection, white is default
+    const applyTileAppearance = useCallback((tile: any) => {
+        if (hiddenTilesRef.current.has(tile)) {
+            tile.color = Cesium.Color.WHITE.withAlpha(0.0);
+        } else if (selectedTilesRef.current.has(tile)) {
+            tile.color = Cesium.Color.YELLOW.withAlpha(0.85);
+        } else {
+            tile.color = Cesium.Color.WHITE;
+        }
+    }, []);
+
+    const forEachTileInSubtree = useCallback((tile: any, fn: (t: any) => void) => {
+        fn(tile);
+        if (tile.children) {
+            tile.children.forEach((child: any) => forEachTileInSubtree(child, fn));
+        }
+    }, []);
+
+    const selectTiles = useCallback(
+        (tiles: any[]) => {
+            const previous = Array.from(selectedTilesRef.current);
+            selectedTilesRef.current = new Set(tiles);
+            previous.forEach(applyTileAppearance);
+            tiles.forEach(applyTileAppearance);
+            setSelectedTiles(tiles);
+        },
+        [applyTileAppearance]
+    );
+
+    const handleTileGraphClick = useCallback(
+        (tile: any, ctrlKey: boolean) => {
+            const isSelected = selectedTilesRef.current.has(tile);
+            if (ctrlKey) {
+                const next = Array.from(selectedTilesRef.current);
+                selectTiles(isSelected ? next.filter((t) => t !== tile) : [...next, tile]);
+            } else {
+                selectTiles(isSelected && selectedTilesRef.current.size === 1 ? [] : [tile]);
+            }
+        },
+        [selectTiles]
+    );
+
+    const toggleTileVisibility = useCallback(
+        (tile: any) => {
+            const hide = !hiddenTilesRef.current.has(tile);
+            forEachTileInSubtree(tile, (t) => {
+                if (hide) {
+                    hiddenTilesRef.current.add(t);
+                } else {
+                    hiddenTilesRef.current.delete(t);
+                }
+                applyTileAppearance(t);
+            });
+            setSceneVersion((v) => v + 1);
+        },
+        [forEachTileInSubtree, applyTileAppearance]
+    );
+
+    const isTileHidden = useCallback((tile: any) => hiddenTilesRef.current.has(tile), []);
+
+    const setAllTilesVisibility = useCallback(
+        (visible: boolean) => {
+            loadedTilesets.forEach((tileset) => {
+                tileset.show = visible;
+                if (visible && tileset.root) {
+                    // Also clear any per-tile hides when showing all
+                    forEachTileInSubtree(tileset.root, (t) => {
+                        hiddenTilesRef.current.delete(t);
+                        applyTileAppearance(t);
+                    });
+                }
+            });
+            setSceneVersion((v) => v + 1);
+        },
+        [loadedTilesets, forEachTileInSubtree, applyTileAppearance]
+    );
+
+    // Re-apply appearance to tiles as they stream in after a hide/selection
+    useEffect(() => {
+        const removers: Array<() => void> = [];
+        loadedTilesets.forEach((tileset) => {
+            const onTileVisible = (tile: any) => {
+                if (hiddenTilesRef.current.has(tile) || selectedTilesRef.current.has(tile)) {
+                    applyTileAppearance(tile);
+                }
+            };
+            tileset.tileVisible.addEventListener(onTileVisible);
+            removers.push(() => tileset.tileVisible.removeEventListener(onTileVisible));
+        });
+        return () => removers.forEach((remove) => remove());
+    }, [loadedTilesets, applyTileAppearance]);
 
     // Scene control functions
     const toggleWireframe = useCallback(() => {
@@ -428,7 +641,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         const newShadowsEnabled = !shadowsEnabled;
         setShadowsEnabled(newShadowsEnabled);
 
-        viewerRef.current.shadows = newShadowsEnabled;
+        viewerRef.current.scene.shadowMap.enabled = newShadowsEnabled;
 
         console.log(`Shadows ${newShadowsEnabled ? "enabled" : "disabled"}`);
     }, [shadowsEnabled]);
@@ -470,7 +683,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             }
 
             const offset = new Cesium.HeadingPitchRange(heading, pitch, distance);
-            viewerRef.current.zoomTo(tileset, offset);
+            focusCameraOnTileset(tileset, offset);
 
             // Don't persist the view mode - just temporarily highlight during animation
             setCurrentViewMode(viewType);
@@ -478,7 +691,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
             console.log(`Camera set to ${viewType} view`);
         },
-        [loadedTilesets]
+        [loadedTilesets, focusCameraOnTileset]
     );
 
     // Measurement tool functions
@@ -520,7 +733,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
         // Reset scene properties
         viewerRef.current.scene.globe.enableLighting = true;
-        viewerRef.current.shadows = false;
+        viewerRef.current.scene.shadowMap.enabled = false;
         viewerRef.current.scene.globe.material = undefined;
 
         // Reset tileset visibility state
@@ -531,13 +744,11 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         setTilesetVisibility(resetVisibility);
 
         // Reset camera to initial position
-        const tileset = loadedTilesets[0];
-        const cameraOffset = createCameraOffset(tileset);
-        viewerRef.current.zoomTo(tileset, cameraOffset);
+        focusCameraOnTileset(loadedTilesets[0]);
         setCurrentViewMode("perspective");
 
         console.log("Scene reset to default settings");
-    }, [loadedTilesets, createCameraOffset, clearMeasurements]);
+    }, [loadedTilesets, focusCameraOnTileset, clearMeasurements]);
 
     const toggleTilesetVisibility = useCallback(
         (index: number) => {
@@ -567,6 +778,47 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         viewerRef.current.scene.backgroundColor = cesiumColor;
 
         console.log(`Background color changed to: ${color}`);
+    }, []);
+
+    const flyHome = useCallback(() => {
+        if (!viewerRef.current) return;
+
+        if (loadedTilesets.length > 0) {
+            focusCameraOnTileset(loadedTilesets[0]);
+        } else {
+            viewerRef.current.camera.flyHome(1.5);
+        }
+    }, [loadedTilesets, focusCameraOnTileset]);
+
+    const changeSceneMode = useCallback(
+        (mode: "3d" | "2d" | "columbus") => {
+            if (!viewerRef.current) return;
+
+            // 2D/Columbus projection requires geo-located content; local-coordinate
+            // tilesets produce NaN positions when projected, crashing the render loop
+            if (mode !== "3d" && !allTilesetsGeolocated) {
+                return;
+            }
+
+            const scene = viewerRef.current.scene;
+            if (mode === "2d") {
+                scene.morphTo2D(1.0);
+            } else if (mode === "columbus") {
+                scene.morphToColumbusView(1.0);
+            } else {
+                scene.morphTo3D(1.0);
+            }
+            setSceneMode(mode);
+        },
+        [allTilesetsGeolocated]
+    );
+
+    const toggleFullscreen = useCallback(() => {
+        if (Cesium.Fullscreen.fullscreen) {
+            Cesium.Fullscreen.exitFullscreen();
+        } else if (cesiumContainer.current) {
+            Cesium.Fullscreen.requestFullscreen(cesiumContainer.current.parentElement);
+        }
     }, []);
 
     const takeScreenshot = useCallback(() => {
@@ -758,6 +1010,52 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         };
     }, [measurementMode, addMeasurementPoint, clearMeasurements]);
 
+    // Scene picking: selects the picked tile in the scene graph (with highlight)
+    // and shows feature properties in the info panel (disabled while measuring)
+    useEffect(() => {
+        if (!viewerRef.current || !cesiumLoaded || measurementMode !== "none") return;
+
+        const handler = new Cesium.ScreenSpaceEventHandler(viewerRef.current.scene.canvas);
+
+        handler.setInputAction((event: any) => {
+            const picked = viewerRef.current!.scene.pick(event.position);
+
+            // Resolve the Cesium3DTile that owns whatever was picked
+            const pickedTile =
+                picked?.content?.tile || // model/content picks
+                (picked instanceof Cesium.Cesium3DTileFeature
+                    ? (picked as any).content?.tile
+                    : undefined);
+
+            if (pickedTile) {
+                handleTileGraphClick(pickedTile, false);
+            } else if (!picked) {
+                selectTiles([]);
+            }
+
+            if (picked && picked instanceof Cesium.Cesium3DTileFeature) {
+                const properties: Array<[string, string]> = [];
+                const propertyIds = picked.getPropertyIds();
+                propertyIds.forEach((propertyId: string) => {
+                    const value = picked.getProperty(propertyId);
+                    if (value !== undefined && value !== null) {
+                        properties.push([propertyId, String(value)]);
+                    }
+                });
+                setPickedFeatureInfo({
+                    title: picked.getProperty("name") || "Feature",
+                    properties,
+                });
+            } else {
+                setPickedFeatureInfo(null);
+            }
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+        return () => {
+            handler.destroy();
+        };
+    }, [measurementMode, cesiumLoaded, loadedTilesets, handleTileGraphClick, selectTiles]);
+
     // Performance monitoring
     useEffect(() => {
         if (!viewerRef.current) return;
@@ -823,6 +1121,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 // Create 3D Tileset using the authenticated resource
                 const tileset = await Cesium.Cesium3DTileset.fromUrl(resource);
+                tileset.vamsFileKey = key;
 
                 // Add tileset to scene
                 viewerRef.current.scene.primitives.add(tileset);
@@ -833,14 +1132,17 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 setTimeout(() => {
                     if (viewerRef.current && tileset.boundingSphere) {
                         try {
+                            const geolocated = isTilesetGeolocated(tileset);
+                            setAllTilesetsGeolocated(geolocated);
+
                             // Configure camera controller for this tileset
-                            configureCameraForTileset(tileset);
+                            configureCameraForTileset(tileset, geolocated);
 
                             // Create appropriate camera offset
                             const cameraOffset = createCameraOffset(tileset);
 
-                            // Zoom to tileset with proper offset
-                            viewerRef.current.zoomTo(tileset, cameraOffset);
+                            // Point camera at tileset (turntable orbit for local models)
+                            focusCameraOnTileset(tileset, cameraOffset);
 
                             console.log(
                                 `Zoomed to tileset with offset - Distance: ${cameraOffset.range.toFixed(
@@ -881,6 +1183,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             constructStreamingUrl,
             configureCameraForTileset,
             createCameraOffset,
+            isTilesetGeolocated,
+            focusCameraOnTileset,
         ]
     );
 
@@ -913,6 +1217,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
                     // Create 3D Tileset using the authenticated resource
                     const tileset = await Cesium.Cesium3DTileset.fromUrl(resource);
+                    tileset.vamsFileKey = key;
 
                     // Add tileset to scene
                     viewerRef.current!.scene.primitives.add(tileset);
@@ -934,14 +1239,17 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         if (primaryTileset.boundingSphere) {
                             try {
+                                const geolocated = tilesets.every(isTilesetGeolocated);
+                                setAllTilesetsGeolocated(geolocated);
+
                                 // Configure camera controller for the primary tileset
-                                configureCameraForTileset(primaryTileset);
+                                configureCameraForTileset(primaryTileset, geolocated);
 
                                 // Create appropriate camera offset
                                 const cameraOffset = createCameraOffset(primaryTileset);
 
-                                // Zoom to primary tileset with proper offset
-                                viewerRef.current.zoomTo(primaryTileset, cameraOffset);
+                                // Point camera at tileset (turntable orbit for local models)
+                                focusCameraOnTileset(primaryTileset, cameraOffset);
 
                                 console.log(
                                     `Zoomed to multiple tilesets with offset - Distance: ${cameraOffset.range.toFixed(
@@ -971,7 +1279,15 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
             console.log(`Loaded ${tilesets.length}/${keys.length} tilesets successfully`);
         },
-        [config, getAuthHeaders, constructStreamingUrl]
+        [
+            config,
+            getAuthHeaders,
+            constructStreamingUrl,
+            configureCameraForTileset,
+            createCameraOffset,
+            isTilesetGeolocated,
+            focusCameraOnTileset,
+        ]
     );
 
     useEffect(() => {
@@ -1223,7 +1539,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 </div>
             )}
 
-            {/* Scene Controls Panel */}
+            {/* Scene Panel (tabbed: Scene Graph / Controls) */}
             {viewerRef.current && showControls && (
                 <div
                     style={{
@@ -1231,23 +1547,26 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         top: initError ? "50px" : "20px",
                         left: "10px",
                         bottom: "20px",
-                        backgroundColor: "rgba(0, 0, 0, 0.8)",
+                        backgroundColor: "rgba(0, 0, 0, 0.85)",
                         color: "white",
-                        padding: "16px",
-                        paddingBottom: "24px", // Extra padding at bottom
                         borderRadius: "8px",
                         fontSize: "0.85em",
                         zIndex: 1000,
-                        minWidth: "200px",
-                        maxWidth: "250px",
-                        overflowY: "auto",
-                        overflowX: "hidden",
-                        // Force scrollbar to be visible
-                        scrollbarWidth: "thin",
-                        scrollbarColor: "rgba(255, 255, 255, 0.5) transparent",
+                        minWidth: "280px",
+                        maxWidth: "320px",
+                        display: "flex",
+                        flexDirection: "column",
+                        overflow: "hidden",
                     }}
                 >
-                    <div style={{ display: "flex", alignItems: "center", marginBottom: "12px" }}>
+                    {/* Header with Tabs */}
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+                        }}
+                    >
                         <button
                             onClick={() => setShowControls(false)}
                             style={{
@@ -1256,178 +1575,217 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                 color: "white",
                                 cursor: "pointer",
                                 fontSize: "16px",
-                                padding: "0",
-                                width: "20px",
-                                height: "20px",
-                                marginRight: "8px",
+                                padding: "16px 12px",
+                                width: "auto",
+                                height: "auto",
                             }}
-                            title="Hide controls"
+                            title="Hide panel"
                         >
                             ×
                         </button>
-                        <h4 style={{ margin: 0, fontSize: "1.1em" }}>Scene Controls</h4>
+                        <div style={{ display: "flex", flex: 1, overflowX: "auto" }}>
+                            <button
+                                onClick={() => setActivePanelTab("sceneGraph")}
+                                style={{
+                                    flex: 1,
+                                    minWidth: "70px",
+                                    background:
+                                        activePanelTab === "sceneGraph"
+                                            ? "rgba(76, 175, 80, 0.3)"
+                                            : "transparent",
+                                    border: "none",
+                                    borderBottom:
+                                        activePanelTab === "sceneGraph"
+                                            ? "2px solid #4CAF50"
+                                            : "2px solid transparent",
+                                    color: "white",
+                                    padding: "12px 8px",
+                                    cursor: "pointer",
+                                    fontSize: "0.8em",
+                                    fontWeight: activePanelTab === "sceneGraph" ? "bold" : "normal",
+                                }}
+                                title="Scene Graph"
+                            >
+                                🌳
+                            </button>
+                            <button
+                                onClick={() => setActivePanelTab("controls")}
+                                style={{
+                                    flex: 1,
+                                    minWidth: "70px",
+                                    background:
+                                        activePanelTab === "controls"
+                                            ? "rgba(33, 150, 243, 0.3)"
+                                            : "transparent",
+                                    border: "none",
+                                    borderBottom:
+                                        activePanelTab === "controls"
+                                            ? "2px solid #2196F3"
+                                            : "2px solid transparent",
+                                    color: "white",
+                                    padding: "12px 8px",
+                                    cursor: "pointer",
+                                    fontSize: "0.8em",
+                                    fontWeight: activePanelTab === "controls" ? "bold" : "normal",
+                                }}
+                                title="Controls"
+                            >
+                                ⚙️
+                            </button>
+                        </div>
                     </div>
 
-                    {/* View Controls */}
-                    <div style={{ marginBottom: "16px" }}>
-                        <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>
-                            Camera Views
-                        </h5>
+                    {/* Scene Graph Tab */}
+                    {activePanelTab === "sceneGraph" && (
+                        <CesiumSceneGraph
+                            tilesets={loadedTilesets}
+                            selectedTiles={selectedTiles}
+                            sceneVersion={sceneVersion}
+                            isTileHidden={isTileHidden}
+                            onTileClick={handleTileGraphClick}
+                            onClearSelection={() => selectTiles([])}
+                            onToggleTileVisibility={toggleTileVisibility}
+                            onSetAllVisibility={setAllTilesVisibility}
+                            onZoomToTile={zoomToTile}
+                        />
+                    )}
+
+                    {/* Controls Tab */}
+                    {activePanelTab === "controls" && (
                         <div
-                            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}
+                            style={{
+                                flex: 1,
+                                overflowY: "auto",
+                                overflowX: "hidden",
+                                padding: "16px",
+                                paddingBottom: "24px",
+                                scrollbarWidth: "thin",
+                                scrollbarColor: "rgba(255, 255, 255, 0.5) transparent",
+                            }}
                         >
-                            {["top", "front", "side", "isometric"].map((view) => (
-                                <button
-                                    key={view}
-                                    onClick={() => setCameraView(view)}
+                            {/* View Controls */}
+                            <div style={{ marginBottom: "16px" }}>
+                                <h5
                                     style={{
-                                        background:
-                                            currentViewMode === view
-                                                ? "#4CAF50"
-                                                : "rgba(255, 255, 255, 0.1)",
+                                        margin: "0 0 8px 0",
+                                        fontSize: "0.9em",
+                                        color: "#ccc",
+                                    }}
+                                >
+                                    Camera Views
+                                </h5>
+                                <div
+                                    style={{
+                                        display: "grid",
+                                        gridTemplateColumns: "1fr 1fr",
+                                        gap: "4px",
+                                    }}
+                                >
+                                    {["top", "front", "side", "isometric"].map((view) => (
+                                        <button
+                                            key={view}
+                                            onClick={() => setCameraView(view)}
+                                            style={{
+                                                background:
+                                                    currentViewMode === view
+                                                        ? "#4CAF50"
+                                                        : "rgba(255, 255, 255, 0.1)",
+                                                border: "1px solid rgba(255, 255, 255, 0.2)",
+                                                color: "white",
+                                                padding: "6px 8px",
+                                                borderRadius: "4px",
+                                                cursor: "pointer",
+                                                fontSize: "0.8em",
+                                                textTransform: "capitalize",
+                                            }}
+                                        >
+                                            {view}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={flyHome}
+                                    style={{
+                                        background: "rgba(255, 255, 255, 0.1)",
                                         border: "1px solid rgba(255, 255, 255, 0.2)",
                                         color: "white",
                                         padding: "6px 8px",
                                         borderRadius: "4px",
                                         cursor: "pointer",
                                         fontSize: "0.8em",
-                                        textTransform: "capitalize",
+                                        width: "100%",
+                                        marginTop: "4px",
                                     }}
+                                    title="Reset camera to home view"
                                 >
-                                    {view}
+                                    🏠 Home
                                 </button>
-                            ))}
-                        </div>
-                    </div>
+                            </div>
 
-                    {/* Rendering Controls */}
-                    <div style={{ marginBottom: "16px" }}>
-                        <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>
-                            Rendering
-                        </h5>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                            <label
-                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
-                            >
-                                <input
-                                    type="checkbox"
-                                    checked={wireframeMode}
-                                    onChange={toggleWireframe}
-                                    style={{ marginRight: "8px" }}
-                                />
-                                Wireframe Mode
-                            </label>
-                            <label
-                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
-                            >
-                                <input
-                                    type="checkbox"
-                                    checked={showBoundingVolumes}
-                                    onChange={toggleBoundingVolumes}
-                                    style={{ marginRight: "8px" }}
-                                />
-                                Bounding Volumes
-                            </label>
-                            <label
-                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
-                            >
-                                <input
-                                    type="checkbox"
-                                    checked={lightingEnabled}
-                                    onChange={toggleLighting}
-                                    style={{ marginRight: "8px" }}
-                                />
-                                Lighting
-                            </label>
-                            <label
-                                style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
-                            >
-                                <input
-                                    type="checkbox"
-                                    checked={shadowsEnabled}
-                                    onChange={toggleShadows}
-                                    style={{ marginRight: "8px" }}
-                                />
-                                Shadows
-                            </label>
-                        </div>
-
-                        {/* Background Color Controls */}
-                        <div style={{ marginTop: "12px" }}>
-                            <h6 style={{ margin: "0 0 6px 0", fontSize: "0.8em", color: "#ddd" }}>
-                                Background:
-                            </h6>
-                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                                {[
-                                    { color: "#000000", name: "Black" },
-                                    { color: "#ffffff", name: "White" },
-                                    { color: "#87ceeb", name: "Light Blue" },
-                                ].map(({ color, name }) => (
-                                    <button
-                                        key={color}
-                                        onClick={() => changeBackgroundColor(color)}
+                            {/* Scene Mode — 2D/2.5D projections only work for geo-located tilesets */}
+                            {allTilesetsGeolocated && (
+                                <div style={{ marginBottom: "16px" }}>
+                                    <h5
                                         style={{
-                                            width: "32px",
-                                            height: "24px",
-                                            backgroundColor: color,
-                                            border:
-                                                backgroundColor === color
-                                                    ? "2px solid #4CAF50"
-                                                    : "1px solid rgba(255, 255, 255, 0.3)",
-                                            borderRadius: "3px",
-                                            cursor: "pointer",
-                                            position: "relative",
+                                            margin: "0 0 8px 0",
+                                            fontSize: "0.9em",
+                                            color: "#ccc",
                                         }}
-                                        title={`${name} (${color})`}
                                     >
-                                        {backgroundColor === color && (
-                                            <div
+                                        Scene Mode
+                                    </h5>
+                                    <div
+                                        style={{
+                                            display: "grid",
+                                            gridTemplateColumns: "1fr 1fr 1fr",
+                                            gap: "4px",
+                                        }}
+                                    >
+                                        {(
+                                            [
+                                                { mode: "3d", label: "3D" },
+                                                { mode: "2d", label: "2D" },
+                                                { mode: "columbus", label: "2.5D" },
+                                            ] as const
+                                        ).map(({ mode, label }) => (
+                                            <button
+                                                key={mode}
+                                                onClick={() => changeSceneMode(mode)}
                                                 style={{
-                                                    position: "absolute",
-                                                    top: "50%",
-                                                    left: "50%",
-                                                    transform: "translate(-50%, -50%)",
-                                                    color:
-                                                        color === "#ffffff" || color === "#87ceeb"
-                                                            ? "#000"
-                                                            : "#fff",
-                                                    fontSize: "10px",
-                                                    fontWeight: "bold",
+                                                    background:
+                                                        sceneMode === mode
+                                                            ? "#4CAF50"
+                                                            : "rgba(255, 255, 255, 0.1)",
+                                                    border: "1px solid rgba(255, 255, 255, 0.2)",
+                                                    color: "white",
+                                                    padding: "6px 8px",
+                                                    borderRadius: "4px",
+                                                    cursor: "pointer",
+                                                    fontSize: "0.8em",
                                                 }}
                                             >
-                                                ✓
-                                            </div>
-                                        )}
-                                    </button>
-                                ))}
-                                <input
-                                    type="color"
-                                    value={backgroundColor}
-                                    onChange={(e) => changeBackgroundColor(e.target.value)}
-                                    style={{
-                                        width: "32px",
-                                        height: "24px",
-                                        border: "1px solid rgba(255, 255, 255, 0.3)",
-                                        borderRadius: "3px",
-                                        cursor: "pointer",
-                                        backgroundColor: "transparent",
-                                    }}
-                                    title="Custom color picker"
-                                />
-                            </div>
-                        </div>
-                    </div>
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
-                    {/* Tileset Visibility */}
-                    {loadedTilesets.length > 1 && (
-                        <div style={{ marginBottom: "16px" }}>
-                            <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>
-                                Tilesets
-                            </h5>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                                {loadedTilesets.map((_, index) => (
+                            {/* Rendering Controls */}
+                            <div style={{ marginBottom: "16px" }}>
+                                <h5
+                                    style={{
+                                        margin: "0 0 8px 0",
+                                        fontSize: "0.9em",
+                                        color: "#ccc",
+                                    }}
+                                >
+                                    Rendering
+                                </h5>
+                                <div
+                                    style={{ display: "flex", flexDirection: "column", gap: "6px" }}
+                                >
                                     <label
-                                        key={index}
                                         style={{
                                             display: "flex",
                                             alignItems: "center",
@@ -1436,170 +1794,379 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                     >
                                         <input
                                             type="checkbox"
-                                            checked={tilesetVisibility[index] !== false}
-                                            onChange={() => toggleTilesetVisibility(index)}
+                                            checked={wireframeMode}
+                                            onChange={toggleWireframe}
                                             style={{ marginRight: "8px" }}
                                         />
-                                        Tileset {index + 1}
+                                        Wireframe Mode
                                     </label>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Measurement Tools */}
-                    <div style={{ marginBottom: "16px" }}>
-                        <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>
-                            Measurements
-                        </h5>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                            <button
-                                onClick={() => startMeasurement("distance")}
-                                style={{
-                                    background:
-                                        measurementMode === "distance" ? "#4CAF50" : "#9C27B0",
-                                    border: "none",
-                                    color: "white",
-                                    padding: "8px 12px",
-                                    borderRadius: "4px",
-                                    cursor: "pointer",
-                                    fontSize: "0.8em",
-                                }}
-                                disabled={measurementMode === "distance"}
-                            >
-                                📏{" "}
-                                {measurementMode === "distance"
-                                    ? "Click 2 points"
-                                    : "Measure Distance"}
-                            </button>
-                            <button
-                                onClick={() => startMeasurement("area")}
-                                style={{
-                                    background: measurementMode === "area" ? "#4CAF50" : "#9C27B0",
-                                    border: "none",
-                                    color: "white",
-                                    padding: "8px 12px",
-                                    borderRadius: "4px",
-                                    cursor: "pointer",
-                                    fontSize: "0.8em",
-                                }}
-                                disabled={measurementMode === "area"}
-                            >
-                                📐 {measurementMode === "area" ? "Click 3+ points" : "Measure Area"}
-                            </button>
-                            <button
-                                onClick={clearMeasurements}
-                                style={{
-                                    background: "#F44336",
-                                    border: "none",
-                                    color: "white",
-                                    padding: "8px 12px",
-                                    borderRadius: "4px",
-                                    cursor: "pointer",
-                                    fontSize: "0.8em",
-                                }}
-                                disabled={measurementResults.length === 0}
-                            >
-                                🗑️ Clear Measurements
-                            </button>
-                        </div>
-
-                        {/* Measurement Results */}
-                        {measurementResults.length > 0 && (
-                            <div
-                                style={{
-                                    marginTop: "12px",
-                                    padding: "8px",
-                                    backgroundColor: "rgba(255, 255, 255, 0.1)",
-                                    borderRadius: "4px",
-                                }}
-                            >
-                                <h6
-                                    style={{
-                                        margin: "0 0 6px 0",
-                                        fontSize: "0.8em",
-                                        color: "#ddd",
-                                    }}
-                                >
-                                    Results:
-                                </h6>
-                                {measurementResults.map((result, index) => (
-                                    <div
-                                        key={result.id}
+                                    <label
                                         style={{
-                                            fontSize: "0.8em",
-                                            color: "#fff",
-                                            marginBottom: "4px",
-                                            padding: "4px 6px",
-                                            backgroundColor: "rgba(255, 255, 255, 0.1)",
-                                            borderRadius: "3px",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            cursor: "pointer",
                                         }}
                                     >
-                                        <span style={{ marginRight: "8px" }}>
-                                            {result.type === "distance" ? "📏" : "📐"}
-                                        </span>
-                                        <strong>
-                                            {result.value.toFixed(2)} {result.unit}
-                                        </strong>
-                                        <span style={{ color: "#ccc", marginLeft: "8px" }}>
-                                            ({result.type === "distance" ? "Distance" : "Area"} #
-                                            {index + 1})
-                                        </span>
+                                        <input
+                                            type="checkbox"
+                                            checked={showBoundingVolumes}
+                                            onChange={toggleBoundingVolumes}
+                                            style={{ marginRight: "8px" }}
+                                        />
+                                        Bounding Volumes
+                                    </label>
+                                    <label
+                                        style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={lightingEnabled}
+                                            onChange={toggleLighting}
+                                            style={{ marginRight: "8px" }}
+                                        />
+                                        Lighting
+                                    </label>
+                                    <label
+                                        style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={shadowsEnabled}
+                                            onChange={toggleShadows}
+                                            style={{ marginRight: "8px" }}
+                                        />
+                                        Shadows
+                                    </label>
+                                </div>
+
+                                {/* Background Color Controls */}
+                                <div style={{ marginTop: "12px" }}>
+                                    <h6
+                                        style={{
+                                            margin: "0 0 6px 0",
+                                            fontSize: "0.8em",
+                                            color: "#ddd",
+                                        }}
+                                    >
+                                        Background:
+                                    </h6>
+                                    <div
+                                        style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "4px",
+                                        }}
+                                    >
+                                        {[
+                                            { color: "#000000", name: "Black" },
+                                            { color: "#ffffff", name: "White" },
+                                            { color: "#87ceeb", name: "Light Blue" },
+                                        ].map(({ color, name }) => (
+                                            <button
+                                                key={color}
+                                                onClick={() => changeBackgroundColor(color)}
+                                                style={{
+                                                    width: "32px",
+                                                    height: "24px",
+                                                    backgroundColor: color,
+                                                    border:
+                                                        backgroundColor === color
+                                                            ? "2px solid #4CAF50"
+                                                            : "1px solid rgba(255, 255, 255, 0.3)",
+                                                    borderRadius: "3px",
+                                                    cursor: "pointer",
+                                                    position: "relative",
+                                                }}
+                                                title={`${name} (${color})`}
+                                            >
+                                                {backgroundColor === color && (
+                                                    <div
+                                                        style={{
+                                                            position: "absolute",
+                                                            top: "50%",
+                                                            left: "50%",
+                                                            transform: "translate(-50%, -50%)",
+                                                            color:
+                                                                color === "#ffffff" ||
+                                                                color === "#87ceeb"
+                                                                    ? "#000"
+                                                                    : "#fff",
+                                                            fontSize: "10px",
+                                                            fontWeight: "bold",
+                                                        }}
+                                                    >
+                                                        ✓
+                                                    </div>
+                                                )}
+                                            </button>
+                                        ))}
+                                        <input
+                                            type="color"
+                                            value={backgroundColor}
+                                            onChange={(e) => changeBackgroundColor(e.target.value)}
+                                            style={{
+                                                width: "32px",
+                                                height: "24px",
+                                                border: "1px solid rgba(255, 255, 255, 0.3)",
+                                                borderRadius: "3px",
+                                                cursor: "pointer",
+                                                backgroundColor: "transparent",
+                                            }}
+                                            title="Custom color picker"
+                                        />
                                     </div>
-                                ))}
+                                </div>
                             </div>
-                        )}
-                    </div>
 
-                    {/* Action Buttons */}
-                    <div style={{ marginBottom: "16px" }}>
-                        <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>
-                            Actions
-                        </h5>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                            <button
-                                onClick={takeScreenshot}
-                                style={{
-                                    background: "#2196F3",
-                                    border: "none",
-                                    color: "white",
-                                    padding: "8px 12px",
-                                    borderRadius: "4px",
-                                    cursor: "pointer",
-                                    fontSize: "0.8em",
-                                }}
-                            >
-                                📷 Screenshot
-                            </button>
-                            <button
-                                onClick={resetScene}
-                                style={{
-                                    background: "#FF9800",
-                                    border: "none",
-                                    color: "white",
-                                    padding: "8px 12px",
-                                    borderRadius: "4px",
-                                    cursor: "pointer",
-                                    fontSize: "0.8em",
-                                }}
-                            >
-                                🔄 Reset Scene
-                            </button>
-                        </div>
-                    </div>
+                            {/* Tileset Visibility */}
+                            {loadedTilesets.length > 1 && (
+                                <div style={{ marginBottom: "16px" }}>
+                                    <h5
+                                        style={{
+                                            margin: "0 0 8px 0",
+                                            fontSize: "0.9em",
+                                            color: "#ccc",
+                                        }}
+                                    >
+                                        Tilesets
+                                    </h5>
+                                    <div
+                                        style={{
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            gap: "4px",
+                                        }}
+                                    >
+                                        {loadedTilesets.map((_, index) => (
+                                            <label
+                                                key={index}
+                                                style={{
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    cursor: "pointer",
+                                                }}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={tilesetVisibility[index] !== false}
+                                                    onChange={() => toggleTilesetVisibility(index)}
+                                                    style={{ marginRight: "8px" }}
+                                                />
+                                                Tileset {index + 1}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
-                    {/* Performance Stats */}
-                    {performanceStats && (
-                        <div>
-                            <h5 style={{ margin: "0 0 8px 0", fontSize: "0.9em", color: "#ccc" }}>
-                                Performance
-                            </h5>
-                            <div style={{ fontSize: "0.8em", color: "#aaa" }}>
-                                <div>FPS: {performanceStats.fps}</div>
-                                {performanceStats.memory > 0 && (
-                                    <div>Memory: {performanceStats.memory} MB</div>
+                            {/* Measurement Tools */}
+                            <div style={{ marginBottom: "16px" }}>
+                                <h5
+                                    style={{
+                                        margin: "0 0 8px 0",
+                                        fontSize: "0.9em",
+                                        color: "#ccc",
+                                    }}
+                                >
+                                    Measurements
+                                </h5>
+                                <div
+                                    style={{ display: "flex", flexDirection: "column", gap: "6px" }}
+                                >
+                                    <button
+                                        onClick={() => startMeasurement("distance")}
+                                        style={{
+                                            background:
+                                                measurementMode === "distance"
+                                                    ? "#4CAF50"
+                                                    : "#9C27B0",
+                                            border: "none",
+                                            color: "white",
+                                            padding: "8px 12px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontSize: "0.8em",
+                                        }}
+                                        disabled={measurementMode === "distance"}
+                                    >
+                                        📏{" "}
+                                        {measurementMode === "distance"
+                                            ? "Click 2 points"
+                                            : "Measure Distance"}
+                                    </button>
+                                    <button
+                                        onClick={() => startMeasurement("area")}
+                                        style={{
+                                            background:
+                                                measurementMode === "area" ? "#4CAF50" : "#9C27B0",
+                                            border: "none",
+                                            color: "white",
+                                            padding: "8px 12px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontSize: "0.8em",
+                                        }}
+                                        disabled={measurementMode === "area"}
+                                    >
+                                        📐{" "}
+                                        {measurementMode === "area"
+                                            ? "Click 3+ points"
+                                            : "Measure Area"}
+                                    </button>
+                                    <button
+                                        onClick={clearMeasurements}
+                                        style={{
+                                            background: "#F44336",
+                                            border: "none",
+                                            color: "white",
+                                            padding: "8px 12px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontSize: "0.8em",
+                                        }}
+                                        disabled={measurementResults.length === 0}
+                                    >
+                                        🗑️ Clear Measurements
+                                    </button>
+                                </div>
+
+                                {/* Measurement Results */}
+                                {measurementResults.length > 0 && (
+                                    <div
+                                        style={{
+                                            marginTop: "12px",
+                                            padding: "8px",
+                                            backgroundColor: "rgba(255, 255, 255, 0.1)",
+                                            borderRadius: "4px",
+                                        }}
+                                    >
+                                        <h6
+                                            style={{
+                                                margin: "0 0 6px 0",
+                                                fontSize: "0.8em",
+                                                color: "#ddd",
+                                            }}
+                                        >
+                                            Results:
+                                        </h6>
+                                        {measurementResults.map((result, index) => (
+                                            <div
+                                                key={result.id}
+                                                style={{
+                                                    fontSize: "0.8em",
+                                                    color: "#fff",
+                                                    marginBottom: "4px",
+                                                    padding: "4px 6px",
+                                                    backgroundColor: "rgba(255, 255, 255, 0.1)",
+                                                    borderRadius: "3px",
+                                                }}
+                                            >
+                                                <span style={{ marginRight: "8px" }}>
+                                                    {result.type === "distance" ? "📏" : "📐"}
+                                                </span>
+                                                <strong>
+                                                    {result.value.toFixed(2)} {result.unit}
+                                                </strong>
+                                                <span style={{ color: "#ccc", marginLeft: "8px" }}>
+                                                    (
+                                                    {result.type === "distance"
+                                                        ? "Distance"
+                                                        : "Area"}{" "}
+                                                    #{index + 1})
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 )}
                             </div>
+
+                            {/* Action Buttons */}
+                            <div style={{ marginBottom: "16px" }}>
+                                <h5
+                                    style={{
+                                        margin: "0 0 8px 0",
+                                        fontSize: "0.9em",
+                                        color: "#ccc",
+                                    }}
+                                >
+                                    Actions
+                                </h5>
+                                <div
+                                    style={{ display: "flex", flexDirection: "column", gap: "6px" }}
+                                >
+                                    <button
+                                        onClick={takeScreenshot}
+                                        style={{
+                                            background: "#2196F3",
+                                            border: "none",
+                                            color: "white",
+                                            padding: "8px 12px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontSize: "0.8em",
+                                        }}
+                                    >
+                                        📷 Screenshot
+                                    </button>
+                                    <button
+                                        onClick={resetScene}
+                                        style={{
+                                            background: "#FF9800",
+                                            border: "none",
+                                            color: "white",
+                                            padding: "8px 12px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontSize: "0.8em",
+                                        }}
+                                    >
+                                        🔄 Reset Scene
+                                    </button>
+                                    <button
+                                        onClick={toggleFullscreen}
+                                        style={{
+                                            background: "#607D8B",
+                                            border: "none",
+                                            color: "white",
+                                            padding: "8px 12px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontSize: "0.8em",
+                                        }}
+                                    >
+                                        ⛶ Fullscreen
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Performance Stats */}
+                            {performanceStats && (
+                                <div>
+                                    <h5
+                                        style={{
+                                            margin: "0 0 8px 0",
+                                            fontSize: "0.9em",
+                                            color: "#ccc",
+                                        }}
+                                    >
+                                        Performance
+                                    </h5>
+                                    <div style={{ fontSize: "0.8em", color: "#aaa" }}>
+                                        <div>FPS: {performanceStats.fps}</div>
+                                        {performanceStats.memory > 0 && (
+                                            <div>Memory: {performanceStats.memory} MB</div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -1657,6 +2224,61 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     <div style={{ fontSize: "0.8em", marginTop: "4px", opacity: 0.9 }}>
                         Press ESC or click "Clear Measurements" to cancel
                     </div>
+                </div>
+            )}
+
+            {/* Picked feature info panel */}
+            {pickedFeatureInfo && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "20px",
+                        right: "10px",
+                        backgroundColor: "rgba(0, 0, 0, 0.8)",
+                        color: "white",
+                        padding: "12px 16px",
+                        borderRadius: "8px",
+                        fontSize: "0.85em",
+                        zIndex: 1000,
+                        maxWidth: "300px",
+                        maxHeight: "50%",
+                        overflowY: "auto",
+                    }}
+                >
+                    <div
+                        style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            marginBottom: "8px",
+                        }}
+                    >
+                        <strong>{pickedFeatureInfo.title}</strong>
+                        <button
+                            onClick={() => setPickedFeatureInfo(null)}
+                            style={{
+                                background: "none",
+                                border: "none",
+                                color: "white",
+                                cursor: "pointer",
+                                fontSize: "14px",
+                                padding: "0 0 0 12px",
+                            }}
+                            title="Close"
+                        >
+                            ×
+                        </button>
+                    </div>
+                    {pickedFeatureInfo.properties.length === 0 ? (
+                        <div style={{ color: "#ccc" }}>No properties</div>
+                    ) : (
+                        pickedFeatureInfo.properties.map(([key, value]) => (
+                            <div key={key} style={{ marginBottom: "4px" }}>
+                                <span style={{ color: "#aaa" }}>{key}: </span>
+                                <span>{value}</span>
+                            </div>
+                        ))
+                    )}
                 </div>
             )}
 

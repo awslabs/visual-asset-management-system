@@ -104,74 +104,90 @@ class TestTagCreateCommand:
             
             assert result.exit_code == 0
             assert '✓ Tag(s) created successfully!' in result.output
-            
-            # Verify API call
+
+            # Verify API call (flat single-object body, matching the backend contract)
             expected_data = {
+                'tagName': 'urgent',
+                'description': 'Urgent priority',
+                'tagTypeName': 'priority'
+            }
+            mocks['api_client'].create_tags.assert_called_once_with(expected_data)
+
+    def test_create_json_input_string(self, cli_runner, tag_command_mocks):
+        """Test tag creation with a flat JSON input string (no wrapper)."""
+        with tag_command_mocks as mocks:
+            mocks['api_client'].create_tags.return_value = {
+                'message': 'Succeeded'
+            }
+
+            # Flat object matching the backend contract
+            json_data = {
+                'tagName': 'urgent',
+                'description': 'Urgent priority',
+                'tagTypeName': 'priority'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'tag', 'create',
+                '--json-input', json.dumps(json_data)
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Tag(s) created successfully!' in result.output
+
+            # Verify API call passes the flat object through unchanged
+            mocks['api_client'].create_tags.assert_called_once_with(json_data)
+
+    def test_create_json_input_legacy_wrapper_unwrapped(self, cli_runner, tag_command_mocks):
+        """A legacy {"tags":[{...}]} wrapper is unwrapped to a flat object for the API."""
+        with tag_command_mocks as mocks:
+            mocks['api_client'].create_tags.return_value = {'message': 'Succeeded'}
+
+            legacy_wrapped = {
                 'tags': [{
                     'tagName': 'urgent',
                     'description': 'Urgent priority',
                     'tagTypeName': 'priority'
                 }]
             }
-            mocks['api_client'].create_tags.assert_called_once_with(expected_data)
-    
-    def test_create_json_input_string(self, cli_runner, tag_command_mocks):
-        """Test tag creation with JSON input string."""
-        with tag_command_mocks as mocks:
-            mocks['api_client'].create_tags.return_value = {
-                'message': 'Succeeded'
-            }
-            
-            json_data = {
-                'tags': [
-                    {
-                        'tagName': 'urgent',
-                        'description': 'Urgent priority',
-                        'tagTypeName': 'priority'
-                    },
-                    {
-                        'tagName': 'low',
-                        'description': 'Low priority',
-                        'tagTypeName': 'priority'
-                    }
-                ]
-            }
-            
+
             result = cli_runner.invoke(cli, [
                 'tag', 'create',
-                '--json-input', json.dumps(json_data)
+                '--json-input', json.dumps(legacy_wrapped)
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Tag(s) created successfully!' in result.output
-            
-            # Verify API call
-            mocks['api_client'].create_tags.assert_called_once_with(json_data)
-    
+
+            # The wrapper is unwrapped to the flat first element before the API call
+            mocks['api_client'].create_tags.assert_called_once_with({
+                'tagName': 'urgent',
+                'description': 'Urgent priority',
+                'tagTypeName': 'priority'
+            })
+
     def test_create_json_input_file(self, cli_runner, tag_command_mocks):
-        """Test tag creation with JSON input file."""
+        """Test tag creation with JSON input file (flat object)."""
         with tag_command_mocks as mocks:
             mocks['api_client'].create_tags.return_value = {
                 'message': 'Succeeded'
             }
-            
+
             json_data = {
-                'tags': [{
-                    'tagName': 'test-tag',
-                    'description': 'Test tag from file',
-                    'tagTypeName': 'test-type'
-                }]
+                'tagName': 'test-tag',
+                'description': 'Test tag from file',
+                'tagTypeName': 'test-type'
             }
-            
+
             with patch('builtins.open', mock_open(read_data=json.dumps(json_data))):
                 result = cli_runner.invoke(cli, [
                     'tag', 'create',
                     '--json-input', 'tags.json'
                 ])
-            
+
             assert result.exit_code == 0
             assert '✓ Tag(s) created successfully!' in result.output
-            
+
             # Verify API call
             mocks['api_client'].create_tags.assert_called_once_with(json_data)
     
@@ -323,11 +339,9 @@ class TestTagUpdateCommand:
             # Verify API calls
             mocks['api_client'].get_tags.assert_called_once()
             expected_data = {
-                'tags': [{
-                    'tagName': 'urgent',
-                    'description': 'Updated description',
-                    'tagTypeName': 'priority'
-                }]
+                'tagName': 'urgent',
+                'description': 'Updated description',
+                'tagTypeName': 'priority'
             }
             mocks['api_client'].update_tags.assert_called_once_with(expected_data)
     
@@ -358,41 +372,37 @@ class TestTagUpdateCommand:
             assert result.exit_code == 0
             assert '✓ Tag(s) updated successfully!' in result.output
             
-            # Verify API calls - should strip [R] indicator
+            # Verify API calls - should strip [R] indicator (flat single-object body)
             expected_data = {
-                'tags': [{
-                    'tagName': 'urgent',
-                    'description': 'Urgent priority',
-                    'tagTypeName': 'status'
-                }]
+                'tagName': 'urgent',
+                'description': 'Urgent priority',
+                'tagTypeName': 'status'
             }
             mocks['api_client'].update_tags.assert_called_once_with(expected_data)
-    
+
     def test_update_json_input(self, cli_runner, tag_command_mocks):
-        """Test tag update with JSON input."""
+        """Test tag update with a flat JSON input (no wrapper)."""
         with tag_command_mocks as mocks:
             mocks['api_client'].update_tags.return_value = {
                 'message': 'Succeeded'
             }
-            
+
             json_data = {
-                'tags': [{
-                    'tagName': 'urgent',
-                    'description': 'Updated via JSON',
-                    'tagTypeName': 'priority'
-                }]
+                'tagName': 'urgent',
+                'description': 'Updated via JSON',
+                'tagTypeName': 'priority'
             }
-            
+
             result = cli_runner.invoke(cli, [
                 'tag', 'update',
                 '--json-input', json.dumps(json_data)
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Tag(s) updated successfully!' in result.output
             assert 'Updating tag \'urgent\'...' in result.output
-            
-            # Verify API call
+
+            # Verify API call passes the flat object through unchanged
             mocks['api_client'].update_tags.assert_called_once_with(json_data)
     
     def test_update_tag_not_found(self, cli_runner, tag_command_mocks):

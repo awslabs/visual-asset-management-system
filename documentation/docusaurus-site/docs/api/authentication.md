@@ -166,12 +166,13 @@ None.
 
 ```json
 {
-    "featuresEnabled": ["CLOUDFRONTDEPLOY", "LOCATIONSERVICES", "AUTHPROVIDER_COGNITO"],
-    "config": {
-        "region": "us-east-1"
-    }
+    "featuresEnabled": "CLOUDFRONTDEPLOY,LOCATIONSERVICES,AUTHPROVIDER_COGNITO",
+    "locationServiceApiUrl": "https://maps.geo.us-east-1.amazonaws.com/v2/styles/Standard/descriptor?key=<apiKey>",
+    "webDeployedUrl": "https://example.cloudfront.net"
 }
 ```
+
+`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` and `webDeployedUrl` are empty strings when Amazon Location Service or the web deployment URL is not configured.
 
 **Error Responses:**
 
@@ -217,7 +218,7 @@ Returns the list of web application routes that the current user is authorized t
 
 `GET /auth/loginProfile/{userId}`
 
-Retrieves the login profile for the specified user, including role assignments and constraint information.
+Retrieves the requesting user's stored login profile. A user who has authenticated but has no stored profile yet (for example, not assigned any roles) receives an identity-only profile (just `userId`) so login can still proceed. The profile may also include organization-specific fields.
 
 **Request Parameters:**
 
@@ -230,8 +231,7 @@ Retrieves the login profile for the specified user, including role assignments a
 ```json
 {
     "userId": "user@example.com",
-    "roles": ["admin", "viewer"],
-    "constraints": [ ... ]
+    "email": "user@example.com"
 }
 ```
 
@@ -239,6 +239,7 @@ Retrieves the login profile for the specified user, including role assignments a
 
 | Status | Description                                 |
 | ------ | ------------------------------------------- |
+| `400`  | Invalid request parameters.                 |
 | `403`  | Not authorized to view this user's profile. |
 | `500`  | Internal server error.                      |
 
@@ -260,11 +261,18 @@ Updates the login profile for a user. This is the primary endpoint for refreshin
 
 Optional. Body contents may be overridden by internal organizational profile logic.
 
+```json
+{
+    "email": "user@example.com"
+}
+```
+
 **Response:**
 
 ```json
 {
-    "message": "Login profile updated"
+    "userId": "user@example.com",
+    "email": "user@example.com"
 }
 ```
 
@@ -272,6 +280,7 @@ Optional. Body contents may be overridden by internal organizational profile log
 
 | Status | Description                                   |
 | ------ | --------------------------------------------- |
+| `400`  | Invalid request parameters.                   |
 | `403`  | Not authorized to update this user's profile. |
 | `500`  | Internal server error.                        |
 

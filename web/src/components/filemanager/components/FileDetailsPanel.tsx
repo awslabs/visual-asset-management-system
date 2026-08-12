@@ -1,4 +1,4 @@
-import React, { useContext, useState, useEffect, useRef } from "react";
+import React, { useContext, useState, useEffect, useRef, useMemo } from "react";
 import {
     Alert,
     Box,
@@ -27,6 +27,7 @@ import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
 import { MoveFilesModal } from "../modals/MoveFilesModal";
 import { FileVersionsModal } from "../modals/FileVersionsModal";
+import { AssetHistoryModal } from "../modals/AssetHistoryModal";
 import { SetPrimaryTypeModal } from "../modals/SetPrimaryTypeModal";
 import { ShareUrlsModal } from "../modals/ShareUrlsModal";
 import { RenameFileModal } from "../modals/RenameFileModal";
@@ -39,6 +40,8 @@ import "./FileDetailsPanel.css";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import Synonyms from "../../../synonyms";
+import AutomationActions from "./AutomationActions";
+import { deriveAutomationInputFiles, automationDisabledReason } from "../utils/automationSelection";
 
 // Import the context from FileTreeView
 import { FileManagerContext } from "./FileTreeView";
@@ -55,6 +58,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const selectedItem = state.selectedItem;
     const selectedItems = state.selectedItems;
     const isMultiSelect = state.multiSelectMode && selectedItems.length > 1;
+    // A non-distributable asset is refused by the download, stream, and preview APIs, so the
+    // affordances that call them (Export, View File, the viewer popup) are hidden rather than left to
+    // fail. Compared against false so the pre-fetch null asset and a record predating the field both
+    // keep the distributable behavior.
+    const isNotDistributable = asset?.isDistributable === false;
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -188,6 +196,37 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             ? selectedItem.isFolder
             : selectedItem?.subTree.length! > 0 || selectedItem?.keyPrefix.endsWith("/");
 
+    // The current selection expressed as workflow input files (extracted so the four selection
+    // shapes — whole asset, folder, one file, many files — are verifiable on their own).
+    const automationSelection = useMemo(
+        () => ({
+            databaseId,
+            assetId,
+            isMultiSelect,
+            selectedItems: selectedItems as any[],
+            selectedItem: selectedItem as any,
+            isFolder: !!isFolder,
+            assetVersionId: state.assetVersionId,
+        }),
+        [
+            databaseId,
+            assetId,
+            isMultiSelect,
+            selectedItems,
+            selectedItem,
+            isFolder,
+            state.assetVersionId,
+        ]
+    );
+    const automationInputFiles = useMemo(
+        () => deriveAutomationInputFiles(automationSelection),
+        [automationSelection]
+    );
+    const automationDisabled = useMemo(
+        () => automationDisabledReason(automationSelection, automationInputFiles),
+        [automationSelection, automationInputFiles]
+    );
+
     // Determine if metadata should be shown
     const shouldShowMetadata =
         selectedItem &&
@@ -204,6 +243,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showMoveFilesModal, setShowMoveFilesModal] = useState(false);
     const [showFileVersionsModal, setShowFileVersionsModal] = useState(false);
+    const [showAssetHistoryModal, setShowAssetHistoryModal] = useState(false);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [showFilePreviewModal, setShowFilePreviewModal] = useState(false);
     const [preloadedAssetUrl, setPreloadedAssetUrl] = useState<string | undefined>(undefined);
@@ -579,40 +619,52 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     </ButtonDropdown>
                                                 )}
 
-                                                <ButtonDropdown
-                                                    items={[
-                                                        {
-                                                            id: "download",
-                                                            text: "Download Files",
-                                                            iconName: "download",
-                                                        },
-                                                        {
-                                                            id: "share",
-                                                            text: "Share File(s) URL",
-                                                            iconName: "share",
-                                                        },
-                                                    ]}
-                                                    onItemClick={({ detail }) => {
-                                                        switch (detail.id) {
-                                                            case "download":
-                                                                handleMultiFileDownload();
-                                                                break;
-                                                            case "share":
-                                                                setShowShareUrlsModal(true);
-                                                                break;
-                                                        }
-                                                    }}
-                                                >
-                                                    Export
-                                                </ButtonDropdown>
+                                                {/* Automation sits immediately LEFT of Export (multi-file selection). */}
+                                                <AutomationActions
+                                                    databaseId={databaseId!}
+                                                    assetId={assetId!}
+                                                    inputFiles={automationInputFiles}
+                                                    disabledReason={automationDisabled}
+                                                />
 
-                                                <Button
-                                                    iconName="external"
-                                                    variant={"primary"}
-                                                    onClick={handleMultiFileView}
-                                                >
-                                                    {`View ${Synonyms.Asset} Files`}
-                                                </Button>
+                                                {!isNotDistributable && (
+                                                    <ButtonDropdown
+                                                        items={[
+                                                            {
+                                                                id: "download",
+                                                                text: "Download Files",
+                                                                iconName: "download",
+                                                            },
+                                                            {
+                                                                id: "share",
+                                                                text: "Share File(s) URL",
+                                                                iconName: "share",
+                                                            },
+                                                        ]}
+                                                        onItemClick={({ detail }) => {
+                                                            switch (detail.id) {
+                                                                case "download":
+                                                                    handleMultiFileDownload();
+                                                                    break;
+                                                                case "share":
+                                                                    setShowShareUrlsModal(true);
+                                                                    break;
+                                                            }
+                                                        }}
+                                                    >
+                                                        Export
+                                                    </ButtonDropdown>
+                                                )}
+
+                                                {!isNotDistributable && (
+                                                    <Button
+                                                        iconName="external"
+                                                        variant={"primary"}
+                                                        onClick={handleMultiFileView}
+                                                    >
+                                                        {`View ${Synonyms.Asset} Files`}
+                                                    </Button>
+                                                )}
                                             </>
                                         )}
                                     </>
@@ -623,7 +675,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
                     <div className="multi-select-info">
                         {/* Show File Viewer: Popup link for multi-file selection */}
-                        {!hasSelectedFolders && (
+                        {!hasSelectedFolders && !isNotDistributable && (
                             <div className="file-info-item">
                                 <div className="file-info-label">File Viewer:</div>
                                 <div className="file-info-value">
@@ -734,11 +786,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             }
 
             // Call the API to create the folder
-            const [success, response] = await createFolder({
+            const [success, response] = (await createFolder({
                 databaseId,
                 assetId,
                 relativeKey,
-            });
+            })) as [boolean, any];
 
             if (success) {
                 // Refresh the file list
@@ -951,6 +1003,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     />
                 )}
 
+                {/* Asset History Modal - asset root node only */}
+                <AssetHistoryModal
+                    visible={showAssetHistoryModal}
+                    onDismiss={() => setShowAssetHistoryModal(false)}
+                    databaseId={databaseId!}
+                    assetId={assetId!}
+                    assetName={asset?.assetName}
+                />
+
                 {/* Set Primary Type Modal */}
                 <SetPrimaryTypeModal
                     visible={showSetPrimaryTypeModal}
@@ -1049,39 +1110,49 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     </ButtonDropdown>
                                 )}
 
-                                <ButtonDropdown
-                                    items={[
-                                        {
-                                            id: "download-folder",
-                                            text: "Download Folder",
-                                            iconName: "download",
-                                            disabled: !hasFolderContent(selectedItem),
-                                        },
-                                        {
-                                            id: "share-folder",
-                                            text: "Share Files URL",
-                                            iconName: "share",
-                                            disabled: !hasFolderContent(selectedItem),
-                                        },
-                                    ]}
-                                    onItemClick={({ detail }) => {
-                                        if (detail.id === "download-folder") {
-                                            navigate(
-                                                `/databases/${databaseId}/assets/${assetId}/download`,
-                                                {
-                                                    state: {
-                                                        fileTree: selectedItem,
-                                                        assetVersionId: state.assetVersionId,
-                                                    },
-                                                }
-                                            );
-                                        } else if (detail.id === "share-folder") {
-                                            setShowShareUrlsModal(true);
-                                        }
-                                    }}
-                                >
-                                    Export
-                                </ButtonDropdown>
+                                {/* Automation sits immediately LEFT of Export (folder selection). */}
+                                <AutomationActions
+                                    databaseId={databaseId!}
+                                    assetId={assetId!}
+                                    inputFiles={automationInputFiles}
+                                    disabledReason={automationDisabled}
+                                />
+
+                                {!isNotDistributable && (
+                                    <ButtonDropdown
+                                        items={[
+                                            {
+                                                id: "download-folder",
+                                                text: "Download Folder",
+                                                iconName: "download",
+                                                disabled: !hasFolderContent(selectedItem),
+                                            },
+                                            {
+                                                id: "share-folder",
+                                                text: "Share Files URL",
+                                                iconName: "share",
+                                                disabled: !hasFolderContent(selectedItem),
+                                            },
+                                        ]}
+                                        onItemClick={({ detail }) => {
+                                            if (detail.id === "download-folder") {
+                                                navigate(
+                                                    `/databases/${databaseId}/assets/${assetId}/download`,
+                                                    {
+                                                        state: {
+                                                            fileTree: selectedItem,
+                                                            assetVersionId: state.assetVersionId,
+                                                        },
+                                                    }
+                                                );
+                                            } else if (detail.id === "share-folder") {
+                                                setShowShareUrlsModal(true);
+                                            }
+                                        }}
+                                    >
+                                        Export
+                                    </ButtonDropdown>
+                                )}
 
                                 {!state.readOnly && (
                                     <Button
@@ -1159,40 +1230,52 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             </ButtonDropdown>
                                         )}
 
-                                        <ButtonDropdown
-                                            items={[
-                                                {
-                                                    id: "download",
-                                                    text: "Download File",
-                                                    iconName: "download",
-                                                },
-                                                {
-                                                    id: "share",
-                                                    text: "Share File URL",
-                                                    iconName: "share",
-                                                },
-                                            ]}
-                                            onItemClick={({ detail }) => {
-                                                switch (detail.id) {
-                                                    case "download":
-                                                        handleDownload();
-                                                        break;
-                                                    case "share":
-                                                        setShowShareUrlsModal(true);
-                                                        break;
-                                                }
-                                            }}
-                                        >
-                                            Export
-                                        </ButtonDropdown>
+                                        {/* Automation sits immediately LEFT of Export (single-file selection). */}
+                                        <AutomationActions
+                                            databaseId={databaseId!}
+                                            assetId={assetId!}
+                                            inputFiles={automationInputFiles}
+                                            disabledReason={automationDisabled}
+                                        />
 
-                                        <Button
-                                            iconName="external"
-                                            variant={"primary"}
-                                            onClick={handleView}
-                                        >
-                                            View File
-                                        </Button>
+                                        {!isNotDistributable && (
+                                            <ButtonDropdown
+                                                items={[
+                                                    {
+                                                        id: "download",
+                                                        text: "Download File",
+                                                        iconName: "download",
+                                                    },
+                                                    {
+                                                        id: "share",
+                                                        text: "Share File URL",
+                                                        iconName: "share",
+                                                    },
+                                                ]}
+                                                onItemClick={({ detail }) => {
+                                                    switch (detail.id) {
+                                                        case "download":
+                                                            handleDownload();
+                                                            break;
+                                                        case "share":
+                                                            setShowShareUrlsModal(true);
+                                                            break;
+                                                    }
+                                                }}
+                                            >
+                                                Export
+                                            </ButtonDropdown>
+                                        )}
+
+                                        {!isNotDistributable && (
+                                            <Button
+                                                iconName="external"
+                                                variant={"primary"}
+                                                onClick={handleView}
+                                            >
+                                                View File
+                                            </Button>
+                                        )}
                                     </>
                                 )}
                             </SpaceBetween>
@@ -1220,7 +1303,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 {selectedItem.name}
                                 {!isFolder &&
                                     selectedItem.level > 0 &&
-                                    !selectedItem.isPermanentlyDeleted && (
+                                    !selectedItem.isPermanentlyDeleted &&
+                                    !isNotDistributable && (
                                         <span style={{ marginLeft: "8px" }}>
                                             <Link
                                                 onFollow={handleFileViewerModal}
@@ -1246,6 +1330,16 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     : isFolder
                                     ? "Folder"
                                     : "File"}
+                                {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
+                                    <span style={{ marginLeft: "8px" }}>
+                                        <Link
+                                            onFollow={() => setShowAssetHistoryModal(true)}
+                                            fontSize="body-s"
+                                        >
+                                            (history)
+                                        </Link>
+                                    </span>
+                                )}
                             </div>
                         </div>
 
@@ -1270,42 +1364,44 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         )}
 
                         {/* Show preview thumbnail for the top-level Asset Node */}
-                        {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
-                            <div className="file-info-item">
-                                <div className="file-info-label">Preview:</div>
-                                <AssetPreviewThumbnail
-                                    assetId={assetId || ""}
-                                    databaseId={databaseId || ""}
-                                    previewKey={
-                                        // Try to get previewKey from direct asset first, then fall back to assetDetailState
-                                        asset?.previewLocation?.Key ||
-                                        (asset?.previewLocation as any)?.key ||
-                                        assetDetailState?.previewLocation?.Key ||
-                                        (assetDetailState?.previewLocation as any)?.key ||
-                                        (typeof assetDetailState?.previewLocation === "string"
-                                            ? assetDetailState?.previewLocation
-                                            : undefined)
-                                    }
-                                    onOpenFullPreview={(url) => {
-                                        setPreloadedAssetUrl(url);
-                                        setShowPreviewModal(true);
-                                    }}
-                                    onDeletePreview={
-                                        state.assetVersionId
-                                            ? undefined
-                                            : asset?.previewLocation?.Key ||
-                                              (asset?.previewLocation as any)?.key ||
-                                              assetDetailState?.previewLocation?.Key ||
-                                              (assetDetailState?.previewLocation as any)?.key ||
-                                              (typeof assetDetailState?.previewLocation ===
-                                                  "string" &&
-                                                  assetDetailState?.previewLocation)
-                                            ? () => setShowDeletePreviewModal(true)
-                                            : undefined
-                                    }
-                                />
-                            </div>
-                        )}
+                        {selectedItem.relativePath === "/" &&
+                            selectedItem.level === 0 &&
+                            !isNotDistributable && (
+                                <div className="file-info-item">
+                                    <div className="file-info-label">Preview:</div>
+                                    <AssetPreviewThumbnail
+                                        assetId={assetId || ""}
+                                        databaseId={databaseId || ""}
+                                        previewKey={
+                                            // Try to get previewKey from direct asset first, then fall back to assetDetailState
+                                            asset?.previewLocation?.Key ||
+                                            (asset?.previewLocation as any)?.key ||
+                                            assetDetailState?.previewLocation?.Key ||
+                                            (assetDetailState?.previewLocation as any)?.key ||
+                                            (typeof assetDetailState?.previewLocation === "string"
+                                                ? assetDetailState?.previewLocation
+                                                : undefined)
+                                        }
+                                        onOpenFullPreview={(url) => {
+                                            setPreloadedAssetUrl(url);
+                                            setShowPreviewModal(true);
+                                        }}
+                                        onDeletePreview={
+                                            state.assetVersionId
+                                                ? undefined
+                                                : asset?.previewLocation?.Key ||
+                                                  (asset?.previewLocation as any)?.key ||
+                                                  assetDetailState?.previewLocation?.Key ||
+                                                  (assetDetailState?.previewLocation as any)?.key ||
+                                                  (typeof assetDetailState?.previewLocation ===
+                                                      "string" &&
+                                                      assetDetailState?.previewLocation)
+                                                ? () => setShowDeletePreviewModal(true)
+                                                : undefined
+                                        }
+                                    />
+                                </div>
+                            )}
 
                         {!isFolder && selectedItem.size !== undefined && (
                             <div className="file-info-item">
@@ -1384,7 +1480,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         )}
 
                         {/* Show preview thumbnail or message for previewable file nodes - at the bottom of the panel */}
-                        {!isFolder && selectedItem.level > 0 && (
+                        {!isFolder && selectedItem.level > 0 && !isNotDistributable && (
                             <>
                                 {/* Check if file has a preview file or is a previewable format */}
                                 {(() => {

@@ -17,6 +17,14 @@ export interface S3AssetBucketRecord {
     defaultSyncDatabaseId: string;
     snsS3ObjectCreatedTopic: sns.ITopic | undefined;
     snsS3ObjectDeletedTopic: sns.ITopic | undefined;
+    // Account that owns the bucket. Undefined for VAMS-owned buckets (same account).
+    accountId: string | undefined;
+    // KMS key ARN the bucket is encrypted with, if a customer managed key is used.
+    // Used to grant the VAMS Lambda/pipeline roles access to a cross-account key.
+    kmsKeyArn: string | undefined;
+    // Marks this bucket record as the VAMS default asset bucket (houses all pipeline template
+    // data + execution-time run I/O under the pipelines/ prefix). Exactly one record is default.
+    isDefault: boolean;
 }
 
 // Global array to store bucket records
@@ -26,7 +34,10 @@ export const s3AssetBucketRecords: S3AssetBucketRecord[] = [];
 export function addS3AssetBucket(
     bucket: s3.IBucket,
     prefix: string,
-    defaultSyncDatabaseId: string
+    defaultSyncDatabaseId: string,
+    accountId?: string,
+    kmsKeyArn?: string,
+    isDefault?: boolean
 ): void {
     s3AssetBucketRecords.push({
         bucket,
@@ -34,6 +45,9 @@ export function addS3AssetBucket(
         defaultSyncDatabaseId,
         snsS3ObjectCreatedTopic: undefined,
         snsS3ObjectDeletedTopic: undefined,
+        accountId,
+        kmsKeyArn,
+        isDefault: !!isDefault,
     });
 }
 

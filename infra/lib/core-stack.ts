@@ -11,7 +11,10 @@ import { ApiBuilderNestedStack } from "./nestedStacks/apiLambda/apiBuilder-neste
 import { ApiBuilder2NestedStack } from "./nestedStacks/apiLambda/apiBuilder2-nestedStack";
 import { StorageResourcesBuilderNestedStack } from "./nestedStacks/storage/storageBuilder-nestedStack";
 import { AuthBuilderNestedStack } from "./nestedStacks/auth/authBuilder-nestedStack";
-import { ApiGatewayV2AmplifyNestedStack } from "./nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack";
+import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
+import { ResourceNameRegistry } from "./nestedStacks/resourceNames/resourceNameRegistry";
+import { ResourceNamesBuilderNestedStack } from "./nestedStacks/resourceNames/resourceNamesBuilder-nestedStack";
+import { ApiNestedStack } from "./nestedStacks/apiLambda/api-nestedStack";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import { CustomFeatureEnabledConfigNestedStack } from "./nestedStacks/featureEnabled/custom-featureEnabled-config-nestedStack";
@@ -35,9 +38,15 @@ import { CfnStack } from "aws-cdk-lib";
 export interface EnvProps {
     env: cdk.Environment;
     stackName: string;
-    ssmWafArn: string;
+    // Regional-scoped WAF web ACL ARN (core region) — attaches to the API Gateway stage
+    // and, for ALB deployments, the ALB. Empty string when WAF is disabled.
+    ssmWafArnRegional: string;
+    // CloudFront-scoped WAF web ACL ARN (us-east-1) — attaches to the CloudFront
+    // distribution. Empty string when CloudFront or WAF is disabled.
+    ssmWafArnCloudfront: string;
     config: Config.Config;
     description: string;
+    synthesizer?: cdk.IStackSynthesizer;
 }
 
 export class CoreVAMSStack extends cdk.Stack {
@@ -49,6 +58,7 @@ export class CoreVAMSStack extends cdk.Stack {
     private subnetsPrivate: ec2.ISubnet[];
     private subnetsPublic: ec2.ISubnet[];
     private vpceSecurityGroup: ec2.ISecurityGroup;
+    private apiGatewayVpcEndpointId?: string;
 
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, { ...props, crossRegionReferences: true });
@@ -111,6 +121,7 @@ export class CoreVAMSStack extends cdk.Stack {
             this.subnetsIsolated = vpcBuilderNestedStack.isolatedSubnets;
             this.subnetsPrivate = vpcBuilderNestedStack.privateSubnets;
             this.subnetsPublic = vpcBuilderNestedStack.publicSubnets;
+            this.apiGatewayVpcEndpointId = vpcBuilderNestedStack.apiGatewayVpcEndpointId;
 
             const vpcIdOutput = new cdk.CfnOutput(this, "VpcIdOutput", {
                 value: this.vpc.vpcId,
@@ -121,6 +132,10 @@ export class CoreVAMSStack extends cdk.Stack {
         //Deploy Lambda Layers (nested stack)
         const lambdaLayers = new LambdaLayersBuilderNestedStack(this, "LambdaLayers", {});
 
+        // Cross-stack resource-name registry — storage builder registers resource names,
+        // the ResourceNames builder materializes them as SSM parameters.
+        const resourceNameRegistry = new ResourceNameRegistry();
+
         //Deploy Storage Resources (nested stack)
         const storageResourcesNestedStack = new StorageResourcesBuilderNestedStack(
             this,
@@ -128,8 +143,23 @@ export class CoreVAMSStack extends cdk.Stack {
             props.config,
             lambdaLayers.lambdaCommonBaseLayer,
             this.vpc,
-            this.subnetsIsolated
+            this.subnetsIsolated,
+            resourceNameRegistry
         );
+
+        //Deploy Resource Names SSM Parameters (nested stack). Deploys directly after storage
+        //and before every Lambda-bearing stack so the parameters exist before any function
+        //that resolves them cold-starts, and so the parameter-creation burst does not race
+        //other stacks' SSM writes (shared PutParameter rate limit).
+        const resourceNamesNestedStack = new ResourceNamesBuilderNestedStack(
+            this,
+            "ResourceNamesBuilder",
+            {
+                config: props.config,
+                resourceNameRegistry: resourceNameRegistry,
+            }
+        );
+        resourceNamesNestedStack.addStackDependency(storageResourcesNestedStack);
 
         //Setup cloud trail and log groups (if enabled)
         if (props.config.app.addStackCloudTrailLogs) {
@@ -177,24 +207,140 @@ export class CoreVAMSStack extends cdk.Stack {
             vpc: this.vpc,
             subnets: this.subnetsIsolated,
         });
-        authBuilderNestedStack.addDependency(storageResourcesNestedStack);
+        authBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+        authBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
 
         //Ignore stacks if we are only loading context (mostly for Imported VPC)
         if (!props.config.env.loadContextIgnoreVPCStacks) {
-            // Deploy api gateway + amplify configuration endpoints (nested stack)
-            const apiNestedStack = new ApiGatewayV2AmplifyNestedStack(this, "Api", {
-                ...props,
-                authResources: authBuilderNestedStack.authResources,
-                storageResources: storageResourcesNestedStack.storageResources,
+            // Cross-stack route registry — populated by all API-contributing stacks,
+            // rendered into a single REST API by RestApiBuilder (built last).
+            const apiRouteRegistry = new RouteRegistry();
+
+            //Deploy Backend API framework (nested stack)
+            const apiBuilderNestedStack = new ApiBuilderNestedStack(
+                this,
+                "ApiBuilder",
+                props.config,
+                apiRouteRegistry,
+                storageResourcesNestedStack.storageResources,
+                authBuilderNestedStack.authResources,
+                lambdaLayers.lambdaCommonBaseLayer,
+                this.vpc,
+                this.subnetsIsolated
+            );
+            apiBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+            apiBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+
+            //Deploy Backend API framework - secondary stack (nested stack).
+            //Holds API domains) moved out of ApiBuilder to keep
+            //it under the CloudFormation per-stack resource limit. Add new API endpoints here.
+            const apiBuilder2NestedStack = new ApiBuilder2NestedStack(this, "ApiBuilder2", {
                 config: props.config,
+                registry: apiRouteRegistry,
+                storageResources: storageResourcesNestedStack.storageResources,
                 lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                lambdaAuthorizerLayer: lambdaLayers.lambdaAuthorizerLayer,
                 vpc: this.vpc,
                 subnets: this.subnetsIsolated,
+                // Shared functions built in ApiBuilder that the workflow/pipeline/execution domain in
+                // ApiBuilder2 depends on: the metadata service and the upload-file lambda.
+                metadataServiceFunction: apiBuilderNestedStack.metadataServiceFunction,
+                uploadFileFunction: apiBuilderNestedStack.uploadFileFunction,
             });
-            apiNestedStack.addDependency(storageResourcesNestedStack);
+            apiBuilder2NestedStack.addStackDependency(storageResourcesNestedStack);
+            apiBuilder2NestedStack.addStackDependency(resourceNamesNestedStack);
+            apiBuilder2NestedStack.addStackDependency(apiBuilderNestedStack);
 
-            //Deploy Static Website and any API proxies (nested stack)
+            //Deploy OpenSearch Serverless (nested stack)
+            const searchBuilderNestedStack = new SearchBuilderNestedStack(
+                this,
+                "SearchBuilder",
+                props.config,
+                apiRouteRegistry,
+                storageResourcesNestedStack.storageResources,
+                lambdaLayers.lambdaCommonBaseLayer,
+                this.vpc,
+                this.subnetsIsolated
+            );
+            searchBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+            searchBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+
+            //Set feature for no opensearch in neither provisioned or serverless selected
+            if (
+                !props.config.app.openSearch.useProvisioned.enabled &&
+                !props.config.app.openSearch.useServerless.enabled
+            ) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.NOOPENSEARCH);
+            }
+
+            ///Optional Pipelines (Nested Stack)
+            const pipelineBuilderNestedStack = new PipelineBuilderNestedStack(
+                this,
+                "PipelineBuilder",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: storageResourcesNestedStack.storageResources,
+                    lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                    vpc: this.vpc,
+                    vpceSecurityGroup: this.vpceSecurityGroup,
+                    isolatedSubnets: this.subnetsIsolated,
+                    privateSubnets: this.subnetsPrivate,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        apiBuilder2NestedStack.importGlobalPipelineWorkflowV2FunctionName,
+                }
+            );
+            pipelineBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+            // The V2 vamsSchema registration CRs invoke the import lambda built in ApiBuilder2.
+            pipelineBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
+
+            ///Optional Addons (Nested Stack)
+            const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {
+                ...props,
+                config: props.config,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                vpc: this.vpc,
+                isolatedSubnets: this.subnetsIsolated,
+                privateSubnets: this.subnetsPrivate,
+                registry: apiRouteRegistry,
+            });
+            addonBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+            addonBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+
+            // The Physna add-on frontend features (viewer today, more planned)
+            // are gated by a single feature flag so the web UI only surfaces
+            // them when the add-on is deployed.
+            if (props.config.app.addons.usePhysnaSync.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
+            }
+
+            // Deadline Cloud pipeline execution-type support (createJob workflow task
+            // states + the job-callback lambda deployed in the API builder stack).
+            if (props.config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.DEADLINECLOUD_PIPELINES);
+            }
+
+            // Build the API stack last (after all registrars have contributed routes).
+            const apiNestedStack = new ApiNestedStack(this, "RestApi", {
+                ...props,
+                config: props.config,
+                authResources: authBuilderNestedStack.authResources,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaAuthorizerLayer: lambdaLayers.lambdaAuthorizerLayer,
+                registry: apiRouteRegistry,
+                vpc: this.vpc,
+                subnets: this.subnetsIsolated,
+                vamsCreatedApiGatewayVpcEndpointId: this.apiGatewayVpcEndpointId,
+                wafArn: props.ssmWafArnRegional,
+            });
+            apiNestedStack.addStackDependency(storageResourcesNestedStack);
+            apiNestedStack.addStackDependency(authBuilderNestedStack);
+            apiNestedStack.addStackDependency(apiBuilderNestedStack);
+            apiNestedStack.addStackDependency(apiBuilder2NestedStack);
+            apiNestedStack.addStackDependency(searchBuilderNestedStack);
+            apiNestedStack.addStackDependency(addonBuilderNestedStack);
+
+            //Deploy Static Website and any API proxies (nested stack; after REST API for apiUrl)
             if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {
                 const staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(
                     this,
@@ -207,11 +353,12 @@ export class CoreVAMSStack extends cdk.Stack {
                         webAppBuildPath: this.webAppBuildPath,
                         apiUrl: apiNestedStack.apiEndpoint,
                         storageResources: storageResourcesNestedStack.storageResources,
-                        ssmWafArn: props.ssmWafArn,
+                        ssmWafArnCloudfront: props.ssmWafArnCloudfront,
+                        ssmWafArnRegional: props.ssmWafArnRegional,
                         authResources: authBuilderNestedStack.authResources,
                     }
                 );
-                staticWebBuilderNestedStack.addDependency(storageResourcesNestedStack);
+                staticWebBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
 
                 //Set features
                 if (props.config.app.useCloudFront.enabled) {
@@ -250,94 +397,6 @@ export class CoreVAMSStack extends cdk.Stack {
                 }
             }
 
-            //Deploy Backend API framework (nested stack)
-            const apiBuilderNestedStack = new ApiBuilderNestedStack(
-                this,
-                "ApiBuilder",
-                props.config,
-                apiNestedStack.apiGatewayV2,
-                storageResourcesNestedStack.storageResources,
-                authBuilderNestedStack.authResources,
-                lambdaLayers.lambdaCommonBaseLayer,
-                this.vpc,
-                this.subnetsIsolated
-            );
-            apiBuilderNestedStack.addDependency(storageResourcesNestedStack);
-
-            //Deploy Backend API framework - secondary stack (nested stack).
-            //Holds API domains) moved out of ApiBuilder to keep
-            //it under the CloudFormation per-stack resource limit. Add new API endpoints here.
-            const apiBuilder2NestedStack = new ApiBuilder2NestedStack(this, "ApiBuilder2", {
-                config: props.config,
-                api: apiNestedStack.apiGatewayV2,
-                storageResources: storageResourcesNestedStack.storageResources,
-                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                vpc: this.vpc,
-                subnets: this.subnetsIsolated,
-            });
-            apiBuilder2NestedStack.addDependency(storageResourcesNestedStack);
-            apiBuilder2NestedStack.addDependency(apiBuilderNestedStack);
-
-            //Deploy OpenSearch Serverless (nested stack)
-            const searchBuilderNestedStack = new SearchBuilderNestedStack(
-                this,
-                "SearchBuilder",
-                props.config,
-                apiNestedStack.apiGatewayV2,
-                storageResourcesNestedStack.storageResources,
-                lambdaLayers.lambdaCommonBaseLayer,
-                this.vpc,
-                this.subnetsIsolated
-            );
-            storageResourcesNestedStack.addDependency(storageResourcesNestedStack);
-
-            //Set feature for no opensearch in neither provisioned or serverless selected
-            if (
-                !props.config.app.openSearch.useProvisioned.enabled &&
-                !props.config.app.openSearch.useServerless.enabled
-            ) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.NOOPENSEARCH);
-            }
-
-            ///Optional Pipelines (Nested Stack)
-            const pipelineBuilderNestedStack = new PipelineBuilderNestedStack(
-                this,
-                "PipelineBuilder",
-                {
-                    ...props,
-                    config: props.config,
-                    storageResources: storageResourcesNestedStack.storageResources,
-                    lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                    vpc: this.vpc,
-                    vpceSecurityGroup: this.vpceSecurityGroup,
-                    isolatedSubnets: this.subnetsIsolated,
-                    privateSubnets: this.subnetsPrivate,
-                    importGlobalPipelineWorkflowFunctionName:
-                        apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
-                }
-            );
-            pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack);
-
-            ///Optional Addons (Nested Stack)
-            const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {
-                ...props,
-                config: props.config,
-                storageResources: storageResourcesNestedStack.storageResources,
-                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                vpc: this.vpc,
-                isolatedSubnets: this.subnetsIsolated,
-                privateSubnets: this.subnetsPrivate,
-                api: apiNestedStack.apiGatewayV2,
-            });
-            addonBuilderNestedStack.addDependency(storageResourcesNestedStack);
-
-            // The Physna add-on frontend features (viewer today, more planned)
-            // are gated by a single feature flag so the web UI only surfaces
-            // them when the add-on is deployed.
-            if (props.config.app.addons.usePhysnaSync.enabled) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
-            }
-
             //Write final output configurations (pulling forward from nested stacks)
             const gatewayURLParamsOutput = new cdk.CfnOutput(this, "APIGatewayEndpointOutput", {
                 value: `${apiNestedStack.apiEndpoint}`,
@@ -348,7 +407,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 this,
                 "ImportGlobalPipelineWorkflowFunctionNameOutput",
                 {
-                    value: apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
+                    value: apiBuilder2NestedStack.importGlobalPipelineWorkflowV2FunctionName,
                     description:
                         "Lambda function name for importing global pipelines and workflows from IaC deployments",
                 }
@@ -380,10 +439,10 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             //Nag supressions
-            const refactorPaths = [`/${props.stackName}/ApiBuilder/VAMSWorkflowIAMRole/Resource`];
+            const refactorPaths = [`/${props.stackName}/ApiBuilder2/VAMSWorkflowIAMRole/Resource`];
 
             for (const path of refactorPaths) {
-                const reason = `Intention is to refactor this model away moving forward 
+                const reason = `Intention is to refactor this model away moving forward
                 so that this type of access is not required within the stack.
                 Customers are advised to isolate VAMS to its own account in test and prod
                 as a substitute to tighter resource access.`;
@@ -428,6 +487,16 @@ export class CoreVAMSStack extends cdk.Stack {
                         .appFeatureEnabledStorageTable,
                 featuresEnabled: this.enabledFeatures,
                 kmsKey: storageResourcesNestedStack.storageResources.encryption.kmsKey,
+            }
+        );
+
+        const resourceNamesSSMParamPrefixOutput = new cdk.CfnOutput(
+            this,
+            "ResourceNamesSSMParamPrefixOutput",
+            {
+                value: props.config.resourceNamesSSMParamPrefix,
+                description:
+                    "SSM Parameter Store prefix for deployment resource names (tables, buckets, log groups, migration tooling)",
             }
         );
 

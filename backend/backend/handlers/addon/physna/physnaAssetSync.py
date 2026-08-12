@@ -28,6 +28,14 @@ from boto3.dynamodb.conditions import Key
 
 from customLogging.logger import safeLogger
 
+from common.syncTracking import (
+    SYNC_ACTION_DELETE,
+    SYNC_ACTION_MODIFY,
+    SYNC_OBJECT_TYPE_ASSET,
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_SUCCESS,
+    write_outbound_sync_record,
+)
 from . import physnaCommon
 from .physnaCommon import (
     PhysnaClient,
@@ -48,6 +56,20 @@ from .physnaCommon import (
 from . import physnaFileSync
 
 logger = safeLogger(service_name="PhysnaAssetSync")
+
+
+def _record_asset_sync(database_id, asset_id, action, sync_status, error_message=None):
+    """Best-effort outbound sync tracking record for an asset-level Physna sync."""
+    write_outbound_sync_record(
+        SYNC_OBJECT_TYPE_ASSET,
+        database_id,
+        physnaCommon.SYNC_SYSTEM_TYPE,
+        physnaCommon.get_sync_system_unique_id(),
+        action,
+        sync_status,
+        asset_id=asset_id,
+        error_message=error_message,
+    )
 
 
 def _sync_asset_metadata_to_physna(
@@ -337,6 +359,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
             continue
         database_id: Optional[str] = None
         asset_id: Optional[str] = None
+        is_delete = False
         try:
             body = record.get("body", "")
             if isinstance(body, str):
@@ -353,9 +376,16 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
             database_id, asset_id, is_delete = ids
 
             _sync_asset_metadata_to_physna(database_id, asset_id, is_delete=is_delete)
+            _record_asset_sync(database_id, asset_id,
+                               SYNC_ACTION_DELETE if is_delete else SYNC_ACTION_MODIFY,
+                               SYNC_STATUS_SUCCESS)
             successful += 1
         except Exception as e:
             failed += 1
+            if database_id and asset_id:
+                _record_asset_sync(database_id, asset_id,
+                                   SYNC_ACTION_DELETE if is_delete else SYNC_ACTION_MODIFY,
+                                   SYNC_STATUS_FAILED, error_message=str(e))
             logger.exception(
                 f"Error processing asset sync record "
                 f"(databaseId={database_id}, assetId={asset_id}): {e}. "

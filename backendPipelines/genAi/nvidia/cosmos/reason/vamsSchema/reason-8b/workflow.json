@@ -1,0 +1,21 @@
+{
+    "workflowName": "NVIDIA Cosmos Reason 8B",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos Reason 8B - Vision Language Model for video/image analysis and reasoning",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.mp4", "*.mov", "*.jpg", "*.jpeg", "*.png", "*.webp"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:nvidia-cosmos-reason2-8b": "cosmos-reason-8b"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "one"
+    }
+}

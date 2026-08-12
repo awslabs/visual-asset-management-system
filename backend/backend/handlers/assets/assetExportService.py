@@ -20,11 +20,12 @@ from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
+from common.dynamodb import query_all_items
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetExport import (
     AssetExportRequestModel,
     AssetExportResponseModel,
@@ -64,18 +65,19 @@ bucket_cache = {}
 
 # Load environment variables
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+    asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     asset_links_function_name = os.environ["ASSET_LINKS_FUNCTION_NAME"]
     presigned_url_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -89,6 +91,8 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 # Constants
 COMPRESSION_THRESHOLD = 102400  # 100KB
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
+# Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
+MAX_PARALLEL_EXPORT_WORKERS = 10
 
 #######################
 # Utility Functions
@@ -191,7 +195,7 @@ def compress_response(response_dict: Dict) -> Dict:
         return {
             'statusCode': 200,
             'headers': {
-                'Content-Type': 'application/json',
+                **commonHeaders(),
                 'Content-Encoding': 'gzip'
             },
             'body': base64.b64encode(compressed).decode('utf-8'),
@@ -200,7 +204,7 @@ def compress_response(response_dict: Dict) -> Dict:
     else:
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json'},
+            'headers': commonHeaders(),
             'body': json_str
         }
 
@@ -498,15 +502,16 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         # Create composite key for the table PK query (no IndexName needed)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
 
-        response = asset_file_versions_table.query(
+        # Page to exhaustion: a version snapshot can hold more files than fit in one
+        # 1 MB query page, and a partial list would drop files from the export.
+        items = query_all_items(
+            asset_file_versions_table,
             KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
         )
-        
-        items = response.get('Items', [])
-        
+
         if not items:
             return None
-        
+
         files = []
         for item in items:
             file_info = {
@@ -909,7 +914,7 @@ def process_asset_batch(
             return None
 
     if authorized_assets:
-        max_workers = min(10, len(authorized_assets))
+        max_workers = min(MAX_PARALLEL_EXPORT_WORKERS, len(authorized_assets))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(_process_single_asset, asset_tuple): asset_tuple
@@ -1125,7 +1130,7 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -1168,7 +1173,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

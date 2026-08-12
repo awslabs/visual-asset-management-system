@@ -8,10 +8,8 @@ import { Construct } from "constructs";
 import { Names } from "aws-cdk-lib";
 import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
 import * as sqs from "aws-cdk-lib/aws-sqs";
-import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 
-import { ApiGatewayV2LambdaConstruct } from "./constructs/apigatewayv2-lambda-construct";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { buildConfigService } from "../../lambdaBuilder/configFunctions";
@@ -21,15 +19,6 @@ import {
     buildCreateDatabaseLambdaFunction,
     buildDatabaseService,
 } from "../../lambdaBuilder/databaseFunctions";
-import {
-    buildListWorkflowExecutionsFunction,
-    buildWorkflowService,
-    buildCreateWorkflowFunction,
-    buildExecuteWorkflowFunction,
-    buildProcessWorkflowExecutionOutputFunction,
-    buildImportGlobalPipelineWorkflowFunction,
-    buildSqsAutoExecuteWorkflowFunction,
-} from "../../lambdaBuilder/workflowFunctions";
 import {
     buildAssetService,
     buildStreamAuxiliaryPreviewAssetFunction,
@@ -48,11 +37,6 @@ import {
     buildEditCommentLambdaFunction,
     buildCommentService,
 } from "../../lambdaBuilder/commentFunctions";
-import {
-    buildCreatePipelineFunction,
-    buildEnablePipelineFunction,
-    buildPipelineService,
-} from "../../lambdaBuilder/pipelineFunctions";
 import { NestedStack } from "aws-cdk-lib";
 
 import { buildMetadataSchemaService } from "../../lambdaBuilder/metadataSchemaFunctions";
@@ -79,21 +63,21 @@ import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-m
 import * as iam from "aws-cdk-lib/aws-iam";
 import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
 import { Service } from "../../../lib/helper/service-helper";
-
-interface apiGatewayLambdaConfiguration {
-    routePath: string;
-    method: apigateway.HttpMethod;
-    api: apigateway.HttpApi;
-}
+import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 
 export class ApiBuilderNestedStack extends NestedStack {
-    public importGlobalPipelineWorkflowFunctionName = "";
+    // Shared references consumed by the workflow/pipeline/execution functions in ApiBuilder2 (which
+    // now own that whole domain): the metadata service and the upload-file lambda. Assigned in the
+    // constructor; the process-output lambda invokes uploadFile, and the execute/process-output
+    // lambdas invoke the metadata service.
+    public metadataServiceFunction!: lambda.Function;
+    public uploadFileFunction!: lambda.Function;
 
     constructor(
         parent: Construct,
         name: string,
         config: Config.Config,
-        api: apigateway.HttpApi,
+        registry: RouteRegistry,
         storageResources: storageResources,
         authResources: authResources,
         lambdaCommonBaseLayer: LayerVersion,
@@ -116,7 +100,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, createConfigFunction, {
             routePath: "/secure-config",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         //Database Resources
@@ -131,7 +115,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, createDatabaseFunction, {
             routePath: "/database",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         const databaseService = buildDatabaseService(
@@ -145,28 +129,28 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, databaseService, {
             routePath: "/database",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, databaseService, {
             routePath: "/database/{databaseId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, databaseService, {
             routePath: "/database/{databaseId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, databaseService, {
             routePath: "/database/{databaseId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, databaseService, {
             routePath: "/buckets",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         //Email Resources
@@ -199,7 +183,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             attachFunctionToApi(this, commentService, {
                 routePath: commentServiceRoutes[i],
                 method: apigateway.HttpMethod.GET,
-                api: api,
+                registry: registry,
             });
         }
 
@@ -207,7 +191,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             routePath:
                 "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         const addCommentFunction = buildAddCommentLambdaFunction(
@@ -223,7 +207,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             routePath:
                 "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         const editCommentFunction = buildEditCommentLambdaFunction(
@@ -239,7 +223,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             routePath:
                 "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
 
         // Role Resources
@@ -255,12 +239,12 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, roleService, {
             routePath: "/roles",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, roleService, {
             routePath: "/roles/{roleId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         const createRoleFunction = buildCreateRoleFunction(
@@ -275,12 +259,12 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, createRoleFunction, {
             routePath: "/roles",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, createRoleFunction, {
             routePath: "/roles",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
 
         // UserRole Resources
@@ -296,22 +280,22 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, userRolesService, {
             routePath: "/user-roles",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, userRolesService, {
             routePath: "/user-roles",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, userRolesService, {
             routePath: "/user-roles",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, userRolesService, {
             routePath: "/user-roles",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         //Subscription Resources
@@ -327,22 +311,22 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, subscriptionService, {
             routePath: "/subscriptions",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, subscriptionService, {
             routePath: "/subscriptions",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, subscriptionService, {
             routePath: "/subscriptions",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, subscriptionService, {
             routePath: "/subscriptions",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         const unSubscribeService = buildUnSubscribeFunction(
@@ -357,7 +341,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, unSubscribeService, {
             routePath: "/unsubscribe",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         const checkSubscriptionService = buildCheckSubscriptionFunction(
@@ -372,7 +356,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, checkSubscriptionService, {
             routePath: "/check-subscription",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         //Asset Links Resources
@@ -389,7 +373,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, createAssetLinkService, {
             routePath: "/asset-links",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // Get and Delete Asset Links (GET and DELETE)
@@ -405,24 +389,24 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, assetLinksService, {
             routePath: "/database/{databaseId}/assets/{assetId}/asset-links",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetLinksService, {
             routePath: "/asset-links/single/{assetLinkId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetLinksService, {
             routePath: "/asset-links/{assetLinkId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, assetLinksService, {
-            routePath: "/asset-links/{relationId}",
+            routePath: "/asset-links/{assetLinkId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         // Centralized Metadata Service - Handles all entity types
@@ -434,27 +418,29 @@ export class ApiBuilderNestedStack extends NestedStack {
             vpc,
             subnets
         );
+        // Shared with ApiBuilder2's execute + process-output lambdas (they invoke the metadata service).
+        this.metadataServiceFunction = metadataService;
 
         // Asset Link Metadata Routes (updated - removed metadataKey path parameter)
         attachFunctionToApi(this, metadataService, {
             routePath: "/asset-links/{assetLinkId}/metadata",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, metadataService, {
             routePath: "/asset-links/{assetLinkId}/metadata",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, metadataService, {
             routePath: "/asset-links/{assetLinkId}/metadata",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, metadataService, {
             routePath: "/asset-links/{assetLinkId}/metadata",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         //Asset Resources
@@ -470,39 +456,39 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, assetService, {
             routePath: "/database/{databaseId}/assets",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, assetService, {
             routePath: "/database/{databaseId}/assets/{assetId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetService, {
             routePath: "/database/{databaseId}/assets/{assetId}/archiveAsset",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetService, {
             routePath: "/database/{databaseId}/assets/{assetId}/deleteAsset",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, assetService, {
             routePath: "/database/{databaseId}/assets/{assetId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, assetService, {
             routePath: "/database/{databaseId}/assets/{assetId}/unarchiveAsset",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, assetService, {
             routePath: "/assets",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         const assetFilesFunction = buildAssetFiles(
@@ -518,74 +504,74 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/listFiles",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         // Add new file operation routes
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/fileInfo",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/moveFile",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/copyFile",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/archiveFile",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/deleteAssetPreview",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/deleteFile",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/unarchiveFile",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/setPrimaryFile",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, assetFilesFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/createFolder",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         const createAssetFunction = buildCreateAssetFunction(
@@ -599,7 +585,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, createAssetFunction, {
             routePath: "/assets",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // Create SQS queue for large file processing
@@ -625,16 +611,18 @@ export class ApiBuilderNestedStack extends NestedStack {
             vpc,
             subnets
         );
+        // Shared with ApiBuilder2's process-output lambda (writes outputs back to the asset).
+        this.uploadFileFunction = uploadFileFunction;
         attachFunctionToApi(this, uploadFileFunction, {
             routePath: "/uploads",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, uploadFileFunction, {
             routePath: "/uploads/{uploadId}/complete",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // Create large file processor Lambda function
@@ -686,13 +674,13 @@ export class ApiBuilderNestedStack extends NestedStack {
             routePath:
                 "/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, streamAuxiliaryPreviewAssetFunction, {
             routePath:
                 "/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}",
             method: apigateway.HttpMethod.HEAD,
-            api: api,
+            registry: registry,
         });
 
         const streamAssetFunction = buildStreamAssetFunction(
@@ -706,12 +694,12 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, streamAssetFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         attachFunctionToApi(this, streamAssetFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}",
             method: apigateway.HttpMethod.HEAD,
-            api: api,
+            registry: registry,
         });
 
         const assetDownloadFunction = buildDownloadAssetFunction(
@@ -725,7 +713,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, assetDownloadFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/download",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // Asset Versions Function
@@ -742,46 +730,46 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/createVersion",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
         // Attach to revertVersion endpoint
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath:
                 "/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
         // Attach to getVersions endpoint
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/getVersions",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         // Attach to getVersion endpoint
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
         // Attach to updateVersion endpoint (edit comment, alias)
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
         // Attach to archiveVersion endpoint
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath:
                 "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
         // Attach to unarchiveVersion endpoint
         attachFunctionToApi(this, assetVersionsFunction, {
             routePath:
                 "/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // Asset Export Service Function
@@ -798,7 +786,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, assetExportServiceFunction, {
             routePath: "/database/{databaseId}/assets/{assetId}/export",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // Asset Metadata Routes (migrated to centralized metadata service)
@@ -812,7 +800,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             attachFunctionToApi(this, metadataService, {
                 routePath: "/database/{databaseId}/assets/{assetId}/metadata",
                 method: methods[i],
-                api: api,
+                registry: registry,
             });
         }
 
@@ -821,7 +809,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             attachFunctionToApi(this, metadataService, {
                 routePath: "/database/{databaseId}/assets/{assetId}/metadata/file",
                 method: methods[i],
-                api: api,
+                registry: registry,
             });
         }
 
@@ -830,7 +818,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             attachFunctionToApi(this, metadataService, {
                 routePath: "/database/{databaseId}/metadata",
                 method: methods[i],
-                api: api,
+                registry: registry,
             });
         }
 
@@ -847,239 +835,41 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, metadataSchemaService, {
             routePath: "/database/{databaseId}/metadataSchema/{metadataSchemaId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, metadataSchemaService, {
             routePath: "/database/{databaseId}/metadataSchema/{metadataSchemaId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         // NEW V2 Routes: /metadataschema - GET/POST/PUT
         attachFunctionToApi(this, metadataSchemaService, {
             routePath: "/metadataschema",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, metadataSchemaService, {
             routePath: "/metadataschema",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, metadataSchemaService, {
             routePath: "/metadataschema",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
 
-        //Pipeline Resources
-        const enablePipelineFunction = buildEnablePipelineFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-
-        const createPipelineFunction = buildCreatePipelineFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            enablePipelineFunction,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createPipelineFunction, {
-            routePath: "/pipelines",
-            method: apigateway.HttpMethod.PUT,
-            api: api,
-        });
-
-        const pipelineService = buildPipelineService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/database/{databaseId}/pipelines",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/database/{databaseId}/pipelines/{pipelineId}",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/database/{databaseId}/pipelines/{pipelineId}",
-            method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/pipelines",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-
-        //Workflows
-        const workflowService = buildWorkflowService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/database/{databaseId}/workflows",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/database/{databaseId}/workflows/{workflowId}",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/database/{databaseId}/workflows/{workflowId}",
-            method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/workflows",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-
-        const listWorkflowExecutionsFunction = buildListWorkflowExecutionsFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, listWorkflowExecutionsFunction, {
-            routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-
-        attachFunctionToApi(this, listWorkflowExecutionsFunction, {
-            routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-
-        const processWorkflowExecutionOutputFunction = buildProcessWorkflowExecutionOutputFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            uploadFileFunction,
-            metadataService,
-            config,
-            vpc,
-            subnets
-        );
-
-        const createWorkflowFunction = buildCreateWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            processWorkflowExecutionOutputFunction,
-            config.env.coreStackName,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createWorkflowFunction, {
-            routePath: "/workflows",
-            method: apigateway.HttpMethod.PUT,
-            api: api,
-        });
-
-        const runWorkflowFunction = buildExecuteWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            metadataService,
-            config,
-            vpc,
-            subnets
-        );
-
-        attachFunctionToApi(this, runWorkflowFunction, {
-            routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
-
-        // Use the workflow auto-execute queue from storage resources
-        const workflowAutoExecuteQueue = storageResources.sqs.workflowAutoExecuteQueue;
-
-        // Create the auto-execute workflow Lambda function
-        const sqsAutoExecuteWorkflowFunction = buildSqsAutoExecuteWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            runWorkflowFunction,
-            config,
-            vpc,
-            subnets
-        );
-
-        // Grant SQS permissions to the Lambda
-        workflowAutoExecuteQueue.grantConsumeMessages(sqsAutoExecuteWorkflowFunction);
-
-        // Setup event source mapping with GovCloud support
-        if (config.app.govCloud.enabled) {
-            const esmWorkflowAutoExecute = new lambda.EventSourceMapping(
-                this,
-                "WorkflowAutoExecuteSqsEventSource",
-                {
-                    eventSourceArn: workflowAutoExecuteQueue.queueArn,
-                    target: sqsAutoExecuteWorkflowFunction,
-                    batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(3),
-                }
-            );
-            const cfnEsmWorkflowAutoExecute = esmWorkflowAutoExecute.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmWorkflowAutoExecute.addPropertyDeletionOverride("Tags");
-        } else {
-            sqsAutoExecuteWorkflowFunction.addEventSource(
-                new eventsources.SqsEventSource(workflowAutoExecuteQueue, {
-                    batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(3),
-                })
-            );
-        }
-
-        // Create the import global pipeline workflow function with direct function references
-        const importGlobalPipelineWorkflowFunction = buildImportGlobalPipelineWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets,
-            createPipelineFunction,
-            pipelineService,
-            createWorkflowFunction,
-            workflowService
-        );
-
-        // Set the class variable for use by core stack
-        this.importGlobalPipelineWorkflowFunctionName =
-            importGlobalPipelineWorkflowFunction.functionName;
+        // Pipeline, workflow, and execution API domains (CRUD + templates + triggers + execute +
+        // execution ops) and the workflow Step Functions execution lambdas (process-output /
+        // interim-tracking / error-handler / register) are all built in ApiBuilder2NestedStack,
+        // which owns that whole domain. ApiBuilder only exposes the two shared functions those
+        // lambdas need (the metadata service and the upload-file lambda) via public properties.
+        this.metadataServiceFunction = metadataService;
+        this.uploadFileFunction = uploadFileFunction;
 
         const ingestAssetFunction = buildIngestAssetFunction(
             this,
@@ -1094,7 +884,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, ingestAssetFunction, {
             routePath: "/ingest-asset",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         const authFunctions = buildAuthFunctions(
@@ -1107,115 +897,100 @@ export class ApiBuilderNestedStack extends NestedStack {
             subnets
         );
 
-        attachFunctionToApi(this, authFunctions.authConstraintsService, {
-            routePath: "/auth/constraints",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        for (let i = 0; i < methods.length; i++) {
-            attachFunctionToApi(this, authFunctions.authConstraintsService, {
-                routePath: "/auth/constraints/{constraintId}",
-                method: methods[i],
-                api: api,
-            });
-        }
-
-        attachFunctionToApi(this, authFunctions.authConstraintsTemplateService, {
-            routePath: "/auth/constraintsTemplateImport",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
+        // NOTE: the auth constraints service and its routes (/auth/constraints,
+        // /auth/constraints/{constraintId}, /auth/constraints/permissionObjects, and
+        // /auth/constraintsTemplateImport) are wired in apiBuilder2-nestedStack.ts.
 
         attachFunctionToApi(this, authFunctions.routes, {
             routePath: "/auth/routes",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.routes, {
             routePath: "/auth/routes/api",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.routes, {
             routePath: "/auth/routes/api/allowed",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.authLoginProfile, {
             routePath: "/auth/loginProfile/{userId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.authLoginProfile, {
             routePath: "/auth/loginProfile/{userId}",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // Cognito User Management Routes
         attachFunctionToApi(this, authFunctions.cognitoUserService, {
             routePath: "/user/cognito",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.cognitoUserService, {
             routePath: "/user/cognito",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.cognitoUserService, {
             routePath: "/user/cognito/{userId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.cognitoUserService, {
             routePath: "/user/cognito/{userId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.cognitoUserService, {
             routePath: "/user/cognito/{userId}/resetPassword",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         // API Key Management Routes
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/api-keys",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/api-keys",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         // User-level (self-service) API key routes — scoped to the requesting
@@ -1223,31 +998,31 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/user/api-keys",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/user/api-keys",
             method: apigateway.HttpMethod.POST,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/user/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/user/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.PUT,
-            api: api,
+            registry: registry,
         });
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/user/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         // Metadata Schema Defaults - Auto-load default schemas if configured
@@ -1316,8 +1091,8 @@ export class ApiBuilderNestedStack extends NestedStack {
                                     conditions: {
                                         StringEquals: {
                                             "kms:ViaService": [
-                                                Service("DYNAMODB").Endpoint,
-                                                Service("S3").Endpoint,
+                                                Service("DYNAMODB", false).Endpoint,
+                                                Service("S3", false).Endpoint,
                                             ],
                                         },
                                     },
@@ -1375,24 +1150,4 @@ export class ApiBuilderNestedStack extends NestedStack {
             true
         );
     }
-}
-
-export function attachFunctionToApi(
-    scope: Construct,
-    lambdaFunction: lambda.Function,
-    apiGatewayConfiguration: apiGatewayLambdaConfiguration
-): ApiGatewayV2LambdaConstruct {
-    const apig = new ApiGatewayV2LambdaConstruct(
-        scope,
-        apiGatewayConfiguration.method + apiGatewayConfiguration.routePath,
-        {
-            ...{},
-            lambdaFn: lambdaFunction,
-            routePath: apiGatewayConfiguration.routePath,
-            methods: [apiGatewayConfiguration.method],
-            api: apiGatewayConfiguration.api,
-        }
-    );
-
-    return apig;
 }

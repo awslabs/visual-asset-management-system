@@ -39,7 +39,7 @@ export function buildConfigService(
     //Only fill in if we have locaiton services enabled since this is not in all aws partitions
     if (config.app.useLocationService.enabled) {
         urlFormat = `https://maps.${
-            Service.Service("GEO").Endpoint
+            Service.Service("GEO", false).Endpoint
         }/v2/styles/Standard/descriptor?key=<apiKey>`;
     }
 
@@ -59,8 +59,6 @@ export function buildConfigService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            APPFEATUREENABLED_STORAGE_TABLE_NAME:
-                storageResources.dynamo.appFeatureEnabledStorageTable.tableName,
             LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM: config.locationServiceApiKeyArnSSMParam,
             LOCATION_SERVICE_URL_FORMAT: urlFormat,
             WEB_DEPLOYED_URL_SSM_PARAM: config.webUrlDeploymentSSMParam,

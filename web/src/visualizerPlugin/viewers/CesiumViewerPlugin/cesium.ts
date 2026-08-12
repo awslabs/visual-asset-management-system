@@ -22,8 +22,8 @@ function getCesiumLib() {
 const CesiumWrapper: any = {};
 
 // Define getters for each Cesium class/function
-Object.defineProperty(CesiumWrapper, "Viewer", {
-    get: () => getCesiumLib()?.Viewer,
+Object.defineProperty(CesiumWrapper, "CesiumWidget", {
+    get: () => getCesiumLib()?.CesiumWidget,
     enumerable: true,
 });
 
@@ -117,8 +117,18 @@ Object.defineProperty(CesiumWrapper, "Entity", {
     enumerable: true,
 });
 
+Object.defineProperty(CesiumWrapper, "Cesium3DTileFeature", {
+    get: () => getCesiumLib()?.Cesium3DTileFeature,
+    enumerable: true,
+});
+
+Object.defineProperty(CesiumWrapper, "Fullscreen", {
+    get: () => getCesiumLib()?.Fullscreen,
+    enumerable: true,
+});
+
 // Named exports
-export const Viewer = CesiumWrapper.Viewer;
+export const CesiumWidget = CesiumWrapper.CesiumWidget;
 export const Cesium3DTileset = CesiumWrapper.Cesium3DTileset;
 export const Resource = CesiumWrapper.Resource;
 export const Ion = CesiumWrapper.Ion;
@@ -137,6 +147,8 @@ export const Cartographic = CesiumWrapper.Cartographic;
 export const ScreenSpaceEventHandler = CesiumWrapper.ScreenSpaceEventHandler;
 export const ScreenSpaceEventType = CesiumWrapper.ScreenSpaceEventType;
 export const Entity = CesiumWrapper.Entity;
+export const Cesium3DTileFeature = CesiumWrapper.Cesium3DTileFeature;
+export const Fullscreen = CesiumWrapper.Fullscreen;
 
 // Export default as the wrapper object
 export default CesiumWrapper;

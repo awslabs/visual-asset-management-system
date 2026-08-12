@@ -119,6 +119,39 @@ while IFS=',' read -r NAME DESCRIPTION DISTRIBUTABLE; do
 done < assets.csv
 ```
 
+### PowerShell
+
+On Windows, parse `--json-output` with `ConvertFrom-Json`:
+
+```powershell
+$assets = vamscli assets list -d my-database --auto-paginate --json-output | ConvertFrom-Json
+foreach ($asset in $assets.Items) {
+    Write-Host "Asset: $($asset.assetName)"
+}
+```
+
+### Python (subprocess)
+
+Wrap VamsCLI from Python by invoking it as a subprocess and parsing JSON output:
+
+```python
+import json
+import subprocess
+
+def run_vamscli(args):
+    """Run a VamsCLI command with --json-output and return parsed JSON."""
+    result = subprocess.run(
+        ["vamscli", *args, "--json-output"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(json.loads(result.stdout or result.stderr).get("message", result.stderr))
+    return json.loads(result.stdout)
+
+assets = run_vamscli(["assets", "list", "-d", "my-database", "--auto-paginate"])
+print(f"Found {len(assets['Items'])} assets")
+```
+
 ## CI/CD Integration
 
 ### Authentication in CI/CD

@@ -3,7 +3,6 @@
 
 """Metadata Schema service handler for VAMS API - V2 implementation."""
 
-import os
 import boto3
 import json
 import base64
@@ -20,7 +19,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.metadataSchema import (
     GetMetadataSchemaRequestModel, GetMetadataSchemasRequestModel,
     CreateMetadataSchemaRequestModel, UpdateMetadataSchemaRequestModel,
@@ -46,10 +45,11 @@ claims_and_roles = {}
 
 # Load environment variables
 try:
-    metadata_schema_table_name = os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"]
-    database_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    metadata_schema_table_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -375,7 +375,7 @@ def create_metadata_schema(schema_data, claims_and_roles):
         
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         
         # Convert fields to JSON string for storage
         fields_json = json.dumps(schema_data['fields'])
@@ -471,7 +471,7 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         
         # Update metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         schema['dateModified'] = now
         schema['modifiedBy'] = username
         
@@ -635,7 +635,7 @@ def handle_get_request(event):
                 }
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Determine which query to use based on filters
             if request_model.databaseId and request_model.metadataEntityType:
@@ -722,7 +722,7 @@ def handle_post_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -773,7 +773,7 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -848,7 +848,7 @@ def handle_delete_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -890,7 +890,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

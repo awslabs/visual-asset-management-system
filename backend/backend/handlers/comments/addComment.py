@@ -1,12 +1,14 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
+import copy
 import boto3
 import json
 import datetime
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id
 from common.constants import STANDARD_JSON_RESPONSE
@@ -14,22 +16,20 @@ from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 
-# Create a logger object to log the events
 logger = safeLogger(service="AddComment")
 
 dynamodb = boto3.resource("dynamodb")
 s3c = boto3.client("s3")
 
-main_rest_response = STANDARD_JSON_RESPONSE
-
-comment_database = None
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
-    comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
-except:
-    logger.info("Failed Loading Environment Variables")
+    comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving comment table name")
+    comment_database = None
     main_rest_response["statusCode"] = 500
-    main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
+    main_rest_response["body"] = json.dumps({"message": "Failed resolving comment table name"})
 
 
 def add_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
@@ -75,7 +75,8 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: Lambda context disctionary
     :returns: Http response object (statusCode, headers, body)
     """
-    response = STANDARD_JSON_RESPONSE
+    normalize_event(event)
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     logger.info(event)
 
     # Parse request body
@@ -110,7 +111,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         logger.info("Validating parameters")
         (valid, message) = validate(
             {
-                "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
+                "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
                 "commentId": {"value": split_arr[1], "validator": "ID"},
             }
         )
@@ -186,7 +187,11 @@ def lambda_handler(event: dict, context: dict) -> dict:
             return response
     except Exception as e:
         logger.exception(f"caught exception")
-        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+        # Only botocore ClientError carries a `.response`; guard the access so a
+        # non-ClientError (e.g. a KeyError/IndexError from malformed path params)
+        # does not raise AttributeError here and collapse into an opaque 502.
+        error_code = getattr(e, "response", {}).get("Error", {}).get("Code")
+        if error_code == "ConditionalCheckFailedException":
             response["statusCode"] = 400
             response["body"] = json.dumps(
                 {"message": "Comment already exists."}

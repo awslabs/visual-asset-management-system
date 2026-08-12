@@ -68,20 +68,44 @@ export AWS_REGION=us-gov-west-1
 cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 ```
 
-:::warning[GovCloud endpoint resolution]
-You must set the `AWS_REGION` environment variable when bootstrapping AWS GovCloud accounts. The AWS SDK requires this to resolve GovCloud service endpoints correctly.
+**AWS European Sovereign Cloud:**
+
+```bash
+export AWS_REGION=eusc-de-east-1
+cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
+```
+
+:::warning[GovCloud and EU Sovereign Cloud endpoint resolution]
+You must set the `AWS_REGION` environment variable when bootstrapping AWS GovCloud or AWS European Sovereign Cloud accounts. The AWS SDK requires this to resolve the partition's service endpoints correctly.
 :::
 
 Replace `ACCOUNT_ID` with your 12-digit AWS account ID and `REGION` with your target deployment Region.
 
+:::warning[Importing an external VPC]
+If you are importing an existing VPC by setting `app.useGlobalVpc.optionalExternalVpcId` in `config.json`, bootstrap also synthesizes the app and will fail with VPC or subnet lookup errors unless the `loadContextIgnoreVPCStacks` flag is set. Set it either as a context flag on the bootstrap command or as `env.loadContextIgnoreVPCStacks: true` in `config.json`:
+
+```bash
+cdk bootstrap aws://ACCOUNT_ID/REGION --context loadContextIgnoreVPCStacks=true
+```
+
+See [Step 7](#step-7-import-an-external-vpc-conditional) for the two-phase deployment that follows.
+:::
+
 ## Step 5: Configure the deployment
 
-Edit the configuration file at `infra/config/config.json` to set your deployment parameters. Template files are provided as starting points:
+Edit the configuration file at `infra/config/config.json` to set your deployment parameters.
 
-| Template       | File                                           |
-| -------------- | ---------------------------------------------- |
-| Commercial AWS | `infra/config/config.template.commercial.json` |
-| AWS GovCloud   | `infra/config/config.template.govcloud.json`   |
+:::tip[Use the interactive configuration builder]
+The easiest way to assemble a valid `config.json` is the interactive [Configuration builder](config-builder.mdx). Choose a Commercial, GovCloud, or EU Sovereign Cloud starting template, fill in the fields you need, and download a ready-to-use `config.json` — it validates cross-field rules (such as the GovCloud and authentication constraints) as you go, before you ever run `cdk synth`. Place the downloaded file at `infra/config/config.json`.
+:::
+
+If you prefer to edit by hand, template files are provided as starting points:
+
+| Template                     | File                                            |
+| ---------------------------- | ----------------------------------------------- |
+| Commercial AWS               | `infra/config/config.template.commercial.json`  |
+| AWS GovCloud                 | `infra/config/config.template.govcloud.json`    |
+| AWS European Sovereign Cloud | `infra/config/config.template.eusovereign.json` |
 
 Copy the appropriate template to `config.json` and customize it:
 
@@ -98,7 +122,7 @@ cp config/config.template.commercial.json config/config.json
 | `app.adminUserId`       | Username for the initial admin account                            | `administrator`     |
 | `app.baseStackName`     | Stack environment name (appended to resource names)               | `prod`              |
 
-For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md).
+For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md). To build the file interactively, use the [Configuration builder](config-builder.mdx).
 
 :::note[Configuration templates]
 The GovCloud template pre-configures settings required for AWS GovCloud: VPC enabled, CloudFront disabled, ALB enabled, Location Service disabled, FIPS enabled, and KMS CMK encryption enabled.
@@ -236,19 +260,19 @@ For major version changes, significant configuration changes (such as switching 
 
 ## Common deployment errors
 
-| Error                                                                                          | Cause                                                          | Resolution                                                                                                                                                                                                                                           |
-| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Docker daemon not running`                                                                    | Docker (or your configured container engine) is not started.   | Start Docker Desktop (or your alternative container engine such as Finch or Podman) and retry. If using an alternative, ensure `CDK_DOCKER` is set correctly.                                                                                        |
-| `Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId`                                | Missing required configuration field.                          | Set `app.assetBuckets.defaultNewBucketSyncDatabaseId` in `config.json` (default: `"default"`).                                                                                                                                                       |
-| `Cannot use ALB deployment without specifying a valid domain hostname and ACM Certificate ARN` | ALB enabled without domain or certificate.                     | Provide `app.useAlb.domainHost` and `app.useAlb.certificateArn`.                                                                                                                                                                                     |
-| `Must specify an initial admin email address`                                                  | Admin email not configured.                                    | Set `app.adminEmailAddress` to a valid email.                                                                                                                                                                                                        |
-| `Must specify either none or one openSearch method`                                            | Both OpenSearch Serverless and Provisioned enabled.            | Enable only one OpenSearch option or disable both.                                                                                                                                                                                                   |
-| `Must specify only one authentication method`                                                  | Both Cognito and External OAuth IdP enabled.                   | Enable only one authentication provider.                                                                                                                                                                                                             |
-| `GovCloud must have useGlobalVpc.enabled set to true`                                          | GovCloud enabled without VPC.                                  | Set `app.useGlobalVpc.enabled: true` for GovCloud deployments.                                                                                                                                                                                       |
-| `Must define either a global VPC Cidr Range or an External VPC ID`                             | VPC enabled without network configuration.                     | Provide either `vpcCidrRange` or `optionalExternalVpcId`.                                                                                                                                                                                            |
-| `route table already has a route with destination-prefix-list-id`                              | Imported VPC already has VPC endpoints.                        | Set `app.useGlobalVpc.addVpcEndpoints: false` and manually add missing endpoints.                                                                                                                                                                    |
-| `Invalid request provided: Before you can proceed, you must enable a service-linked role`      | OpenSearch Provisioned service-linked role not yet propagated. | Wait 5 minutes and redeploy. If the issue persists, manually create the roles: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com` and `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`. |
-| `Properties validation failed ... array items are not unique` (ALB target group)               | Rare CloudFormation issue with ALB VPC endpoint IP resolution. | No configuration change needed. Redeploy to resolve.                                                                                                                                                                                                 |
+| Error                                                                                          | Cause                                                              | Resolution                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Docker daemon not running`                                                                    | Docker (or your configured container engine) is not started.       | Start Docker Desktop (or your alternative container engine such as Finch or Podman) and retry. If using an alternative, ensure `CDK_DOCKER` is set correctly.                                                                                                                                                                                                                             |
+| `Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId`                                | Missing required configuration field.                              | Set `app.assetBuckets.defaultNewBucketSyncDatabaseId` in `config.json` (default: `"default"`).                                                                                                                                                                                                                                                                                            |
+| `Cannot use ALB deployment without specifying a valid domain hostname and ACM Certificate ARN` | ALB enabled without domain or certificate.                         | Provide `app.useAlb.domainHost` and `app.useAlb.certificateArn`.                                                                                                                                                                                                                                                                                                                          |
+| `Must specify an initial admin email address`                                                  | Admin email not configured.                                        | Set `app.adminEmailAddress` to a valid email.                                                                                                                                                                                                                                                                                                                                             |
+| `Must specify either none or one openSearch method`                                            | Both OpenSearch Serverless and Provisioned enabled.                | Enable only one OpenSearch option or disable both.                                                                                                                                                                                                                                                                                                                                        |
+| `Must specify only one authentication method`                                                  | Both Cognito and External OAuth IdP enabled.                       | Enable only one authentication provider.                                                                                                                                                                                                                                                                                                                                                  |
+| `GovCloud must have useGlobalVpc.enabled set to true`                                          | GovCloud enabled without VPC.                                      | Set `app.useGlobalVpc.enabled: true` for GovCloud deployments.                                                                                                                                                                                                                                                                                                                            |
+| `Must define either a global VPC Cidr Range or an External VPC ID`                             | VPC enabled without network configuration.                         | Provide either `vpcCidrRange` or `optionalExternalVpcId`.                                                                                                                                                                                                                                                                                                                                 |
+| `route table already has a route with destination-prefix-list-id`                              | Imported VPC already has VPC endpoints.                            | Set `app.useGlobalVpc.addVpcEndpoints: false` and manually add missing endpoints.                                                                                                                                                                                                                                                                                                         |
+| `Invalid request provided: Before you can proceed, you must enable a service-linked role`      | OpenSearch Provisioned service-linked role missing in the account. | VAMS now creates this role idempotently during deployment, so this should not occur. If it persists (for example, the deploy principal lacks `iam:CreateServiceLinkedRole`), manually create it: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com` (use the partition-correct principal, e.g. `opensearchservice.amazonaws.com`, where applicable), then redeploy. |
+| `Properties validation failed ... array items are not unique` (ALB target group)               | Rare CloudFormation issue with ALB VPC endpoint IP resolution.     | No configuration change needed. Redeploy to resolve.                                                                                                                                                                                                                                                                                                                                      |
 
 ## Uninstalling
 

@@ -107,6 +107,12 @@ Yes. VAMS supports AWS GovCloud (US) regions with specific configuration require
 
 A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`.
 
+### Can I deploy to the AWS European Sovereign Cloud?
+
+Yes. VAMS supports the AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`). Deploy it using the GovCloud guardrails: set `app.govCloud.enabled: true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service). The Region exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`.
+
+A dedicated configuration template is provided at `infra/config/config.template.eusovereign.json`. See the [Configuration Reference](../deployment/configuration-reference.md) for the full deployment notes.
+
 ### What file types are blocked from upload?
 
 The following file extensions are blocked by the VAMS upload API for security reasons:

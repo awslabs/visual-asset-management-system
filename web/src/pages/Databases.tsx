@@ -30,7 +30,7 @@ export default function Databases() {
     const listDefinition = useMemo(
         () =>
             createDatabaseListDefinition({
-                onMetadataClick: (databaseId) => setMetadataModalDatabaseId(databaseId),
+                onMetadataClick: (databaseId: any) => setMetadataModalDatabaseId(databaseId),
                 showMapThumbnails: showMapThumbnails && useMapView,
                 MapThumbnailComponent: DatabaseMapThumbnail,
                 mapStyleUrl,

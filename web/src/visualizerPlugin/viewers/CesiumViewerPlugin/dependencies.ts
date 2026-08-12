@@ -63,8 +63,8 @@ export class CesiumDependencyManager {
             // Debug: Check what's available
             console.log(`[${this.PLUGIN_ID}] Cesium loaded successfully from bundle`);
             console.log(
-                `[${this.PLUGIN_ID}] Cesium.Viewer available:`,
-                typeof this.cesiumInstance.Viewer
+                `[${this.PLUGIN_ID}] Cesium.CesiumWidget available:`,
+                typeof this.cesiumInstance.CesiumWidget
             );
             console.log(
                 `[${this.PLUGIN_ID}] Cesium keys:`,
@@ -96,7 +96,7 @@ export class CesiumDependencyManager {
      */
     private static async loadCesiumFromAssets(): Promise<void> {
         // Load CSS first using StylesheetManager
-        const stylesheets = ["/viewers/cesium/Widgets/widgets.css"];
+        const stylesheets = ["/viewers/cesium/Widget/CesiumWidget.css"];
 
         for (const stylesheet of stylesheets) {
             try {

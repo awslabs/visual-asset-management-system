@@ -9,24 +9,21 @@ import json
 import pytest
 from unittest.mock import Mock, MagicMock
 
-# NOTE: Import commented out due to test infrastructure limitations with MockModule
-# Uncomment when test infrastructure is updated to support backend.common imports
-# from backend.common.stepfunctions_builder import (
-#     create_lambda_task_state,
-#     create_fail_state,
-#     create_retry_config,
-#     create_catch_config,
-#     create_workflow_definition,
-#     create_state_machine,
-#     update_state_machine,
-#     format_s3_uri_with_states_format
-# )
+from backend.backend.common.workflows.stepfunctions_builder import (
+    create_lambda_task_state,
+    create_fail_state,
+    create_retry_config,
+    create_catch_config,
+    create_workflow_definition,
+    create_state_machine,
+    update_state_machine,
+    format_s3_uri_with_states_format,
+)
 
 
 class TestCreateLambdaTaskState:
     """Test Lambda task state creation."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_basic_lambda_task_state(self):
         """Test creating a basic Lambda task state."""
         state = create_lambda_task_state(
@@ -41,7 +38,6 @@ class TestCreateLambdaTaskState:
         assert state["Parameters"]["Payload"] == {"key": "value"}
         assert "ResultPath" not in state
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_lambda_task_state_with_result_path(self):
         """Test Lambda task state with result path."""
         state = create_lambda_task_state(
@@ -53,7 +49,6 @@ class TestCreateLambdaTaskState:
 
         assert state["ResultPath"] == "$.output"
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_lambda_task_state_with_callback(self):
         """Test Lambda task state with callback pattern."""
         state = create_lambda_task_state(
@@ -69,7 +64,6 @@ class TestCreateLambdaTaskState:
         assert state["TimeoutSeconds"] == 300
         assert state["HeartbeatSeconds"] == 60
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_lambda_task_state_with_retry(self):
         """Test Lambda task state with retry configuration."""
         retry_config = create_retry_config(
@@ -93,7 +87,6 @@ class TestCreateLambdaTaskState:
         assert state["Retry"][0]["BackoffRate"] == 2.0
         assert state["Retry"][0]["MaxAttempts"] == 3
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_lambda_task_state_with_catch(self):
         """Test Lambda task state with catch configuration."""
         catch_config = [create_catch_config(
@@ -117,7 +110,6 @@ class TestCreateLambdaTaskState:
 class TestCreateFailState:
     """Test Fail state creation."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_basic_fail_state(self):
         """Test creating a basic Fail state."""
         state = create_fail_state(
@@ -130,7 +122,6 @@ class TestCreateFailState:
         assert state["Cause"] == "Test failure"
         assert state["Error"] == "TestError"
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_fail_state_default_error(self):
         """Test Fail state with default error."""
         state = create_fail_state(
@@ -144,7 +135,6 @@ class TestCreateFailState:
 class TestCreateRetryConfig:
     """Test retry configuration creation."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_default_retry_config(self):
         """Test creating retry config with defaults."""
         config = create_retry_config()
@@ -152,9 +142,9 @@ class TestCreateRetryConfig:
         assert config["ErrorEquals"] == ["States.ALL"]
         assert config["IntervalSeconds"] == 5
         assert config["BackoffRate"] == 2.0
-        assert config["MaxAttempts"] == 3
+        # Callers that want a third attempt pass max_attempts explicitly; the default is two.
+        assert config["MaxAttempts"] == 2
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_custom_retry_config(self):
         """Test creating retry config with custom values."""
         config = create_retry_config(
@@ -173,7 +163,6 @@ class TestCreateRetryConfig:
 class TestCreateCatchConfig:
     """Test catch configuration creation."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_basic_catch_config(self):
         """Test creating basic catch config."""
         config = create_catch_config(
@@ -185,7 +174,6 @@ class TestCreateCatchConfig:
         assert config["Next"] == "FailureState"
         assert "ResultPath" not in config
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_catch_config_with_result_path(self):
         """Test catch config with result path."""
         config = create_catch_config(
@@ -200,7 +188,6 @@ class TestCreateCatchConfig:
 class TestCreateWorkflowDefinition:
     """Test workflow definition creation."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_single_state_workflow(self):
         """Test workflow with single state."""
         state = create_lambda_task_state(
@@ -219,7 +206,6 @@ class TestCreateWorkflowDefinition:
         assert "TestState" in workflow["States"]
         assert workflow["States"]["TestState"]["End"] is True
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_multiple_states_workflow(self):
         """Test workflow with multiple states."""
         state1 = create_lambda_task_state(
@@ -251,7 +237,6 @@ class TestCreateWorkflowDefinition:
         assert "End" not in workflow["States"]["FailureState"]  # Fail states don't have End
         assert "Next" not in workflow["States"]["FailureState"]
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_workflow_with_existing_next(self):
         """Test workflow respects existing Next pointers."""
         state1 = create_lambda_task_state(
@@ -279,7 +264,6 @@ class TestCreateWorkflowDefinition:
         # State2 should have End
         assert workflow["States"]["State2"]["End"] is True
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_empty_states_raises_error(self):
         """Test that empty states list raises error."""
         with pytest.raises(ValueError, match="At least one state is required"):
@@ -289,7 +273,6 @@ class TestCreateWorkflowDefinition:
 class TestCreateStateMachine:
     """Test state machine creation."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_create_state_machine(self):
         """Test creating a state machine."""
         mock_sf_client = Mock()
@@ -332,7 +315,6 @@ class TestCreateStateMachine:
 class TestUpdateStateMachine:
     """Test state machine update."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_update_state_machine(self):
         """Test updating a state machine."""
         mock_sf_client = Mock()
@@ -369,7 +351,6 @@ class TestUpdateStateMachine:
 class TestFormatS3UriWithStatesFormat:
     """Test S3 URI formatting with States.Format."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_basic_s3_uri_format(self):
         """Test basic S3 URI formatting."""
         uri = format_s3_uri_with_states_format(
@@ -379,7 +360,6 @@ class TestFormatS3UriWithStatesFormat:
 
         assert uri == "States.Format('s3://{}/path/to/file/{}', $.bucketName, $$.Execution.Name)"
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_s3_uri_format_custom_execution_placeholder(self):
         """Test S3 URI formatting with custom execution placeholder."""
         uri = format_s3_uri_with_states_format(
@@ -394,7 +374,6 @@ class TestFormatS3UriWithStatesFormat:
 class TestIntegration:
     """Integration tests for complete workflow creation."""
 
-    @pytest.mark.skip(reason="Test infrastructure needs update - MockModule does not support backend.common imports. Tests are comprehensive and ready to run once test infrastructure is fixed.")
     def test_complete_workflow_creation(self):
         """Test creating a complete workflow with multiple states."""
         # Create retry and catch configs

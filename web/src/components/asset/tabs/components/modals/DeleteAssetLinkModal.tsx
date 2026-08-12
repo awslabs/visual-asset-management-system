@@ -27,7 +27,7 @@ export function DeleteAssetLinkModal({
         try {
             setDeleteDisabled(true);
 
-            const result: any = await deleteAssetLink({ relationId: assetLinkId });
+            const result: any = await deleteAssetLink({ assetLinkId });
             if (Array.isArray(result) && result[0] === false) {
                 const status = result[2];
                 showMessage({

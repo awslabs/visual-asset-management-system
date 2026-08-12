@@ -13,14 +13,13 @@ Key Features:
 - Uses "touch and delete" pattern: creates then immediately deletes REINDEX_METADATA_RECORD
 - DynamoDB Streams automatically trigger OpenSearch indexing on both INSERT and REMOVE events
 - Supports both direct Lambda invocation and CloudFormation custom resource events
-- All configuration read from environment variables
+- Table names resolved via common.resourceNames (SSM with environment variable override for testing)
 - Comprehensive error handling and logging
 - Batch operations for optimal performance
 
-Environment Variables Required:
-- ASSET_STORAGE_TABLE_NAME: DynamoDB table for assets (source)
-- S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: DynamoDB table for S3 bucket configs (source)
-- ASSET_FILE_METADATA_STORAGE_TABLE_NAME: DynamoDB table for asset/file metadata (target for touch operations)
+Configuration Required:
+- DynamoDB table names: ASSET_STORAGE_TABLE_NAME, S3_ASSET_BUCKETS_STORAGE_TABLE_NAME,
+  ASSET_FILE_METADATA_STORAGE_TABLE_NAME (resolved via SSM with env var override)
 - OPENSEARCH_ASSET_INDEX_SSM_PARAM: SSM parameter for asset index name
 - OPENSEARCH_FILE_INDEX_SSM_PARAM: SSM parameter for file index name
 - OPENSEARCH_ENDPOINT_SSM_PARAM: SSM parameter for OpenSearch endpoint
@@ -88,9 +87,23 @@ ssm_client = boto3.client('ssm')
 http = urllib3.PoolManager()
 
 # Environment Variables - Loaded at module initialization
-ASSET_STORAGE_TABLE_NAME = os.environ.get('ASSET_STORAGE_TABLE_NAME', '')
-S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = os.environ.get('S3_ASSET_BUCKETS_STORAGE_TABLE_NAME', '')
-ASSET_FILE_METADATA_STORAGE_TABLE_NAME = os.environ.get('ASSET_FILE_METADATA_STORAGE_TABLE_NAME', '')
+from common.resourceNames import get_table_name, ResourceKeys
+
+try:
+    ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception:
+    ASSET_STORAGE_TABLE_NAME = ''
+
+try:
+    S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+except Exception:
+    S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = ''
+
+try:
+    ASSET_FILE_METADATA_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+except Exception:
+    ASSET_FILE_METADATA_STORAGE_TABLE_NAME = ''
+
 OPENSEARCH_ASSET_INDEX_SSM_PARAM = os.environ.get('OPENSEARCH_ASSET_INDEX_SSM_PARAM', '')
 OPENSEARCH_FILE_INDEX_SSM_PARAM = os.environ.get('OPENSEARCH_FILE_INDEX_SSM_PARAM', '')
 OPENSEARCH_ENDPOINT_SSM_PARAM = os.environ.get('OPENSEARCH_ENDPOINT_SSM_PARAM', '')
@@ -1242,9 +1255,9 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
     is_cfn_event = 'RequestType' in event and 'ResponseURL' in event
     
     try:
-        # Validate required environment variables
+        # Validate required table name configuration
         if not all([ASSET_STORAGE_TABLE_NAME, S3_ASSET_BUCKETS_STORAGE_TABLE_NAME, ASSET_FILE_METADATA_STORAGE_TABLE_NAME]):
-            error_msg = "Missing required environment variables"
+            error_msg = "Missing required table name configuration"
             logger.error(error_msg)
             logger.error(f"  ASSET_STORAGE_TABLE_NAME: {ASSET_STORAGE_TABLE_NAME}")
             logger.error(f"  S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: {S3_ASSET_BUCKETS_STORAGE_TABLE_NAME}")

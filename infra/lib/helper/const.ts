@@ -8,6 +8,7 @@ export type SERVICE =
     | "ACCOUNT"
     | "ACM"
     | "ACM_PCA"
+    | "AGREEMENT_MARKETPLACE"
     | "AIRFLOW"
     | "AMPLIFY"
     | "AMPLIFYBACKEND"
@@ -45,6 +46,7 @@ export type SERVICE =
     | "BACKUPSTORAGE"
     | "BACKUP_GATEWAY"
     | "BATCH"
+    | "BEDROCK"
     | "BILLINGCONDUCTOR"
     | "BRAKET"
     | "BUDGETS"
@@ -69,11 +71,13 @@ export type SERVICE =
     | "CODECATALYST"
     | "CODECOMMIT"
     | "CODEDEPLOY"
+    | "CODEGURU_PROFILER"
     | "CODEGURU_REVIEWER"
     | "CODEPIPELINE"
     | "CODESTAR"
     | "CODESTAR_CONNECTIONS"
     | "CODESTAR_NOTIFICATIONS"
+    | "COGNITO_HOSTED_UI"
     | "COGNITO_IDENTITY"
     | "COGNITO_IDP"
     | "COGNITO_SYNC"
@@ -85,11 +89,13 @@ export type SERVICE =
     | "CONNECT_CAMPAIGNS"
     | "CONTACT_LENS"
     | "CONTROLTOWER"
+    | "COST_OPTIMIZATION_HUB"
     | "CUR"
     | "DATABREW"
     | "DATAEXCHANGE"
     | "DATAPIPELINE"
     | "DATASYNC"
+    | "DATAZONE"
     | "DATA_ATS_IOT"
     | "DATA_IOT"
     | "DATA_JOBS_IOT"
@@ -112,6 +118,7 @@ export type SERVICE =
     | "ECS_TASKS"
     | "EDGE_SAGEMAKER"
     | "EKS"
+    | "EKS_AUTH"
     | "ELASTICACHE"
     | "ELASTICBEANSTALK"
     | "ELASTICFILESYSTEM"
@@ -135,9 +142,11 @@ export type SERVICE =
     | "FRAUDDETECTOR"
     | "FSX"
     | "GAMELIFT"
+    | "GAMELIFTSTREAMS"
     | "GAMESPARKS"
     | "GEO"
     | "GLACIER"
+    | "GLOBALACCELERATOR"
     | "GLUE"
     | "GRAFANA"
     | "GREENGRASS"
@@ -191,6 +200,7 @@ export type SERVICE =
     | "MACIE"
     | "MACIE2"
     | "MANAGEDBLOCKCHAIN"
+    | "MANAGEDBLOCKCHAIN_QUERY"
     | "MARKETPLACECOMMERCEANALYTICS"
     | "MEDIACONNECT"
     | "MEDIACONVERT"
@@ -219,6 +229,9 @@ export type SERVICE =
     | "NETWORKMANAGER"
     | "NETWORK_FIREWALL"
     | "NIMBLE"
+    | "NOTIFICATIONS"
+    | "NOTIFICATIONS_CONTACTS"
+    | "NOVA_ACT"
     | "OAM"
     | "OIDC"
     | "OMICS"
@@ -228,6 +241,7 @@ export type SERVICE =
     | "OSIS"
     | "OUTPOSTS"
     | "PARTICIPANT_CONNECT"
+    | "PARTNERCENTRAL_CHANNEL"
     | "PERSONALIZE"
     | "PI"
     | "PINPOINT"
@@ -237,7 +251,9 @@ export type SERVICE =
     | "PROFILE"
     | "PROJECTS_IOT1CLICK"
     | "PROTON"
+    | "QBUSINESS"
     | "QLDB"
+    | "QUERY_TIMESTREAM"
     | "QUICKSIGHT"
     | "RAM"
     | "RBIN"
@@ -253,6 +269,7 @@ export type SERVICE =
     | "ROLESANYWHERE"
     | "ROUTE53"
     | "ROUTE53DOMAINS"
+    | "ROUTE53PROFILES"
     | "ROUTE53RESOLVER"
     | "ROUTE53_RECOVERY_CONTROL_CONFIG"
     | "RUM"
@@ -288,6 +305,7 @@ export type SERVICE =
     | "SSM"
     | "SSM_CONTACTS"
     | "SSM_INCIDENTS"
+    | "SSM_QUICKSETUP"
     | "SSM_SAP"
     | "SSO"
     | "STATES"
@@ -299,12 +317,15 @@ export type SERVICE =
     | "SWF"
     | "SYNTHETICS"
     | "TAGGING"
+    | "TAX"
     | "TEXTRACT"
+    | "THINCLIENT"
     | "TNB"
     | "TRANSCRIBE"
     | "TRANSCRIBESTREAMING"
     | "TRANSFER"
     | "TRANSLATE"
+    | "TRUSTEDADVISOR"
     | "VERIFIEDPERMISSIONS"
     | "VOICEID"
     | "VOICE_CHIME"
@@ -325,6 +346,7 @@ export const TYPE_SERVICE_LOOKUP = {
     ACCOUNT: "account",
     ACM: "acm",
     ACM_PCA: "acm-pca",
+    AGREEMENT_MARKETPLACE: "agreement-marketplace",
     AIRFLOW: "airflow",
     AMPLIFY: "amplify",
     AMPLIFYBACKEND: "amplifybackend",
@@ -362,6 +384,7 @@ export const TYPE_SERVICE_LOOKUP = {
     BACKUP_GATEWAY: "backup-gateway",
     BACKUPSTORAGE: "backupstorage",
     BATCH: "batch",
+    BEDROCK: "bedrock",
     BILLINGCONDUCTOR: "billingconductor",
     BRAKET: "braket",
     BUDGETS: "budgets",
@@ -386,11 +409,13 @@ export const TYPE_SERVICE_LOOKUP = {
     CODECATALYST: "codecatalyst",
     CODECOMMIT: "codecommit",
     CODEDEPLOY: "codedeploy",
+    CODEGURU_PROFILER: "codeguru-profiler",
     CODEGURU_REVIEWER: "codeguru-reviewer",
     CODEPIPELINE: "codepipeline",
     CODESTAR: "codestar",
     CODESTAR_CONNECTIONS: "codestar-connections",
     CODESTAR_NOTIFICATIONS: "codestar-notifications",
+    COGNITO_HOSTED_UI: "cognito-hosted-ui",
     COGNITO_IDENTITY: "cognito-identity",
     COGNITO_IDP: "cognito-idp",
     COGNITO_SYNC: "cognito-sync",
@@ -402,6 +427,7 @@ export const TYPE_SERVICE_LOOKUP = {
     CONNECT_CAMPAIGNS: "connect-campaigns",
     CONTACT_LENS: "contact-lens",
     CONTROLTOWER: "controltower",
+    COST_OPTIMIZATION_HUB: "cost-optimization-hub",
     CUR: "cur",
     DATA_ATS_IOT: "data-ats.iot",
     DATA_IOT: "data.iot",
@@ -411,6 +437,7 @@ export const TYPE_SERVICE_LOOKUP = {
     DATAEXCHANGE: "dataexchange",
     DATAPIPELINE: "datapipeline",
     DATASYNC: "datasync",
+    DATAZONE: "datazone",
     DAX: "dax",
     DEVICEFARM: "devicefarm",
     DEVOPS_GURU: "devops-guru",
@@ -429,6 +456,7 @@ export const TYPE_SERVICE_LOOKUP = {
     ECS_TASKS: "ecs-tasks",
     EDGE_SAGEMAKER: "edge.sagemaker",
     EKS: "eks",
+    EKS_AUTH: "eks-auth",
     ELASTICACHE: "elasticache",
     ELASTICBEANSTALK: "elasticbeanstalk",
     ELASTICFILESYSTEM: "elasticfilesystem",
@@ -442,6 +470,7 @@ export const TYPE_SERVICE_LOOKUP = {
     ES: "es",
     EVENTS: "events",
     EVIDENTLY: "evidently",
+    EXECUTE_API: "execute-api",
     FINSPACE: "finspace",
     FINSPACE_API: "finspace-api",
     FIREHOSE: "firehose",
@@ -451,9 +480,11 @@ export const TYPE_SERVICE_LOOKUP = {
     FRAUDDETECTOR: "frauddetector",
     FSX: "fsx",
     GAMELIFT: "gamelift",
+    GAMELIFTSTREAMS: "gameliftstreams",
     GAMESPARKS: "gamesparks",
     GEO: "geo",
     GLACIER: "glacier",
+    GLOBALACCELERATOR: "globalaccelerator",
     GLUE: "glue",
     GRAFANA: "grafana",
     GREENGRASS: "greengrass",
@@ -507,6 +538,7 @@ export const TYPE_SERVICE_LOOKUP = {
     MACIE: "macie",
     MACIE2: "macie2",
     MANAGEDBLOCKCHAIN: "managedblockchain",
+    MANAGEDBLOCKCHAIN_QUERY: "managedblockchain-query",
     MARKETPLACECOMMERCEANALYTICS: "marketplacecommerceanalytics",
     MEDIA_PIPELINES_CHIME: "media-pipelines-chime",
     MEDIACONNECT: "mediaconnect",
@@ -535,6 +567,9 @@ export const TYPE_SERVICE_LOOKUP = {
     NETWORK_FIREWALL: "network-firewall",
     NETWORKMANAGER: "networkmanager",
     NIMBLE: "nimble",
+    NOTIFICATIONS: "notifications",
+    NOTIFICATIONS_CONTACTS: "notifications-contacts",
+    NOVA_ACT: "nova-act",
     OAM: "oam",
     OIDC: "oidc",
     OMICS: "omics",
@@ -544,6 +579,7 @@ export const TYPE_SERVICE_LOOKUP = {
     OSIS: "osis",
     OUTPOSTS: "outposts",
     PARTICIPANT_CONNECT: "participant.connect",
+    PARTNERCENTRAL_CHANNEL: "partnercentral-channel",
     PERSONALIZE: "personalize",
     PI: "pi",
     PINPOINT: "pinpoint",
@@ -553,7 +589,9 @@ export const TYPE_SERVICE_LOOKUP = {
     PROFILE: "profile",
     PROJECTS_IOT1CLICK: "projects.iot1click",
     PROTON: "proton",
+    QBUSINESS: "qbusiness",
     QLDB: "qldb",
+    QUERY_TIMESTREAM: "query.timestream",
     QUICKSIGHT: "quicksight",
     RAM: "ram",
     RBIN: "rbin",
@@ -570,6 +608,7 @@ export const TYPE_SERVICE_LOOKUP = {
     ROUTE53: "route53",
     ROUTE53_RECOVERY_CONTROL_CONFIG: "route53-recovery-control-config",
     ROUTE53DOMAINS: "route53domains",
+    ROUTE53PROFILES: "route53profiles",
     ROUTE53RESOLVER: "route53resolver",
     RUM: "rum",
     RUNTIME_V2_LEX: "runtime-v2-lex",
@@ -578,6 +617,7 @@ export const TYPE_SERVICE_LOOKUP = {
     S3: "s3",
     S3_CONTROL: "s3-control",
     S3_OUTPOSTS: "s3-outposts",
+    SAGEMAKER: "sagemaker",
     SAGEMAKER_GEOSPATIAL: "sagemaker-geospatial",
     SAVINGSPLANS: "savingsplans",
     SCHEDULER: "scheduler",
@@ -603,6 +643,7 @@ export const TYPE_SERVICE_LOOKUP = {
     SSM: "ssm",
     SSM_CONTACTS: "ssm-contacts",
     SSM_INCIDENTS: "ssm-incidents",
+    SSM_QUICKSETUP: "ssm-quicksetup",
     SSM_SAP: "ssm-sap",
     SSO: "sso",
     STATES: "states",
@@ -614,12 +655,15 @@ export const TYPE_SERVICE_LOOKUP = {
     SWF: "swf",
     SYNTHETICS: "synthetics",
     TAGGING: "tagging",
+    TAX: "tax",
     TEXTRACT: "textract",
+    THINCLIENT: "thinclient",
     TNB: "tnb",
     TRANSCRIBE: "transcribe",
     TRANSCRIBESTREAMING: "transcribestreaming",
     TRANSFER: "transfer",
     TRANSLATE: "translate",
+    TRUSTEDADVISOR: "trustedadvisor",
     VERIFIEDPERMISSIONS: "verifiedpermissions",
     VOICE_CHIME: "voice-chime",
     VOICEID: "voiceid",
@@ -634,8 +678,6 @@ export const TYPE_SERVICE_LOOKUP = {
     WORKSPACES: "workspaces",
     WORKSPACES_WEB: "workspaces-web",
     XRAY: "xray",
-    SAGEMAKER: "sagemaker",
-    EXECUTE_API: "execute-api",
 };
 export interface IServiceInfo {
     arn: string;
@@ -671,6 +713,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "access-analyzer.{region}.amazonaws.com",
             fipsHostname: "access-analyzer-fips.{region}.amazonaws.com",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:access-analyzer:{region}:{account-id}:{resource-id}",
+            principal: "access-analyzer.cloud.adc-e.uk",
+            hostname: "access-analyzer.{region}.cloud.adc-e.uk",
+            fipsHostname: "access-analyzer-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:access-analyzer:{region}:{account-id}:{resource-id}",
+            principal: "access-analyzer.csp.hci.ic.gov",
+            hostname: "access-analyzer.{region}.csp.hci.ic.gov",
+            fipsHostname: "access-analyzer-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:access-analyzer:{region}:{account-id}:{resource-id}",
+            principal: "access-analyzer.amazonaws.com",
+            hostname: "access-analyzer.{region}.amazonaws.eu",
+            fipsHostname: "access-analyzer-fips.{region}.amazonaws.eu",
+        },
     },
     account: {
         aws: {
@@ -705,6 +765,36 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "acm.{region}.amazonaws.com",
             fipsHostname: "acm-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:acm:{region}:{account-id}:{resource-id}",
+            principal: "acm.c2s.ic.gov",
+            hostname: "acm.{region}.c2s.ic.gov",
+            fipsHostname: "acm-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:acm:{region}:{account-id}:{resource-id}",
+            principal: "acm.sc2s.sgov.gov",
+            hostname: "acm.{region}.sc2s.sgov.gov",
+            fipsHostname: "acm-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:acm:{region}:{account-id}:{resource-id}",
+            principal: "acm.cloud.adc-e.uk",
+            hostname: "acm.{region}.cloud.adc-e.uk",
+            fipsHostname: "acm-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:acm:{region}:{account-id}:{resource-id}",
+            principal: "acm.csp.hci.ic.gov",
+            hostname: "acm.{region}.csp.hci.ic.gov",
+            fipsHostname: "acm-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:acm:{region}:{account-id}:{resource-id}",
+            principal: "acm.amazonaws.com",
+            hostname: "acm.{region}.amazonaws.eu",
+            fipsHostname: "acm-fips.{region}.amazonaws.eu",
+        },
     },
     "acm-pca": {
         aws: {
@@ -718,6 +808,68 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "acm-pca.amazonaws.com",
             hostname: "acm-pca.{region}.amazonaws.com",
             fipsHostname: "acm-pca-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:acm-pca:{region}:{account-id}:{resource-id}",
+            principal: "acm-pca.amazonaws.com.cn",
+            hostname: "acm-pca.{region}.amazonaws.com.cn",
+            fipsHostname: "acm-pca-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:acm-pca:{region}:{account-id}:{resource-id}",
+            principal: "acm-pca.c2s.ic.gov",
+            hostname: "acm-pca.{region}.c2s.ic.gov",
+            fipsHostname: "acm-pca-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:acm-pca:{region}:{account-id}:{resource-id}",
+            principal: "acm-pca.cloud.adc-e.uk",
+            hostname: "acm-pca.{region}.cloud.adc-e.uk",
+            fipsHostname: "acm-pca-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:acm-pca:{region}:{account-id}:{resource-id}",
+            principal: "acm-pca.csp.hci.ic.gov",
+            hostname: "acm-pca.{region}.csp.hci.ic.gov",
+            fipsHostname: "acm-pca-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:acm-pca:{region}:{account-id}:{resource-id}",
+            principal: "acm-pca.amazonaws.com",
+            hostname: "acm-pca.{region}.amazonaws.eu",
+            fipsHostname: "acm-pca-fips.{region}.amazonaws.eu",
+        },
+    },
+    "agreement-marketplace": {
+        aws: {
+            arn: "arn:aws:agreement-marketplace:{region}:{account-id}:{resource-id}",
+            principal: "agreement-marketplace.amazonaws.com",
+            hostname: "agreement-marketplace.{region}.amazonaws.com",
+            fipsHostname: "agreement-marketplace-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:agreement-marketplace:{region}:{account-id}:{resource-id}",
+            principal: "agreement-marketplace.c2s.ic.gov",
+            hostname: "agreement-marketplace.{region}.c2s.ic.gov",
+            fipsHostname: "agreement-marketplace-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:agreement-marketplace:{region}:{account-id}:{resource-id}",
+            principal: "agreement-marketplace.sc2s.sgov.gov",
+            hostname: "agreement-marketplace.{region}.sc2s.sgov.gov",
+            fipsHostname: "agreement-marketplace-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:agreement-marketplace:{region}:{account-id}:{resource-id}",
+            principal: "agreement-marketplace.csp.hci.ic.gov",
+            hostname: "agreement-marketplace.{region}.csp.hci.ic.gov",
+            fipsHostname: "agreement-marketplace-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:agreement-marketplace:{region}:{account-id}:{resource-id}",
+            principal: "agreement-marketplace.amazonaws.com",
+            hostname: "agreement-marketplace.{region}.amazonaws.eu",
+            fipsHostname: "agreement-marketplace-fips.{region}.amazonaws.eu",
         },
     },
     airflow: {
@@ -761,6 +913,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
     aoss: {
         aws: {
             arn: "arn:aws:aoss:{region}:{account-id}:{resource-id}",
+            principal: "aoss.amazonaws.com",
+            hostname: "aoss.{region}.amazonaws.com",
+            fipsHostname: "aoss-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:aoss:{region}:{account-id}:{resource-id}",
             principal: "aoss.amazonaws.com",
             hostname: "aoss.{region}.amazonaws.com",
             fipsHostname: "aoss-fips.{region}.amazonaws.com",
@@ -810,6 +968,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "api.ecr.sc2s.sgov.gov",
             hostname: "api.ecr.{region}.sc2s.sgov.gov",
             fipsHostname: "api.ecr-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:api.ecr:{region}:{account-id}:{resource-id}",
+            principal: "api.ecr.cloud.adc-e.uk",
+            hostname: "api.ecr.{region}.cloud.adc-e.uk",
+            fipsHostname: "api.ecr-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:api.ecr:{region}:{account-id}:{resource-id}",
+            principal: "api.ecr.csp.hci.ic.gov",
+            hostname: "api.ecr.{region}.csp.hci.ic.gov",
+            fipsHostname: "api.ecr-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:api.ecr:{region}:{account-id}:{resource-id}",
+            principal: "api.ecr.amazonaws.com",
+            hostname: "api.ecr.{region}.amazonaws.eu",
+            fipsHostname: "api.ecr-fips.{region}.amazonaws.eu",
         },
     },
     "api.ecr-public": {
@@ -867,6 +1043,42 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "api.pricing.{region}.amazonaws.com",
             fipsHostname: "api.pricing-fips.{region}.amazonaws.com",
         },
+        "aws-cn": {
+            arn: "arn:aws-cn:api.pricing:{region}:{account-id}:{resource-id}",
+            principal: "api.pricing.amazonaws.com.cn",
+            hostname: "api.pricing.{region}.amazonaws.com.cn",
+            fipsHostname: "api.pricing-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:api.pricing:{region}:{account-id}:{resource-id}",
+            principal: "api.pricing.c2s.ic.gov",
+            hostname: "api.pricing.{region}.c2s.ic.gov",
+            fipsHostname: "api.pricing-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:api.pricing:{region}:{account-id}:{resource-id}",
+            principal: "api.pricing.sc2s.sgov.gov",
+            hostname: "api.pricing.{region}.sc2s.sgov.gov",
+            fipsHostname: "api.pricing-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:api.pricing:{region}:{account-id}:{resource-id}",
+            principal: "api.pricing.cloud.adc-e.uk",
+            hostname: "api.pricing.{region}.cloud.adc-e.uk",
+            fipsHostname: "api.pricing-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:api.pricing:{region}:{account-id}:{resource-id}",
+            principal: "api.pricing.csp.hci.ic.gov",
+            hostname: "api.pricing.{region}.csp.hci.ic.gov",
+            fipsHostname: "api.pricing-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:api.pricing:{region}:{account-id}:{resource-id}",
+            principal: "api.pricing.amazonaws.com",
+            hostname: "api.pricing.{region}.amazonaws.eu",
+            fipsHostname: "api.pricing-fips.{region}.amazonaws.eu",
+        },
     },
     "api.sagemaker": {
         aws: {
@@ -892,6 +1104,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "api.sagemaker.c2s.ic.gov",
             hostname: "api.sagemaker.{region}.c2s.ic.gov",
             fipsHostname: "api.sagemaker-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:api.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "api.sagemaker.sc2s.sgov.gov",
+            hostname: "api.sagemaker.{region}.sc2s.sgov.gov",
+            fipsHostname: "api.sagemaker-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:api.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "api.sagemaker.cloud.adc-e.uk",
+            hostname: "api.sagemaker.{region}.cloud.adc-e.uk",
+            fipsHostname: "api.sagemaker-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:api.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "api.sagemaker.csp.hci.ic.gov",
+            hostname: "api.sagemaker.{region}.csp.hci.ic.gov",
+            fipsHostname: "api.sagemaker-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:api.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "api.sagemaker.amazonaws.com",
+            hostname: "api.sagemaker.{region}.amazonaws.eu",
+            fipsHostname: "api.sagemaker-fips.{region}.amazonaws.eu",
         },
     },
     "api.tunneling.iot": {
@@ -939,6 +1175,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "apigateway.{region}.c2s.ic.gov",
             fipsHostname: "apigateway-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:apigateway:{region}:{account-id}:{resource-id}",
+            principal: "apigateway.sc2s.sgov.gov",
+            hostname: "apigateway.{region}.sc2s.sgov.gov",
+            fipsHostname: "apigateway-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:apigateway:{region}:{account-id}:{resource-id}",
+            principal: "apigateway.cloud.adc-e.uk",
+            hostname: "apigateway.{region}.cloud.adc-e.uk",
+            fipsHostname: "apigateway-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:apigateway:{region}:{account-id}:{resource-id}",
+            principal: "apigateway.amazonaws.com",
+            hostname: "apigateway.{region}.amazonaws.eu",
+            fipsHostname: "apigateway-fips.{region}.amazonaws.eu",
+        },
     },
     "app-integrations": {
         aws: {
@@ -979,6 +1233,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "appconfig.{region}.sc2s.sgov.gov",
             fipsHostname: "appconfig-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:appconfig:{region}:{account-id}:{resource-id}",
+            principal: "appconfig.cloud.adc-e.uk",
+            hostname: "appconfig.{region}.cloud.adc-e.uk",
+            fipsHostname: "appconfig-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:appconfig:{region}:{account-id}:{resource-id}",
+            principal: "appconfig.csp.hci.ic.gov",
+            hostname: "appconfig.{region}.csp.hci.ic.gov",
+            fipsHostname: "appconfig-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:appconfig:{region}:{account-id}:{resource-id}",
+            principal: "appconfig.amazonaws.com",
+            hostname: "appconfig.{region}.amazonaws.eu",
+            fipsHostname: "appconfig-fips.{region}.amazonaws.eu",
+        },
     },
     appconfigdata: {
         aws: {
@@ -1010,6 +1282,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "appconfigdata.sc2s.sgov.gov",
             hostname: "appconfigdata.{region}.sc2s.sgov.gov",
             fipsHostname: "appconfigdata-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:appconfigdata:{region}:{account-id}:{resource-id}",
+            principal: "appconfigdata.cloud.adc-e.uk",
+            hostname: "appconfigdata.{region}.cloud.adc-e.uk",
+            fipsHostname: "appconfigdata-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:appconfigdata:{region}:{account-id}:{resource-id}",
+            principal: "appconfigdata.csp.hci.ic.gov",
+            hostname: "appconfigdata.{region}.csp.hci.ic.gov",
+            fipsHostname: "appconfigdata-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:appconfigdata:{region}:{account-id}:{resource-id}",
+            principal: "appconfigdata.amazonaws.com",
+            hostname: "appconfigdata.{region}.amazonaws.eu",
+            fipsHostname: "appconfigdata-fips.{region}.amazonaws.eu",
         },
     },
     appflow: {
@@ -1050,6 +1340,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "application-autoscaling.sc2s.sgov.gov",
             hostname: "application-autoscaling.{region}.sc2s.sgov.gov",
             fipsHostname: "application-autoscaling-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:application-autoscaling:{region}:{account-id}:{resource-id}",
+            principal: "application-autoscaling.cloud.adc-e.uk",
+            hostname: "application-autoscaling.{region}.cloud.adc-e.uk",
+            fipsHostname: "application-autoscaling-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:application-autoscaling:{region}:{account-id}:{resource-id}",
+            principal: "application-autoscaling.csp.hci.ic.gov",
+            hostname: "application-autoscaling.{region}.csp.hci.ic.gov",
+            fipsHostname: "application-autoscaling-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:application-autoscaling:{region}:{account-id}:{resource-id}",
+            principal: "application-autoscaling.amazonaws.com",
+            hostname: "application-autoscaling.{region}.amazonaws.eu",
+            fipsHostname: "application-autoscaling-fips.{region}.amazonaws.eu",
         },
     },
     applicationinsights: {
@@ -1107,6 +1415,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "appstream2.{region}.amazonaws.com",
             fipsHostname: "appstream2-fips.{region}.amazonaws.com",
         },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:appstream2:{region}:{account-id}:{resource-id}",
+            principal: "appstream2.sc2s.sgov.gov",
+            hostname: "appstream2.{region}.sc2s.sgov.gov",
+            fipsHostname: "appstream2-fips.{region}.sc2s.sgov.gov",
+        },
     },
     appsync: {
         aws: {
@@ -1129,6 +1443,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "aps.{region}.amazonaws.com",
             fipsHostname: "aps-fips.{region}.amazonaws.com",
         },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:aps:{region}:{account-id}:{resource-id}",
+            principal: "aps.amazonaws.com",
+            hostname: "aps.{region}.amazonaws.com",
+            fipsHostname: "aps-fips.{region}.amazonaws.com",
+        },
     },
     "arc-zonal-shift": {
         aws: {
@@ -1142,6 +1462,42 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "arc-zonal-shift.amazonaws.com.cn",
             hostname: "arc-zonal-shift.{region}.amazonaws.com.cn",
             fipsHostname: "arc-zonal-shift-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:arc-zonal-shift:{region}:{account-id}:{resource-id}",
+            principal: "arc-zonal-shift.amazonaws.com",
+            hostname: "arc-zonal-shift.{region}.amazonaws.com",
+            fipsHostname: "arc-zonal-shift-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:arc-zonal-shift:{region}:{account-id}:{resource-id}",
+            principal: "arc-zonal-shift.c2s.ic.gov",
+            hostname: "arc-zonal-shift.{region}.c2s.ic.gov",
+            fipsHostname: "arc-zonal-shift-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:arc-zonal-shift:{region}:{account-id}:{resource-id}",
+            principal: "arc-zonal-shift.sc2s.sgov.gov",
+            hostname: "arc-zonal-shift.{region}.sc2s.sgov.gov",
+            fipsHostname: "arc-zonal-shift-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:arc-zonal-shift:{region}:{account-id}:{resource-id}",
+            principal: "arc-zonal-shift.cloud.adc-e.uk",
+            hostname: "arc-zonal-shift.{region}.cloud.adc-e.uk",
+            fipsHostname: "arc-zonal-shift-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:arc-zonal-shift:{region}:{account-id}:{resource-id}",
+            principal: "arc-zonal-shift.csp.hci.ic.gov",
+            hostname: "arc-zonal-shift.{region}.csp.hci.ic.gov",
+            fipsHostname: "arc-zonal-shift-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:arc-zonal-shift:{region}:{account-id}:{resource-id}",
+            principal: "arc-zonal-shift.amazonaws.com",
+            hostname: "arc-zonal-shift.{region}.amazonaws.eu",
+            fipsHostname: "arc-zonal-shift-fips.{region}.amazonaws.eu",
         },
     },
     athena: {
@@ -1168,6 +1524,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "athena.c2s.ic.gov",
             hostname: "athena.{region}.c2s.ic.gov",
             fipsHostname: "athena-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:athena:{region}:{account-id}:{resource-id}",
+            principal: "athena.sc2s.sgov.gov",
+            hostname: "athena.{region}.sc2s.sgov.gov",
+            fipsHostname: "athena-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:athena:{region}:{account-id}:{resource-id}",
+            principal: "athena.cloud.adc-e.uk",
+            hostname: "athena.{region}.cloud.adc-e.uk",
+            fipsHostname: "athena-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:athena:{region}:{account-id}:{resource-id}",
+            principal: "athena.csp.hci.ic.gov",
+            hostname: "athena.{region}.csp.hci.ic.gov",
+            fipsHostname: "athena-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:athena:{region}:{account-id}:{resource-id}",
+            principal: "athena.amazonaws.com",
+            hostname: "athena.{region}.amazonaws.eu",
+            fipsHostname: "athena-fips.{region}.amazonaws.eu",
         },
     },
     auditmanager: {
@@ -1209,6 +1589,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "autoscaling.{region}.sc2s.sgov.gov",
             fipsHostname: "autoscaling-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:autoscaling:{region}:{account-id}:{resource-id}",
+            principal: "autoscaling.cloud.adc-e.uk",
+            hostname: "autoscaling.{region}.cloud.adc-e.uk",
+            fipsHostname: "autoscaling-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:autoscaling:{region}:{account-id}:{resource-id}",
+            principal: "autoscaling.csp.hci.ic.gov",
+            hostname: "autoscaling.{region}.csp.hci.ic.gov",
+            fipsHostname: "autoscaling-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:autoscaling:{region}:{account-id}:{resource-id}",
+            principal: "autoscaling.amazonaws.com",
+            hostname: "autoscaling.{region}.amazonaws.eu",
+            fipsHostname: "autoscaling-fips.{region}.amazonaws.eu",
+        },
     },
     "autoscaling-plans": {
         aws: {
@@ -1248,6 +1646,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "backup.amazonaws.com",
             hostname: "backup.{region}.amazonaws.com",
             fipsHostname: "backup-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:backup:{region}:{account-id}:{resource-id}",
+            principal: "backup.c2s.ic.gov",
+            hostname: "backup.{region}.c2s.ic.gov",
+            fipsHostname: "backup-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:backup:{region}:{account-id}:{resource-id}",
+            principal: "backup.sc2s.sgov.gov",
+            hostname: "backup.{region}.sc2s.sgov.gov",
+            fipsHostname: "backup-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:backup:{region}:{account-id}:{resource-id}",
+            principal: "backup.csp.hci.ic.gov",
+            hostname: "backup.{region}.csp.hci.ic.gov",
+            fipsHostname: "backup-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:backup:{region}:{account-id}:{resource-id}",
+            principal: "backup.amazonaws.com",
+            hostname: "backup.{region}.amazonaws.eu",
+            fipsHostname: "backup-fips.{region}.amazonaws.eu",
         },
     },
     "backup-gateway": {
@@ -1303,6 +1725,74 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "batch.{region}.amazonaws.com",
             fipsHostname: "batch-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:batch:{region}:{account-id}:{resource-id}",
+            principal: "batch.c2s.ic.gov",
+            hostname: "batch.{region}.c2s.ic.gov",
+            fipsHostname: "batch-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:batch:{region}:{account-id}:{resource-id}",
+            principal: "batch.sc2s.sgov.gov",
+            hostname: "batch.{region}.sc2s.sgov.gov",
+            fipsHostname: "batch-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:batch:{region}:{account-id}:{resource-id}",
+            principal: "batch.cloud.adc-e.uk",
+            hostname: "batch.{region}.cloud.adc-e.uk",
+            fipsHostname: "batch-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:batch:{region}:{account-id}:{resource-id}",
+            principal: "batch.csp.hci.ic.gov",
+            hostname: "batch.{region}.csp.hci.ic.gov",
+            fipsHostname: "batch-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:batch:{region}:{account-id}:{resource-id}",
+            principal: "batch.amazonaws.com",
+            hostname: "batch.{region}.amazonaws.eu",
+            fipsHostname: "batch-fips.{region}.amazonaws.eu",
+        },
+    },
+    bedrock: {
+        aws: {
+            arn: "arn:aws:bedrock:{region}:{account-id}:{resource-id}",
+            principal: "bedrock.amazonaws.com",
+            hostname: "bedrock.{region}.amazonaws.com",
+            fipsHostname: "bedrock-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:bedrock:{region}:{account-id}:{resource-id}",
+            principal: "bedrock.amazonaws.com",
+            hostname: "bedrock.{region}.amazonaws.com",
+            fipsHostname: "bedrock-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:bedrock:{region}:{account-id}:{resource-id}",
+            principal: "bedrock.c2s.ic.gov",
+            hostname: "bedrock.{region}.c2s.ic.gov",
+            fipsHostname: "bedrock-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:bedrock:{region}:{account-id}:{resource-id}",
+            principal: "bedrock.sc2s.sgov.gov",
+            hostname: "bedrock.{region}.sc2s.sgov.gov",
+            fipsHostname: "bedrock-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:bedrock:{region}:{account-id}:{resource-id}",
+            principal: "bedrock.csp.hci.ic.gov",
+            hostname: "bedrock.{region}.csp.hci.ic.gov",
+            fipsHostname: "bedrock-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:bedrock:{region}:{account-id}:{resource-id}",
+            principal: "bedrock.amazonaws.com",
+            hostname: "bedrock.{region}.amazonaws.eu",
+            fipsHostname: "bedrock-fips.{region}.amazonaws.eu",
+        },
     },
     billingconductor: {
         aws: {
@@ -1332,6 +1822,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "budgets.amazonaws.com.cn",
             hostname: "budgets.{region}.amazonaws.com.cn",
             fipsHostname: "budgets-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:budgets:{region}:{account-id}:{resource-id}",
+            principal: "budgets.c2s.ic.gov",
+            hostname: "budgets.{region}.c2s.ic.gov",
+            fipsHostname: "budgets-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:budgets:{region}:{account-id}:{resource-id}",
+            principal: "budgets.sc2s.sgov.gov",
+            hostname: "budgets.{region}.sc2s.sgov.gov",
+            fipsHostname: "budgets-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:budgets:{region}:{account-id}:{resource-id}",
+            principal: "budgets.cloud.adc-e.uk",
+            hostname: "budgets.{region}.cloud.adc-e.uk",
+            fipsHostname: "budgets-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:budgets:{region}:{account-id}:{resource-id}",
+            principal: "budgets.csp.hci.ic.gov",
+            hostname: "budgets.{region}.csp.hci.ic.gov",
+            fipsHostname: "budgets-fips.{region}.csp.hci.ic.gov",
         },
     },
     cases: {
@@ -1383,6 +1897,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "ce.{region}.amazonaws.com.cn",
             fipsHostname: "ce-fips.{region}.amazonaws.com.cn",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:ce:{region}:{account-id}:{resource-id}",
+            principal: "ce.c2s.ic.gov",
+            hostname: "ce.{region}.c2s.ic.gov",
+            fipsHostname: "ce-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:ce:{region}:{account-id}:{resource-id}",
+            principal: "ce.sc2s.sgov.gov",
+            hostname: "ce.{region}.sc2s.sgov.gov",
+            fipsHostname: "ce-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ce:{region}:{account-id}:{resource-id}",
+            principal: "ce.csp.hci.ic.gov",
+            hostname: "ce.{region}.csp.hci.ic.gov",
+            fipsHostname: "ce-fips.{region}.csp.hci.ic.gov",
+        },
     },
     chime: {
         aws: {
@@ -1433,6 +1965,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "cloudcontrolapi.{region}.c2s.ic.gov",
             fipsHostname: "cloudcontrolapi-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:cloudcontrolapi:{region}:{account-id}:{resource-id}",
+            principal: "cloudcontrolapi.sc2s.sgov.gov",
+            hostname: "cloudcontrolapi.{region}.sc2s.sgov.gov",
+            fipsHostname: "cloudcontrolapi-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:cloudcontrolapi:{region}:{account-id}:{resource-id}",
+            principal: "cloudcontrolapi.cloud.adc-e.uk",
+            hostname: "cloudcontrolapi.{region}.cloud.adc-e.uk",
+            fipsHostname: "cloudcontrolapi-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:cloudcontrolapi:{region}:{account-id}:{resource-id}",
+            principal: "cloudcontrolapi.csp.hci.ic.gov",
+            hostname: "cloudcontrolapi.{region}.csp.hci.ic.gov",
+            fipsHostname: "cloudcontrolapi-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:cloudcontrolapi:{region}:{account-id}:{resource-id}",
+            principal: "cloudcontrolapi.amazonaws.com",
+            hostname: "cloudcontrolapi.{region}.amazonaws.eu",
+            fipsHostname: "cloudcontrolapi-fips.{region}.amazonaws.eu",
+        },
     },
     clouddirectory: {
         aws: {
@@ -1478,6 +2034,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "cloudformation.sc2s.sgov.gov",
             hostname: "cloudformation.{region}.sc2s.sgov.gov",
             fipsHostname: "cloudformation-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:cloudformation:{region}:{account-id}:{resource-id}",
+            principal: "cloudformation.cloud.adc-e.uk",
+            hostname: "cloudformation.{region}.cloud.adc-e.uk",
+            fipsHostname: "cloudformation-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:cloudformation:{region}:{account-id}:{resource-id}",
+            principal: "cloudformation.csp.hci.ic.gov",
+            hostname: "cloudformation.{region}.csp.hci.ic.gov",
+            fipsHostname: "cloudformation-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:cloudformation:{region}:{account-id}:{resource-id}",
+            principal: "cloudformation.amazonaws.com",
+            hostname: "cloudformation.{region}.amazonaws.eu",
+            fipsHostname: "cloudformation-fips.{region}.amazonaws.eu",
         },
     },
     cloudfront: {
@@ -1561,6 +2135,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "cloudtrail.{region}.sc2s.sgov.gov",
             fipsHostname: "cloudtrail-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:cloudtrail:{region}:{account-id}:{resource-id}",
+            principal: "cloudtrail.cloud.adc-e.uk",
+            hostname: "cloudtrail.{region}.cloud.adc-e.uk",
+            fipsHostname: "cloudtrail-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:cloudtrail:{region}:{account-id}:{resource-id}",
+            principal: "cloudtrail.csp.hci.ic.gov",
+            hostname: "cloudtrail.{region}.csp.hci.ic.gov",
+            fipsHostname: "cloudtrail-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:cloudtrail:{region}:{account-id}:{resource-id}",
+            principal: "cloudtrail.amazonaws.com",
+            hostname: "cloudtrail.{region}.amazonaws.eu",
+            fipsHostname: "cloudtrail-fips.{region}.amazonaws.eu",
+        },
     },
     "cloudtrail-data": {
         aws: {
@@ -1568,6 +2160,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "cloudtrail-data.amazonaws.com",
             hostname: "cloudtrail-data.{region}.amazonaws.com",
             fipsHostname: "cloudtrail-data-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:cloudtrail-data:{region}:{account-id}:{resource-id}",
+            principal: "cloudtrail-data.cloud.adc-e.uk",
+            hostname: "cloudtrail-data.{region}.cloud.adc-e.uk",
+            fipsHostname: "cloudtrail-data-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:cloudtrail-data:{region}:{account-id}:{resource-id}",
+            principal: "cloudtrail-data.csp.hci.ic.gov",
+            hostname: "cloudtrail-data.{region}.csp.hci.ic.gov",
+            fipsHostname: "cloudtrail-data-fips.{region}.csp.hci.ic.gov",
         },
     },
     codeartifact: {
@@ -1596,6 +2200,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "codebuild.amazonaws.com",
             hostname: "codebuild.{region}.amazonaws.com",
             fipsHostname: "codebuild-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:codebuild:{region}:{account-id}:{resource-id}",
+            principal: "codebuild.c2s.ic.gov",
+            hostname: "codebuild.{region}.c2s.ic.gov",
+            fipsHostname: "codebuild-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:codebuild:{region}:{account-id}:{resource-id}",
+            principal: "codebuild.sc2s.sgov.gov",
+            hostname: "codebuild.{region}.sc2s.sgov.gov",
+            fipsHostname: "codebuild-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:codebuild:{region}:{account-id}:{resource-id}",
+            principal: "codebuild.csp.hci.ic.gov",
+            hostname: "codebuild.{region}.csp.hci.ic.gov",
+            fipsHostname: "codebuild-fips.{region}.csp.hci.ic.gov",
         },
     },
     codecatalyst: {
@@ -1657,6 +2279,32 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "codedeploy.{region}.sc2s.sgov.gov",
             fipsHostname: "codedeploy-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:codedeploy:{region}:{account-id}:{resource-id}",
+            principal: "codedeploy.cloud.adc-e.uk",
+            hostname: "codedeploy.{region}.cloud.adc-e.uk",
+            fipsHostname: "codedeploy-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:codedeploy:{region}:{account-id}:{resource-id}",
+            principal: "codedeploy.csp.hci.ic.gov",
+            hostname: "codedeploy.{region}.csp.hci.ic.gov",
+            fipsHostname: "codedeploy-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:codedeploy:{region}:{account-id}:{resource-id}",
+            principal: "codedeploy.amazonaws.com",
+            hostname: "codedeploy.{region}.amazonaws.eu",
+            fipsHostname: "codedeploy-fips.{region}.amazonaws.eu",
+        },
+    },
+    "codeguru-profiler": {
+        aws: {
+            arn: "arn:aws:codeguru-profiler:{region}:{account-id}:{resource-id}",
+            principal: "codeguru-profiler.amazonaws.com",
+            hostname: "codeguru-profiler.{region}.amazonaws.com",
+            fipsHostname: "codeguru-profiler-fips.{region}.amazonaws.com",
+        },
     },
     "codeguru-reviewer": {
         aws: {
@@ -1685,6 +2333,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "codepipeline.{region}.amazonaws.com",
             fipsHostname: "codepipeline-fips.{region}.amazonaws.com",
         },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:codepipeline:{region}:{account-id}:{resource-id}",
+            principal: "codepipeline.csp.hci.ic.gov",
+            hostname: "codepipeline.{region}.csp.hci.ic.gov",
+            fipsHostname: "codepipeline-fips.{region}.csp.hci.ic.gov",
+        },
     },
     codestar: {
         aws: {
@@ -1697,6 +2351,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
     "codestar-connections": {
         aws: {
             arn: "arn:aws:codestar-connections:{region}:{account-id}:{resource-id}",
+            principal: "codestar-connections.amazonaws.com",
+            hostname: "codestar-connections.{region}.amazonaws.com",
+            fipsHostname: "codestar-connections-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:codestar-connections:{region}:{account-id}:{resource-id}",
             principal: "codestar-connections.amazonaws.com",
             hostname: "codestar-connections.{region}.amazonaws.com",
             fipsHostname: "codestar-connections-fips.{region}.amazonaws.com",
@@ -1729,6 +2389,20 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "cognito-identity.{region}.amazonaws.com",
             fipsHostname: "cognito-identity-fips.{region}.amazonaws.com",
         },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:cognito-identity:{region}:{account-id}:{resource-id}",
+            principal: "cognito-identity.amazonaws.com",
+            hostname: "cognito-identity.{region}.amazonaws.eu",
+            fipsHostname: "cognito-identity-fips.{region}.amazonaws.eu",
+        },
+    },
+    "cognito-hosted-ui": {
+        aws: {
+            arn: "",
+            principal: "",
+            hostname: "auth.{region}.amazoncognito.com",
+            fipsHostname: "auth.{region}.amazoncognito.com",
+        },
     },
     "cognito-idp": {
         aws: {
@@ -1742,6 +2416,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "cognito-idp.amazonaws.com",
             hostname: "cognito-idp.{region}.amazonaws.com",
             fipsHostname: "cognito-idp-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:cognito-idp:{region}:{account-id}:{resource-id}",
+            principal: "cognito-idp.amazonaws.com",
+            hostname: "cognito-idp.{region}.amazonaws.eu",
+            fipsHostname: "cognito-idp-fips.{region}.amazonaws.eu",
         },
     },
     "cognito-sync": {
@@ -1770,6 +2450,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "comprehend.c2s.ic.gov",
             hostname: "comprehend.{region}.c2s.ic.gov",
             fipsHostname: "comprehend-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:comprehend:{region}:{account-id}:{resource-id}",
+            principal: "comprehend.csp.hci.ic.gov",
+            hostname: "comprehend.{region}.csp.hci.ic.gov",
+            fipsHostname: "comprehend-fips.{region}.csp.hci.ic.gov",
         },
     },
     comprehendmedical: {
@@ -1805,6 +2491,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "compute-optimizer.{region}.amazonaws.com",
             fipsHostname: "compute-optimizer-fips.{region}.amazonaws.com",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:compute-optimizer:{region}:{account-id}:{resource-id}",
+            principal: "compute-optimizer.cloud.adc-e.uk",
+            hostname: "compute-optimizer.{region}.cloud.adc-e.uk",
+            fipsHostname: "compute-optimizer-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:compute-optimizer:{region}:{account-id}:{resource-id}",
+            principal: "compute-optimizer.csp.hci.ic.gov",
+            hostname: "compute-optimizer.{region}.csp.hci.ic.gov",
+            fipsHostname: "compute-optimizer-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:compute-optimizer:{region}:{account-id}:{resource-id}",
+            principal: "compute-optimizer.amazonaws.com",
+            hostname: "compute-optimizer.{region}.amazonaws.eu",
+            fipsHostname: "compute-optimizer-fips.{region}.amazonaws.eu",
+        },
     },
     config: {
         aws: {
@@ -1836,6 +2540,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "config.sc2s.sgov.gov",
             hostname: "config.{region}.sc2s.sgov.gov",
             fipsHostname: "config-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:config:{region}:{account-id}:{resource-id}",
+            principal: "config.cloud.adc-e.uk",
+            hostname: "config.{region}.cloud.adc-e.uk",
+            fipsHostname: "config-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:config:{region}:{account-id}:{resource-id}",
+            principal: "config.csp.hci.ic.gov",
+            hostname: "config.{region}.csp.hci.ic.gov",
+            fipsHostname: "config-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:config:{region}:{account-id}:{resource-id}",
+            principal: "config.amazonaws.com",
+            hostname: "config.{region}.amazonaws.eu",
+            fipsHostname: "config-fips.{region}.amazonaws.eu",
         },
     },
     connect: {
@@ -1880,6 +2602,38 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "controltower.amazonaws.com",
             hostname: "controltower.{region}.amazonaws.com",
             fipsHostname: "controltower-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:controltower:{region}:{account-id}:{resource-id}",
+            principal: "controltower.amazonaws.com",
+            hostname: "controltower.{region}.amazonaws.eu",
+            fipsHostname: "controltower-fips.{region}.amazonaws.eu",
+        },
+    },
+    "cost-optimization-hub": {
+        aws: {
+            arn: "arn:aws:cost-optimization-hub:{region}:{account-id}:{resource-id}",
+            principal: "cost-optimization-hub.amazonaws.com",
+            hostname: "cost-optimization-hub.{region}.amazonaws.com",
+            fipsHostname: "cost-optimization-hub-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:cost-optimization-hub:{region}:{account-id}:{resource-id}",
+            principal: "cost-optimization-hub.cloud.adc-e.uk",
+            hostname: "cost-optimization-hub.{region}.cloud.adc-e.uk",
+            fipsHostname: "cost-optimization-hub-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:cost-optimization-hub:{region}:{account-id}:{resource-id}",
+            principal: "cost-optimization-hub.csp.hci.ic.gov",
+            hostname: "cost-optimization-hub.{region}.csp.hci.ic.gov",
+            fipsHostname: "cost-optimization-hub-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:cost-optimization-hub:{region}:{account-id}:{resource-id}",
+            principal: "cost-optimization-hub.amazonaws.com",
+            hostname: "cost-optimization-hub.{region}.amazonaws.eu",
+            fipsHostname: "cost-optimization-hub-fips.{region}.amazonaws.eu",
         },
     },
     cur: {
@@ -2025,6 +2779,50 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "datasync.{region}.amazonaws.com",
             fipsHostname: "datasync-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:datasync:{region}:{account-id}:{resource-id}",
+            principal: "datasync.c2s.ic.gov",
+            hostname: "datasync.{region}.c2s.ic.gov",
+            fipsHostname: "datasync-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:datasync:{region}:{account-id}:{resource-id}",
+            principal: "datasync.sc2s.sgov.gov",
+            hostname: "datasync.{region}.sc2s.sgov.gov",
+            fipsHostname: "datasync-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:datasync:{region}:{account-id}:{resource-id}",
+            principal: "datasync.amazonaws.com",
+            hostname: "datasync.{region}.amazonaws.eu",
+            fipsHostname: "datasync-fips.{region}.amazonaws.eu",
+        },
+    },
+    datazone: {
+        aws: {
+            arn: "arn:aws:datazone:{region}:{account-id}:{resource-id}",
+            principal: "datazone.amazonaws.com",
+            hostname: "datazone.{region}.amazonaws.com",
+            fipsHostname: "datazone-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:datazone:{region}:{account-id}:{resource-id}",
+            principal: "datazone.amazonaws.com.cn",
+            hostname: "datazone.{region}.amazonaws.com.cn",
+            fipsHostname: "datazone-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:datazone:{region}:{account-id}:{resource-id}",
+            principal: "datazone.amazonaws.com",
+            hostname: "datazone.{region}.amazonaws.com",
+            fipsHostname: "datazone-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:datazone:{region}:{account-id}:{resource-id}",
+            principal: "datazone.amazonaws.com",
+            hostname: "datazone.{region}.amazonaws.eu",
+            fipsHostname: "datazone-fips.{region}.amazonaws.eu",
+        },
     },
     dax: {
         aws: {
@@ -2087,6 +2885,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "directconnect.{region}.sc2s.sgov.gov",
             fipsHostname: "directconnect-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:directconnect:{region}:{account-id}:{resource-id}",
+            principal: "directconnect.cloud.adc-e.uk",
+            hostname: "directconnect.{region}.cloud.adc-e.uk",
+            fipsHostname: "directconnect-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:directconnect:{region}:{account-id}:{resource-id}",
+            principal: "directconnect.csp.hci.ic.gov",
+            hostname: "directconnect.{region}.csp.hci.ic.gov",
+            fipsHostname: "directconnect-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:directconnect:{region}:{account-id}:{resource-id}",
+            principal: "directconnect.amazonaws.com",
+            hostname: "directconnect.{region}.amazonaws.eu",
+            fipsHostname: "directconnect-fips.{region}.amazonaws.eu",
+        },
     },
     discovery: {
         aws: {
@@ -2127,6 +2943,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "dlm.{region}.sc2s.sgov.gov",
             fipsHostname: "dlm-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:dlm:{region}:{account-id}:{resource-id}",
+            principal: "dlm.cloud.adc-e.uk",
+            hostname: "dlm.{region}.cloud.adc-e.uk",
+            fipsHostname: "dlm-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:dlm:{region}:{account-id}:{resource-id}",
+            principal: "dlm.csp.hci.ic.gov",
+            hostname: "dlm.{region}.csp.hci.ic.gov",
+            fipsHostname: "dlm-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:dlm:{region}:{account-id}:{resource-id}",
+            principal: "dlm.amazonaws.com",
+            hostname: "dlm.{region}.amazonaws.eu",
+            fipsHostname: "dlm-fips.{region}.amazonaws.eu",
+        },
     },
     dms: {
         aws: {
@@ -2159,6 +2993,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "dms.{region}.sc2s.sgov.gov",
             fipsHostname: "dms-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:dms:{region}:{account-id}:{resource-id}",
+            principal: "dms.cloud.adc-e.uk",
+            hostname: "dms.{region}.cloud.adc-e.uk",
+            fipsHostname: "dms-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:dms:{region}:{account-id}:{resource-id}",
+            principal: "dms.csp.hci.ic.gov",
+            hostname: "dms.{region}.csp.hci.ic.gov",
+            fipsHostname: "dms-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:dms:{region}:{account-id}:{resource-id}",
+            principal: "dms.amazonaws.com",
+            hostname: "dms.{region}.amazonaws.eu",
+            fipsHostname: "dms-fips.{region}.amazonaws.eu",
+        },
     },
     docdb: {
         aws: {
@@ -2186,6 +3038,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "drs.amazonaws.com",
             hostname: "drs.{region}.amazonaws.com",
             fipsHostname: "drs-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:drs:{region}:{account-id}:{resource-id}",
+            principal: "drs.amazonaws.com",
+            hostname: "drs.{region}.amazonaws.com",
+            fipsHostname: "drs-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:drs:{region}:{account-id}:{resource-id}",
+            principal: "drs.amazonaws.com",
+            hostname: "drs.{region}.amazonaws.eu",
+            fipsHostname: "drs-fips.{region}.amazonaws.eu",
         },
     },
     ds: {
@@ -2219,6 +3083,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "ds.{region}.sc2s.sgov.gov",
             fipsHostname: "ds-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ds:{region}:{account-id}:{resource-id}",
+            principal: "ds.cloud.adc-e.uk",
+            hostname: "ds.{region}.cloud.adc-e.uk",
+            fipsHostname: "ds-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ds:{region}:{account-id}:{resource-id}",
+            principal: "ds.csp.hci.ic.gov",
+            hostname: "ds.{region}.csp.hci.ic.gov",
+            fipsHostname: "ds-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ds:{region}:{account-id}:{resource-id}",
+            principal: "ds.amazonaws.com",
+            hostname: "ds.{region}.amazonaws.eu",
+            fipsHostname: "ds-fips.{region}.amazonaws.eu",
+        },
     },
     dynamodb: {
         aws: {
@@ -2250,6 +3132,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "dynamodb.sc2s.sgov.gov",
             hostname: "dynamodb.{region}.sc2s.sgov.gov",
             fipsHostname: "dynamodb-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:dynamodb:{region}:{account-id}:{resource-id}",
+            principal: "dynamodb.cloud.adc-e.uk",
+            hostname: "dynamodb.{region}.cloud.adc-e.uk",
+            fipsHostname: "dynamodb-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:dynamodb:{region}:{account-id}:{resource-id}",
+            principal: "dynamodb.csp.hci.ic.gov",
+            hostname: "dynamodb.{region}.csp.hci.ic.gov",
+            fipsHostname: "dynamodb-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:dynamodb:{region}:{account-id}:{resource-id}",
+            principal: "dynamodb.amazonaws.com",
+            hostname: "dynamodb.{region}.amazonaws.eu",
+            fipsHostname: "dynamodb-fips.{region}.amazonaws.eu",
         },
     },
     ebs: {
@@ -2283,6 +3183,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "ebs.{region}.sc2s.sgov.gov",
             fipsHostname: "ebs-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ebs:{region}:{account-id}:{resource-id}",
+            principal: "ebs.cloud.adc-e.uk",
+            hostname: "ebs.{region}.cloud.adc-e.uk",
+            fipsHostname: "ebs-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ebs:{region}:{account-id}:{resource-id}",
+            principal: "ebs.csp.hci.ic.gov",
+            hostname: "ebs.{region}.csp.hci.ic.gov",
+            fipsHostname: "ebs-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ebs:{region}:{account-id}:{resource-id}",
+            principal: "ebs.amazonaws.com",
+            hostname: "ebs.{region}.amazonaws.eu",
+            fipsHostname: "ebs-fips.{region}.amazonaws.eu",
+        },
     },
     ec2: {
         aws: {
@@ -2314,6 +3232,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "ec2.sc2s.sgov.gov",
             hostname: "ec2.{region}.sc2s.sgov.gov",
             fipsHostname: "ec2-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ec2:{region}:{account-id}:{resource-id}",
+            principal: "ec2.cloud.adc-e.uk",
+            hostname: "ec2.{region}.cloud.adc-e.uk",
+            fipsHostname: "ec2-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ec2:{region}:{account-id}:{resource-id}",
+            principal: "ec2.csp.hci.ic.gov",
+            hostname: "ec2.{region}.csp.hci.ic.gov",
+            fipsHostname: "ec2-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ec2:{region}:{account-id}:{resource-id}",
+            principal: "ec2.amazonaws.com",
+            hostname: "ec2.{region}.amazonaws.eu",
+            fipsHostname: "ec2-fips.{region}.amazonaws.eu",
         },
     },
     "ecr-dkr": {
@@ -2347,6 +3283,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "dkr.ecr.{region}.sc2s.sgov.gov",
             fipsHostname: "dkr.ecr-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ecr-dkr:{region}:{account-id}:{resource-id}",
+            principal: "ecr-dkr.cloud.adc-e.uk",
+            hostname: "ecr-dkr.{region}.cloud.adc-e.uk",
+            fipsHostname: "ecr-dkr-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ecr-dkr:{region}:{account-id}:{resource-id}",
+            principal: "ecr-dkr.csp.hci.ic.gov",
+            hostname: "ecr-dkr.{region}.csp.hci.ic.gov",
+            fipsHostname: "ecr-dkr-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ecr-dkr:{region}:{account-id}:{resource-id}",
+            principal: "ecr-dkr.amazonaws.com",
+            hostname: "ecr-dkr.{region}.amazonaws.eu",
+            fipsHostname: "ecr-dkr-fips.{region}.amazonaws.eu",
+        },
     },
     ecs: {
         aws: {
@@ -2379,6 +3333,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "ecs.{region}.sc2s.sgov.gov",
             fipsHostname: "ecs-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ecs:{region}:{account-id}:{resource-id}",
+            principal: "ecs.cloud.adc-e.uk",
+            hostname: "ecs.{region}.cloud.adc-e.uk",
+            fipsHostname: "ecs-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ecs:{region}:{account-id}:{resource-id}",
+            principal: "ecs.csp.hci.ic.gov",
+            hostname: "ecs.{region}.csp.hci.ic.gov",
+            fipsHostname: "ecs-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ecs:{region}:{account-id}:{resource-id}",
+            principal: "ecs.amazonaws.com",
+            hostname: "ecs.{region}.amazonaws.eu",
+            fipsHostname: "ecs-fips.{region}.amazonaws.eu",
+        },
     },
     "ecs-tasks": {
         aws: {
@@ -2410,6 +3382,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "ecs-tasks.sc2s.sgov.gov",
             hostname: "ecs.{region}.sc2s.sgov.gov",
             fipsHostname: "ecs-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ecs-tasks:{region}:{account-id}:{resource-id}",
+            principal: "ecs-tasks.cloud.adc-e.uk",
+            hostname: "ecs-tasks.{region}.cloud.adc-e.uk",
+            fipsHostname: "ecs-tasks-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ecs-tasks:{region}:{account-id}:{resource-id}",
+            principal: "ecs-tasks.csp.hci.ic.gov",
+            hostname: "ecs-tasks.{region}.csp.hci.ic.gov",
+            fipsHostname: "ecs-tasks-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ecs-tasks:{region}:{account-id}:{resource-id}",
+            principal: "ecs-tasks.amazonaws.com",
+            hostname: "ecs-tasks.{region}.amazonaws.eu",
+            fipsHostname: "ecs-tasks-fips.{region}.amazonaws.eu",
         },
     },
     "edge.sagemaker": {
@@ -2451,6 +3441,50 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "eks.{region}.sc2s.sgov.gov",
             fipsHostname: "eks-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:eks:{region}:{account-id}:{resource-id}",
+            principal: "eks.cloud.adc-e.uk",
+            hostname: "eks.{region}.cloud.adc-e.uk",
+            fipsHostname: "eks-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:eks:{region}:{account-id}:{resource-id}",
+            principal: "eks.csp.hci.ic.gov",
+            hostname: "eks.{region}.csp.hci.ic.gov",
+            fipsHostname: "eks-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:eks:{region}:{account-id}:{resource-id}",
+            principal: "eks.amazonaws.com",
+            hostname: "eks.{region}.amazonaws.eu",
+            fipsHostname: "eks-fips.{region}.amazonaws.eu",
+        },
+    },
+    "eks-auth": {
+        aws: {
+            arn: "arn:aws:eks-auth:{region}:{account-id}:{resource-id}",
+            principal: "eks-auth.amazonaws.com",
+            hostname: "eks-auth.{region}.amazonaws.com",
+            fipsHostname: "eks-auth-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:eks-auth:{region}:{account-id}:{resource-id}",
+            principal: "eks-auth.amazonaws.com.cn",
+            hostname: "eks-auth.{region}.amazonaws.com.cn",
+            fipsHostname: "eks-auth-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:eks-auth:{region}:{account-id}:{resource-id}",
+            principal: "eks-auth.amazonaws.com",
+            hostname: "eks-auth.{region}.amazonaws.com",
+            fipsHostname: "eks-auth-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:eks-auth:{region}:{account-id}:{resource-id}",
+            principal: "eks-auth.amazonaws.com",
+            hostname: "eks-auth.{region}.amazonaws.eu",
+            fipsHostname: "eks-auth-fips.{region}.amazonaws.eu",
+        },
     },
     elasticache: {
         aws: {
@@ -2482,6 +3516,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "elasticache.sc2s.sgov.gov",
             hostname: "elasticache.{region}.sc2s.sgov.gov",
             fipsHostname: "elasticache-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:elasticache:{region}:{account-id}:{resource-id}",
+            principal: "elasticache.cloud.adc-e.uk",
+            hostname: "elasticache.{region}.cloud.adc-e.uk",
+            fipsHostname: "elasticache-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:elasticache:{region}:{account-id}:{resource-id}",
+            principal: "elasticache.csp.hci.ic.gov",
+            hostname: "elasticache.{region}.csp.hci.ic.gov",
+            fipsHostname: "elasticache-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:elasticache:{region}:{account-id}:{resource-id}",
+            principal: "elasticache.amazonaws.com",
+            hostname: "elasticache.{region}.amazonaws.eu",
+            fipsHostname: "elasticache-fips.{region}.amazonaws.eu",
         },
     },
     elasticbeanstalk: {
@@ -2535,6 +3587,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "elasticfilesystem.{region}.sc2s.sgov.gov",
             fipsHostname: "elasticfilesystem-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:elasticfilesystem:{region}:{account-id}:{resource-id}",
+            principal: "elasticfilesystem.cloud.adc-e.uk",
+            hostname: "elasticfilesystem.{region}.cloud.adc-e.uk",
+            fipsHostname: "elasticfilesystem-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:elasticfilesystem:{region}:{account-id}:{resource-id}",
+            principal: "elasticfilesystem.csp.hci.ic.gov",
+            hostname: "elasticfilesystem.{region}.csp.hci.ic.gov",
+            fipsHostname: "elasticfilesystem-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:elasticfilesystem:{region}:{account-id}:{resource-id}",
+            principal: "elasticfilesystem.amazonaws.com",
+            hostname: "elasticfilesystem.{region}.amazonaws.eu",
+            fipsHostname: "elasticfilesystem-fips.{region}.amazonaws.eu",
+        },
     },
     elasticloadbalancing: {
         aws: {
@@ -2566,6 +3636,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "elasticloadbalancing.sc2s.sgov.gov",
             hostname: "elasticloadbalancing.{region}.sc2s.sgov.gov",
             fipsHostname: "elasticloadbalancing-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:elasticloadbalancing:{region}:{account-id}:{resource-id}",
+            principal: "elasticloadbalancing.cloud.adc-e.uk",
+            hostname: "elasticloadbalancing.{region}.cloud.adc-e.uk",
+            fipsHostname: "elasticloadbalancing-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:elasticloadbalancing:{region}:{account-id}:{resource-id}",
+            principal: "elasticloadbalancing.csp.hci.ic.gov",
+            hostname: "elasticloadbalancing.{region}.csp.hci.ic.gov",
+            fipsHostname: "elasticloadbalancing-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:elasticloadbalancing:{region}:{account-id}:{resource-id}",
+            principal: "elasticloadbalancing.amazonaws.com",
+            hostname: "elasticloadbalancing.{region}.amazonaws.eu",
+            fipsHostname: "elasticloadbalancing-fips.{region}.amazonaws.eu",
         },
     },
     elasticmapreduce: {
@@ -2599,6 +3687,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "elasticmapreduce.{region}.sc2s.sgov.gov",
             fipsHostname: "elasticmapreduce-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:elasticmapreduce:{region}:{account-id}:{resource-id}",
+            principal: "elasticmapreduce.cloud.adc-e.uk",
+            hostname: "elasticmapreduce.{region}.cloud.adc-e.uk",
+            fipsHostname: "elasticmapreduce-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:elasticmapreduce:{region}:{account-id}:{resource-id}",
+            principal: "elasticmapreduce.csp.hci.ic.gov",
+            hostname: "elasticmapreduce.{region}.csp.hci.ic.gov",
+            fipsHostname: "elasticmapreduce-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:elasticmapreduce:{region}:{account-id}:{resource-id}",
+            principal: "elasticmapreduce.amazonaws.com",
+            hostname: "elasticmapreduce.{region}.amazonaws.eu",
+            fipsHostname: "elasticmapreduce-fips.{region}.amazonaws.eu",
+        },
     },
     elastictranscoder: {
         aws: {
@@ -2620,6 +3726,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "email.amazonaws.com",
             hostname: "email.{region}.amazonaws.com",
             fipsHostname: "email-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:email:{region}:{account-id}:{resource-id}",
+            principal: "email.amazonaws.com",
+            hostname: "email.{region}.amazonaws.eu",
+            fipsHostname: "email-fips.{region}.amazonaws.eu",
         },
     },
     "emr-containers": {
@@ -2655,6 +3767,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "emr-serverless.{region}.amazonaws.com.cn",
             fipsHostname: "emr-serverless-fips.{region}.amazonaws.com.cn",
         },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:emr-serverless:{region}:{account-id}:{resource-id}",
+            principal: "emr-serverless.amazonaws.com",
+            hostname: "emr-serverless.{region}.amazonaws.com",
+            fipsHostname: "emr-serverless-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:emr-serverless:{region}:{account-id}:{resource-id}",
+            principal: "emr-serverless.cloud.adc-e.uk",
+            hostname: "emr-serverless.{region}.cloud.adc-e.uk",
+            fipsHostname: "emr-serverless-fips.{region}.cloud.adc-e.uk",
+        },
     },
     "entitlement.marketplace": {
         aws: {
@@ -2662,6 +3786,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "entitlement.marketplace.amazonaws.com",
             hostname: "entitlement.marketplace.{region}.amazonaws.com",
             fipsHostname: "entitlement.marketplace-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:entitlement.marketplace:{region}:{account-id}:{resource-id}",
+            principal: "entitlement.marketplace.amazonaws.com.cn",
+            hostname: "entitlement.marketplace.{region}.amazonaws.com.cn",
+            fipsHostname: "entitlement.marketplace-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:entitlement.marketplace:{region}:{account-id}:{resource-id}",
+            principal: "entitlement.marketplace.amazonaws.com",
+            hostname: "entitlement.marketplace.{region}.amazonaws.eu",
+            fipsHostname: "entitlement.marketplace-fips.{region}.amazonaws.eu",
         },
     },
     es: {
@@ -2695,6 +3831,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "opensearchservice.{region}.sc2s.sgov.gov",
             fipsHostname: "opensearchservice-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:es:{region}:{account-id}:{resource-id}",
+            principal: "opensearchservice.cloud.adc-e.uk",
+            hostname: "opensearchservice.{region}.cloud.adc-e.uk",
+            fipsHostname: "opensearchservice-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:es:{region}:{account-id}:{resource-id}",
+            principal: "opensearchservice.csp.hci.ic.gov",
+            hostname: "opensearchservice.{region}.csp.hci.ic.gov",
+            fipsHostname: "opensearchservice-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:es:{region}:{account-id}:{resource-id}",
+            principal: "opensearchservice.amazonaws.com",
+            hostname: "opensearchservice.{region}.amazonaws.eu",
+            fipsHostname: "opensearchservice-fips.{region}.amazonaws.eu",
+        },
     },
     events: {
         aws: {
@@ -2727,6 +3881,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "events.{region}.sc2s.sgov.gov",
             fipsHostname: "events-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:events:{region}:{account-id}:{resource-id}",
+            principal: "events.cloud.adc-e.uk",
+            hostname: "events.{region}.cloud.adc-e.uk",
+            fipsHostname: "events-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:events:{region}:{account-id}:{resource-id}",
+            principal: "events.csp.hci.ic.gov",
+            hostname: "events.{region}.csp.hci.ic.gov",
+            fipsHostname: "events-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:events:{region}:{account-id}:{resource-id}",
+            principal: "events.amazonaws.com",
+            hostname: "events.{region}.amazonaws.eu",
+            fipsHostname: "events-fips.{region}.amazonaws.eu",
+        },
     },
     evidently: {
         aws: {
@@ -2734,6 +3906,56 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "evidently.amazonaws.com",
             hostname: "evidently.{region}.amazonaws.com",
             fipsHostname: "evidently-fips.{region}.amazonaws.com",
+        },
+    },
+    "execute-api": {
+        aws: {
+            arn: "arn:aws:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.amazonaws.com",
+            hostname: "execute-api.{region}.amazonaws.com",
+            fipsHostname: "execute-api-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.amazonaws.com.cn",
+            hostname: "execute-api.{region}.amazonaws.com.cn",
+            fipsHostname: "execute-api-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.amazonaws.com",
+            hostname: "execute-api.{region}.amazonaws.com",
+            fipsHostname: "execute-api-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.c2s.ic.gov",
+            hostname: "execute-api.{region}.c2s.ic.gov",
+            fipsHostname: "execute-api-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.sc2s.sgov.gov",
+            hostname: "execute-api.{region}.sc2s.sgov.gov",
+            fipsHostname: "execute-api-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.cloud.adc-e.uk",
+            hostname: "execute-api.{region}.cloud.adc-e.uk",
+            fipsHostname: "execute-api-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.csp.hci.ic.gov",
+            hostname: "execute-api.{region}.csp.hci.ic.gov",
+            fipsHostname: "execute-api-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:execute-api:{region}:{account-id}:{resource-id}",
+            principal: "execute-api.amazonaws.com",
+            hostname: "execute-api.{region}.amazonaws.eu",
+            fipsHostname: "execute-api-fips.{region}.amazonaws.eu",
         },
     },
     finspace: {
@@ -2776,6 +3998,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "firehose.c2s.ic.gov",
             hostname: "firehose.{region}.c2s.ic.gov",
             fipsHostname: "firehose-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:firehose:{region}:{account-id}:{resource-id}",
+            principal: "firehose.sc2s.sgov.gov",
+            hostname: "firehose.{region}.sc2s.sgov.gov",
+            fipsHostname: "firehose-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:firehose:{region}:{account-id}:{resource-id}",
+            principal: "firehose.cloud.adc-e.uk",
+            hostname: "firehose.{region}.cloud.adc-e.uk",
+            fipsHostname: "firehose-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:firehose:{region}:{account-id}:{resource-id}",
+            principal: "firehose.csp.hci.ic.gov",
+            hostname: "firehose.{region}.csp.hci.ic.gov",
+            fipsHostname: "firehose-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:firehose:{region}:{account-id}:{resource-id}",
+            principal: "firehose.amazonaws.com",
+            hostname: "firehose.{region}.amazonaws.eu",
+            fipsHostname: "firehose-fips.{region}.amazonaws.eu",
         },
     },
     fms: {
@@ -2841,6 +4087,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "fsx.{region}.amazonaws.com",
             fipsHostname: "fsx-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:fsx:{region}:{account-id}:{resource-id}",
+            principal: "fsx.c2s.ic.gov",
+            hostname: "fsx.{region}.c2s.ic.gov",
+            fipsHostname: "fsx-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:fsx:{region}:{account-id}:{resource-id}",
+            principal: "fsx.sc2s.sgov.gov",
+            hostname: "fsx.{region}.sc2s.sgov.gov",
+            fipsHostname: "fsx-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:fsx:{region}:{account-id}:{resource-id}",
+            principal: "fsx.csp.hci.ic.gov",
+            hostname: "fsx.{region}.csp.hci.ic.gov",
+            fipsHostname: "fsx-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:fsx:{region}:{account-id}:{resource-id}",
+            principal: "fsx.amazonaws.com",
+            hostname: "fsx.{region}.amazonaws.eu",
+            fipsHostname: "fsx-fips.{region}.amazonaws.eu",
+        },
     },
     gamelift: {
         aws: {
@@ -2856,6 +4126,32 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             fipsHostname: "gamelift-fips.{region}.amazonaws.com.cn",
         },
     },
+    gameliftstreams: {
+        aws: {
+            arn: "arn:aws:gameliftstreams:{region}:{account-id}:{resource-id}",
+            principal: "gameliftstreams.amazonaws.com",
+            hostname: "gameliftstreams.{region}.amazonaws.com",
+            fipsHostname: "gameliftstreams-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:gameliftstreams:{region}:{account-id}:{resource-id}",
+            principal: "gameliftstreams.amazonaws.com.cn",
+            hostname: "gameliftstreams.{region}.amazonaws.com.cn",
+            fipsHostname: "gameliftstreams-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:gameliftstreams:{region}:{account-id}:{resource-id}",
+            principal: "gameliftstreams.amazonaws.com",
+            hostname: "gameliftstreams.{region}.amazonaws.com",
+            fipsHostname: "gameliftstreams-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:gameliftstreams:{region}:{account-id}:{resource-id}",
+            principal: "gameliftstreams.amazonaws.com",
+            hostname: "gameliftstreams.{region}.amazonaws.eu",
+            fipsHostname: "gameliftstreams-fips.{region}.amazonaws.eu",
+        },
+    },
     gamesparks: {
         aws: {
             arn: "arn:aws:gamesparks:{region}:{account-id}:{resource-id}",
@@ -2867,6 +4163,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
     geo: {
         aws: {
             arn: "arn:aws:geo:{region}:{account-id}:{resource-id}",
+            principal: "geo.amazonaws.com",
+            hostname: "geo.{region}.amazonaws.com",
+            fipsHostname: "geo-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:geo:{region}:{account-id}:{resource-id}",
             principal: "geo.amazonaws.com",
             hostname: "geo.{region}.amazonaws.com",
             fipsHostname: "geo-fips.{region}.amazonaws.com",
@@ -2904,6 +4206,14 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             fipsHostname: "glacier-fips.{region}.sc2s.sgov.gov",
         },
     },
+    globalaccelerator: {
+        aws: {
+            arn: "arn:aws:globalaccelerator:{region}:{account-id}:{resource-id}",
+            principal: "globalaccelerator.amazonaws.com",
+            hostname: "globalaccelerator.{region}.amazonaws.com",
+            fipsHostname: "globalaccelerator-fips.{region}.amazonaws.com",
+        },
+    },
     glue: {
         aws: {
             arn: "arn:aws:glue:{region}:{account-id}:{resource-id}",
@@ -2929,10 +4239,40 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "glue.{region}.c2s.ic.gov",
             fipsHostname: "glue-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:glue:{region}:{account-id}:{resource-id}",
+            principal: "glue.sc2s.sgov.gov",
+            hostname: "glue.{region}.sc2s.sgov.gov",
+            fipsHostname: "glue-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:glue:{region}:{account-id}:{resource-id}",
+            principal: "glue.cloud.adc-e.uk",
+            hostname: "glue.{region}.cloud.adc-e.uk",
+            fipsHostname: "glue-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:glue:{region}:{account-id}:{resource-id}",
+            principal: "glue.csp.hci.ic.gov",
+            hostname: "glue.{region}.csp.hci.ic.gov",
+            fipsHostname: "glue-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:glue:{region}:{account-id}:{resource-id}",
+            principal: "glue.amazonaws.com",
+            hostname: "glue.{region}.amazonaws.eu",
+            fipsHostname: "glue-fips.{region}.amazonaws.eu",
+        },
     },
     grafana: {
         aws: {
             arn: "arn:aws:grafana:{region}:{account-id}:{resource-id}",
+            principal: "grafana.amazonaws.com",
+            hostname: "grafana.{region}.amazonaws.com",
+            fipsHostname: "grafana-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:grafana:{region}:{account-id}:{resource-id}",
             principal: "grafana.amazonaws.com",
             hostname: "grafana.{region}.amazonaws.com",
             fipsHostname: "grafana-fips.{region}.amazonaws.com",
@@ -2985,6 +4325,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "guardduty.{region}.amazonaws.com",
             fipsHostname: "guardduty-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:guardduty:{region}:{account-id}:{resource-id}",
+            principal: "guardduty.c2s.ic.gov",
+            hostname: "guardduty.{region}.c2s.ic.gov",
+            fipsHostname: "guardduty-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:guardduty:{region}:{account-id}:{resource-id}",
+            principal: "guardduty.sc2s.sgov.gov",
+            hostname: "guardduty.{region}.sc2s.sgov.gov",
+            fipsHostname: "guardduty-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:guardduty:{region}:{account-id}:{resource-id}",
+            principal: "guardduty.csp.hci.ic.gov",
+            hostname: "guardduty.{region}.csp.hci.ic.gov",
+            fipsHostname: "guardduty-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:guardduty:{region}:{account-id}:{resource-id}",
+            principal: "guardduty.amazonaws.com",
+            hostname: "guardduty.{region}.amazonaws.eu",
+            fipsHostname: "guardduty-fips.{region}.amazonaws.eu",
+        },
     },
     health: {
         aws: {
@@ -3016,6 +4380,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "health.sc2s.sgov.gov",
             hostname: "health.{region}.sc2s.sgov.gov",
             fipsHostname: "health-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:health:{region}:{account-id}:{resource-id}",
+            principal: "health.amazonaws.com",
+            hostname: "health.{region}.amazonaws.eu",
+            fipsHostname: "health-fips.{region}.amazonaws.eu",
         },
     },
     healthlake: {
@@ -3065,6 +4435,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "iam.{region}.sc2s.sgov.gov",
             fipsHostname: "iam-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:iam:{region}:{account-id}:{resource-id}",
+            principal: "iam.csp.hci.ic.gov",
+            hostname: "iam.{region}.csp.hci.ic.gov",
+            fipsHostname: "iam-fips.{region}.csp.hci.ic.gov",
+        },
     },
     "identity-chime": {
         aws: {
@@ -3086,6 +4462,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "identitystore.amazonaws.com",
             hostname: "identitystore.{region}.amazonaws.com",
             fipsHostname: "identitystore-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:identitystore:{region}:{account-id}:{resource-id}",
+            principal: "identitystore.amazonaws.com.cn",
+            hostname: "identitystore.{region}.amazonaws.com.cn",
+            fipsHostname: "identitystore-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:identitystore:{region}:{account-id}:{resource-id}",
+            principal: "identitystore.csp.hci.ic.gov",
+            hostname: "identitystore.{region}.csp.hci.ic.gov",
+            fipsHostname: "identitystore-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:identitystore:{region}:{account-id}:{resource-id}",
+            principal: "identitystore.amazonaws.com",
+            hostname: "identitystore.{region}.amazonaws.eu",
+            fipsHostname: "identitystore-fips.{region}.amazonaws.eu",
         },
     },
     importexport: {
@@ -3137,6 +4531,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "inspector2.{region}.amazonaws.com",
             fipsHostname: "inspector2-fips.{region}.amazonaws.com",
         },
+        "aws-cn": {
+            arn: "arn:aws-cn:inspector2:{region}:{account-id}:{resource-id}",
+            principal: "inspector2.amazonaws.com.cn",
+            hostname: "inspector2.{region}.amazonaws.com.cn",
+            fipsHostname: "inspector2-fips.{region}.amazonaws.com.cn",
+        },
     },
     internetmonitor: {
         aws: {
@@ -3156,6 +4556,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "internetmonitor.amazonaws.com",
             hostname: "internetmonitor.{region}.amazonaws.com",
             fipsHostname: "internetmonitor-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:internetmonitor:{region}:{account-id}:{resource-id}",
+            principal: "internetmonitor.amazonaws.com",
+            hostname: "internetmonitor.{region}.amazonaws.eu",
+            fipsHostname: "internetmonitor-fips.{region}.amazonaws.eu",
         },
     },
     iot: {
@@ -3309,6 +4715,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "iottwinmaker.{region}.amazonaws.com",
             fipsHostname: "iottwinmaker-fips.{region}.amazonaws.com",
         },
+        "aws-cn": {
+            arn: "arn:aws-cn:iottwinmaker:{region}:{account-id}:{resource-id}",
+            principal: "iottwinmaker.amazonaws.com.cn",
+            hostname: "iottwinmaker.{region}.amazonaws.com.cn",
+            fipsHostname: "iottwinmaker-fips.{region}.amazonaws.com.cn",
+        },
     },
     iotwireless: {
         aws: {
@@ -3361,10 +4773,28 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "kafka.{region}.amazonaws.com",
             fipsHostname: "kafka-fips.{region}.amazonaws.com",
         },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:kafka:{region}:{account-id}:{resource-id}",
+            principal: "kafka.amazonaws.com",
+            hostname: "kafka.{region}.amazonaws.eu",
+            fipsHostname: "kafka-fips.{region}.amazonaws.eu",
+        },
     },
     kafkaconnect: {
         aws: {
             arn: "arn:aws:kafkaconnect:{region}:{account-id}:{resource-id}",
+            principal: "kafkaconnect.amazonaws.com",
+            hostname: "kafkaconnect.{region}.amazonaws.com",
+            fipsHostname: "kafkaconnect-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:kafkaconnect:{region}:{account-id}:{resource-id}",
+            principal: "kafkaconnect.amazonaws.com.cn",
+            hostname: "kafkaconnect.{region}.amazonaws.com.cn",
+            fipsHostname: "kafkaconnect-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:kafkaconnect:{region}:{account-id}:{resource-id}",
             principal: "kafkaconnect.amazonaws.com",
             hostname: "kafkaconnect.{region}.amazonaws.com",
             fipsHostname: "kafkaconnect-fips.{region}.amazonaws.com",
@@ -3403,6 +4833,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "kendra-ranking.{region}.amazonaws.com",
             fipsHostname: "kendra-ranking-fips.{region}.amazonaws.com",
         },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:kendra-ranking:{region}:{account-id}:{resource-id}",
+            principal: "kendra-ranking.amazonaws.com",
+            hostname: "kendra-ranking.{region}.amazonaws.eu",
+            fipsHostname: "kendra-ranking-fips.{region}.amazonaws.eu",
+        },
     },
     kinesis: {
         aws: {
@@ -3435,6 +4871,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "kinesis.{region}.sc2s.sgov.gov",
             fipsHostname: "kinesis-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:kinesis:{region}:{account-id}:{resource-id}",
+            principal: "kinesis.cloud.adc-e.uk",
+            hostname: "kinesis.{region}.cloud.adc-e.uk",
+            fipsHostname: "kinesis-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:kinesis:{region}:{account-id}:{resource-id}",
+            principal: "kinesis.csp.hci.ic.gov",
+            hostname: "kinesis.{region}.csp.hci.ic.gov",
+            fipsHostname: "kinesis-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:kinesis:{region}:{account-id}:{resource-id}",
+            principal: "kinesis.amazonaws.com",
+            hostname: "kinesis.{region}.amazonaws.eu",
+            fipsHostname: "kinesis-fips.{region}.amazonaws.eu",
+        },
     },
     kinesisanalytics: {
         aws: {
@@ -3455,6 +4909,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "kinesisanalytics.{region}.amazonaws.com",
             fipsHostname: "kinesisanalytics-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:kinesisanalytics:{region}:{account-id}:{resource-id}",
+            principal: "kinesisanalytics.c2s.ic.gov",
+            hostname: "kinesisanalytics.{region}.c2s.ic.gov",
+            fipsHostname: "kinesisanalytics-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:kinesisanalytics:{region}:{account-id}:{resource-id}",
+            principal: "kinesisanalytics.sc2s.sgov.gov",
+            hostname: "kinesisanalytics.{region}.sc2s.sgov.gov",
+            fipsHostname: "kinesisanalytics-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:kinesisanalytics:{region}:{account-id}:{resource-id}",
+            principal: "kinesisanalytics.amazonaws.com",
+            hostname: "kinesisanalytics.{region}.amazonaws.eu",
+            fipsHostname: "kinesisanalytics-fips.{region}.amazonaws.eu",
+        },
     },
     kinesisvideo: {
         aws: {
@@ -3468,6 +4940,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "kinesisvideo.amazonaws.com.cn",
             hostname: "kinesisvideo.{region}.amazonaws.com.cn",
             fipsHostname: "kinesisvideo-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:kinesisvideo:{region}:{account-id}:{resource-id}",
+            principal: "kinesisvideo.amazonaws.com",
+            hostname: "kinesisvideo.{region}.amazonaws.com",
+            fipsHostname: "kinesisvideo-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:kinesisvideo:{region}:{account-id}:{resource-id}",
+            principal: "kinesisvideo.c2s.ic.gov",
+            hostname: "kinesisvideo.{region}.c2s.ic.gov",
+            fipsHostname: "kinesisvideo-fips.{region}.c2s.ic.gov",
         },
     },
     kms: {
@@ -3501,6 +4985,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "kms.{region}.sc2s.sgov.gov",
             fipsHostname: "kms-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:kms:{region}:{account-id}:{resource-id}",
+            principal: "kms.cloud.adc-e.uk",
+            hostname: "kms.{region}.cloud.adc-e.uk",
+            fipsHostname: "kms-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:kms:{region}:{account-id}:{resource-id}",
+            principal: "kms.csp.hci.ic.gov",
+            hostname: "kms.{region}.csp.hci.ic.gov",
+            fipsHostname: "kms-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:kms:{region}:{account-id}:{resource-id}",
+            principal: "kms.amazonaws.com",
+            hostname: "kms.{region}.amazonaws.eu",
+            fipsHostname: "kms-fips.{region}.amazonaws.eu",
+        },
     },
     lakeformation: {
         aws: {
@@ -3520,6 +5022,36 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "lakeformation.amazonaws.com",
             hostname: "lakeformation.{region}.amazonaws.com",
             fipsHostname: "lakeformation-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:lakeformation:{region}:{account-id}:{resource-id}",
+            principal: "lakeformation.c2s.ic.gov",
+            hostname: "lakeformation.{region}.c2s.ic.gov",
+            fipsHostname: "lakeformation-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:lakeformation:{region}:{account-id}:{resource-id}",
+            principal: "lakeformation.sc2s.sgov.gov",
+            hostname: "lakeformation.{region}.sc2s.sgov.gov",
+            fipsHostname: "lakeformation-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:lakeformation:{region}:{account-id}:{resource-id}",
+            principal: "lakeformation.cloud.adc-e.uk",
+            hostname: "lakeformation.{region}.cloud.adc-e.uk",
+            fipsHostname: "lakeformation-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:lakeformation:{region}:{account-id}:{resource-id}",
+            principal: "lakeformation.csp.hci.ic.gov",
+            hostname: "lakeformation.{region}.csp.hci.ic.gov",
+            fipsHostname: "lakeformation-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:lakeformation:{region}:{account-id}:{resource-id}",
+            principal: "lakeformation.amazonaws.com",
+            hostname: "lakeformation.{region}.amazonaws.eu",
+            fipsHostname: "lakeformation-fips.{region}.amazonaws.eu",
         },
     },
     lambda: {
@@ -3553,6 +5085,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "lambda.{region}.sc2s.sgov.gov",
             fipsHostname: "lambda-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:lambda:{region}:{account-id}:{resource-id}",
+            principal: "lambda.cloud.adc-e.uk",
+            hostname: "lambda.{region}.cloud.adc-e.uk",
+            fipsHostname: "lambda-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:lambda:{region}:{account-id}:{resource-id}",
+            principal: "lambda.csp.hci.ic.gov",
+            hostname: "lambda.{region}.csp.hci.ic.gov",
+            fipsHostname: "lambda-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:lambda:{region}:{account-id}:{resource-id}",
+            principal: "lambda.amazonaws.com",
+            hostname: "lambda.{region}.amazonaws.eu",
+            fipsHostname: "lambda-fips.{region}.amazonaws.eu",
+        },
     },
     "license-manager": {
         aws: {
@@ -3585,6 +5135,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "license-manager.{region}.sc2s.sgov.gov",
             fipsHostname: "license-manager-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:license-manager:{region}:{account-id}:{resource-id}",
+            principal: "license-manager.cloud.adc-e.uk",
+            hostname: "license-manager.{region}.cloud.adc-e.uk",
+            fipsHostname: "license-manager-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:license-manager:{region}:{account-id}:{resource-id}",
+            principal: "license-manager.csp.hci.ic.gov",
+            hostname: "license-manager.{region}.csp.hci.ic.gov",
+            fipsHostname: "license-manager-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:license-manager:{region}:{account-id}:{resource-id}",
+            principal: "license-manager.amazonaws.com",
+            hostname: "license-manager.{region}.amazonaws.eu",
+            fipsHostname: "license-manager-fips.{region}.amazonaws.eu",
+        },
     },
     "license-manager-linux-subscriptions": {
         aws: {
@@ -3609,6 +5177,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
     "license-manager-user-subscriptions": {
         aws: {
             arn: "arn:aws:license-manager-user-subscriptions:{region}:{account-id}:{resource-id}",
+            principal: "license-manager-user-subscriptions.amazonaws.com",
+            hostname: "license-manager-user-subscriptions.{region}.amazonaws.com",
+            fipsHostname: "license-manager-user-subscriptions-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:license-manager-user-subscriptions:{region}:{account-id}:{resource-id}",
             principal: "license-manager-user-subscriptions.amazonaws.com",
             hostname: "license-manager-user-subscriptions.{region}.amazonaws.com",
             fipsHostname: "license-manager-user-subscriptions-fips.{region}.amazonaws.com",
@@ -3653,6 +5227,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "logs.{region}.sc2s.sgov.gov",
             fipsHostname: "logs-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:logs:{region}:{account-id}:{resource-id}",
+            principal: "logs.cloud.adc-e.uk",
+            hostname: "logs.{region}.cloud.adc-e.uk",
+            fipsHostname: "logs-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:logs:{region}:{account-id}:{resource-id}",
+            principal: "logs.csp.hci.ic.gov",
+            hostname: "logs.{region}.csp.hci.ic.gov",
+            fipsHostname: "logs-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:logs:{region}:{account-id}:{resource-id}",
+            principal: "logs.amazonaws.com",
+            hostname: "logs.{region}.amazonaws.eu",
+            fipsHostname: "logs-fips.{region}.amazonaws.eu",
+        },
     },
     lookoutequipment: {
         aws: {
@@ -3681,6 +5273,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
     m2: {
         aws: {
             arn: "arn:aws:m2:{region}:{account-id}:{resource-id}",
+            principal: "m2.amazonaws.com",
+            hostname: "m2.{region}.amazonaws.com",
+            fipsHostname: "m2-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:m2:{region}:{account-id}:{resource-id}",
             principal: "m2.amazonaws.com",
             hostname: "m2.{region}.amazonaws.com",
             fipsHostname: "m2-fips.{region}.amazonaws.com",
@@ -3722,6 +5320,14 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "managedblockchain.amazonaws.com",
             hostname: "managedblockchain.{region}.amazonaws.com",
             fipsHostname: "managedblockchain-fips.{region}.amazonaws.com",
+        },
+    },
+    "managedblockchain-query": {
+        aws: {
+            arn: "arn:aws:managedblockchain-query:{region}:{account-id}:{resource-id}",
+            principal: "managedblockchain-query.amazonaws.com",
+            hostname: "managedblockchain-query.{region}.amazonaws.com",
+            fipsHostname: "managedblockchain-query-fips.{region}.amazonaws.com",
         },
     },
     marketplacecommerceanalytics: {
@@ -3781,6 +5387,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "medialive.{region}.c2s.ic.gov",
             fipsHostname: "medialive-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:medialive:{region}:{account-id}:{resource-id}",
+            principal: "medialive.sc2s.sgov.gov",
+            hostname: "medialive.{region}.sc2s.sgov.gov",
+            fipsHostname: "medialive-fips.{region}.sc2s.sgov.gov",
+        },
     },
     mediapackage: {
         aws: {
@@ -3794,6 +5406,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "mediapackage.c2s.ic.gov",
             hostname: "mediapackage.{region}.c2s.ic.gov",
             fipsHostname: "mediapackage-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:mediapackage:{region}:{account-id}:{resource-id}",
+            principal: "mediapackage.sc2s.sgov.gov",
+            hostname: "mediapackage.{region}.sc2s.sgov.gov",
+            fipsHostname: "mediapackage-fips.{region}.sc2s.sgov.gov",
         },
     },
     "mediapackage-vod": {
@@ -3847,6 +5465,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "memory-db.{region}.amazonaws.com.cn",
             fipsHostname: "memory-db-fips.{region}.amazonaws.com.cn",
         },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:memory-db:{region}:{account-id}:{resource-id}",
+            principal: "memory-db.amazonaws.com",
+            hostname: "memory-db.{region}.amazonaws.com",
+            fipsHostname: "memory-db-fips.{region}.amazonaws.com",
+        },
     },
     "messaging-chime": {
         aws: {
@@ -3874,6 +5498,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "metering.marketplace.sc2s.sgov.gov",
             hostname: "metering.marketplace.{region}.sc2s.sgov.gov",
             fipsHostname: "metering.marketplace-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:metering.marketplace:{region}:{account-id}:{resource-id}",
+            principal: "metering.marketplace.amazonaws.com.cn",
+            hostname: "metering.marketplace.{region}.amazonaws.com.cn",
+            fipsHostname: "metering.marketplace-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:metering.marketplace:{region}:{account-id}:{resource-id}",
+            principal: "metering.marketplace.amazonaws.com",
+            hostname: "metering.marketplace.{region}.amazonaws.eu",
+            fipsHostname: "metering.marketplace-fips.{region}.amazonaws.eu",
         },
     },
     "metrics.sagemaker": {
@@ -3906,6 +5542,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "metrics.sagemaker.sc2s.sgov.gov",
             hostname: "metrics.sagemaker.{region}.sc2s.sgov.gov",
             fipsHostname: "metrics.sagemaker-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:metrics.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "metrics.sagemaker.cloud.adc-e.uk",
+            hostname: "metrics.sagemaker.{region}.cloud.adc-e.uk",
+            fipsHostname: "metrics.sagemaker-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:metrics.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "metrics.sagemaker.csp.hci.ic.gov",
+            hostname: "metrics.sagemaker.{region}.csp.hci.ic.gov",
+            fipsHostname: "metrics.sagemaker-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:metrics.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "metrics.sagemaker.amazonaws.com",
+            hostname: "metrics.sagemaker.{region}.amazonaws.eu",
+            fipsHostname: "metrics.sagemaker-fips.{region}.amazonaws.eu",
         },
     },
     mgh: {
@@ -3961,6 +5615,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "models-v2-lex.{region}.amazonaws.com",
             fipsHostname: "models-v2-lex-fips.{region}.amazonaws.com",
         },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:models-v2-lex:{region}:{account-id}:{resource-id}",
+            principal: "models-v2-lex.amazonaws.com",
+            hostname: "models-v2-lex.{region}.amazonaws.com",
+            fipsHostname: "models-v2-lex-fips.{region}.amazonaws.com",
+        },
     },
     "models.lex": {
         aws: {
@@ -4007,6 +5667,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "monitoring.{region}.sc2s.sgov.gov",
             fipsHostname: "monitoring-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:monitoring:{region}:{account-id}:{resource-id}",
+            principal: "monitoring.cloud.adc-e.uk",
+            hostname: "monitoring.{region}.cloud.adc-e.uk",
+            fipsHostname: "monitoring-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:monitoring:{region}:{account-id}:{resource-id}",
+            principal: "monitoring.csp.hci.ic.gov",
+            hostname: "monitoring.{region}.csp.hci.ic.gov",
+            fipsHostname: "monitoring-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:monitoring:{region}:{account-id}:{resource-id}",
+            principal: "monitoring.amazonaws.com",
+            hostname: "monitoring.{region}.amazonaws.eu",
+            fipsHostname: "monitoring-fips.{region}.amazonaws.eu",
+        },
     },
     mq: {
         aws: {
@@ -4026,6 +5704,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "mq.amazonaws.com",
             hostname: "mq.{region}.amazonaws.com",
             fipsHostname: "mq-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:mq:{region}:{account-id}:{resource-id}",
+            principal: "mq.c2s.ic.gov",
+            hostname: "mq.{region}.c2s.ic.gov",
+            fipsHostname: "mq-fips.{region}.c2s.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:mq:{region}:{account-id}:{resource-id}",
+            principal: "mq.amazonaws.com",
+            hostname: "mq.{region}.amazonaws.eu",
+            fipsHostname: "mq-fips.{region}.amazonaws.eu",
         },
     },
     "mturk-requester": {
@@ -4069,6 +5759,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "network-firewall.{region}.amazonaws.com",
             fipsHostname: "network-firewall-fips.{region}.amazonaws.com",
         },
+        "aws-cn": {
+            arn: "arn:aws-cn:network-firewall:{region}:{account-id}:{resource-id}",
+            principal: "network-firewall.amazonaws.com.cn",
+            hostname: "network-firewall.{region}.amazonaws.com.cn",
+            fipsHostname: "network-firewall-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:network-firewall:{region}:{account-id}:{resource-id}",
+            principal: "network-firewall.c2s.ic.gov",
+            hostname: "network-firewall.{region}.c2s.ic.gov",
+            fipsHostname: "network-firewall-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:network-firewall:{region}:{account-id}:{resource-id}",
+            principal: "network-firewall.sc2s.sgov.gov",
+            hostname: "network-firewall.{region}.sc2s.sgov.gov",
+            fipsHostname: "network-firewall-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:network-firewall:{region}:{account-id}:{resource-id}",
+            principal: "network-firewall.amazonaws.com",
+            hostname: "network-firewall.{region}.amazonaws.eu",
+            fipsHostname: "network-firewall-fips.{region}.amazonaws.eu",
+        },
     },
     networkmanager: {
         aws: {
@@ -4092,6 +5806,48 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             fipsHostname: "nimble-fips.{region}.amazonaws.com",
         },
     },
+    notifications: {
+        aws: {
+            arn: "arn:aws:notifications:{region}:{account-id}:{resource-id}",
+            principal: "notifications.amazonaws.com",
+            hostname: "notifications.{region}.amazonaws.com",
+            fipsHostname: "notifications-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:notifications:{region}:{account-id}:{resource-id}",
+            principal: "notifications.amazonaws.com.cn",
+            hostname: "notifications.{region}.amazonaws.com.cn",
+            fipsHostname: "notifications-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:notifications:{region}:{account-id}:{resource-id}",
+            principal: "notifications.amazonaws.com",
+            hostname: "notifications.{region}.amazonaws.com",
+            fipsHostname: "notifications-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:notifications:{region}:{account-id}:{resource-id}",
+            principal: "notifications.amazonaws.com",
+            hostname: "notifications.{region}.amazonaws.eu",
+            fipsHostname: "notifications-fips.{region}.amazonaws.eu",
+        },
+    },
+    "notifications-contacts": {
+        aws: {
+            arn: "arn:aws:notifications-contacts:{region}:{account-id}:{resource-id}",
+            principal: "notifications-contacts.amazonaws.com",
+            hostname: "notifications-contacts.{region}.amazonaws.com",
+            fipsHostname: "notifications-contacts-fips.{region}.amazonaws.com",
+        },
+    },
+    "nova-act": {
+        aws: {
+            arn: "arn:aws:nova-act:{region}:{account-id}:{resource-id}",
+            principal: "nova-act.amazonaws.com",
+            hostname: "nova-act.{region}.amazonaws.com",
+            fipsHostname: "nova-act-fips.{region}.amazonaws.com",
+        },
+    },
     oam: {
         aws: {
             arn: "arn:aws:oam:{region}:{account-id}:{resource-id}",
@@ -4104,6 +5860,42 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "oam.amazonaws.com.cn",
             hostname: "oam.{region}.amazonaws.com.cn",
             fipsHostname: "oam-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:oam:{region}:{account-id}:{resource-id}",
+            principal: "oam.amazonaws.com",
+            hostname: "oam.{region}.amazonaws.com",
+            fipsHostname: "oam-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:oam:{region}:{account-id}:{resource-id}",
+            principal: "oam.c2s.ic.gov",
+            hostname: "oam.{region}.c2s.ic.gov",
+            fipsHostname: "oam-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:oam:{region}:{account-id}:{resource-id}",
+            principal: "oam.sc2s.sgov.gov",
+            hostname: "oam.{region}.sc2s.sgov.gov",
+            fipsHostname: "oam-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:oam:{region}:{account-id}:{resource-id}",
+            principal: "oam.cloud.adc-e.uk",
+            hostname: "oam.{region}.cloud.adc-e.uk",
+            fipsHostname: "oam-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:oam:{region}:{account-id}:{resource-id}",
+            principal: "oam.csp.hci.ic.gov",
+            hostname: "oam.{region}.csp.hci.ic.gov",
+            fipsHostname: "oam-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:oam:{region}:{account-id}:{resource-id}",
+            principal: "oam.amazonaws.com",
+            hostname: "oam.{region}.amazonaws.eu",
+            fipsHostname: "oam-fips.{region}.amazonaws.eu",
         },
     },
     oidc: {
@@ -4118,6 +5910,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "oidc.amazonaws.com",
             hostname: "oidc.{region}.amazonaws.com",
             fipsHostname: "oidc-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:oidc:{region}:{account-id}:{resource-id}",
+            principal: "oidc.amazonaws.com.cn",
+            hostname: "oidc.{region}.amazonaws.com.cn",
+            fipsHostname: "oidc-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:oidc:{region}:{account-id}:{resource-id}",
+            principal: "oidc.amazonaws.com",
+            hostname: "oidc.{region}.amazonaws.eu",
+            fipsHostname: "oidc-fips.{region}.amazonaws.eu",
         },
     },
     omics: {
@@ -4162,6 +5966,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "organizations.amazonaws.com",
             hostname: "organizations.{region}.amazonaws.com",
             fipsHostname: "organizations-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:organizations:{region}:{account-id}:{resource-id}",
+            principal: "organizations.c2s.ic.gov",
+            hostname: "organizations.{region}.c2s.ic.gov",
+            fipsHostname: "organizations-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:organizations:{region}:{account-id}:{resource-id}",
+            principal: "organizations.sc2s.sgov.gov",
+            hostname: "organizations.{region}.sc2s.sgov.gov",
+            fipsHostname: "organizations-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:organizations:{region}:{account-id}:{resource-id}",
+            principal: "organizations.cloud.adc-e.uk",
+            hostname: "organizations.{region}.cloud.adc-e.uk",
+            fipsHostname: "organizations-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:organizations:{region}:{account-id}:{resource-id}",
+            principal: "organizations.csp.hci.ic.gov",
+            hostname: "organizations.{region}.csp.hci.ic.gov",
+            fipsHostname: "organizations-fips.{region}.csp.hci.ic.gov",
         },
     },
     osis: {
@@ -4212,6 +6040,14 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             fipsHostname: "participant.connect-fips.{region}.amazonaws.com",
         },
     },
+    "partnercentral-channel": {
+        aws: {
+            arn: "arn:aws:partnercentral-channel:{region}:{account-id}:{resource-id}",
+            principal: "partnercentral-channel.amazonaws.com",
+            hostname: "partnercentral-channel.{region}.amazonaws.com",
+            fipsHostname: "partnercentral-channel-fips.{region}.amazonaws.com",
+        },
+    },
     personalize: {
         aws: {
             arn: "arn:aws:personalize:{region}:{account-id}:{resource-id}",
@@ -4245,6 +6081,36 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "pi.{region}.amazonaws.com",
             fipsHostname: "pi-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:pi:{region}:{account-id}:{resource-id}",
+            principal: "pi.c2s.ic.gov",
+            hostname: "pi.{region}.c2s.ic.gov",
+            fipsHostname: "pi-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:pi:{region}:{account-id}:{resource-id}",
+            principal: "pi.sc2s.sgov.gov",
+            hostname: "pi.{region}.sc2s.sgov.gov",
+            fipsHostname: "pi-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:pi:{region}:{account-id}:{resource-id}",
+            principal: "pi.cloud.adc-e.uk",
+            hostname: "pi.{region}.cloud.adc-e.uk",
+            fipsHostname: "pi-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:pi:{region}:{account-id}:{resource-id}",
+            principal: "pi.csp.hci.ic.gov",
+            hostname: "pi.{region}.csp.hci.ic.gov",
+            fipsHostname: "pi-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:pi:{region}:{account-id}:{resource-id}",
+            principal: "pi.amazonaws.com",
+            hostname: "pi.{region}.amazonaws.eu",
+            fipsHostname: "pi-fips.{region}.amazonaws.eu",
+        },
     },
     pinpoint: {
         aws: {
@@ -4267,6 +6133,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "pipes.{region}.amazonaws.com",
             fipsHostname: "pipes-fips.{region}.amazonaws.com",
         },
+        "aws-cn": {
+            arn: "arn:aws-cn:pipes:{region}:{account-id}:{resource-id}",
+            principal: "pipes.amazonaws.com.cn",
+            hostname: "pipes.{region}.amazonaws.com.cn",
+            fipsHostname: "pipes-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:pipes:{region}:{account-id}:{resource-id}",
+            principal: "pipes.cloud.adc-e.uk",
+            hostname: "pipes.{region}.cloud.adc-e.uk",
+            fipsHostname: "pipes-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:pipes:{region}:{account-id}:{resource-id}",
+            principal: "pipes.csp.hci.ic.gov",
+            hostname: "pipes.{region}.csp.hci.ic.gov",
+            fipsHostname: "pipes-fips.{region}.csp.hci.ic.gov",
+        },
     },
     polly: {
         aws: {
@@ -4287,6 +6171,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "polly.{region}.amazonaws.com",
             fipsHostname: "polly-fips.{region}.amazonaws.com",
         },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:polly:{region}:{account-id}:{resource-id}",
+            principal: "polly.amazonaws.com",
+            hostname: "polly.{region}.amazonaws.eu",
+            fipsHostname: "polly-fips.{region}.amazonaws.eu",
+        },
     },
     "portal.sso": {
         aws: {
@@ -4300,6 +6190,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "portal.sso.amazonaws.com",
             hostname: "portal.sso.{region}.amazonaws.com",
             fipsHostname: "portal.sso-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:portal.sso:{region}:{account-id}:{resource-id}",
+            principal: "portal.sso.amazonaws.com.cn",
+            hostname: "portal.sso.{region}.amazonaws.com.cn",
+            fipsHostname: "portal.sso-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:portal.sso:{region}:{account-id}:{resource-id}",
+            principal: "portal.sso.amazonaws.com",
+            hostname: "portal.sso.{region}.amazonaws.eu",
+            fipsHostname: "portal.sso-fips.{region}.amazonaws.eu",
         },
     },
     profile: {
@@ -4326,12 +6228,52 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             fipsHostname: "proton-fips.{region}.amazonaws.com",
         },
     },
+    qbusiness: {
+        aws: {
+            arn: "arn:aws:qbusiness:{region}:{account-id}:{resource-id}",
+            principal: "qbusiness.amazonaws.com",
+            hostname: "qbusiness.{region}.amazonaws.com",
+            fipsHostname: "qbusiness-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:qbusiness:{region}:{account-id}:{resource-id}",
+            principal: "qbusiness.amazonaws.com.cn",
+            hostname: "qbusiness.{region}.amazonaws.com.cn",
+            fipsHostname: "qbusiness-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:qbusiness:{region}:{account-id}:{resource-id}",
+            principal: "qbusiness.amazonaws.com",
+            hostname: "qbusiness.{region}.amazonaws.com",
+            fipsHostname: "qbusiness-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:qbusiness:{region}:{account-id}:{resource-id}",
+            principal: "qbusiness.amazonaws.com",
+            hostname: "qbusiness.{region}.amazonaws.eu",
+            fipsHostname: "qbusiness-fips.{region}.amazonaws.eu",
+        },
+    },
     qldb: {
         aws: {
             arn: "arn:aws:qldb:{region}:{account-id}:{resource-id}",
             principal: "qldb.amazonaws.com",
             hostname: "qldb.{region}.amazonaws.com",
             fipsHostname: "qldb-fips.{region}.amazonaws.com",
+        },
+    },
+    "query.timestream": {
+        aws: {
+            arn: "arn:aws:query.timestream:{region}:{account-id}:{resource-id}",
+            principal: "query.timestream.amazonaws.com",
+            hostname: "query.timestream.{region}.amazonaws.com",
+            fipsHostname: "query.timestream-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:query.timestream:{region}:{account-id}:{resource-id}",
+            principal: "query.timestream.amazonaws.com",
+            hostname: "query.timestream.{region}.amazonaws.com",
+            fipsHostname: "query.timestream-fips.{region}.amazonaws.com",
         },
     },
     quicksight: {
@@ -4346,6 +6288,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "quicksight.amazonaws.com",
             hostname: "quicksight.{region}.amazonaws.com",
             fipsHostname: "quicksight-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:quicksight:{region}:{account-id}:{resource-id}",
+            principal: "quicksight.amazonaws.com.cn",
+            hostname: "quicksight.{region}.amazonaws.com.cn",
+            fipsHostname: "quicksight-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:quicksight:{region}:{account-id}:{resource-id}",
+            principal: "quicksight.csp.hci.ic.gov",
+            hostname: "quicksight.{region}.csp.hci.ic.gov",
+            fipsHostname: "quicksight-fips.{region}.csp.hci.ic.gov",
         },
     },
     ram: {
@@ -4379,6 +6333,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "ram.{region}.sc2s.sgov.gov",
             fipsHostname: "ram-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ram:{region}:{account-id}:{resource-id}",
+            principal: "ram.cloud.adc-e.uk",
+            hostname: "ram.{region}.cloud.adc-e.uk",
+            fipsHostname: "ram-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ram:{region}:{account-id}:{resource-id}",
+            principal: "ram.csp.hci.ic.gov",
+            hostname: "ram.{region}.csp.hci.ic.gov",
+            fipsHostname: "ram-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ram:{region}:{account-id}:{resource-id}",
+            principal: "ram.amazonaws.com",
+            hostname: "ram.{region}.amazonaws.eu",
+            fipsHostname: "ram-fips.{region}.amazonaws.eu",
+        },
     },
     rbin: {
         aws: {
@@ -4411,6 +6383,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "rbin.{region}.sc2s.sgov.gov",
             fipsHostname: "rbin-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:rbin:{region}:{account-id}:{resource-id}",
+            principal: "rbin.cloud.adc-e.uk",
+            hostname: "rbin.{region}.cloud.adc-e.uk",
+            fipsHostname: "rbin-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:rbin:{region}:{account-id}:{resource-id}",
+            principal: "rbin.csp.hci.ic.gov",
+            hostname: "rbin.{region}.csp.hci.ic.gov",
+            fipsHostname: "rbin-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:rbin:{region}:{account-id}:{resource-id}",
+            principal: "rbin.amazonaws.com",
+            hostname: "rbin.{region}.amazonaws.eu",
+            fipsHostname: "rbin-fips.{region}.amazonaws.eu",
+        },
     },
     rds: {
         aws: {
@@ -4442,6 +6432,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "rds.sc2s.sgov.gov",
             hostname: "rds.{region}.sc2s.sgov.gov",
             fipsHostname: "rds-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:rds:{region}:{account-id}:{resource-id}",
+            principal: "rds.cloud.adc-e.uk",
+            hostname: "rds.{region}.cloud.adc-e.uk",
+            fipsHostname: "rds-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:rds:{region}:{account-id}:{resource-id}",
+            principal: "rds.csp.hci.ic.gov",
+            hostname: "rds.{region}.csp.hci.ic.gov",
+            fipsHostname: "rds-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:rds:{region}:{account-id}:{resource-id}",
+            principal: "rds.amazonaws.com",
+            hostname: "rds.{region}.amazonaws.eu",
+            fipsHostname: "rds-fips.{region}.amazonaws.eu",
         },
     },
     "rds-data": {
@@ -4483,6 +6491,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "redshift.{region}.sc2s.sgov.gov",
             fipsHostname: "redshift-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:redshift:{region}:{account-id}:{resource-id}",
+            principal: "redshift.cloud.adc-e.uk",
+            hostname: "redshift.{region}.cloud.adc-e.uk",
+            fipsHostname: "redshift-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:redshift:{region}:{account-id}:{resource-id}",
+            principal: "redshift.csp.hci.ic.gov",
+            hostname: "redshift.{region}.csp.hci.ic.gov",
+            fipsHostname: "redshift-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:redshift:{region}:{account-id}:{resource-id}",
+            principal: "redshift.amazonaws.com",
+            hostname: "redshift.{region}.amazonaws.eu",
+            fipsHostname: "redshift-fips.{region}.amazonaws.eu",
+        },
     },
     "redshift-serverless": {
         aws: {
@@ -4490,6 +6516,30 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "redshift-serverless.amazonaws.com",
             hostname: "redshift-serverless.{region}.amazonaws.com",
             fipsHostname: "redshift-serverless-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:redshift-serverless:{region}:{account-id}:{resource-id}",
+            principal: "redshift-serverless.amazonaws.com.cn",
+            hostname: "redshift-serverless.{region}.amazonaws.com.cn",
+            fipsHostname: "redshift-serverless-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:redshift-serverless:{region}:{account-id}:{resource-id}",
+            principal: "redshift-serverless.amazonaws.com",
+            hostname: "redshift-serverless.{region}.amazonaws.com",
+            fipsHostname: "redshift-serverless-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:redshift-serverless:{region}:{account-id}:{resource-id}",
+            principal: "redshift-serverless.cloud.adc-e.uk",
+            hostname: "redshift-serverless.{region}.cloud.adc-e.uk",
+            fipsHostname: "redshift-serverless-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:redshift-serverless:{region}:{account-id}:{resource-id}",
+            principal: "redshift-serverless.csp.hci.ic.gov",
+            hostname: "redshift-serverless.{region}.csp.hci.ic.gov",
+            fipsHostname: "redshift-serverless-fips.{region}.csp.hci.ic.gov",
         },
     },
     rekognition: {
@@ -4505,10 +6555,28 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "rekognition.{region}.amazonaws.com",
             fipsHostname: "rekognition-fips.{region}.amazonaws.com",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:rekognition:{region}:{account-id}:{resource-id}",
+            principal: "rekognition.cloud.adc-e.uk",
+            hostname: "rekognition.{region}.cloud.adc-e.uk",
+            fipsHostname: "rekognition-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:rekognition:{region}:{account-id}:{resource-id}",
+            principal: "rekognition.csp.hci.ic.gov",
+            hostname: "rekognition.{region}.csp.hci.ic.gov",
+            fipsHostname: "rekognition-fips.{region}.csp.hci.ic.gov",
+        },
     },
     resiliencehub: {
         aws: {
             arn: "arn:aws:resiliencehub:{region}:{account-id}:{resource-id}",
+            principal: "resiliencehub.amazonaws.com",
+            hostname: "resiliencehub.{region}.amazonaws.com",
+            fipsHostname: "resiliencehub-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:resiliencehub:{region}:{account-id}:{resource-id}",
             principal: "resiliencehub.amazonaws.com",
             hostname: "resiliencehub.{region}.amazonaws.com",
             fipsHostname: "resiliencehub-fips.{region}.amazonaws.com",
@@ -4565,6 +6633,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "resource-groups.{region}.sc2s.sgov.gov",
             fipsHostname: "resource-groups-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:resource-groups:{region}:{account-id}:{resource-id}",
+            principal: "resource-groups.cloud.adc-e.uk",
+            hostname: "resource-groups.{region}.cloud.adc-e.uk",
+            fipsHostname: "resource-groups-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:resource-groups:{region}:{account-id}:{resource-id}",
+            principal: "resource-groups.csp.hci.ic.gov",
+            hostname: "resource-groups.{region}.csp.hci.ic.gov",
+            fipsHostname: "resource-groups-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:resource-groups:{region}:{account-id}:{resource-id}",
+            principal: "resource-groups.amazonaws.com",
+            hostname: "resource-groups.{region}.amazonaws.eu",
+            fipsHostname: "resource-groups-fips.{region}.amazonaws.eu",
+        },
     },
     robomaker: {
         aws: {
@@ -4592,6 +6678,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "rolesanywhere.amazonaws.com.cn",
             hostname: "rolesanywhere.{region}.amazonaws.com.cn",
             fipsHostname: "rolesanywhere-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:rolesanywhere:{region}:{account-id}:{resource-id}",
+            principal: "rolesanywhere.amazonaws.com",
+            hostname: "rolesanywhere.{region}.amazonaws.com",
+            fipsHostname: "rolesanywhere-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:rolesanywhere:{region}:{account-id}:{resource-id}",
+            principal: "rolesanywhere.csp.hci.ic.gov",
+            hostname: "rolesanywhere.{region}.csp.hci.ic.gov",
+            fipsHostname: "rolesanywhere-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:rolesanywhere:{region}:{account-id}:{resource-id}",
+            principal: "rolesanywhere.amazonaws.com",
+            hostname: "rolesanywhere.{region}.amazonaws.eu",
+            fipsHostname: "rolesanywhere-fips.{region}.amazonaws.eu",
         },
     },
     route53: {
@@ -4625,6 +6729,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "route53.{region}.sc2s.sgov.gov",
             fipsHostname: "route53-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:route53:{region}:{account-id}:{resource-id}",
+            principal: "route53.cloud.adc-e.uk",
+            hostname: "route53.{region}.cloud.adc-e.uk",
+            fipsHostname: "route53-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:route53:{region}:{account-id}:{resource-id}",
+            principal: "route53.csp.hci.ic.gov",
+            hostname: "route53.{region}.csp.hci.ic.gov",
+            fipsHostname: "route53-fips.{region}.csp.hci.ic.gov",
+        },
     },
     "route53-recovery-control-config": {
         aws: {
@@ -4640,6 +6756,44 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "route53domains.amazonaws.com",
             hostname: "route53domains.{region}.amazonaws.com",
             fipsHostname: "route53domains-fips.{region}.amazonaws.com",
+        },
+    },
+    route53profiles: {
+        aws: {
+            arn: "arn:aws:route53profiles:{region}:{account-id}:{resource-id}",
+            principal: "route53profiles.amazonaws.com",
+            hostname: "route53profiles.{region}.amazonaws.com",
+            fipsHostname: "route53profiles-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:route53profiles:{region}:{account-id}:{resource-id}",
+            principal: "route53profiles.amazonaws.com.cn",
+            hostname: "route53profiles.{region}.amazonaws.com.cn",
+            fipsHostname: "route53profiles-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:route53profiles:{region}:{account-id}:{resource-id}",
+            principal: "route53profiles.amazonaws.com",
+            hostname: "route53profiles.{region}.amazonaws.com",
+            fipsHostname: "route53profiles-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:route53profiles:{region}:{account-id}:{resource-id}",
+            principal: "route53profiles.cloud.adc-e.uk",
+            hostname: "route53profiles.{region}.cloud.adc-e.uk",
+            fipsHostname: "route53profiles-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:route53profiles:{region}:{account-id}:{resource-id}",
+            principal: "route53profiles.csp.hci.ic.gov",
+            hostname: "route53profiles.{region}.csp.hci.ic.gov",
+            fipsHostname: "route53profiles-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:route53profiles:{region}:{account-id}:{resource-id}",
+            principal: "route53profiles.amazonaws.com",
+            hostname: "route53profiles.{region}.amazonaws.eu",
+            fipsHostname: "route53profiles-fips.{region}.amazonaws.eu",
         },
     },
     route53resolver: {
@@ -4673,6 +6827,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "route53resolver.{region}.sc2s.sgov.gov",
             fipsHostname: "route53resolver-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:route53resolver:{region}:{account-id}:{resource-id}",
+            principal: "route53resolver.cloud.adc-e.uk",
+            hostname: "route53resolver.{region}.cloud.adc-e.uk",
+            fipsHostname: "route53resolver-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:route53resolver:{region}:{account-id}:{resource-id}",
+            principal: "route53resolver.csp.hci.ic.gov",
+            hostname: "route53resolver.{region}.csp.hci.ic.gov",
+            fipsHostname: "route53resolver-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:route53resolver:{region}:{account-id}:{resource-id}",
+            principal: "route53resolver.amazonaws.com",
+            hostname: "route53resolver.{region}.amazonaws.eu",
+            fipsHostname: "route53resolver-fips.{region}.amazonaws.eu",
+        },
     },
     rum: {
         aws: {
@@ -4681,10 +6853,28 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "rum.{region}.amazonaws.com",
             fipsHostname: "rum-fips.{region}.amazonaws.com",
         },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:rum:{region}:{account-id}:{resource-id}",
+            principal: "rum.amazonaws.com",
+            hostname: "rum.{region}.amazonaws.com",
+            fipsHostname: "rum-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:rum:{region}:{account-id}:{resource-id}",
+            principal: "rum.amazonaws.com",
+            hostname: "rum.{region}.amazonaws.eu",
+            fipsHostname: "rum-fips.{region}.amazonaws.eu",
+        },
     },
     "runtime-v2-lex": {
         aws: {
             arn: "arn:aws:runtime-v2-lex:{region}:{account-id}:{resource-id}",
+            principal: "runtime-v2-lex.amazonaws.com",
+            hostname: "runtime-v2-lex.{region}.amazonaws.com",
+            fipsHostname: "runtime-v2-lex-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:runtime-v2-lex:{region}:{account-id}:{resource-id}",
             principal: "runtime-v2-lex.amazonaws.com",
             hostname: "runtime-v2-lex.{region}.amazonaws.com",
             fipsHostname: "runtime-v2-lex-fips.{region}.amazonaws.com",
@@ -4729,6 +6919,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "runtime.sagemaker.{region}.c2s.ic.gov",
             fipsHostname: "runtime.sagemaker-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:runtime.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "runtime.sagemaker.sc2s.sgov.gov",
+            hostname: "runtime.sagemaker.{region}.sc2s.sgov.gov",
+            fipsHostname: "runtime.sagemaker-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:runtime.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "runtime.sagemaker.csp.hci.ic.gov",
+            hostname: "runtime.sagemaker.{region}.csp.hci.ic.gov",
+            fipsHostname: "runtime.sagemaker-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:runtime.sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "runtime.sagemaker.amazonaws.com",
+            hostname: "runtime.sagemaker.{region}.amazonaws.eu",
+            fipsHostname: "runtime.sagemaker-fips.{region}.amazonaws.eu",
+        },
     },
     s3: {
         aws: {
@@ -4761,6 +6969,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "s3.{region}.sc2s.sgov.gov",
             fipsHostname: "s3-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:s3:{region}:{account-id}:{resource-id}",
+            principal: "s3.cloud.adc-e.uk",
+            hostname: "s3.{region}.cloud.adc-e.uk",
+            fipsHostname: "s3-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:s3:{region}:{account-id}:{resource-id}",
+            principal: "s3.csp.hci.ic.gov",
+            hostname: "s3.{region}.csp.hci.ic.gov",
+            fipsHostname: "s3-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:s3:{region}:{account-id}:{resource-id}",
+            principal: "s3.amazonaws.com",
+            hostname: "s3.{region}.amazonaws.eu",
+            fipsHostname: "s3-fips.{region}.amazonaws.eu",
+        },
     },
     "s3-control": {
         aws: {
@@ -4781,6 +7007,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "s3-control.{region}.amazonaws.com",
             fipsHostname: "s3-control-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:s3-control:{region}:{account-id}:{resource-id}",
+            principal: "s3-control.c2s.ic.gov",
+            hostname: "s3-control.{region}.c2s.ic.gov",
+            fipsHostname: "s3-control-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:s3-control:{region}:{account-id}:{resource-id}",
+            principal: "s3-control.sc2s.sgov.gov",
+            hostname: "s3-control.{region}.sc2s.sgov.gov",
+            fipsHostname: "s3-control-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:s3-control:{region}:{account-id}:{resource-id}",
+            principal: "s3-control.amazonaws.com",
+            hostname: "s3-control.{region}.amazonaws.eu",
+            fipsHostname: "s3-control-fips.{region}.amazonaws.eu",
+        },
     },
     "s3-outposts": {
         aws: {
@@ -4794,6 +7038,68 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "s3-outposts.amazonaws.com",
             hostname: "s3-outposts.{region}.amazonaws.com",
             fipsHostname: "s3-outposts-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:s3-outposts:{region}:{account-id}:{resource-id}",
+            principal: "s3-outposts.c2s.ic.gov",
+            hostname: "s3-outposts.{region}.c2s.ic.gov",
+            fipsHostname: "s3-outposts-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:s3-outposts:{region}:{account-id}:{resource-id}",
+            principal: "s3-outposts.sc2s.sgov.gov",
+            hostname: "s3-outposts.{region}.sc2s.sgov.gov",
+            fipsHostname: "s3-outposts-fips.{region}.sc2s.sgov.gov",
+        },
+    },
+    sagemaker: {
+        aws: {
+            arn: "arn:aws:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.amazonaws.com",
+            hostname: "sagemaker.{region}.amazonaws.com",
+            fipsHostname: "sagemaker-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.amazonaws.com.cn",
+            hostname: "sagemaker.{region}.amazonaws.com.cn",
+            fipsHostname: "sagemaker-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.amazonaws.com",
+            hostname: "sagemaker.{region}.amazonaws.com",
+            fipsHostname: "sagemaker-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.c2s.ic.gov",
+            hostname: "sagemaker.{region}.c2s.ic.gov",
+            fipsHostname: "sagemaker-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.sc2s.sgov.gov",
+            hostname: "sagemaker.{region}.sc2s.sgov.gov",
+            fipsHostname: "sagemaker-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.cloud.adc-e.uk",
+            hostname: "sagemaker.{region}.cloud.adc-e.uk",
+            fipsHostname: "sagemaker-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.csp.hci.ic.gov",
+            hostname: "sagemaker.{region}.csp.hci.ic.gov",
+            fipsHostname: "sagemaker-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:sagemaker:{region}:{account-id}:{resource-id}",
+            principal: "sagemaker.amazonaws.com",
+            hostname: "sagemaker.{region}.amazonaws.eu",
+            fipsHostname: "sagemaker-fips.{region}.amazonaws.eu",
         },
     },
     "sagemaker-geospatial": {
@@ -4817,6 +7123,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "savingsplans.{region}.amazonaws.com.cn",
             fipsHostname: "savingsplans-fips.{region}.amazonaws.com.cn",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:savingsplans:{region}:{account-id}:{resource-id}",
+            principal: "savingsplans.cloud.adc-e.uk",
+            hostname: "savingsplans.{region}.cloud.adc-e.uk",
+            fipsHostname: "savingsplans-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:savingsplans:{region}:{account-id}:{resource-id}",
+            principal: "savingsplans.csp.hci.ic.gov",
+            hostname: "savingsplans.{region}.csp.hci.ic.gov",
+            fipsHostname: "savingsplans-fips.{region}.csp.hci.ic.gov",
+        },
     },
     scheduler: {
         aws: {
@@ -4824,6 +7142,48 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "scheduler.amazonaws.com",
             hostname: "scheduler.{region}.amazonaws.com",
             fipsHostname: "scheduler-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:scheduler:{region}:{account-id}:{resource-id}",
+            principal: "scheduler.amazonaws.com.cn",
+            hostname: "scheduler.{region}.amazonaws.com.cn",
+            fipsHostname: "scheduler-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:scheduler:{region}:{account-id}:{resource-id}",
+            principal: "scheduler.amazonaws.com",
+            hostname: "scheduler.{region}.amazonaws.com",
+            fipsHostname: "scheduler-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:scheduler:{region}:{account-id}:{resource-id}",
+            principal: "scheduler.c2s.ic.gov",
+            hostname: "scheduler.{region}.c2s.ic.gov",
+            fipsHostname: "scheduler-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:scheduler:{region}:{account-id}:{resource-id}",
+            principal: "scheduler.sc2s.sgov.gov",
+            hostname: "scheduler.{region}.sc2s.sgov.gov",
+            fipsHostname: "scheduler-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:scheduler:{region}:{account-id}:{resource-id}",
+            principal: "scheduler.cloud.adc-e.uk",
+            hostname: "scheduler.{region}.cloud.adc-e.uk",
+            fipsHostname: "scheduler-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:scheduler:{region}:{account-id}:{resource-id}",
+            principal: "scheduler.csp.hci.ic.gov",
+            hostname: "scheduler.{region}.csp.hci.ic.gov",
+            fipsHostname: "scheduler-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:scheduler:{region}:{account-id}:{resource-id}",
+            principal: "scheduler.amazonaws.com",
+            hostname: "scheduler.{region}.amazonaws.eu",
+            fipsHostname: "scheduler-fips.{region}.amazonaws.eu",
         },
     },
     schemas: {
@@ -4838,6 +7198,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "schemas.amazonaws.com.cn",
             hostname: "schemas.{region}.amazonaws.com.cn",
             fipsHostname: "schemas-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:schemas:{region}:{account-id}:{resource-id}",
+            principal: "schemas.amazonaws.com",
+            hostname: "schemas.{region}.amazonaws.com",
+            fipsHostname: "schemas-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:schemas:{region}:{account-id}:{resource-id}",
+            principal: "schemas.cloud.adc-e.uk",
+            hostname: "schemas.{region}.cloud.adc-e.uk",
+            fipsHostname: "schemas-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:schemas:{region}:{account-id}:{resource-id}",
+            principal: "schemas.csp.hci.ic.gov",
+            hostname: "schemas.{region}.csp.hci.ic.gov",
+            fipsHostname: "schemas-fips.{region}.csp.hci.ic.gov",
         },
     },
     sdb: {
@@ -4879,6 +7257,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "secretsmanager.{region}.sc2s.sgov.gov",
             fipsHostname: "secretsmanager-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:secretsmanager:{region}:{account-id}:{resource-id}",
+            principal: "secretsmanager.cloud.adc-e.uk",
+            hostname: "secretsmanager.{region}.cloud.adc-e.uk",
+            fipsHostname: "secretsmanager-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:secretsmanager:{region}:{account-id}:{resource-id}",
+            principal: "secretsmanager.csp.hci.ic.gov",
+            hostname: "secretsmanager.{region}.csp.hci.ic.gov",
+            fipsHostname: "secretsmanager-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:secretsmanager:{region}:{account-id}:{resource-id}",
+            principal: "secretsmanager.amazonaws.com",
+            hostname: "secretsmanager.{region}.amazonaws.eu",
+            fipsHostname: "secretsmanager-fips.{region}.amazonaws.eu",
+        },
     },
     securityhub: {
         aws: {
@@ -4899,10 +7295,40 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "securityhub.{region}.amazonaws.com",
             fipsHostname: "securityhub-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:securityhub:{region}:{account-id}:{resource-id}",
+            principal: "securityhub.c2s.ic.gov",
+            hostname: "securityhub.{region}.c2s.ic.gov",
+            fipsHostname: "securityhub-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:securityhub:{region}:{account-id}:{resource-id}",
+            principal: "securityhub.sc2s.sgov.gov",
+            hostname: "securityhub.{region}.sc2s.sgov.gov",
+            fipsHostname: "securityhub-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:securityhub:{region}:{account-id}:{resource-id}",
+            principal: "securityhub.csp.hci.ic.gov",
+            hostname: "securityhub.{region}.csp.hci.ic.gov",
+            fipsHostname: "securityhub-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:securityhub:{region}:{account-id}:{resource-id}",
+            principal: "securityhub.amazonaws.com",
+            hostname: "securityhub.{region}.amazonaws.eu",
+            fipsHostname: "securityhub-fips.{region}.amazonaws.eu",
+        },
     },
     securitylake: {
         aws: {
             arn: "arn:aws:securitylake:{region}:{account-id}:{resource-id}",
+            principal: "securitylake.amazonaws.com",
+            hostname: "securitylake.{region}.amazonaws.com",
+            fipsHostname: "securitylake-fips.{region}.amazonaws.com",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:securitylake:{region}:{account-id}:{resource-id}",
             principal: "securitylake.amazonaws.com",
             hostname: "securitylake.{region}.amazonaws.com",
             fipsHostname: "securitylake-fips.{region}.amazonaws.com",
@@ -4947,6 +7373,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "servicecatalog.{region}.amazonaws.com",
             fipsHostname: "servicecatalog-fips.{region}.amazonaws.com",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:servicecatalog:{region}:{account-id}:{resource-id}",
+            principal: "servicecatalog.cloud.adc-e.uk",
+            hostname: "servicecatalog.{region}.cloud.adc-e.uk",
+            fipsHostname: "servicecatalog-fips.{region}.cloud.adc-e.uk",
+        },
     },
     "servicecatalog-appregistry": {
         aws: {
@@ -4981,6 +7413,36 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "servicediscovery.{region}.amazonaws.com",
             fipsHostname: "servicediscovery-fips.{region}.amazonaws.com",
         },
+        "aws-iso": {
+            arn: "arn:aws-iso:servicediscovery:{region}:{account-id}:{resource-id}",
+            principal: "servicediscovery.c2s.ic.gov",
+            hostname: "servicediscovery.{region}.c2s.ic.gov",
+            fipsHostname: "servicediscovery-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:servicediscovery:{region}:{account-id}:{resource-id}",
+            principal: "servicediscovery.sc2s.sgov.gov",
+            hostname: "servicediscovery.{region}.sc2s.sgov.gov",
+            fipsHostname: "servicediscovery-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:servicediscovery:{region}:{account-id}:{resource-id}",
+            principal: "servicediscovery.cloud.adc-e.uk",
+            hostname: "servicediscovery.{region}.cloud.adc-e.uk",
+            fipsHostname: "servicediscovery-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:servicediscovery:{region}:{account-id}:{resource-id}",
+            principal: "servicediscovery.csp.hci.ic.gov",
+            hostname: "servicediscovery.{region}.csp.hci.ic.gov",
+            fipsHostname: "servicediscovery-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:servicediscovery:{region}:{account-id}:{resource-id}",
+            principal: "servicediscovery.amazonaws.com",
+            hostname: "servicediscovery.{region}.amazonaws.eu",
+            fipsHostname: "servicediscovery-fips.{region}.amazonaws.eu",
+        },
     },
     servicequotas: {
         aws: {
@@ -5000,6 +7462,36 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "servicequotas.amazonaws.com",
             hostname: "servicequotas.{region}.amazonaws.com",
             fipsHostname: "servicequotas-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:servicequotas:{region}:{account-id}:{resource-id}",
+            principal: "servicequotas.c2s.ic.gov",
+            hostname: "servicequotas.{region}.c2s.ic.gov",
+            fipsHostname: "servicequotas-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:servicequotas:{region}:{account-id}:{resource-id}",
+            principal: "servicequotas.sc2s.sgov.gov",
+            hostname: "servicequotas.{region}.sc2s.sgov.gov",
+            fipsHostname: "servicequotas-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:servicequotas:{region}:{account-id}:{resource-id}",
+            principal: "servicequotas.cloud.adc-e.uk",
+            hostname: "servicequotas.{region}.cloud.adc-e.uk",
+            fipsHostname: "servicequotas-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:servicequotas:{region}:{account-id}:{resource-id}",
+            principal: "servicequotas.csp.hci.ic.gov",
+            hostname: "servicequotas.{region}.csp.hci.ic.gov",
+            fipsHostname: "servicequotas-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:servicequotas:{region}:{account-id}:{resource-id}",
+            principal: "servicequotas.amazonaws.com",
+            hostname: "servicequotas.{region}.amazonaws.eu",
+            fipsHostname: "servicequotas-fips.{region}.amazonaws.eu",
         },
     },
     "session.qldb": {
@@ -5030,6 +7522,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "signer.amazonaws.com.cn",
             hostname: "signer.{region}.amazonaws.com.cn",
             fipsHostname: "signer-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:signer:{region}:{account-id}:{resource-id}",
+            principal: "signer.amazonaws.com",
+            hostname: "signer.{region}.amazonaws.com",
+            fipsHostname: "signer-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:signer:{region}:{account-id}:{resource-id}",
+            principal: "signer.amazonaws.com",
+            hostname: "signer.{region}.amazonaws.eu",
+            fipsHostname: "signer-fips.{region}.amazonaws.eu",
         },
     },
     simspaceweaver: {
@@ -5078,6 +7582,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "sms-voice.amazonaws.com",
             hostname: "sms-voice.{region}.amazonaws.com",
             fipsHostname: "sms-voice-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:sms-voice:{region}:{account-id}:{resource-id}",
+            principal: "sms-voice.amazonaws.com",
+            hostname: "sms-voice.{region}.amazonaws.eu",
+            fipsHostname: "sms-voice-fips.{region}.amazonaws.eu",
         },
     },
     snowball: {
@@ -5143,6 +7653,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "sns.{region}.sc2s.sgov.gov",
             fipsHostname: "sns-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:sns:{region}:{account-id}:{resource-id}",
+            principal: "sns.cloud.adc-e.uk",
+            hostname: "sns.{region}.cloud.adc-e.uk",
+            fipsHostname: "sns-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:sns:{region}:{account-id}:{resource-id}",
+            principal: "sns.csp.hci.ic.gov",
+            hostname: "sns.{region}.csp.hci.ic.gov",
+            fipsHostname: "sns-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:sns:{region}:{account-id}:{resource-id}",
+            principal: "sns.amazonaws.com",
+            hostname: "sns.{region}.amazonaws.eu",
+            fipsHostname: "sns-fips.{region}.amazonaws.eu",
+        },
     },
     sqs: {
         aws: {
@@ -5174,6 +7702,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "sqs.sc2s.sgov.gov",
             hostname: "sqs.{region}.sc2s.sgov.gov",
             fipsHostname: "sqs-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:sqs:{region}:{account-id}:{resource-id}",
+            principal: "sqs.cloud.adc-e.uk",
+            hostname: "sqs.{region}.cloud.adc-e.uk",
+            fipsHostname: "sqs-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:sqs:{region}:{account-id}:{resource-id}",
+            principal: "sqs.csp.hci.ic.gov",
+            hostname: "sqs.{region}.csp.hci.ic.gov",
+            fipsHostname: "sqs-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:sqs:{region}:{account-id}:{resource-id}",
+            principal: "sqs.amazonaws.com",
+            hostname: "sqs.{region}.amazonaws.eu",
+            fipsHostname: "sqs-fips.{region}.amazonaws.eu",
         },
     },
     ssm: {
@@ -5207,6 +7753,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "ssm.{region}.sc2s.sgov.gov",
             fipsHostname: "ssm-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:ssm:{region}:{account-id}:{resource-id}",
+            principal: "ssm.cloud.adc-e.uk",
+            hostname: "ssm.{region}.cloud.adc-e.uk",
+            fipsHostname: "ssm-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:ssm:{region}:{account-id}:{resource-id}",
+            principal: "ssm.csp.hci.ic.gov",
+            hostname: "ssm.{region}.csp.hci.ic.gov",
+            fipsHostname: "ssm-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:ssm:{region}:{account-id}:{resource-id}",
+            principal: "ssm.amazonaws.com",
+            hostname: "ssm.{region}.amazonaws.eu",
+            fipsHostname: "ssm-fips.{region}.amazonaws.eu",
+        },
     },
     "ssm-contacts": {
         aws: {
@@ -5222,6 +7786,14 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "ssm-incidents.amazonaws.com",
             hostname: "ssm-incidents.{region}.amazonaws.com",
             fipsHostname: "ssm-incidents-fips.{region}.amazonaws.com",
+        },
+    },
+    "ssm-quicksetup": {
+        aws: {
+            arn: "arn:aws:ssm-quicksetup:{region}:{account-id}:{resource-id}",
+            principal: "ssm-quicksetup.amazonaws.com",
+            hostname: "ssm-quicksetup.{region}.amazonaws.com",
+            fipsHostname: "ssm-quicksetup-fips.{region}.amazonaws.com",
         },
     },
     "ssm-sap": {
@@ -5244,6 +7816,18 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "sso.amazonaws.com",
             hostname: "sso.{region}.amazonaws.com",
             fipsHostname: "sso-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:sso:{region}:{account-id}:{resource-id}",
+            principal: "sso.amazonaws.com.cn",
+            hostname: "sso.{region}.amazonaws.com.cn",
+            fipsHostname: "sso-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:sso:{region}:{account-id}:{resource-id}",
+            principal: "sso.amazonaws.com",
+            hostname: "sso.{region}.amazonaws.eu",
+            fipsHostname: "sso-fips.{region}.amazonaws.eu",
         },
     },
     states: {
@@ -5277,6 +7861,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "states.{region}.sc2s.sgov.gov",
             fipsHostname: "states-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:states:{region}:{account-id}:{resource-id}",
+            principal: "states.cloud.adc-e.uk",
+            hostname: "states.{region}.cloud.adc-e.uk",
+            fipsHostname: "states-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:states:{region}:{account-id}:{resource-id}",
+            principal: "states.csp.hci.ic.gov",
+            hostname: "states.{region}.csp.hci.ic.gov",
+            fipsHostname: "states-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:states:{region}:{account-id}:{resource-id}",
+            principal: "states.amazonaws.com",
+            hostname: "states.{region}.amazonaws.eu",
+            fipsHostname: "states-fips.{region}.amazonaws.eu",
+        },
     },
     storagegateway: {
         aws: {
@@ -5296,6 +7898,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "storagegateway.amazonaws.com",
             hostname: "storagegateway.{region}.amazonaws.com",
             fipsHostname: "storagegateway-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:storagegateway:{region}:{account-id}:{resource-id}",
+            principal: "storagegateway.c2s.ic.gov",
+            hostname: "storagegateway.{region}.c2s.ic.gov",
+            fipsHostname: "storagegateway-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:storagegateway:{region}:{account-id}:{resource-id}",
+            principal: "storagegateway.sc2s.sgov.gov",
+            hostname: "storagegateway.{region}.sc2s.sgov.gov",
+            fipsHostname: "storagegateway-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:storagegateway:{region}:{account-id}:{resource-id}",
+            principal: "storagegateway.amazonaws.com",
+            hostname: "storagegateway.{region}.amazonaws.eu",
+            fipsHostname: "storagegateway-fips.{region}.amazonaws.eu",
         },
     },
     "streams.dynamodb": {
@@ -5329,6 +7949,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "streams.dynamodb.{region}.sc2s.sgov.gov",
             fipsHostname: "streams.dynamodb-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:streams.dynamodb:{region}:{account-id}:{resource-id}",
+            principal: "streams.dynamodb.cloud.adc-e.uk",
+            hostname: "streams.dynamodb.{region}.cloud.adc-e.uk",
+            fipsHostname: "streams.dynamodb-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:streams.dynamodb:{region}:{account-id}:{resource-id}",
+            principal: "streams.dynamodb.csp.hci.ic.gov",
+            hostname: "streams.dynamodb.{region}.csp.hci.ic.gov",
+            fipsHostname: "streams.dynamodb-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:streams.dynamodb:{region}:{account-id}:{resource-id}",
+            principal: "streams.dynamodb.amazonaws.com",
+            hostname: "streams.dynamodb.{region}.amazonaws.eu",
+            fipsHostname: "streams.dynamodb-fips.{region}.amazonaws.eu",
+        },
     },
     sts: {
         aws: {
@@ -5360,6 +7998,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "sts.sc2s.sgov.gov",
             hostname: "sts.{region}.sc2s.sgov.gov",
             fipsHostname: "sts-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:sts:{region}:{account-id}:{resource-id}",
+            principal: "sts.cloud.adc-e.uk",
+            hostname: "sts.{region}.cloud.adc-e.uk",
+            fipsHostname: "sts-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:sts:{region}:{account-id}:{resource-id}",
+            principal: "sts.csp.hci.ic.gov",
+            hostname: "sts.{region}.csp.hci.ic.gov",
+            fipsHostname: "sts-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:sts:{region}:{account-id}:{resource-id}",
+            principal: "sts.amazonaws.com",
+            hostname: "sts.{region}.amazonaws.eu",
+            fipsHostname: "sts-fips.{region}.amazonaws.eu",
         },
     },
     support: {
@@ -5433,6 +8089,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "swf.{region}.sc2s.sgov.gov",
             fipsHostname: "swf-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:swf:{region}:{account-id}:{resource-id}",
+            principal: "swf.cloud.adc-e.uk",
+            hostname: "swf.{region}.cloud.adc-e.uk",
+            fipsHostname: "swf-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:swf:{region}:{account-id}:{resource-id}",
+            principal: "swf.csp.hci.ic.gov",
+            hostname: "swf.{region}.csp.hci.ic.gov",
+            fipsHostname: "swf-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:swf:{region}:{account-id}:{resource-id}",
+            principal: "swf.amazonaws.com",
+            hostname: "swf.{region}.amazonaws.eu",
+            fipsHostname: "swf-fips.{region}.amazonaws.eu",
+        },
     },
     synthetics: {
         aws: {
@@ -5464,6 +8138,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "synthetics.sc2s.sgov.gov",
             hostname: "synthetics.{region}.sc2s.sgov.gov",
             fipsHostname: "synthetics-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:synthetics:{region}:{account-id}:{resource-id}",
+            principal: "synthetics.cloud.adc-e.uk",
+            hostname: "synthetics.{region}.cloud.adc-e.uk",
+            fipsHostname: "synthetics-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:synthetics:{region}:{account-id}:{resource-id}",
+            principal: "synthetics.csp.hci.ic.gov",
+            hostname: "synthetics.{region}.csp.hci.ic.gov",
+            fipsHostname: "synthetics-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:synthetics:{region}:{account-id}:{resource-id}",
+            principal: "synthetics.amazonaws.com",
+            hostname: "synthetics.{region}.amazonaws.eu",
+            fipsHostname: "synthetics-fips.{region}.amazonaws.eu",
         },
     },
     tagging: {
@@ -5497,6 +8189,32 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "tagging.{region}.sc2s.sgov.gov",
             fipsHostname: "tagging-fips.{region}.sc2s.sgov.gov",
         },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:tagging:{region}:{account-id}:{resource-id}",
+            principal: "tagging.cloud.adc-e.uk",
+            hostname: "tagging.{region}.cloud.adc-e.uk",
+            fipsHostname: "tagging-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:tagging:{region}:{account-id}:{resource-id}",
+            principal: "tagging.csp.hci.ic.gov",
+            hostname: "tagging.{region}.csp.hci.ic.gov",
+            fipsHostname: "tagging-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:tagging:{region}:{account-id}:{resource-id}",
+            principal: "tagging.amazonaws.com",
+            hostname: "tagging.{region}.amazonaws.eu",
+            fipsHostname: "tagging-fips.{region}.amazonaws.eu",
+        },
+    },
+    tax: {
+        aws: {
+            arn: "arn:aws:tax:{region}:{account-id}:{resource-id}",
+            principal: "tax.amazonaws.com",
+            hostname: "tax.{region}.amazonaws.com",
+            fipsHostname: "tax-fips.{region}.amazonaws.com",
+        },
     },
     textract: {
         aws: {
@@ -5510,6 +8228,26 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "textract.amazonaws.com",
             hostname: "textract.{region}.amazonaws.com",
             fipsHostname: "textract-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:textract:{region}:{account-id}:{resource-id}",
+            principal: "textract.c2s.ic.gov",
+            hostname: "textract.{region}.c2s.ic.gov",
+            fipsHostname: "textract-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:textract:{region}:{account-id}:{resource-id}",
+            principal: "textract.csp.hci.ic.gov",
+            hostname: "textract.{region}.csp.hci.ic.gov",
+            fipsHostname: "textract-fips.{region}.csp.hci.ic.gov",
+        },
+    },
+    thinclient: {
+        aws: {
+            arn: "arn:aws:thinclient:{region}:{account-id}:{resource-id}",
+            principal: "thinclient.amazonaws.com",
+            hostname: "thinclient.{region}.amazonaws.com",
+            fipsHostname: "thinclient-fips.{region}.amazonaws.com",
         },
     },
     tnb: {
@@ -5545,6 +8283,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "transcribe.{region}.c2s.ic.gov",
             fipsHostname: "transcribe-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:transcribe:{region}:{account-id}:{resource-id}",
+            principal: "transcribe.csp.hci.ic.gov",
+            hostname: "transcribe.{region}.csp.hci.ic.gov",
+            fipsHostname: "transcribe-fips.{region}.csp.hci.ic.gov",
+        },
     },
     transcribestreaming: {
         aws: {
@@ -5571,6 +8315,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "transcribestreaming.{region}.c2s.ic.gov",
             fipsHostname: "transcribestreaming-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:transcribestreaming:{region}:{account-id}:{resource-id}",
+            principal: "transcribestreaming.csp.hci.ic.gov",
+            hostname: "transcribestreaming.{region}.csp.hci.ic.gov",
+            fipsHostname: "transcribestreaming-fips.{region}.csp.hci.ic.gov",
+        },
     },
     transfer: {
         aws: {
@@ -5590,6 +8340,12 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "transfer.amazonaws.com",
             hostname: "transfer.{region}.amazonaws.com",
             fipsHostname: "transfer-fips.{region}.amazonaws.com",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:transfer:{region}:{account-id}:{resource-id}",
+            principal: "transfer.amazonaws.com",
+            hostname: "transfer.{region}.amazonaws.eu",
+            fipsHostname: "transfer-fips.{region}.amazonaws.eu",
         },
     },
     translate: {
@@ -5611,10 +8367,54 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "translate.{region}.c2s.ic.gov",
             fipsHostname: "translate-fips.{region}.c2s.ic.gov",
         },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:translate:{region}:{account-id}:{resource-id}",
+            principal: "translate.csp.hci.ic.gov",
+            hostname: "translate.{region}.csp.hci.ic.gov",
+            fipsHostname: "translate-fips.{region}.csp.hci.ic.gov",
+        },
+    },
+    trustedadvisor: {
+        aws: {
+            arn: "arn:aws:trustedadvisor:{region}:{account-id}:{resource-id}",
+            principal: "trustedadvisor.amazonaws.com",
+            hostname: "trustedadvisor.{region}.amazonaws.com",
+            fipsHostname: "trustedadvisor-fips.{region}.amazonaws.com",
+        },
+        "aws-iso-e": {
+            arn: "arn:aws-iso-e:trustedadvisor:{region}:{account-id}:{resource-id}",
+            principal: "trustedadvisor.cloud.adc-e.uk",
+            hostname: "trustedadvisor.{region}.cloud.adc-e.uk",
+            fipsHostname: "trustedadvisor-fips.{region}.cloud.adc-e.uk",
+        },
+        "aws-iso-f": {
+            arn: "arn:aws-iso-f:trustedadvisor:{region}:{account-id}:{resource-id}",
+            principal: "trustedadvisor.csp.hci.ic.gov",
+            hostname: "trustedadvisor.{region}.csp.hci.ic.gov",
+            fipsHostname: "trustedadvisor-fips.{region}.csp.hci.ic.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:trustedadvisor:{region}:{account-id}:{resource-id}",
+            principal: "trustedadvisor.amazonaws.com",
+            hostname: "trustedadvisor.{region}.amazonaws.eu",
+            fipsHostname: "trustedadvisor-fips.{region}.amazonaws.eu",
+        },
     },
     verifiedpermissions: {
         aws: {
             arn: "arn:aws:verifiedpermissions:{region}:{account-id}:{resource-id}",
+            principal: "verifiedpermissions.amazonaws.com",
+            hostname: "verifiedpermissions.{region}.amazonaws.com",
+            fipsHostname: "verifiedpermissions-fips.{region}.amazonaws.com",
+        },
+        "aws-cn": {
+            arn: "arn:aws-cn:verifiedpermissions:{region}:{account-id}:{resource-id}",
+            principal: "verifiedpermissions.amazonaws.com.cn",
+            hostname: "verifiedpermissions.{region}.amazonaws.com.cn",
+            fipsHostname: "verifiedpermissions-fips.{region}.amazonaws.com.cn",
+        },
+        "aws-us-gov": {
+            arn: "arn:aws-us-gov:verifiedpermissions:{region}:{account-id}:{resource-id}",
             principal: "verifiedpermissions.amazonaws.com",
             hostname: "verifiedpermissions.{region}.amazonaws.com",
             fipsHostname: "verifiedpermissions-fips.{region}.amazonaws.com",
@@ -5690,6 +8490,24 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "wafv2.amazonaws.com",
             hostname: "wafv2.{region}.amazonaws.com",
             fipsHostname: "wafv2-fips.{region}.amazonaws.com",
+        },
+        "aws-iso": {
+            arn: "arn:aws-iso:wafv2:{region}:{account-id}:{resource-id}",
+            principal: "wafv2.c2s.ic.gov",
+            hostname: "wafv2.{region}.c2s.ic.gov",
+            fipsHostname: "wafv2-fips.{region}.c2s.ic.gov",
+        },
+        "aws-iso-b": {
+            arn: "arn:aws-iso-b:wafv2:{region}:{account-id}:{resource-id}",
+            principal: "wafv2.sc2s.sgov.gov",
+            hostname: "wafv2.{region}.sc2s.sgov.gov",
+            fipsHostname: "wafv2-fips.{region}.sc2s.sgov.gov",
+        },
+        "aws-eusc": {
+            arn: "arn:aws-eusc:wafv2:{region}:{account-id}:{resource-id}",
+            principal: "wafv2.amazonaws.com",
+            hostname: "wafv2.{region}.amazonaws.eu",
+            fipsHostname: "wafv2-fips.{region}.amazonaws.eu",
         },
     },
     wellarchitected: {
@@ -5789,93 +8607,35 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             hostname: "xray.{region}.amazonaws.com",
             fipsHostname: "xray-fips.{region}.amazonaws.com",
         },
-    },
-    sagemaker: {
-        aws: {
-            arn: "arn:aws:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.amazonaws.com",
-            hostname: "sagemaker.{region}.amazonaws.com",
-            fipsHostname: "sagemaker-fips.{region}.amazonaws.com",
-        },
-        "aws-cn": {
-            arn: "arn:aws-cn:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.amazonaws.com.cn",
-            hostname: "sagemaker.{region}.amazonaws.com.cn",
-            fipsHostname: "sagemaker-fips.{region}.amazonaws.com.cn",
-        },
-        "aws-us-gov": {
-            arn: "arn:aws-us-gov:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.amazonaws.com",
-            hostname: "sagemaker.{region}.amazonaws.com",
-            fipsHostname: "sagemaker-fips.{region}.amazonaws.com",
-        },
         "aws-iso": {
-            arn: "arn:aws-iso:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.c2s.ic.gov",
-            hostname: "sagemaker.{region}.c2s.ic.gov",
-            fipsHostname: "sagemaker-fips.{region}.c2s.ic.gov",
+            arn: "arn:aws-iso:xray:{region}:{account-id}:{resource-id}",
+            principal: "xray.c2s.ic.gov",
+            hostname: "xray.{region}.c2s.ic.gov",
+            fipsHostname: "xray-fips.{region}.c2s.ic.gov",
         },
         "aws-iso-b": {
-            arn: "arn:aws-iso-b:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.sc2s.sgov.gov",
-            hostname: "sagemaker.{region}.sc2s.sgov.gov",
-            fipsHostname: "sagemaker-fips.{region}.sc2s.sgov.gov",
+            arn: "arn:aws-iso-b:xray:{region}:{account-id}:{resource-id}",
+            principal: "xray.sc2s.sgov.gov",
+            hostname: "xray.{region}.sc2s.sgov.gov",
+            fipsHostname: "xray-fips.{region}.sc2s.sgov.gov",
         },
         "aws-iso-e": {
-            arn: "arn:aws-iso-e:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.cloud.adc-e.uk",
-            hostname: "sagemaker.{region}.cloud.adc-e.uk",
-            fipsHostname: "sagemaker-fips.{region}.cloud.adc-e.uk",
+            arn: "arn:aws-iso-e:xray:{region}:{account-id}:{resource-id}",
+            principal: "xray.cloud.adc-e.uk",
+            hostname: "xray.{region}.cloud.adc-e.uk",
+            fipsHostname: "xray-fips.{region}.cloud.adc-e.uk",
         },
         "aws-iso-f": {
-            arn: "arn:aws-iso-f:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.csp.hci.ic.gov",
-            hostname: "sagemaker.{region}.csp.hci.ic.gov",
-            fipsHostname: "sagemaker-fips.{region}.csp.hci.ic.gov",
+            arn: "arn:aws-iso-f:xray:{region}:{account-id}:{resource-id}",
+            principal: "xray.csp.hci.ic.gov",
+            hostname: "xray.{region}.csp.hci.ic.gov",
+            fipsHostname: "xray-fips.{region}.csp.hci.ic.gov",
         },
-    },
-    "execute-api": {
-        aws: {
-            arn: "arn:aws:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.amazonaws.com",
-            hostname: "execute-api.{region}.amazonaws.com",
-            fipsHostname: "execute-api-fips.{region}.amazonaws.com",
-        },
-        "aws-cn": {
-            arn: "arn:aws-cn:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.amazonaws.com.cn",
-            hostname: "execute-api.{region}.amazonaws.com.cn",
-            fipsHostname: "execute-api-fips.{region}.amazonaws.com.cn",
-        },
-        "aws-us-gov": {
-            arn: "arn:aws-us-gov:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.amazonaws.com",
-            hostname: "execute-api.{region}.amazonaws.com",
-            fipsHostname: "execute-api-fips.{region}.amazonaws.com",
-        },
-        "aws-iso": {
-            arn: "arn:aws-iso:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.c2s.ic.gov",
-            hostname: "execute-api.{region}.c2s.ic.gov",
-            fipsHostname: "execute-api-fips.{region}.c2s.ic.gov",
-        },
-        "aws-iso-b": {
-            arn: "arn:aws-iso-b:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.sc2s.sgov.gov",
-            hostname: "execute-api.{region}.sc2s.sgov.gov",
-            fipsHostname: "execute-api-fips.{region}.sc2s.sgov.gov",
-        },
-        "aws-iso-e": {
-            arn: "arn:aws-iso-e:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.cloud.adc-e.uk",
-            hostname: "execute-api.{region}.cloud.adc-e.uk",
-            fipsHostname: "execute-api-fips.{region}.cloud.adc-e.uk",
-        },
-        "aws-iso-f": {
-            arn: "arn:aws-iso-f:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.csp.hci.ic.gov",
-            hostname: "execute-api.{region}.csp.hci.ic.gov",
-            fipsHostname: "execute-api-fips.{region}.csp.hci.ic.gov",
+        "aws-eusc": {
+            arn: "arn:aws-eusc:xray:{region}:{account-id}:{resource-id}",
+            principal: "xray.amazonaws.com",
+            hostname: "xray.{region}.amazonaws.eu",
+            fipsHostname: "xray-fips.{region}.amazonaws.eu",
         },
     },
 };

@@ -114,6 +114,31 @@ export function setExternalOauth2Token(oauth2Token: OAuth2Token): void {
 }
 
 /**
+ * Coalesces concurrent OAuth2 refreshes onto a single in-flight promise. Several API
+ * calls firing in parallel after the access token expires would otherwise each issue
+ * their own refreshToken() with the same refresh token; IdPs that rotate refresh tokens
+ * invalidate it after the first use, so the rest fail and force a spurious re-login.
+ */
+let oauth2RefreshInFlight: Promise<string> | null = null;
+
+async function refreshOAuth2AccessToken(): Promise<string> {
+    if (oauth2RefreshInFlight) {
+        return oauth2RefreshInFlight;
+    }
+    oauth2RefreshInFlight = (async () => {
+        const oauth2Client = getOAuth2ClientInstance();
+        const currentToken = getExternalOAuth2Token();
+        const newToken = await oauth2Client.refreshToken(currentToken);
+        setExternalOauth2Token(newToken);
+        console.log("OAuth2 token refreshed successfully");
+        return newToken.accessToken;
+    })().finally(() => {
+        oauth2RefreshInFlight = null;
+    });
+    return oauth2RefreshInFlight;
+}
+
+/**
  * Gets a valid, fresh access token for API calls (Works with both Cognito and OAuth2)
  * Handles both Cognito and OAuth2 modes
  * Automatically refreshes expired tokens when possible
@@ -132,14 +157,10 @@ export async function getDualValidAccessToken(): Promise<string> {
         }
 
         if (refreshTokenValid) {
-            // Access token expired but refresh token exists, attempt to refresh
+            // Access token expired but refresh token exists, attempt to refresh.
+            // Coalesced so parallel callers share one refresh (see refreshOAuth2AccessToken).
             try {
-                const oauth2Client = getOAuth2ClientInstance();
-                const currentToken = getExternalOAuth2Token();
-                const newToken = await oauth2Client.refreshToken(currentToken);
-                setExternalOauth2Token(newToken);
-                console.log("OAuth2 token refreshed successfully");
-                return newToken.accessToken;
+                return await refreshOAuth2AccessToken();
             } catch (error) {
                 console.error("Failed to refresh OAuth2 token:", error);
                 throw new Error("Failed to refresh OAuth2 token. Please log in again.");
@@ -151,7 +172,14 @@ export async function getDualValidAccessToken(): Promise<string> {
         // Cognito Mode
         try {
             const session = await fetchAuthSession();
-            return session.tokens?.idToken?.toString() || "";
+            const token = session.tokens?.idToken?.toString();
+            // Throw on an absent token rather than returning "" — an empty Bearer header
+            // would otherwise be sent, deferring detection of a dead session by a failed
+            // round-trip. Mirrors the OAuth2 branch, which throws on absence.
+            if (!token) {
+                throw new Error("No valid Cognito token available. Please log in again.");
+            }
+            return token;
         } catch (error) {
             console.error("Failed to get Cognito session:", error);
             throw new Error("Failed to get valid Cognito token. Please log in again.");
@@ -168,6 +196,59 @@ export async function getDualValidAccessToken(): Promise<string> {
 export async function getDualAuthorizationHeader(): Promise<string> {
     const token = await getDualValidAccessToken();
     return `Bearer ${token}`;
+}
+
+/**
+ * Epoch-ms expiry of the token currently used for API auth, or null if unknown.
+ * OAuth2: the stored token's expiresAt. Cognito: the idToken's exp claim (the
+ * idToken is what VAMS sends as the Bearer token).
+ */
+export async function getCurrentTokenExpiryMs(): Promise<number | null> {
+    if (window.DISABLE_COGNITO) {
+        const oauth2Token = getExternalOAuth2Token();
+        return typeof oauth2Token.expiresAt === "number" ? oauth2Token.expiresAt : null;
+    }
+    try {
+        const session = await fetchAuthSession();
+        const exp = session.tokens?.idToken?.payload?.exp;
+        return typeof exp === "number" ? exp * 1000 : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Validate the active session, refreshing when needed (or when forceRefresh is set).
+ * Returns true if a usable token exists afterward, false if the session is dead.
+ * Never throws — callers treat false as "session unrecoverable".
+ */
+export async function ensureSessionValid(forceRefresh = false): Promise<boolean> {
+    if (window.DISABLE_COGNITO) {
+        const [accessTokenValid, refreshTokenValid] = externalTokenValidation();
+        if (accessTokenValid && !forceRefresh) {
+            return true;
+        }
+        if (refreshTokenValid || (accessTokenValid && forceRefresh)) {
+            try {
+                const client = getOAuth2ClientInstance();
+                const newToken = await client.refreshToken(getExternalOAuth2Token());
+                setExternalOauth2Token(newToken);
+                return true;
+            } catch (error) {
+                console.error("Failed to refresh OAuth2 token:", error);
+                return false;
+            }
+        }
+        return accessTokenValid;
+    }
+
+    try {
+        const session = await fetchAuthSession(forceRefresh ? { forceRefresh: true } : undefined);
+        return !!session.tokens?.idToken;
+    } catch (error) {
+        console.error("Failed to validate Cognito session:", error);
+        return false;
+    }
 }
 
 /**

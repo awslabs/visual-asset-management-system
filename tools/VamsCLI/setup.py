@@ -37,6 +37,7 @@ setup(
         'pycognito>=2024.5.1',
         'aiohttp>=3.8.0',
         'aiofiles>=23.0.0',
+        'pathspec>=0.12.0',
         'botocore>=1.29.0',
         'geojson>=3.2.0',
         'rich>=14.2.0',

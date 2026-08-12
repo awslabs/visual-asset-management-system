@@ -15,6 +15,7 @@ import { CosmosPredictConstruct } from "./constructs/cosmosPredict-construct";
 import { CosmosTransferConstruct } from "./constructs/cosmosTransfer-construct";
 import { CosmosReasonConstruct } from "./constructs/cosmosReason-construct";
 import { CosmosCodeBuildConstruct } from "./constructs/cosmosCodeBuild-construct";
+import { Cosmos3Construct } from "./constructs/cosmos3-construct";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../../../../config/config";
 
@@ -25,7 +26,7 @@ export interface CosmosBuilderNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -56,6 +57,10 @@ export class CosmosBuilderNestedStack extends NestedStack {
     public pipelineTransfer2BVamsLambdaFunctionName?: string;
     public pipelineReason2BVamsLambdaFunctionName?: string;
     public pipelineReason8BVamsLambdaFunctionName?: string;
+    public pipelineCosmos3Nano16BVamsLambdaFunctionName?: string;
+    public pipelineCosmos3Super64BVamsLambdaFunctionName?: string;
+    public pipelineCosmos3SuperText2Image64BVamsLambdaFunctionName?: string;
+    public pipelineCosmos3SuperImage2Video64BVamsLambdaFunctionName?: string;
 
     constructor(parent: Construct, name: string, props: CosmosBuilderNestedStackProps) {
         super(parent, name);
@@ -71,16 +76,25 @@ export class CosmosBuilderNestedStack extends NestedStack {
             storageResources: props.storageResources,
         });
 
-        // Conditionally create CodeBuild construct for container image builds
+        // Conditionally create CodeBuild construct for container image builds. Each Cosmos family
+        // opts in independently: `useNvidiaCosmos.useCodeBuild` covers Predict/Transfer/Reason and
+        // `useNvidiaCosmos3.useCodeBuild` covers Cosmos3 (omni). The construct is created when
+        // EITHER opts in and builds only the repos of the families that did, so a family left on
+        // the local Docker build never receives a CodeBuild-built image.
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos;
+        const cosmos3ConfigEarly = props.config.app.pipelines.useNvidiaCosmos3;
+        const cosmosUseCodeBuild = cosmosConfig.useCodeBuild === true;
+        const cosmos3UseCodeBuild = cosmos3ConfigEarly?.useCodeBuild === true;
         let codeBuildConstruct: CosmosCodeBuildConstruct | undefined;
-        if (cosmosConfig.useCodeBuild) {
+        if (cosmosUseCodeBuild || cosmos3UseCodeBuild) {
             codeBuildConstruct = new CosmosCodeBuildConstruct(this, "CosmosCodeBuild", {
                 config: props.config,
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 vpc: props.vpc,
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
+                buildCosmosRepos: cosmosUseCodeBuild,
+                buildCosmos3Repos: cosmos3UseCodeBuild,
             });
         }
 
@@ -96,8 +110,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                     // Shared resources from common construct
                     modelCacheBucket: cosmosCommon.modelCacheBucket,
                     efsFileSystem: cosmosCommon.efsFileSystem,
@@ -134,8 +148,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                     // Shared resources from common construct
                     modelCacheBucket: cosmosCommon.modelCacheBucket,
                     efsFileSystem: cosmosCommon.efsFileSystem,
@@ -165,8 +179,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
                 // Shared resources from common construct
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 efsFileSystem: cosmosCommon.efsFileSystem,
@@ -183,6 +197,43 @@ export class CosmosBuilderNestedStack extends NestedStack {
                 cosmosReasonConstruct.pipelineReason2BVamsLambdaFunctionName;
             this.pipelineReason8BVamsLambdaFunctionName =
                 cosmosReasonConstruct.pipelineReason8BVamsLambdaFunctionName;
+        }
+
+        // Create Cosmos 3 (omni) pipeline (conditional on useNvidiaCosmos3)
+        const cosmos3Config = props.config.app.pipelines.useNvidiaCosmos3;
+        const anyCosmos3Enabled =
+            cosmos3Config?.enabled &&
+            (cosmos3Config.modelsOmni?.nano16B?.enabled ||
+                cosmos3Config.modelsOmni?.super64B?.enabled ||
+                cosmos3Config.modelsOmni?.superText2Image64B?.enabled ||
+                cosmos3Config.modelsOmni?.superImage2Video64B?.enabled);
+
+        if (anyCosmos3Enabled) {
+            const cosmos3Construct = new Cosmos3Construct(this, "Cosmos3Pipeline", {
+                config: props.config,
+                storageResources: props.storageResources,
+                vpc: props.vpc,
+                pipelineSubnets: props.pipelineSubnets,
+                pipelineSecurityGroups: props.pipelineSecurityGroups,
+                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
+                modelCacheBucket: cosmosCommon.modelCacheBucket,
+                efsFileSystem: cosmosCommon.efsFileSystem,
+                efsSecurityGroup: cosmosCommon.efsSecurityGroup,
+                ...(codeBuildConstruct?.cosmos3Repo
+                    ? { codeBuildImageUri: codeBuildConstruct.cosmos3Repo.imageUri }
+                    : {}),
+            });
+
+            this.pipelineCosmos3Nano16BVamsLambdaFunctionName =
+                cosmos3Construct.pipelineCosmos3Nano16BVamsLambdaFunctionName;
+            this.pipelineCosmos3Super64BVamsLambdaFunctionName =
+                cosmos3Construct.pipelineCosmos3Super64BVamsLambdaFunctionName;
+            this.pipelineCosmos3SuperText2Image64BVamsLambdaFunctionName =
+                cosmos3Construct.pipelineCosmos3SuperText2Image64BVamsLambdaFunctionName;
+            this.pipelineCosmos3SuperImage2Video64BVamsLambdaFunctionName =
+                cosmos3Construct.pipelineCosmos3SuperImage2Video64BVamsLambdaFunctionName;
         }
 
         // Future: other Cosmos model types would be added here

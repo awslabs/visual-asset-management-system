@@ -8,7 +8,7 @@ import React from "react";
 import DatabaseSelector from "./DatabaseSelector";
 import Synonyms from "../../synonyms";
 
-export default function DatabaseSelectorWithModal(props) {
+export default function DatabaseSelectorWithModal(props: any) {
     const { open, setOpen, onSelectorChange, showGlobal = false } = props;
 
     const handleClose = () => {

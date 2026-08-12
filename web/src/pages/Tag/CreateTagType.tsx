@@ -17,7 +17,7 @@ interface TagTypeFields {
     tagTypeName: string;
     description: string;
     required: string;
-    selectedOptions: OptionDefinition[] | null;
+    selectedOptions: any[] | null;
 }
 
 interface CreateTagTypeProps {
@@ -84,8 +84,8 @@ export default function CreateTagType({
     };
 
     const handleApiError = (err: any) => {
-        if (err.response && err.response.status === 500) {
-            const errorMessage = err.response.data.message || "Duplicate Tag Type";
+        if (err?.status === 500) {
+            const errorMessage = err?.message || "Duplicate Tag Type";
             setErrorMessage(errorMessage);
             setShowModal(true);
         }
@@ -145,16 +145,21 @@ export default function CreateTagType({
                                         })
                                         .catch((err) => {
                                             console.log("create tag-type ", err);
-                                            if (err.response && err.response.status === 500) {
+                                            if (err?.status === 500) {
                                                 const errorMessage =
                                                     "Tag type name " +
                                                     tagtypeBody.tagTypeName +
                                                     " already exists or is not valid";
                                                 setNameError(errorMessage);
-                                            }
-                                            if (err.response && err.response.status === 403) {
-                                                const msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
-                                                setFormError(msg);
+                                            } else {
+                                                setFormError(
+                                                    `Unable to ${createOrUpdate} tag type. ${
+                                                        err?.message ||
+                                                        (err?.status
+                                                            ? `Request failed with status code ${err.status}`
+                                                            : "Unknown error")
+                                                    }`
+                                                );
                                             }
                                         })
                                         .finally(() => {
@@ -174,9 +179,15 @@ export default function CreateTagType({
                                         .catch((err) => {
                                             console.log("update tag-type ", err);
                                             handleApiError(err);
-                                            if (err.response && err.response.status === 403) {
-                                                const msg = `Unable to ${createOrUpdate} tag type. Error: Request failed with status code 403`;
-                                                setFormError(msg);
+                                            if (err?.status !== 500) {
+                                                setFormError(
+                                                    `Unable to ${createOrUpdate} tag type. ${
+                                                        err?.message ||
+                                                        (err?.status
+                                                            ? `Request failed with status code ${err.status}`
+                                                            : "Unknown error")
+                                                    }`
+                                                );
                                             }
                                         })
                                         .finally(() => {

@@ -154,6 +154,31 @@ import create from "zustand";
 
 ## API Integration Pattern
 
+### API Request Routing (base domain vs. direct API Gateway)
+
+VAMS clients (both the web application and the VAMS CLI) reach the backend through **two distinct paths**, and understanding the split matters for deployment fronting and CORS:
+
+-   **Bootstrap only — the base (static-website) domain `/api/*`:** The single request the web app makes to its own origin is `GET /api/amplify-config`, fetched from `window.location.origin` (the Amazon CloudFront distribution or ALB domain). This is the one endpoint that must be reachable through the web front. The response includes the `api` field — the API Gateway invoke URL (stage-inclusive).
+-   **Everything else — directly to Amazon API Gateway:** After bootstrap, `apiClient` sets its base URL to that `api` value (`config.api`, stored in `localStorage.api_path`) and sends **all** subsequent calls straight to the API Gateway endpoint — including `secure-config`, `auth/*`, `database/*`, and every data operation. These never traverse the web front.
+
+The **VAMS CLI works the same way**: `vamscli setup` fetches `/api/amplify-config` from the base URL you provide, extracts the API Gateway URL, and issues all later commands directly against API Gateway.
+
+```mermaid
+graph LR
+    subgraph "Base domain (CloudFront / ALB)"
+        AC["GET /api/amplify-config<br/>(bootstrap only)"]
+    end
+    subgraph "Amazon API Gateway (execute-api)"
+        REST["secure-config, auth/*,<br/>database/*, all data APIs"]
+    end
+    APP["Web app / VAMS CLI"] -->|"1. once, at startup"| AC
+    APP -->|"2. everything else"| REST
+```
+
+:::info[Why this matters for ALB deployments and CORS]
+Under an ALB deployment the front does **not** proxy `/api/*` — it issues an HTTP redirect to the API Gateway host. Because only the bootstrap `amplify-config` request uses the front, only that one endpoint is fetched cross-origin (front origin → API Gateway host) and needs an `Access-Control-Allow-Origin` header on its response. All other calls go directly to API Gateway from the start, where the REST API's CORS (the OPTIONS preflight MOCK method and per-response CORS headers) applies uniformly. This keeps the fronting layer thin and avoids routing bulk API traffic (and CORS preflights) through the ALB redirect.
+:::
+
 ### The Return Tuple Pattern
 
 Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
@@ -394,11 +419,11 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 
 Known feature flags:
 
-| Flag               | Purpose                                      |
-| ------------------ | -------------------------------------------- |
-| `LOCATIONSERVICES` | Map and geospatial features                  |
-| `NOOPENSEARCH`     | Disable OpenSearch-dependent features        |
-| `ALLOWUNSAFEEVAL`  | Required for CesiumJS and Needle USD viewers |
+| Flag               | Purpose                                         |
+| ------------------ | ----------------------------------------------- |
+| `LOCATIONSERVICES` | Map and geospatial features                     |
+| `NOOPENSEARCH`     | Disable OpenSearch-dependent features           |
+| `ALLOWUNSAFEEVAL`  | Required for certain 3D file visualizer viewers |
 
 ### Display Name Customization (Synonyms)
 
@@ -577,7 +602,7 @@ Browsers ignore `'unsafe-inline'` whenever any hash or nonce source is also pres
 
 ### `app.webUi.allowUnsafeEvalFeatures`
 
-Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
+Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, the ThatOpen IFC BIM viewer, and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
 
 ### Add-on origins
 

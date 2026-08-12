@@ -8,6 +8,8 @@ import * as path from "path";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
+import * as events from "aws-cdk-lib/aws-events";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -184,6 +186,8 @@ export function buildOpenPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey,
     modelKey?: string
 ): lambda.Function {
@@ -212,12 +216,16 @@ export function buildOpenPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
+    orchestrationBus.grantPutEventsTo(fun);
     // Grant SFN permissions for abort_external_workflow task failure callback
     fun.addToRolePolicy(
         new iam.PolicyStatement({

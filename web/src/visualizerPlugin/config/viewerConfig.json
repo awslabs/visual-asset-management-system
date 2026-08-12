@@ -146,7 +146,6 @@
             "dependencies": ["cesium"],
             "loadStrategy": "lazy",
             "category": "3d",
-            "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
             "customParameters": {
                 "cesiumIonToken": ""
             },
@@ -398,6 +397,7 @@
             ],
             "loadStrategy": "lazy",
             "category": "3d",
+            "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
             "enabled": true
         },
         {

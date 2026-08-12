@@ -6,7 +6,7 @@ This section describes the VAMS REST API, which provides programmatic access to 
 
 ## Base URL
 
-All API endpoints are served through an Amazon API Gateway V2 HTTP API. The base URL is determined by your deployment and follows this format:
+All API endpoints are served through an Amazon API Gateway REST API. The base URL is determined by your deployment and follows this format:
 
 ```
 https://{api-id}.execute-api.{region}.amazonaws.com
@@ -53,7 +53,7 @@ Content-Type: application/json
 
 ## Common Response Format
 
-All API responses follow the API Gateway V2 proxy response format:
+All API responses follow the API Gateway proxy response format:
 
 ```json
 {
@@ -91,15 +91,14 @@ The `body` field contains a JSON-encoded string. When successful, the body conta
 
 VAMS uses standard HTTP status codes to indicate the result of an API request.
 
-| Status Code | Description                                                                                |
-| ----------- | ------------------------------------------------------------------------------------------ |
-| `200`       | The request succeeded.                                                                     |
-| `400`       | Bad request. The request contains invalid parameters or fails validation.                  |
-| `401`       | Unauthorized. The asset is not distributable (download-specific).                          |
-| `403`       | Forbidden. The authenticated user does not have permission for the requested action.       |
-| `404`       | Not found. The requested resource does not exist.                                          |
-| `500`       | Internal server error. An unexpected error occurred on the server.                         |
-| `503`       | Service unavailable. The requested feature is not enabled (e.g., Cognito user management). |
+| Status Code | Description                                                                                                                                                                       |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`       | The request succeeded.                                                                                                                                                            |
+| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled). |
+| `401`       | Unauthorized. The asset is not distributable (download-specific).                                                                                                                 |
+| `403`       | Forbidden. The authenticated user does not have permission for the requested action.                                                                                              |
+| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                    |
+| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                |
 
 ---
 
@@ -107,11 +106,13 @@ VAMS uses standard HTTP status codes to indicate the result of an API request.
 
 Many list endpoints support pagination using a token-based pattern. The following query parameters control pagination:
 
-| Parameter       | Type    | Default | Description                                                             |
-| --------------- | ------- | ------- | ----------------------------------------------------------------------- |
-| `maxItems`      | integer | `100`   | Maximum number of items to return in a single response.                 |
-| `pageSize`      | integer | `100`   | Number of items per page (equivalent to `maxItems` for most endpoints). |
-| `startingToken` | string  | --      | Base64-encoded continuation token from a previous response.             |
+| Parameter       | Type    | Description                                                             |
+| --------------- | ------- | ----------------------------------------------------------------------- |
+| `maxItems`      | integer | Maximum number of items to return in a single response.                 |
+| `pageSize`      | integer | Number of items per page (equivalent to `maxItems` for most endpoints). |
+| `startingToken` | string  | Base64-encoded continuation token from a previous response.             |
+
+Default and maximum values for `maxItems` and `pageSize` vary by domain. Asset, file, and metadata listings default to a page size of 100. Authorization-domain listings use larger defaults -- constraints default to `maxItems` 30000 and `pageSize` 10000; roles, tags, and user-role listings default to `maxItems` 30000 and `pageSize` 3000. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size.
 
 ### Paginated Response
 
@@ -141,7 +142,7 @@ The API Gateway enforces rate limits to protect the system from excessive traffi
 | `globalRateLimit`  | 50 requests/second | Steady-state request rate across all clients.    |
 | `globalBurstLimit` | 100 requests       | Maximum burst capacity for short traffic spikes. |
 
-These values are configurable at deployment time through the `app.api.globalRateLimit` and `app.api.globalBurstLimit` configuration settings.
+These values are configurable at deployment time through the `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit` configuration settings.
 
 When rate limits are exceeded, the API returns an HTTP `429 Too Many Requests` response.
 

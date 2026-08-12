@@ -15,7 +15,7 @@ from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetLinks import (
     GetAssetLinksRequestModel,
     GetAssetLinksResponseModel, 
@@ -47,11 +47,12 @@ logger = safeLogger(service_name="AssetLinksService")
 
 # Load environment variables
 try:
-    asset_links_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_links_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -62,6 +63,25 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 #######################
 # Utility Functions
 #######################
+
+
+def query_all_items(table, **query_kwargs) -> List[Dict]:
+    """Query a DynamoDB table to exhaustion, returning every matching item.
+
+    A single ``table.query`` returns at most one 1 MB page, so relationship listings and
+    the alias-conflict check must page through ``LastEvaluatedKey`` — otherwise links
+    beyond the first page are silently dropped (incomplete trees, and a duplicate alias
+    slipping past the uniqueness check).
+    """
+    items: List[Dict] = []
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get('Items', []))
+        last_key = response.get('LastEvaluatedKey')
+        if not last_key:
+            break
+        query_kwargs['ExclusiveStartKey'] = last_key
+    return items
 
 def get_asset_details(asset_id: str, database_id: str) -> Optional[Dict]:
     """Get asset details from the asset storage table"""
@@ -135,14 +155,15 @@ def check_asset_permission(asset: Dict, claims_and_roles: Dict, action: str = "G
 def delete_asset_link_metadata(asset_link_id: str):
     """Delete all metadata associated with an asset link"""
     try:
-        # Query all metadata for this asset link
-        response = asset_links_metadata_table.query(
+        # Query all metadata for this asset link (page to exhaustion)
+        metadata_items = query_all_items(
+            asset_links_metadata_table,
             KeyConditionExpression=boto3.dynamodb.conditions.Key('assetLinkId').eq(asset_link_id)
         )
-        
+
         # Delete all metadata items
         with asset_links_metadata_table.batch_writer() as batch:
-            for item in response.get('Items', []):
+            for item in metadata_items:
                 batch.delete_item(
                     Key={
                         'assetLinkId': item['assetLinkId'],
@@ -150,7 +171,7 @@ def delete_asset_link_metadata(asset_link_id: str):
                     }
                 )
         
-        logger.info(f"Deleted {len(response.get('Items', []))} metadata items for asset link {asset_link_id}")
+        logger.info(f"Deleted {len(metadata_items)} metadata items for asset link {asset_link_id}")
         
     except Exception as e:
         logger.exception(f"Error deleting asset link metadata: {e}")
@@ -218,18 +239,20 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
             raise PermissionError("Not authorized to view links for this asset")
         
         # Get all links where this asset is the 'from' asset (children/related going out)
-        from_response = asset_links_table.query(
+        from_items = query_all_items(
+            asset_links_table,
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key)
         )
-        
+
         # Get all links where this asset is the 'to' asset (parents/related coming in)
-        to_response = asset_links_table.query(
+        to_items = query_all_items(
+            asset_links_table,
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key)
         )
-        
-        all_links = from_response.get('Items', []) + to_response.get('Items', [])
+
+        all_links = from_items + to_items
         
         # Collect all unique asset keys for batch retrieval
         asset_keys = set()
@@ -349,16 +372,17 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
             new_path = current_path.copy()
             new_path.add(asset_key)
             
-            # Get all children of this asset
-            response = asset_links_table.query(
+            # Get all children of this asset (page to exhaustion)
+            child_links = query_all_items(
+                asset_links_table,
                 IndexName='fromAssetGSI',
                 KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
-            
+
             tree_nodes = []
-            
-            for link in response.get('Items', []):
+
+            for link in child_links:
                 child_asset = get_asset_details(link['toAssetId'], link['toAssetDatabaseId'])
                 
                 if child_asset and check_asset_permission(child_asset, claims_and_roles):
@@ -449,15 +473,17 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
                 to_key = f"{link_item['toAssetDatabaseId']}:{link_item['toAssetId']}"
                 
                 # Get ALL parent->child relationships for this parent-child pair
-                conflict_response = asset_links_table.query(
+                # (page to exhaustion so the alias-uniqueness check sees every link)
+                conflict_items = query_all_items(
+                    asset_links_table,
                     IndexName='fromAssetGSI',
-                    KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) & 
+                    KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) &
                                          Key('toAssetDatabaseId:toAssetId').eq(to_key),
                     FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
                 )
-                
+
                 # Check if any existing links have the same new alias (excluding current link)
-                for item in conflict_response.get('Items', []):
+                for item in conflict_items:
                     if item['assetLinkId'] != asset_link_id:
                         existing_alias = item.get('assetLinkAliasId')
                         # Both have no alias
@@ -584,7 +610,7 @@ def handle_get_request(event):
                 request_model = parse(path_parameters, model=GetSingleAssetLinkRequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in path parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Validate asset link ID
             (valid, message) = validate({
@@ -632,7 +658,7 @@ def handle_get_request(event):
                 request_model = parse(combined_params, model=GetAssetLinksRequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Get asset links
             response = get_asset_links_for_asset(
@@ -646,6 +672,13 @@ def handle_get_request(event):
         else:
             return validation_error(body={'message': 'Asset ID, Database ID, or Asset Link ID is required'}, event=event)
             
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as v:
+        logger.warning(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.warning(f"Validation error in asset links retrieval: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -672,7 +705,7 @@ def handle_put_request(event):
             path_request_model = parse(path_parameters, model=GetSingleAssetLinkRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Validate asset link ID
         (valid, message) = validate({
@@ -712,6 +745,13 @@ def handle_put_request(event):
         response = update_asset_link(path_request_model.assetLinkId, request_model, claims_and_roles)
         return success(body=response.dict())
         
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as v:
+        logger.warning(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.warning(f"Validation error in asset link update: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -727,36 +767,43 @@ def handle_put_request(event):
 def handle_delete_request(event):
     """Handle DELETE requests for asset links"""
     path_parameters = event.get('pathParameters', {})
-    
+
     try:
         # Validate required path parameters
-        if 'relationId' not in path_parameters:
-            return validation_error(body={'message': "Asset link ID (relationId) is required"}, event=event)
-        
+        if 'assetLinkId' not in path_parameters:
+            return validation_error(body={'message': "Asset link ID is required"}, event=event)
+
         # Parse and validate path parameters using request model
         try:
             request_model = parse(path_parameters, model=DeleteAssetLinkRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
-        
-        # Validate relation ID
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
+
+        # Validate asset link ID
         (valid, message) = validate({
-            'relationId': {
-                'value': request_model.relationId,
+            'assetLinkId': {
+                'value': request_model.assetLinkId,
                 'validator': 'ID'
             }
         })
         if not valid:
             logger.error(message)
             return validation_error(body={'message': message}, event=event)
-        
-        logger.info(f"Deleting asset link {request_model.relationId}")
-        
+
+        logger.info(f"Deleting asset link {request_model.assetLinkId}")
+
         # Delete the asset link
-        response = delete_asset_link(request_model.relationId, claims_and_roles)
+        response = delete_asset_link(request_model.assetLinkId, claims_and_roles)
         return success(body=response.dict())
         
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as v:
+        logger.warning(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.warning(f"Validation error in asset link deletion: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -805,7 +852,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

@@ -1,0 +1,21 @@
+{
+    "workflowName": "NVIDIA Cosmos Transfer 2B",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos Transfer 2B - Style/content transfer with control signals (edge, depth, segmentation, blur)",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.mp4", "*.mov", "*.avi"],
+                "exclude": ["*_CosmosTransfer_*"]
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:nvidia-cosmos-transfer2-edge-2b": "cosmos-transfer-edge-2b"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "one"
+    }
+}

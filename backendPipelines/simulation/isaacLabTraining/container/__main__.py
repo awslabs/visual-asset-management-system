@@ -28,18 +28,21 @@ AWS_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "
 
 
 def get_job_uuid_from_output_path(output_s3_path: str) -> str:
-    """Extract job UUID from output S3 path.
-    
-    Output path format: .../output/{uuid}/files/
-    Returns the UUID for organizing files under {uuid}/ prefix.
-    """
+    """The execution id encoded in the output S3 path (``.../output/{executionId}/files/``), or ``""``."""
     if not output_s3_path:
         return ""
-    # Path ends with /files/, UUID is second-to-last segment
+    # Path ends with /files/, execution id is the second-to-last segment
     parts = output_s3_path.rstrip("/").split("/")
     if len(parts) >= 2 and parts[-1] == "files":
         return parts[-2]
     return ""
+
+
+def resolve_output_base_path(output_s3_path: str) -> str:
+    """Output prefix for all written files, with a trailing slash."""
+    if not output_s3_path:
+        return ""
+    return output_s3_path if output_s3_path.endswith("/") else output_s3_path + "/"
 
 
 def get_sfn_client():
@@ -454,22 +457,21 @@ def build_multi_node_command(base_cmd: list, node_info: dict) -> list:
 
 def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir: str, job_config: dict):
     """Upload trained policy and checkpoints to VAMS asset bucket.
-    
-    Output structure (files organized under job UUID for easy identification):
-    - {output_s3_path}/{uuid}/checkpoints/*.pt (model checkpoints)
-    - {output_s3_path}/{uuid}/metrics.csv (training metrics from TensorBoard)
-    - {output_s3_path}/{uuid}/*.txt (converted .diff files)
-    - {output_s3_path}/{uuid}/training-config.json (input configuration)
+
+    Output structure:
+    - {output_s3_path}checkpoints/*.pt (model checkpoints)
+    - {output_s3_path}metrics.csv (training metrics from TensorBoard)
+    - {output_s3_path}*.txt (converted .diff files)
+    - {output_s3_path}training-config.json (input configuration)
     """
     if not config.output_s3_path:
         print("No output S3 path configured, skipping upload")
         return
 
-    # Get job UUID for organizing output files
+    base_output_path = resolve_output_base_path(config.output_s3_path)
     job_uuid = get_job_uuid_from_output_path(config.output_s3_path)
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
-    print(f"Uploading training results to {base_output_path}")
+
+    print(f"Uploading training results for execution {job_uuid} to {base_output_path}")
 
     # Upload model checkpoints
     checkpoint_output_path = f"{base_output_path}checkpoints/"
@@ -487,21 +489,21 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
             s3.upload_file(policy_path, s3_path)
 
     # Upload logs
-    upload_logs(s3, config, job_uuid)
-    
+    upload_logs(s3, config)
+
     # Upload input config
-    upload_config(s3, config, job_config, job_uuid)
+    upload_config(s3, config, job_config)
 
 
 def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: dict):
     """Upload evaluation results to VAMS asset bucket.
-    
-    Output structure (files organized under job UUID for easy identification):
-    - {output_s3_path}/{uuid}/metrics.csv (evaluation metrics from TensorBoard)
-    - {output_s3_path}/{uuid}/*.txt (converted .diff files)
-    - {output_s3_path}/{uuid}/videos/*.mp4 (evaluation videos)
-    - {output_s3_path}/{uuid}/evaluation-config.json (input configuration)
-    
+
+    Output structure:
+    - {output_s3_path}metrics.csv (evaluation metrics from TensorBoard)
+    - {output_s3_path}*.txt (converted .diff files)
+    - {output_s3_path}videos/*.mp4 (evaluation videos)
+    - {output_s3_path}evaluation-config.json (input configuration)
+
     Note: Videos are always generated because --video flag is required for
     play.py to terminate. See ISAACLAB_CLI_REFERENCE.md for details.
     """
@@ -509,11 +511,10 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
         print("No output S3 path configured, skipping upload")
         return
 
-    # Get job UUID for organizing output files
+    base_output_path = resolve_output_base_path(config.output_s3_path)
     job_uuid = get_job_uuid_from_output_path(config.output_s3_path)
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
-    print(f"Uploading evaluation results to {base_output_path}")
+
+    print(f"Uploading evaluation results for execution {job_uuid} to {base_output_path}")
 
     # Convert TensorBoard events to CSV for VAMS compatibility
     export_tensorboard_to_csv(LOCAL_LOG_PATH)
@@ -559,7 +560,7 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
                 print(f"Warning: Failed to upload video {video_path}: {e}")
 
     # Upload input config
-    upload_config(s3, config, job_config, job_uuid)
+    upload_config(s3, config, job_config)
 
 
 def export_tensorboard_to_csv(log_dir: str) -> str | None:
@@ -661,14 +662,13 @@ def convert_diff_to_txt(log_dir: str) -> list[str]:
     return txt_files
 
 
-def upload_logs(s3: S3Client, config: PipelineConfig, job_uuid: str = ""):
+def upload_logs(s3: S3Client, config: PipelineConfig):
     """Upload logs and metrics to VAMS asset bucket."""
     if not config.output_s3_path:
         return
-    
-    # Determine base output path with job UUID prefix
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
+
+    base_output_path = resolve_output_base_path(config.output_s3_path)
+
     # Convert TensorBoard events to CSV for VAMS compatibility
     export_tensorboard_to_csv(LOCAL_LOG_PATH)
     
@@ -694,11 +694,10 @@ def upload_logs(s3: S3Client, config: PipelineConfig, job_uuid: str = ""):
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
 
-def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict, job_uuid: str = ""):
+def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict):
     """Upload the input configuration to the output directory for reference."""
-    # Determine base output path with job UUID prefix
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
+    base_output_path = resolve_output_base_path(config.output_s3_path)
+
     # Determine config filename based on mode
     config_filename = f"{config.mode}-config.json"
     config_s3_path = f"{base_output_path}{config_filename}"

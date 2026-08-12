@@ -109,7 +109,7 @@ export default function CreateCognitoUser({
         setFormError("");
 
         try {
-            let response;
+            let response: any;
             if (createOrUpdate === "Create") {
                 const params: any = {
                     userId: formState.userId,

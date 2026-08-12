@@ -585,7 +585,8 @@ class VamsConnectorExtension(omni.ext.IExt):
                 ui.Label("  No workflows found.", height=20, style={"color": 0xFF888888})
             else:
                 for wf in self._workflows:
-                    desc = f"{wf.workflow_id} - {wf.description}" if wf.description else wf.workflow_id
+                    label = wf.workflow_name or wf.workflow_id
+                    desc = f"{label} - {wf.description}" if wf.description else label
                     with ui.HStack(height=24, spacing=HORIZONTAL_SPACING):
                         ui.Button(
                             f"  {desc}",
@@ -629,19 +630,28 @@ class VamsConnectorExtension(omni.ext.IExt):
         asset_id = self._selected_asset.asset_id
         asset_name = self._selected_asset.asset_name
         self._selected_workflow = wf
-        desc = wf.description or wf.workflow_id
+        desc = wf.workflow_name or wf.description or wf.workflow_id
         self._wf_stack.clear()
         with self._wf_stack:
             ui.Label(f"  Execute: {desc}", height=20, style={"font_size": 13})
             ui.Label(f"  Asset: {asset_name}", height=18, style={"font_size": 11, "color": 0xFF999999})
-            ui.Button("  Run on Entire Asset", height=26,
-                      clicked_fn=lambda: _defer(lambda: self._execute_wf(wf, db_id, asset_id, None)))
+
+            takes_input_files = wf.input_file_arity != "none"
+            if not takes_input_files:
+                ui.Label("  This workflow takes no input files and is run from the VAMS web UI.",
+                         height=20, style={"font_size": 11, "color": 0xFF888888})
+            elif wf.allows_whole_asset:
+                ui.Button("  Run on Entire Asset", height=26,
+                          clicked_fn=lambda: _defer(lambda: self._execute_wf(wf, db_id, asset_id, None)))
+            else:
+                ui.Label("  This workflow runs on a single file, not a whole asset.",
+                         height=20, style={"font_size": 11, "color": 0xFF888888})
 
             non_folders = [f for f in self._files
                            if not f.is_folder and (f.relative_path or f.file_name).strip("/")]
-            if non_folders:
-                ui.Label("  Or run on a file:", height=18,
-                         style={"font_size": 11, "color": 0xFF888888})
+            if takes_input_files and non_folders:
+                ui.Label("  Or run on a file:" if wf.allows_whole_asset else "  Run on a file:",
+                         height=18, style={"font_size": 11, "color": 0xFF888888})
                 for f in non_folders:
                     fkey = (f.relative_path or f.file_name).strip("/")
                     with ui.HStack(height=22, spacing=HORIZONTAL_SPACING):
@@ -657,14 +667,15 @@ class VamsConnectorExtension(omni.ext.IExt):
 
     def _execute_wf(self, wf, db_id, asset_id, file_key):
         target = file_key or "entire asset"
-        self._set_status(f"Executing {wf.description or wf.workflow_id} on {target}...")
+        label = wf.workflow_name or wf.description or wf.workflow_id
+        self._set_status(f"Executing {label} on {target}...")
         try:
             result = self._connector.execute_workflow(
                 database_id=db_id, asset_id=asset_id,
                 workflow_id=wf.workflow_id, workflow_database_id=wf.database_id,
                 file_key=file_key,
             )
-            self._set_status(f"Workflow started: {result.get('message', '?')}")
+            self._set_status(f"Workflow started: {result.get('executionId', '?')}")
         except VamsCliError as e:
             self._set_status(f"Workflow error: {e}")
 

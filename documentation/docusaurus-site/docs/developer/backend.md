@@ -79,6 +79,7 @@ from models.common import (
     VAMSGeneralErrorResponse
 )
 from models.yourDomain import YourRequestModel
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Configure AWS clients with retry configuration
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -89,7 +90,7 @@ logger = safeLogger(service_name="YourServiceName")
 claims_and_roles = {}
 
 try:
-    your_table_name = os.environ["YOUR_STORAGE_TABLE_NAME"]
+    your_table_name = get_table_name(ResourceKeys.YOUR_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -97,8 +98,8 @@ except Exception as e:
 your_table = dynamodb.Table(your_table_name)
 ```
 
-:::note[Environment Variable Loading]
-All environment variables must be loaded at module level inside a `try/except` block. Use `os.environ["KEY"]` for required variables and `os.environ.get("KEY")` for optional ones. Never load environment variables inside handler functions.
+:::note[Resource Name Resolution]
+DynamoDB table, S3 bucket, and audit log group names are resolved at module level inside a `try/except` block through `common.resourceNames` (`get_table_name`, `get_bucket_name`, `get_log_group_name` with a `ResourceKeys` constant). The resolver checks a legacy environment-variable override first, then a cached batched AWS Systems Manager Parameter Store lookup under the deployment's `VAMS_RESOURCE_PARAM_PREFIX`. Non-resource configuration (function names, queue URLs, feature flags) still comes from `os.environ` at module level. Never resolve names inside handler functions.
 :::
 
 ### 2. Lambda Handler Entry Point
@@ -180,7 +181,7 @@ def get_single_item(event, item_id):
     # Step 3: Object-level authorization
     item['object__type'] = 'yourObjectType'
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    if not casbin_enforcer.enforce(event, item):
+    if not casbin_enforcer.enforce(item, "GET"):
         return authorization_error()
 
     # Step 4: Return response
@@ -214,15 +215,17 @@ if not casbin_enforcer.enforceAPI(event):
 
 ### Tier 2: Object-Level Authorization
 
-Controls which specific data entities a role can access. Performed in business logic functions using `enforce()`.
+Controls which specific data entities a role can access. Performed in business logic functions using `enforce(obj, act)`, where `obj` is the entity dictionary and `act` is the HTTP method the caller must be allowed to perform on it (`GET`, `POST`, `PUT`, `DELETE`).
 
 ```python
 # MUST annotate the object type before calling enforce()
 item['object__type'] = 'asset'
 casbin_enforcer = CasbinEnforcer(claims_and_roles)
-if not casbin_enforcer.enforce(event, item):
+if not casbin_enforcer.enforce(item, "GET"):
     return authorization_error()
 ```
+
+Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
 You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
@@ -253,11 +256,11 @@ class CreateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new item"""
     databaseId: str = Field(
         min_length=4, max_length=256,
-        strip_whitespace=True, pattern=id_pattern
+        strip_whitespace=True, regex=id_pattern
     )
     itemName: str = Field(
         min_length=1, max_length=256,
-        strip_whitespace=True, pattern=object_name_pattern
+        strip_whitespace=True, regex=object_name_pattern
     )
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     tags: Optional[list[str]] = []
@@ -315,8 +318,10 @@ request = parse(body, model=CreateItemRequestModel)
 
 ```python
 # Module-level: resource API for high-level operations
+from common.resourceNames import ResourceKeys, get_table_name
+
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-your_table = dynamodb.Table(os.environ["YOUR_STORAGE_TABLE_NAME"])
+your_table = dynamodb.Table(get_table_name(ResourceKeys.YOUR_STORAGE_TABLE))
 
 # Module-level: client API for low-level operations
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
@@ -408,18 +413,24 @@ if not valid:
 
 ### Available Validators
 
-| Validator          | Pattern                      | Use For                |
-| ------------------ | ---------------------------- | ---------------------- |
-| `ID`               | `^[-_a-zA-Z0-9]{3,63}$`      | databaseId, pipelineId |
-| `ASSET_ID`         | filename pattern, max 256    | assetId                |
-| `UUID`             | Standard UUID format         | Unique identifiers     |
-| `OBJECT_NAME`      | `^[a-zA-Z0-9\-._\s]{1,256}$` | assetName, dbName      |
-| `EMAIL`            | Email regex                  | Email addresses        |
-| `USERID`           | `^[\w\-\.\+\@]{3,256}$`      | User identifiers       |
-| `FILE_NAME`        | No special characters        | File names             |
-| `STRING_256`       | Max 256 chars                | Medium strings         |
-| `ID_ARRAY`         | Array of IDs                 | Multiple IDs           |
-| `STRING_256_ARRAY` | Array of max-256 strings     | Tags, lists            |
+| Validator                   | Pattern                       | Use For                                         |
+| --------------------------- | ----------------------------- | ----------------------------------------------- |
+| `ID`                        | `^[-_a-zA-Z0-9]{3,63}$`       | databaseId, pipelineId                          |
+| `ASSET_ID`                  | filename pattern, max 256     | assetId                                         |
+| `UUID`                      | Standard UUID format          | Unique identifiers                              |
+| `OBJECT_NAME`               | `^[a-zA-Z0-9\-._\s]{1,256}$`  | assetName, dbName                               |
+| `EMAIL`                     | Email regex                   | Email addresses                                 |
+| `USERID`                    | `^[\w\-\.\+\@]{3,256}$`       | User identifiers                                |
+| `FILE_NAME`                 | No special characters         | File names                                      |
+| `STRING_256`                | Max 256 chars                 | Medium strings                                  |
+| `ID_ARRAY`                  | Array of IDs                  | Multiple IDs                                    |
+| `STRING_256_ARRAY`          | Array of max-256 strings      | Tags, lists                                     |
+| `ARN`                       | Partition-aware AWS ARN       | Any AWS resource ARN (sub-process registration) |
+| `CLOUDWATCH_LOG_GROUP_ARN`  | Partition-aware log-group ARN | Registered CloudWatch log-group locations       |
+| `CLOUDWATCH_LOG_GROUP_NAME` | 1-512 chars (`-_./#` + alnum) | Registered CloudWatch log-group names           |
+| `LOG_STREAM_NAME`           | 1-512 chars, no `:` or `*`    | Registered log-stream names / prefixes          |
+
+All AWS-resource validators are partition-aware (commercial, GovCloud, China, ISO).
 
 ### Regex Patterns for Pydantic Fields
 
@@ -468,7 +479,7 @@ from common.s3PathPatterns import (
     PIPELINE_OUTPUT_FILES_PREFIX,     # '/files/' (file-level outputs, outputS3AssetFilesPath)
     PIPELINE_OUTPUT_PREVIEWS_PREFIX,  # '/previews/' (asset-level previews, outputS3AssetPreviewPath)
     PIPELINE_OUTPUT_METADATA_PREFIX,  # '/metadata/' (metadata files, outputS3AssetMetadataPath)
-    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (reserved for a future feature)
+    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (structured pipeline result files, recorded by the end-state lambda)
 )
 ```
 
@@ -510,11 +521,14 @@ logger.exception(f"Unexpected error: {e}")   # Includes stack trace
 logger.warning(f"Potential issue: {details}")
 ```
 
-The logger automatically redacts sensitive fields at all nesting levels:
+The logger automatically redacts sensitive fields at all nesting levels, in both objects and arrays:
 
 -   `authorization`
 -   `idJwtToken`
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
+-   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
+
+Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
 
 ### Audit Logging
 
@@ -578,6 +592,7 @@ from models.common import (
     validation_error, general_error, authorization_error,
     VAMSGeneralErrorResponse
 )
+from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -586,7 +601,7 @@ logger = safeLogger(service_name="CHANGE_ME")
 claims_and_roles = {}
 
 try:
-    table_name = os.environ["CHANGE_ME_STORAGE_TABLE_NAME"]
+    table_name = get_table_name(ResourceKeys.CHANGE_ME_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -666,26 +681,30 @@ The email field is used by systems that send notifications to the user. If the e
 
 The file `customAuthClaimsCheck.py` controls how authentication claims are verified, including Multi-Factor Authentication (MFA) status.
 
-**Default behavior for Amazon Cognito:** Calls the Cognito `get_user` API with the access token to check if MFA is enabled for the authenticated user. Results are cached per user based on `auth_time` to reduce external API calls.
+The MFA check runs **once at authorization time**: the API Gateway custom authorizer calls `customMFATokenScopeCheckOverride` after verifying the caller's JWT and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. Handler Lambda functions read that context value in `request_to_claims` — they make no identity provider calls of their own.
 
-**Default behavior for external OAuth IDP:** Sets `mfaEnabled` to `false`. Organizations must implement their own MFA verification logic for external identity providers.
+**Default behavior for Amazon Cognito:** Resolves the user's MFA preference with the Cognito `AdminGetUser` API, cached per user per sign-in session (`auth_time`).
+
+**Default behavior for external OAuth IDP:** Sets `mfaEnabled` to `false`. Organizations implement their own MFA verification logic (for example, a call to the IDP userinfo endpoint using the bearer token from the authorizer event headers) in the marked section of the hook.
 
 ```python
 # backend/backend/customConfigCommon/customAuthClaimsCheck.py
-def customMFATokenScopeCheckOverride(user, lambdaRequest):
-    # For Cognito: checks UserMFASettingList via get_user API
+def customMFATokenScopeCheckOverride(user, authorizerJwtClaims, lambdaRequest):
+    # Called by the API Gateway authorizer after JWT verification
+    # For Cognito: checks UserMFASettingList via the AdminGetUser API
     # For external IDP: returns False by default
     # Override with your organization's MFA verification logic
     return mfaLoginEnabled
 
 def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
-    # Calls customMFATokenScopeCheckOverride and sets mfaEnabled flag
-    # Add additional claims validation logic here
+    # Called by handler lambdas; mfaEnabled is already resolved from the
+    # vams:mfaEnabled authorizer context value before this hook runs
+    # Add additional handler-time claims validation logic here
     return claims_and_roles
 ```
 
 :::warning[Performance Consideration]
-The `customAuthClaimsCheck` functions are called frequently during VAMS API authorization checks. Use caching (the default implementation caches by `auth_time`) and minimize external API calls to avoid performance impacts.
+`customMFATokenScopeCheckOverride` runs inside the API Gateway authorizer on every non-cached authorization. Cache external lookups (the default implementation caches by `auth_time`) and minimize external API calls to avoid adding latency to every request.
 :::
 
 ## Anti-Patterns

@@ -19,6 +19,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -29,7 +30,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
@@ -57,15 +58,15 @@ claims_and_roles = {}
 
 # Load environment variables with error handling
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Get SSM parameter values
@@ -338,15 +339,40 @@ def get_asset_details(database_id: str, asset_id: str) -> Optional[Dict[str, Any
                 'assetId': asset_id
             }
         )
-        
+
         if 'Item' not in response:
             logger.warning(f"Asset not found: {database_id}/{asset_id}")
             return None
-            
+
         return response['Item']
     except Exception as e:
         logger.exception(f"Error getting asset details for {database_id}/{asset_id}: {e}")
         return None
+
+
+def get_asset_details_any_state(database_id: str, asset_id: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Get asset details from the live partition, falling back to the archived one.
+
+    Archiving an asset moves its record to the `{databaseId}#deleted` partition,
+    but the S3 object metadata (and therefore the file index document IDs) keep
+    the live database_id. File events arriving for an archived asset must still
+    resolve the asset record so their documents can be (re)indexed with the
+    archived flag rather than silently skipped.
+
+    Returns:
+        Tuple of (asset_details, asset_is_archived). (None, False) if the record
+        exists in neither partition.
+    """
+    asset_details = get_asset_details(database_id, asset_id)
+    if asset_details:
+        return asset_details, False
+    if database_id.endswith('#deleted'):
+        return None, False
+    archived_details = get_asset_details(f"{database_id}#deleted", asset_id)
+    if archived_details:
+        logger.info(f"Asset {asset_id} found in archived partition {database_id}#deleted")
+        return archived_details, True
+    return None, False
 
 def lookup_database_id_for_permanent_delete(
     asset_id: str, 
@@ -377,14 +403,18 @@ def lookup_database_id_for_permanent_delete(
         )
         
         items = response.get('Items', [])
-        
+
         if len(items) == 0:
             logger.warning(f"No assets found with asset_id: {asset_id}")
             return None, False
-        
+
         if len(items) == 1:
-            # Single match - use this database_id
+            # Single match - use this database_id. The record may live in the
+            # archived partition ({databaseId}#deleted); document IDs always use
+            # the live database_id, so strip the suffix.
             database_id = items[0].get('databaseId')
+            if database_id and database_id.endswith('#deleted'):
+                database_id = database_id[:-len('#deleted')]
             logger.info(f"Found single asset match for {asset_id}, database_id: {database_id}")
             return database_id, True
         
@@ -424,8 +454,10 @@ def lookup_database_id_for_permanent_delete(
                 logger.info(f"Bucket match found: database_id={item.get('databaseId')}, bucket={item_bucket_name}, prefix={item_bucket_prefix}")
         
         if len(matching_assets) == 1:
-            # Single match after bucket filtering
+            # Single match after bucket filtering (strip archived-partition suffix)
             database_id = matching_assets[0].get('databaseId')
+            if database_id and database_id.endswith('#deleted'):
+                database_id = database_id[:-len('#deleted')]
             logger.info(f"Found single bucket match for {asset_id}, database_id: {database_id}")
             return database_id, True
         
@@ -822,6 +854,79 @@ def delete_file_document(database_id: str, asset_id: str, file_path: str) -> boo
         logger.exception(f"Error deleting file document: {e}")
         return False
 
+
+def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
+                                            bucket_name: str) -> int:
+    """Delete file documents matched by asset ID + file path when the database
+    ID cannot be resolved.
+
+    Once an asset record is permanently deleted from DynamoDB, the trailing S3
+    version-delete events can no longer resolve the database_id, so documents
+    cannot be addressed by exact _id. Search the file index for documents with
+    the matching asset ID, path, and bucket, and delete them by their _id.
+
+    Returns:
+        Number of documents deleted (0 if none matched).
+    """
+    try:
+        if not opensearch_manager.is_available():
+            raise VAMSGeneralErrorResponse("OpenSearch client not available")
+
+        client = opensearch_manager.get_client()
+
+        query = {
+            "size": 100,
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"str_assetid.keyword": asset_id}},
+                        {"term": {"str_key.keyword": file_path}},
+                        {"term": {"str_bucketname.keyword": bucket_name}},
+                    ]
+                }
+            }
+        }
+
+        # Drain all matches page by page. The exact asset+path+bucket filter
+        # normally matches only a handful of documents (one per database that
+        # ever mapped this asset), but don't assume a single page. Deleted
+        # documents may still appear in search results until the next index
+        # refresh, so stop as soon as a round yields no NEW document IDs.
+        deleted = 0
+        seen_ids = set()
+        max_rounds = 50
+        for _ in range(max_rounds):
+            response = opensearch_operation_with_retry(
+                lambda: client.search(index=opensearch_file_index, body=query),
+                operation_name=f"search orphaned file docs for {asset_id}{file_path}"
+            )
+            new_ids = [h['_id'] for h in response.get('hits', {}).get('hits', [])
+                       if h.get('_id') and h['_id'] not in seen_ids]
+            if not new_ids:
+                break
+            for doc_id in new_ids:
+                seen_ids.add(doc_id)
+                opensearch_operation_with_retry(
+                    lambda doc_id=doc_id: client.delete(
+                        index=opensearch_file_index,
+                        id=doc_id,
+                        ignore=[404]
+                    ),
+                    operation_name=f"delete orphaned file doc {doc_id}"
+                )
+                deleted += 1
+                logger.info(f"Deleted orphaned file document: {doc_id}")
+        else:
+            logger.warning(
+                f"Orphan cleanup for {asset_id}{file_path} hit the round cap ({max_rounds}); "
+                "remaining documents will be cleaned on subsequent events"
+            )
+
+        return deleted
+    except Exception as e:
+        logger.exception(f"Error deleting orphaned file documents for {asset_id}{file_path}: {e}")
+        return 0
+
 #######################
 # Business Logic Functions
 #######################
@@ -885,8 +990,11 @@ def process_file_index_request(request: FileIndexRequest) -> IndexOperationRespo
             )
         
         elif request.operation == "index":
-            # Get asset details
-            asset_details = get_asset_details(request.databaseId, request.assetId)
+            # Get asset details. Resolution falls back to the archived partition
+            # (record may be mid-move during archive/unarchive); the document's
+            # archived state is governed by the request/S3 state, not by which
+            # partition the record was found in.
+            asset_details, _ = get_asset_details_any_state(request.databaseId, request.assetId)
             if not asset_details:
                 raise VAMSGeneralErrorResponse(f"Asset not found: {request.databaseId}/{request.assetId}")
             
@@ -1042,6 +1150,10 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                         operation="error"
                     )
         
+        # When True, the live S3 object state overrides the asset record's
+        # archived state for this document (set on delete-marker-removal events).
+        force_live = False
+
         # Handle ObjectRemoved:Delete events specially.
         # Skip this branch when we rewrote a preview file to its base file —
         # the base file still exists and we just need to re-index it.
@@ -1062,9 +1174,16 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 
                 delete_markers = versions_response.get('DeleteMarkers', [])
                 versions = versions_response.get('Versions', [])
-                
-                # Check if this specific key has a delete marker and versions
-                has_delete_marker = any(marker['Key'] == s3_key for marker in delete_markers)
+
+                # Only the CURRENT (IsLatest) entry decides archived state. A
+                # non-latest delete marker buried under a live version (e.g. a
+                # file re-uploaded or unarchived after an earlier delete) does
+                # not make the file archived — and events can arrive out of
+                # order, so the live S3 state, not the event, is authoritative.
+                has_delete_marker = any(
+                    marker['Key'] == s3_key and marker.get('IsLatest')
+                    for marker in delete_markers
+                )
                 has_versions = any(v['Key'] == s3_key for v in versions)
                 
                 if has_delete_marker and has_versions:
@@ -1092,8 +1211,12 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                             
                             if asset_id and database_id:
                                 # File is archived - need to index with archived flag
-                                # Get asset details to calculate relative path
-                                asset_details = get_asset_details(database_id, asset_id)
+                                # Get asset details to calculate relative path. The
+                                # asset itself may be archived (asset-archive flow
+                                # creates these delete markers), so fall back to the
+                                # archived partition — the file doc must still be
+                                # flipped to archived rather than skipped.
+                                asset_details, _ = get_asset_details_any_state(database_id, asset_id)
                                 if not asset_details:
                                     logger.warning(f"Asset not found for archived file: {database_id}/{asset_id}")
                                     return IndexOperationResponse(
@@ -1192,14 +1315,71 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                             indexName=opensearch_file_index,
                             operation="skip"
                         )
+                elif not has_delete_marker and has_versions:
+                    # Delete marker was removed but live versions remain — this is
+                    # a file/asset unarchive (marker removal emits ObjectRemoved
+                    # events). The file is live again: re-index it rather than
+                    # deleting its document.
+                    try:
+                        live_head = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                    except ClientError as head_err:
+                        if head_err.response['Error']['Code'] in ('404', 'NoSuchKey', '405'):
+                            live_head = None
+                        else:
+                            raise
+                    if live_head is None:
+                        # Versions exist but none is current (shouldn't normally
+                        # happen without a delete marker) — nothing indexable.
+                        logger.warning(f"No current version for {s3_key} despite versions; skipping")
+                        return IndexOperationResponse(
+                            success=True,
+                            message="No current version for file, skipping",
+                            indexName=opensearch_file_index,
+                            operation="skip"
+                        )
+                    s3_metadata = live_head.get('Metadata', {})
+                    asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+                    database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+                    if not asset_id or not database_id:
+                        logger.warning(f"Missing asset/database ID in S3 metadata for restored file {s3_key}")
+                        return IndexOperationResponse(
+                            success=True,
+                            message="Missing metadata on restored file, skipping",
+                            indexName=opensearch_file_index,
+                            operation="skip"
+                        )
+                    # A permanent-delete burst emits one ObjectRemoved per version;
+                    # an early event can observe the key still live mid-burst. If
+                    # the asset record is gone from both partitions this is a
+                    # delete in progress, not an unarchive — do not re-index.
+                    restored_asset, _ = get_asset_details_any_state(database_id, asset_id)
+                    if not restored_asset:
+                        logger.info(
+                            f"Object {s3_key} live but asset {asset_id} record gone; "
+                            "skipping re-index (delete in progress)"
+                        )
+                        return IndexOperationResponse(
+                            success=True,
+                            message="Asset record gone for live object, skipping",
+                            indexName=opensearch_file_index,
+                            operation="skip"
+                        )
+                    logger.info(f"Delete marker removed and object live again, re-indexing: {s3_key}")
+                    operation = "index"
+                    is_archived = False
+                    # The live S3 object is authoritative here: during an asset
+                    # unarchive the markers are removed before the DynamoDB record
+                    # moves back to the live partition, so a stale archived-partition
+                    # record must not flip this document back to archived.
+                    force_live = True
                 else:
-                    # File is permanently deleted (no versions or no delete marker)
+                    # File is permanently deleted (no versions remain)
                     logger.info(f"File is permanently deleted: {s3_key}")
-                    
+
                     # Try to parse asset ID from S3 key path
                     # Typical structure: {basePrefix}{assetId}/{filePath}
                     # Asset ID is typically a UUID or identifier before the first slash after prefix
-                    
+
                     # Split the key and try to find the asset ID
                     # This is a heuristic approach - asset ID is usually the first path component
                     key_parts = s3_key.split('/')
@@ -1242,12 +1422,28 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                     operation="delete"
                                 )
                             else:
-                                logger.warning(f"Cannot determine database_id for permanently deleted file: {s3_key}")
+                                # Asset record already gone (e.g. asset permanent
+                                # delete removed DynamoDB before the trailing S3
+                                # version-delete events processed). Fall back to
+                                # matching documents by asset ID + path so no
+                                # orphaned documents remain in the index.
+                                if len(key_parts) > 1:
+                                    relative_path = '/' + '/'.join(key_parts[1:])
+                                else:
+                                    relative_path = '/' + s3_key
+                                deleted_count = delete_file_documents_by_asset_and_path(
+                                    potential_asset_id, relative_path, bucket_name
+                                )
+                                logger.warning(
+                                    f"Cannot determine database_id for permanently deleted file: {s3_key}; "
+                                    f"removed {deleted_count} orphaned document(s) by asset/path match"
+                                )
                                 return IndexOperationResponse(
                                     success=True,
-                                    message="Cannot identify permanently deleted file, skipping",
+                                    message=f"Removed {deleted_count} orphaned document(s) for unresolvable file" if deleted_count
+                                            else "Cannot identify permanently deleted file, skipping",
                                     indexName=opensearch_file_index,
-                                    operation="skip"
+                                    operation="delete" if deleted_count else "skip"
                                 )
                         else:
                             logger.warning(f"Cannot parse asset ID from S3 key: {s3_key}")
@@ -1305,8 +1501,11 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 )
         
         # Calculate relative file path
-        # This requires getting the asset details to determine the base prefix
-        asset_details = get_asset_details(database_id, asset_id)
+        # This requires getting the asset details to determine the base prefix.
+        # The asset may be archived (record moved to {databaseId}#deleted) while
+        # its files still receive events — resolve from either partition and
+        # carry the asset's archived state onto the file document.
+        asset_details, asset_is_archived = get_asset_details_any_state(database_id, asset_id)
         if not asset_details:
             logger.warning(f"Asset not found for S3 file: {database_id}/{asset_id}")
             return IndexOperationResponse(
@@ -1315,6 +1514,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 indexName=opensearch_file_index,
                 operation="skip"
             )
+        if asset_is_archived and not force_live:
+            is_archived = True
         
         # Get bucket details to determine prefix
         bucket_details = get_bucket_details(asset_details.get('bucketId'))
@@ -1747,7 +1948,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 results.append(result)
             except ValidationError as v:
                 logger.exception(f"Validation error: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Summarize results
         successful = sum(1 for r in results if r.success)
@@ -1762,7 +1963,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

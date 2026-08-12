@@ -3,7 +3,6 @@
 
 """Auth Constraints service handler for VAMS API."""
 
-import os
 import boto3
 import json
 import uuid
@@ -17,8 +16,14 @@ from common.constants import (
     ALLOWED_CONSTRAINT_PERMISSIONS,
     ALLOWED_CONSTRAINT_PERMISSION_TYPES,
     ALLOWED_CONSTRAINT_OBJECT_TYPES,
-    ALLOWED_CONSTRAINT_OPERATORS
+    ALLOWED_CONSTRAINT_OPERATORS,
+    CONSTRAINT_OBJECT_TYPE_FIELDS,
+    CONSTRAINT_OPERATOR_LABELS,
+    CONSTRAINT_PERMISSION_LABELS,
+    CONSTRAINT_PERMISSION_TYPE_LABELS,
 )
+from common.apiRoutes import API_AUTH_CONSTRAINT_PERMISSION_OBJECTS
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -26,13 +31,15 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_changes
 from common.dynamodb import validate_pagination_info
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
     validation_error, general_error, authorization_error,
     VAMSGeneralErrorResponse
 )
 from models.roleConstraints import (
     GetConstraintsRequestModel, CreateConstraintRequestModel,
-    ConstraintResponseModel, ConstraintOperationResponseModel
+    ConstraintResponseModel, ConstraintOperationResponseModel,
+    GetConstraintPermissionObjectsResponseModel,
 )
 
 # Configure AWS clients with retry configuration
@@ -49,16 +56,19 @@ logger = safeLogger(service_name="AuthConstraintsService")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
 try:
-    constraints_table_name = os.environ["CONSTRAINTS_TABLE_NAME"]  # New optimized table
-    roles_table_name = os.environ.get("ROLES_TABLE_NAME")  # Optional for validation
+    constraints_table_name = get_table_name(ResourceKeys.CONSTRAINTS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving constraints table name")
+    constraints_table_name = None
 
-# Initialize DynamoDB tables
-constraints_table = dynamodb.Table(constraints_table_name)
+try:
+    roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving roles table name")
+    roles_table_name = None
+
+constraints_table = dynamodb.Table(constraints_table_name) if constraints_table_name else None
 roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
 
 #######################
@@ -320,7 +330,7 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
         
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM"
+        username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
         constraint_data['dateModified'] = now
         constraint_data['modifiedBy'] = username
         if 'dateCreated' not in constraint_data:
@@ -458,15 +468,42 @@ def delete_constraint(constraint_id, claims_and_roles):
 # Request Handlers
 #######################
 
+def get_constraint_permission_objects(event):
+    """Return the constraint permission objects: object types (with their valid
+    fields), operators, permissions, and permission types."""
+    object_types = [
+        {
+            "label": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["label"],
+            "value": object_type,
+            "fields": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["fields"],
+        }
+        for object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES
+        if object_type in CONSTRAINT_OBJECT_TYPE_FIELDS
+    ]
+    response_model = GetConstraintPermissionObjectsResponseModel(
+        objectTypes=object_types,
+        operators=CONSTRAINT_OPERATOR_LABELS,
+        permissions=CONSTRAINT_PERMISSION_LABELS,
+        permissionTypes=CONSTRAINT_PERMISSION_TYPE_LABELS,
+    )
+    return success(body=response_model.dict())
+
+
 def handle_get_request(event):
     """Handle GET requests for constraints
-    
+
     Args:
         event: API Gateway event
-        
+
     Returns:
         APIGatewayProxyResponseV2 response
     """
+    path = event['requestContext']['http']['path']
+    # The permissionObjects listing must be matched before the constraint list / by-id
+    # logic, since /auth/constraints/permissionObjects also matches the {constraintId} template.
+    if API_AUTH_CONSTRAINT_PERMISSION_OBJECTS.matches(path):
+        return get_constraint_permission_objects(event)
+
     path_parameters = event.get('pathParameters', {})
     query_parameters = event.get('queryStringParameters', {}) or {}
     
@@ -623,7 +660,7 @@ def handle_post_request(event):
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -718,7 +755,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

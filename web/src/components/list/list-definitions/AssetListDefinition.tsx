@@ -23,7 +23,7 @@ export const AssetListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "assetName",
             header: Synonyms.Asset,
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link href={`#/databases/${item.databaseId}/assets/${item.assetId}`}>
@@ -36,7 +36,7 @@ export const AssetListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "databaseId",
             header: Synonyms.Database,
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link href={`#/databases/${item.databaseId}/assets/`}>{props.children}</Link>
@@ -47,19 +47,19 @@ export const AssetListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "description",
         }),
         new ColumnDefinition({
             id: "assetType",
             header: "Type",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "assetType",
         }),
         new ColumnDefinition({
             id: "tags",
             header: "Tags",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "tags",
         }),
     ],

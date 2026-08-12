@@ -15,6 +15,10 @@ import { WAFScope } from "../lib/constructs/wafv2-basic-construct";
 import * as Config from "../config/config";
 import { STACK_WAF_DESCRIPTION, STACK_CORE_DESCRIPTION } from "../config/config";
 import * as Service from "../lib/helper/service-helper";
+import {
+    buildBootstrapSynthesizer,
+    applyVamsStackRoleCustomization,
+} from "../lib/helper/iamRoleCustomization";
 
 const app = new cdk.App();
 
@@ -23,6 +27,11 @@ const config = Config.getConfig(app);
 Service.SetConfig(config);
 
 console.log("DEPLOYMENT CONFIGURATION 👉", config);
+
+//Optional IAM role customization for restricted environments (advanced).
+//VAMS stack role customization is applied at the App level so the single
+//iam-policy-report covers the WAF stack, the core stack, and all nested stacks.
+applyVamsStackRoleCustomization(app, config);
 
 if (config.enableCdkNag) {
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
@@ -38,27 +47,53 @@ config.env.coreStackName = vamsCoreStackName;
 
 //Deploy with WAF?
 if (config.app.useWaf) {
-    //Deploy web access firewall to us-east-1 for cloudfront or in-region for non-cloudfront (ALB) deployments
-    const wafRegion = !config.app.useCloudFront.enabled ? config.env.region : "us-east-1";
-    const wafScope = !config.app.useCloudFront.enabled ? WAFScope.REGIONAL : WAFScope.CLOUDFRONT;
+    const wafBaseName = config.app.baseStackName || process.env.DEPLOYMENT_ENV || "dev";
 
-    //Web access firewall stackname
-    const wafStackName = `${config.name}-waf-${
-        config.app.baseStackName || process.env.DEPLOYMENT_ENV || "dev"
-    }`;
+    // A regional-scoped web ACL is ALWAYS created in the core region when WAF is enabled.
+    // It is the ACL that attaches to the API Gateway stage (regional or private) and, for
+    // ALB deployments, to the ALB. API Gateway and ALB both require a REGIONAL WAFV2 ACL
+    // in the same Region as the resource, so a CloudFront-scoped ACL (us-east-1) cannot
+    // protect them.
+    //
+    // Naming for backwards compatibility: when CloudFront is disabled, the existing WAF
+    // stack is already regional and named "{name}-waf-{base}", so the regional stack keeps
+    // that exact name (in-place update, no replacement). When CloudFront is enabled, the
+    // existing "{name}-waf-{base}" stack is the CloudFront/us-east-1 ACL, so the regional
+    // stack is additive under "{name}-waf-regional-{base}".
+    const regionalWafStackName = config.app.useCloudFront.enabled
+        ? `${config.name}-waf-regional-${wafBaseName}`
+        : `${config.name}-waf-${wafBaseName}`;
 
-    //WAF Stack
-    const cfWafStack = new CfWafStack(app, wafStackName, {
-        stackName: wafStackName,
+    const regionalWafStack = new CfWafStack(app, regionalWafStackName, {
+        stackName: regionalWafStackName,
         env: {
             account: config.env.account,
-            region: wafRegion,
+            region: config.env.region,
         },
-        wafScope: wafScope,
+        wafScope: WAFScope.REGIONAL,
+        wafPolicy: config.wafPolicyJSON,
         description: STACK_WAF_DESCRIPTION,
+        synthesizer: buildBootstrapSynthesizer(config),
     });
 
-    // ssmWafArn = cfWafStack.wafArn;
+    // CloudFront requires a CLOUDFRONT-scoped ACL in us-east-1. Only created when CloudFront
+    // is enabled. Keeps the historical "{name}-waf-{base}" name so existing CloudFront
+    // deployments' WAF stack is unchanged (in-place update, no replacement).
+    let cloudfrontWafStack: CfWafStack | undefined;
+    if (config.app.useCloudFront.enabled) {
+        const cloudfrontWafStackName = `${config.name}-waf-${wafBaseName}`;
+        cloudfrontWafStack = new CfWafStack(app, cloudfrontWafStackName, {
+            stackName: cloudfrontWafStackName,
+            env: {
+                account: config.env.account,
+                region: "us-east-1",
+            },
+            wafScope: WAFScope.CLOUDFRONT,
+            wafPolicy: config.wafPolicyJSON,
+            description: STACK_WAF_DESCRIPTION,
+            synthesizer: buildBootstrapSynthesizer(config),
+        });
+    }
 
     //Core VAMS Stack
     const coreVamsStack = new CoreVAMSStack(app, vamsCoreStackName, {
@@ -67,12 +102,17 @@ if (config.app.useWaf) {
             account: config.env.account,
             region: config.env.region,
         },
-        ssmWafArn: cfWafStack.wafArn,
+        ssmWafArnRegional: regionalWafStack.wafArn,
+        ssmWafArnCloudfront: cloudfrontWafStack ? cloudfrontWafStack.wafArn : "",
         config: config,
         description: STACK_CORE_DESCRIPTION,
+        synthesizer: buildBootstrapSynthesizer(config),
     });
 
-    coreVamsStack.addDependency(cfWafStack);
+    coreVamsStack.addStackDependency(regionalWafStack);
+    if (cloudfrontWafStack) {
+        coreVamsStack.addStackDependency(cloudfrontWafStack);
+    }
 
     //Stack level NAG supressions
     if (config.app.govCloud.enabled) {
@@ -100,9 +140,11 @@ else {
             account: config.env.account,
             region: config.env.region,
         },
-        ssmWafArn: "",
+        ssmWafArnRegional: "",
+        ssmWafArnCloudfront: "",
         config: config,
         description: STACK_CORE_DESCRIPTION,
+        synthesizer: buildBootstrapSynthesizer(config),
     });
 
     //Stack level NAG supressions

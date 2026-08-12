@@ -1,3 +1,5 @@
+> ⚠️ **Deprecated — this documentation has moved.** The VamsCLI documentation is now maintained in the official VAMS documentation site. This file is retained temporarily for migration validation and will be removed. See the live docs: **https://awslabs.github.io/visual-asset-management-system/cli/commands/setup-and-auth**
+
 # VamsCLI Authentication Guide
 
 This guide provides detailed information about VamsCLI's authentication system, including AWS Cognito integration and override token support.
@@ -7,7 +9,7 @@ This guide provides detailed information about VamsCLI's authentication system, 
 VamsCLI supports two authentication methods with full multi-profile support:
 
 1. **AWS Cognito Authentication** - Primary authentication method using AWS Cognito User Pools
-2. **Override Token Authentication** - External token support for integration with other authentication systems
+2. **Override Token Authentication** - Use a pre-generated token directly instead of signing in with the CLI; used mostly for external identity provider authentication, though any valid pre-generated token works (including an AWS Cognito token obtained outside VAMS)
 
 **Profile Support**: Each profile maintains completely separate authentication state, allowing you to authenticate to different VAMS environments or as different users on the same machine.
 
@@ -56,6 +58,50 @@ vamscli auth login -u john.doe@example.com --save-credentials
 5. Stores authentication tokens securely
 6. Calls login profile API to refresh user profile
 7. Optionally saves credentials for future use
+
+#### Change Password
+
+```bash
+vamscli auth change-password -u john.doe@example.com
+vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
+```
+
+**Options:**
+
+-   `-u, --username`: Username (email address) - required
+-   `--old-password`: Current password (prompts securely if not provided)
+-   `--new-password`: New password to set (prompts securely if not provided)
+-   `--json-output`: Output raw JSON response
+
+**Behavior:**
+
+-   **Use when you know your current password.** If you have forgotten it, use [Forgot Password](#forgot-password) instead.
+-   Signs in with the current password and sets the new one in Cognito.
+-   Available only for Cognito authentication; deployments using external authentication return a configuration error.
+-   In interactive mode, prompts for any password not provided (the new password is confirmed). With `--json-output`, both `--old-password` and `--new-password` are required.
+-   Also satisfies a forced password change when the account requires one.
+
+#### Forgot Password
+
+```bash
+vamscli auth forgot-password -u john.doe@example.com
+vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
+```
+
+**Options:**
+
+-   `-u, --username`: Username (email address) - required
+-   `--code`: Verification code emailed by Cognito (confirm step)
+-   `--new-password`: New password to set (confirm step)
+-   `--json-output`: Output raw JSON response
+
+**Behavior:**
+
+-   **Use when you have forgotten your current password.** If you know it and simply want to change it, use [Change Password](#change-password) instead.
+-   Self-service reset that does not require the current password; available only for Cognito authentication.
+-   Run with `--username` only to email a verification code, then run again with `--code` and `--new-password` to set the new password.
+-   In interactive mode, prompts for the code and new password after the code is requested, completing both steps in one invocation. With `--json-output`, provide `--code` and `--new-password` together to confirm, or neither to only request a code.
+-   A successful reset does not sign you in; authenticate afterward with `vamscli auth login`.
 
 #### Status Check
 
@@ -120,20 +166,30 @@ VamsCLI handles various password challenges:
 
 #### New Password Required
 
-When a new password is required:
+Cognito can require a password change before the first successful sign-in (for example, for a newly created account or after an administrator resets the password). VamsCLI handles this during `vamscli auth login`:
 
-1. VamsCLI prompts for a new password
-2. Validates password meets requirements
-3. Updates the password in Cognito
-4. Continues with authentication
+1. Provide the new password with `--new-password`, or let VamsCLI prompt for it in interactive mode
+2. The new password is set in Cognito while satisfying the sign-in challenge
+3. Authentication continues and tokens are stored
 
-#### Password Reset
+With `--json-output`, prompts are not possible: supply `--new-password`. If a change is required and `--new-password` is not provided, the command returns a JSON error.
 
-For password reset scenarios:
+```bash
+vamscli auth login -u john.doe@example.com -p temporary-password --new-password new-password
+```
 
-1. VamsCLI guides through the reset process
-2. Prompts for verification code
-3. Allows setting new password
+#### Changing a Password
+
+Use `vamscli auth change-password` to change a Cognito user's password by signing in with the current password and setting a new one (see [Change Password](#change-password)). This command also satisfies a forced password change.
+
+#### Forgot Password
+
+When the current password is unknown, use `vamscli auth forgot-password` for a self-service reset using a verification code emailed by Cognito (see [Forgot Password](#forgot-password)).
+
+1. Run with `--username` only to email a verification code
+2. Run again with `--code` and `--new-password` to set the new password
+
+In interactive mode, VamsCLI prompts for the code and new password after the code is requested. With `--json-output`, provide `--code` and `--new-password` together to confirm, or neither to only request a code.
 
 ## Override Token Authentication
 

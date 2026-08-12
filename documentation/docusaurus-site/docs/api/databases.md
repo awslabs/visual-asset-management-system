@@ -29,19 +29,20 @@ GET /database
 
 ```json
 {
-    "message": {
-        "Items": [
-            {
-                "databaseId": "architecture-db",
-                "databaseName": "Architecture Database",
-                "description": "3D architectural models and floor plans",
-                "assetCount": 42,
-                "dateCreated": "\"March 15 2026 - 10:30:00\"",
-                "dateUpdated": "\"March 16 2026 - 14:20:00\""
-            }
-        ],
-        "NextToken": null
-    }
+    "Items": [
+        {
+            "databaseId": "architecture-db",
+            "description": "3D architectural models and floor plans",
+            "dateCreated": "March 15 2026 - 10:30:00",
+            "assetCount": 42,
+            "defaultBucketId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "bucketName": "vams-assets-abc123",
+            "baseAssetsPrefix": "assets/",
+            "restrictMetadataOutsideSchemas": false,
+            "restrictFileUploadsToExtensions": ""
+        }
+    ],
+    "NextToken": null
 }
 ```
 
@@ -85,7 +86,7 @@ Returns a single database object in the same format as the items in the list res
 
 ## Create a database
 
-Creates a new database and its associated S3 storage bucket.
+Creates a new database associated with a pre-configured S3 bucket and prefix.
 
 ```
 POST /database
@@ -93,19 +94,23 @@ POST /database
 
 ### Request body
 
-| Field          | Type   | Required | Description                             |
-| -------------- | ------ | -------- | --------------------------------------- |
-| `databaseId`   | string | Yes      | Unique database identifier (3-63 chars) |
-| `databaseName` | string | Yes      | Human-readable database name            |
-| `description`  | string | No       | Description of the database             |
+| Field                             | Type    | Required | Description                                                                                                                                                                                                       |
+| --------------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`                      | string  | Yes      | Unique database identifier (4-256 chars, alphanumeric plus `-` and `_`). Cannot be `GLOBAL` or a reserved S3 keyword (`pipeline(s)`, `preview(s)`, `temp-upload(s)`, `workspace(s)`), matched case-insensitively. |
+| `description`                     | string  | Yes      | Description of the database (4-256 chars).                                                                                                                                                                        |
+| `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination.                                                                                                                                                        |
+| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, metadata must conform to an applied metadata schema. Defaults to `false`.                                                                                                                            |
+| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all. Defaults to empty.                                                                              |
 
 ### Request body example
 
 ```json
 {
     "databaseId": "architecture-db",
-    "databaseName": "Architecture Database",
-    "description": "3D architectural models and floor plans"
+    "description": "3D architectural models and floor plans",
+    "defaultBucketId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "restrictMetadataOutsideSchemas": false,
+    "restrictFileUploadsToExtensions": ""
 }
 ```
 
@@ -113,7 +118,8 @@ POST /database
 
 ```json
 {
-    "message": "Succeeded"
+    "databaseId": "architecture-db",
+    "message": "Database created successfully"
 }
 ```
 
@@ -141,19 +147,23 @@ PUT /database/{databaseId}
 | ------------ | ------ | -------- | ------------------- |
 | `databaseId` | string | Yes      | Database identifier |
 
+At least one field must be provided. The `databaseId` cannot be changed after creation.
+
 ### Request body
 
-| Field          | Type   | Required | Description           |
-| -------------- | ------ | -------- | --------------------- |
-| `databaseName` | string | No       | Updated database name |
-| `description`  | string | No       | Updated description   |
+| Field                             | Type    | Required | Description                                                                                                       |
+| --------------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `description`                     | string  | No       | Updated description (4-256 chars).                                                                                |
+| `defaultBucketId`                 | string  | No       | UUID of a pre-configured S3 bucket and prefix combination. Must reference an existing bucket.                     |
+| `restrictMetadataOutsideSchemas`  | boolean | No       | Toggle metadata schema enforcement.                                                                               |
+| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all. |
 
 ### Request body example
 
 ```json
 {
-    "databaseName": "Architecture Database (v2)",
-    "description": "Updated 3D architectural models"
+    "description": "Updated 3D architectural models",
+    "restrictFileUploadsToExtensions": ".e57,.las,.laz,.ply"
 }
 ```
 
@@ -161,7 +171,11 @@ PUT /database/{databaseId}
 
 ```json
 {
-    "message": "Succeeded"
+    "success": true,
+    "message": "Database architecture-db updated successfully",
+    "databaseId": "architecture-db",
+    "operation": "update",
+    "timestamp": "2026-03-16T14:20:00"
 }
 ```
 

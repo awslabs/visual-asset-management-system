@@ -17,14 +17,14 @@ import Synonyms from "../../../synonyms";
  * @param {React.ComponentType} options.MapThumbnailComponent - Component to render map thumbnails
  * @param {string} options.mapStyleUrl - Map style URL for thumbnails
  */
-export const createDatabaseListDefinition = (options = {}) => {
+export const createDatabaseListDefinition = (options: any = {}) => {
     const { onMetadataClick, showMapThumbnails, MapThumbnailComponent, mapStyleUrl } = options;
 
     const columnDefinitions = [
         new ColumnDefinition({
             id: "databaseId",
             header: "Name",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link href={`#/databases/${item.databaseId}/assets/`}>{props.children}</Link>
@@ -35,7 +35,7 @@ export const createDatabaseListDefinition = (options = {}) => {
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props) => (
+            cellWrapper: (props: any) => (
                 <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
                     {props.children}
                 </span>
@@ -45,13 +45,13 @@ export const createDatabaseListDefinition = (options = {}) => {
         new ColumnDefinition({
             id: "assetCount",
             header: `${Synonyms.Asset} Count`,
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "assetCount",
         }),
         new ColumnDefinition({
             id: "metadata",
             header: "Metadata",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link
@@ -78,7 +78,7 @@ export const createDatabaseListDefinition = (options = {}) => {
             new ColumnDefinition({
                 id: "mapThumbnail",
                 header: "Map",
-                cellWrapper: (props) => {
+                cellWrapper: (props: any) => {
                     const { item } = props;
                     return (
                         <MapThumbnailComponent
@@ -98,7 +98,7 @@ export const createDatabaseListDefinition = (options = {}) => {
         new ColumnDefinition({
             id: "restrictMetadataOutsideSchemas",
             header: "Restrict Metadata Outside Schemas",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const value = props.item?.restrictMetadataOutsideSchemas;
                 return <>{value ? "True" : "False"}</>;
             },
@@ -107,7 +107,7 @@ export const createDatabaseListDefinition = (options = {}) => {
         new ColumnDefinition({
             id: "restrictFileUploadsToExtensions",
             header: "Restrict File Upload Extensions",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const value = props.item?.restrictFileUploadsToExtensions;
                 return <>{value && value.trim() !== "" ? value : "No Restrictions"}</>;
             },
@@ -116,13 +116,13 @@ export const createDatabaseListDefinition = (options = {}) => {
         new ColumnDefinition({
             id: "bucketName",
             header: "Bucket Name",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "bucketName",
         }),
         new ColumnDefinition({
             id: "baseAssetsPrefix",
             header: "Base Bucket Prefix",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "baseAssetsPrefix",
         })
     );

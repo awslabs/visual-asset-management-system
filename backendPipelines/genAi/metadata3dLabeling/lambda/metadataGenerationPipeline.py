@@ -11,6 +11,7 @@ from utils.rekognition import RekognitionImage
 from utils.rekognition import RekognitionLabel
 from utils.rekognition import RekognitionText
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="MetadataGenerationPipeline")
 
@@ -39,11 +40,12 @@ def get_all_image_files_in_path(bucket, path):
         "Items": []
     }
 
-    response = s3_client.list_objects(Bucket=bucket, Prefix=path)
-    if 'Contents' in response:
+    # Paginate: a single page caps at 1,000 keys, so a render set larger than that
+    # would be only partially labeled.
+    paginator = s3_client.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket, Prefix=path):
         # map object from object list
-        keys = []
-        for o in response["Contents"]:
+        for o in page.get("Contents", []):
             if o['Key'].endswith('.png'):
                 result["Items"].append({
                     'key': o['Key'],
@@ -157,6 +159,42 @@ def metadata_dict_to_str_array(metadata_dict):
     
     return arr
 
+
+def aggregate_input_metadata_fields(metadata_body):
+    """Flatten every metadata scope of the run metadata payload into the "key:::value" seed list.
+
+    The metadata file is the grouped-by-asset envelope: each asset group contributes its
+    asset-level metadata (the fileKey '/' record) plus each file record's metadata and
+    attributes. A legacy ``{"VAMS": {...}}`` body reads its three scopes directly, so both
+    payload shapes seed the prompt with the same elements.
+    """
+    fields = []
+    if not isinstance(metadata_body, dict):
+        return fields
+
+    if "assets" in metadata_body:
+        for asset_group in metadata_body.get("assets") or []:
+            database_id = asset_group.get("databaseId", "")
+            asset_id = asset_group.get("assetId", "")
+            fields.extend(metadata_dict_to_str_array(
+                manifestHelper.asset_metadata_for(metadata_body, database_id, asset_id)))
+            for file_record in asset_group.get("files") or []:
+                file_key = file_record.get("fileKey", "")
+                if file_key in ("", "/"):
+                    continue
+                fields.extend(metadata_dict_to_str_array(
+                    manifestHelper.file_metadata_for(metadata_body, database_id, asset_id, file_key)))
+                fields.extend(metadata_dict_to_str_array(
+                    manifestHelper.file_attributes_for(metadata_body, database_id, asset_id, file_key)))
+        return fields
+
+    vams_metadata = metadata_body.get("VAMS", {}) or {}
+    fields.extend(metadata_dict_to_str_array(vams_metadata.get("assetMetadata") or {}))
+    fields.extend(metadata_dict_to_str_array(vams_metadata.get("fileMetadata") or {}))
+    fields.extend(metadata_dict_to_str_array(vams_metadata.get("fileAttributes") or {}))
+    return fields
+
+
 def lambda_handler(event, context):
     """
     Metadata Generation Pipeline Lambda Handler
@@ -183,23 +221,29 @@ def lambda_handler(event, context):
         logger.error("No metadata generation stage found in pipeline definition.")
         raise Exception("No metadata generation stage found in pipeline definition.")
     
-    #Get and parse input parameters
-    inputParameters = event.get("inputParameters", "")
-    inputParametersObject = {}
-    if(isinstance(inputParameters,str) and inputParameters != ""):
-        try:
-            inputParametersObject = json.loads(inputParameters)
-        except:
-            logger.error("Input parameters is not valid JSON.")
+    #Read input configuration + metadata from S3 (only the locations travel in the definition)
+    inputConfigurationS3Location = pipelineDefinitions.get("inputConfigurationS3Location", "")
+    inputMetadataS3Location = pipelineDefinitions.get("inputMetadataS3Location", "")
 
-    #Get and parse input metadata
-    inputMetadata = event.get("inputMetadata", "")
-    inputMetadataObject = {}
-    if(isinstance(inputMetadata,str) and inputMetadata != ""):
-        try:
-            inputMetadataObject = json.loads(inputMetadata)
-        except:
-            logger.error("Input metadata is not valid JSON.")
+    inputParametersObject = manifestHelper.fetch_input_configuration(s3_client, inputConfigurationS3Location)
+    if not inputParametersObject:
+        #Transition fallback for legacy payloads that still forward inline content
+        inlineParameters = event.get("inputParameters", "")
+        if(isinstance(inlineParameters,str) and inlineParameters != ""):
+            try:
+                inputParametersObject = json.loads(inlineParameters)
+            except:
+                logger.error("Input parameters is not valid JSON.")
+
+    inputMetadataObject = manifestHelper.fetch_metadata(s3_client, inputMetadataS3Location)
+    if not inputMetadataObject:
+        #Transition fallback for legacy payloads that still forward inline content
+        inlineMetadata = event.get("inputMetadata", "")
+        if(isinstance(inlineMetadata,str) and inlineMetadata != ""):
+            try:
+                inputMetadataObject = json.loads(inlineMetadata)
+            except:
+                logger.error("Input metadata is not valid JSON.")
 
     #Get input/output locations
     inputBucket = pipelineStageDefinition['inputFile']['bucketName']
@@ -215,16 +259,8 @@ def lambda_handler(event, context):
     #Input Metadata Fields to Aggregate for use from Various Called Systems
     inputMetadataFieldsToAggregate = []
     if seedMetadataGenerationWithInputMetadata == "True":
-        # Extract simplified metadata dictionaries from VAMS structure
-        vams_metadata = inputMetadataObject.get("VAMS", {})
-        asset_metadata_dict = vams_metadata.get("assetMetadata", {})
-        file_metadata_dict = vams_metadata.get("fileMetadata", {})
-        file_attributes_dict = vams_metadata.get("fileAttributes", {})
-        
-        # Aggregate from all metadata sources (now using simplified dictionary format)
-        inputMetadataFieldsToAggregate.extend(metadata_dict_to_str_array(asset_metadata_dict))
-        inputMetadataFieldsToAggregate.extend(metadata_dict_to_str_array(file_metadata_dict))
-        inputMetadataFieldsToAggregate.extend(metadata_dict_to_str_array(file_attributes_dict))
+        # Aggregate every metadata scope of the run metadata payload into the prompt seed list
+        inputMetadataFieldsToAggregate = aggregate_input_metadata_fields(inputMetadataObject)
 
 
     #Get all S3 image paths at input bucket directory location

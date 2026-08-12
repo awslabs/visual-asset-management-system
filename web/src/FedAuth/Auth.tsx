@@ -5,7 +5,7 @@
 
 import React, { PropsWithChildren, Suspense, useEffect, useRef, useState } from "react";
 import { Amplify } from "aws-amplify";
-import { fetchAuthSession, getCurrentUser, signOut, signInWithRedirect } from "aws-amplify/auth";
+import { getCurrentUser, signOut, signInWithRedirect } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { appCache } from "../services/appCache";
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from "@badgateway/oauth2-client";
@@ -24,6 +24,14 @@ import {
     setExternalOauth2Token,
     externalOAuthTokenProvider,
 } from "../utils/authTokenUtils";
+import {
+    ensureValidSession,
+    scheduleExpiryTimer,
+    clearExpiryTimer,
+    registerFocusRevalidation,
+    SESSION_EXPIRED_KEY,
+    SESSION_RETURN_TO_KEY,
+} from "../utils/sessionManager";
 
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
@@ -35,12 +43,13 @@ import LoadingScreen from "../components/loading/LoadingScreen";
 import { Alert } from "@cloudscape-design/components";
 import styles from "./loginbox.module.css";
 import "@aws-amplify/ui-react/styles.css";
-import { Heading } from "@aws-amplify/ui-react";
+import { Heading, useTheme } from "@aws-amplify/ui-react";
 
 import {
     ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
     ALLOWED_API_ROUTES_CACHE_KEY,
 } from "../common/constants/authRoutes";
+import { normalizeFeaturesEnabled } from "../common/constants/featuresEnabled";
 import { GlobalHeader } from "./../common/GlobalHeader";
 import { Header } from "./../authenticator/Header";
 import { Footer, PageFooter } from "./../authenticator/Footer";
@@ -49,6 +58,7 @@ import { SignInFooter } from "./../authenticator/SignInFooter";
 import { useThemeSettings } from "../hooks/useThemeSettings";
 import { TopNavigation } from "@cloudscape-design/components";
 import logoWhite from "../../logo_white.png";
+import { ensureApiStage } from "../utils/apiEndpoint";
 
 /**
  * Additional configuration needed to use federated identities
@@ -139,11 +149,6 @@ interface Config {
     externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
-     * External OAUTH IDP Display Name Configuration
-     */
-    externalOAuthIdpDisplayName?: string;
-
-    /**
      * VAMS Features that are enabled
      */
     featuresEnabled?: string;
@@ -171,8 +176,11 @@ interface Config {
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     let api_path = vamsConfig.DEV_API_ENDPOINT === "" ? config.api : vamsConfig.DEV_API_ENDPOINT;
-    if (api_path != undefined && api_path.length > 0 && api_path[api_path.length - 1] !== "/") {
-        api_path = api_path + "/";
+    // Normalize to end with the fixed API Gateway stage ("/api/"). amplify-config already
+    // includes the stage (no-op here); a hand-entered dev/base URL (e.g. a bare execute-api
+    // host without the stage) gets it appended so downstream API calls resolve correctly.
+    if (api_path != undefined && api_path.length > 0) {
+        api_path = ensureApiStage(api_path);
     }
     localStorage.setItem("api_path", api_path);
 
@@ -192,6 +200,11 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     } else {
         // Cognito mode: standard Amplify v6 configuration
         // identityPoolId intentionally omitted — VAMS uses Bearer token auth only
+        // Amplify's oauth.domain expects a bare hostname (it prepends https:// itself),
+        // so strip any scheme the config may carry
+        const cognitoAuthDomain = (
+            config.cognitoFederatedConfig?.customCognitoAuthDomain || ""
+        ).replace(/^https?:\/\//, "");
         Amplify.configure({
             Auth: {
                 Cognito: {
@@ -199,12 +212,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     userPoolClientId: config.cognitoAppClientId,
                     loginWith: {
                         oauth: {
-                            // Amplify expects the hosted-UI domain as a bare hostname (no scheme).
-                            // The backend config provides it with an "https://" prefix, so strip it
-                            // to avoid a malformed "https://https//..." authorize URL.
-                            domain: (
-                                config.cognitoFederatedConfig?.customCognitoAuthDomain || ""
-                            ).replace(/^https?:\/\//, ""),
+                            domain: cognitoAuthDomain,
                             scopes: ["openid", "email", "profile"],
                             redirectSignIn: [window.location.origin],
                             redirectSignOut: [window.location.origin],
@@ -219,7 +227,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     setAmpInit(true);
 }
 
-type AuthProps = {};
+type AuthProps = { children?: React.ReactNode };
 
 //Cognito components
 const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {
@@ -237,6 +245,50 @@ const cognitoAuthenticatorComponents = {
         Footer: SignInFooter,
     },
     Footer,
+};
+
+interface CognitoFederatedLoginProps {
+    onLogin: () => void;
+    logoSrc?: string;
+    idpDisplayName?: string;
+}
+
+const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc, idpDisplayName }) => {
+    const { tokens } = useTheme();
+
+    return (
+        <>
+            <div className={styles.container}>
+                <div className={styles.centeredBox}>
+                    <Heading level={3} padding={`${tokens.space.xl} ${tokens.space.xl} 0`}>
+                        <img
+                            style={{ width: "100%", maxWidth: "390px" }}
+                            src={logoSrc || logoDarkImageSrc}
+                            alt={`${vamsConfig.APP_NAME} Logo`}
+                        />
+                    </Heading>
+                    <button
+                        className={styles.button}
+                        onClick={onLogin}
+                        data-testid="federated-login-button"
+                    >
+                        Login with {idpDisplayName || "SSO"}
+                    </button>
+                </div>
+            </div>
+            <img
+                alt="background texture"
+                src={loginBgImageSrc}
+                style={{
+                    position: "fixed",
+                    top: 0,
+                    width: "100vw",
+                    left: 0,
+                    zIndex: "-100",
+                }}
+            />
+        </>
+    );
 };
 
 //External OAUTH components
@@ -344,11 +396,20 @@ const Auth: React.FC<AuthProps> = (props) => {
     const [authError, setauthError] = useState<string | null>(() =>
         localStorage.getItem("auth_error")
     );
+    const [sessionExpired, setSessionExpired] = useState<boolean>(
+        () => localStorage.getItem(SESSION_EXPIRED_KEY) === "true"
+    );
 
     // Tracks whether secure-config has been fetched for the current login
     // session, so feature switches are refetched on every re-login instead of
     // being cached forever in localStorage.
     const secureConfigFetchedRef = useRef(false);
+
+    // Tracks whether amplify-config has been re-fetched for this page load, so the
+    // runtime Amplify/OAuth configuration is refreshed from the backend on every
+    // reload (parallel to secure-config) instead of being served from the stale
+    // localStorage cache until site data is cleared.
+    const amplifyConfigFetchedRef = useRef(false);
 
     const [ampInit, setAmpInit] = useState(false);
 
@@ -403,8 +464,40 @@ const Auth: React.FC<AuthProps> = (props) => {
 
             //Configure Amplify
             configureAmplify(config, setAmpInit);
+
+            //Refresh amplify-config from the backend once per page load even when a
+            //cached config exists, so a changed runtime configuration (Cognito pool,
+            //OAuth endpoints, IDP settings) is picked up on reload instead of serving
+            //the stale cache until site data is cleared. Mirrors the secure-config
+            //refetch. The cached config above still drives the synchronous first render.
+            if (!amplifyConfigFetchedRef.current) {
+                amplifyConfigFetchedRef.current = true;
+                getAmplifyConfig().then((fetchedConfig) => {
+                    if (
+                        fetchedConfig &&
+                        typeof fetchedConfig === "object" &&
+                        !Array.isArray(fetchedConfig) &&
+                        !fetchedConfig._configError &&
+                        fetchedConfig.api
+                    ) {
+                        // Merge fresh amplify-config over the cached config so
+                        // secure-config-derived fields (featuresEnabled, etc.) are
+                        // preserved. Only re-render/reconfigure if something changed.
+                        const merged = { ...config, ...fetchedConfig };
+                        if (JSON.stringify(merged) !== JSON.stringify(config)) {
+                            appCache.setItem("config", merged);
+                            setConfig(merged);
+                        }
+                    } else {
+                        // Fetch failed or returned invalid data: keep using the cached
+                        // config (it rendered fine) rather than breaking the page.
+                        console.error("Failed to refresh amplify-config:", fetchedConfig);
+                    }
+                });
+            }
         } else {
             getAmplifyConfig().then(async (fetchedConfig) => {
+                amplifyConfigFetchedRef.current = true;
                 // Check if getAmplifyConfig returned an error object
                 if (fetchedConfig?._configError) {
                     setConfig(fetchedConfig);
@@ -439,16 +532,16 @@ const Auth: React.FC<AuthProps> = (props) => {
         getCurrentUser()
             .then((currentUser) => {
                 if (!localStorage.getItem("user")) {
-                    // getCurrentUser() succeeded, so there is a valid Cognito session,
-                    // but the local user record has not been written yet. This happens
-                    // right after a federated hosted-UI redirect (tokens already exist on
-                    // page load), where this effect would otherwise race the login-restore
-                    // effect and sign the user out. Restore the session instead of ending it.
-                    localStorage.setItem(
-                        "user",
-                        JSON.stringify({ username: currentUser.username })
-                    );
-                    setisLoggedIn(true);
+                    // No valid user session state
+                    signOut()
+                        .then(() => {
+                            console.log("User signed out - invalid session state");
+                        })
+                        .catch((error) => {
+                            console.log("User sign out error - invalid session state", error);
+                        });
+                    setisLoggedIn(false);
+                    resetSession();
                 }
             })
             .catch((error) => {});
@@ -458,43 +551,27 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Set user session once oauth access key login confirmed, start refresh interval
     useEffect(() => {
         if (window.DISABLE_COGNITO === true) {
-            // Check if access token or refresh token still valid
-            // ( This check is needed on initial login or if a user refreshes the page )
-            const [accessTokenValid, refreshTokenValid] = externalTokenValidation();
-            if (accessTokenValid) {
-                setisLoggedIn(true); // Since access token has been validated, can deem as logged in
-                startAccessTokenRefreshTimer(); // Restart refresh timer
-            } else if (refreshTokenValid) {
-                // If access token not valid but refresh token exists, attempt to refresh the token
-                setIsLoading(true); // show loading page while it's still refreshing the token
-                oauth2Client
-                    .refreshToken(getExternalOAuth2Token())
-                    .then((oauth2Token) => {
-                        // Successful token refresh. Update token & user session accordingly
-                        setExternalOauthLoginAndRefreshTimer(oauth2Token);
-                        setisLoggedIn(true); // Since access token has been validated, can deem as logged in
-                    })
-                    .catch((error) => {
-                        // Failed to refresh the token
-                        console.error(error);
-                        // Reset amplify info
-                        signOut()
-                            .then(() => {
-                                console.log("User signed out - Unable to refresh token");
-                            })
-                            .catch((error) => {
-                                console.log("User sign out error - Unable to refresh token", error);
-                            });
-                        setisLoggedIn(false);
-                        setIsLoading(false); // hide loading page so it will show login page instead
-                        resetSession();
-                    });
-                return; // since cant do an await in here, need to ensure everything is executed within the then/catch statements so don't execute anything after this
-            } else {
-                // neither token valid, setisLoggedIn to false
-                setisLoggedIn(false);
-                resetSession();
+            // If an OAuth2 authorization-code redirect is in flight (state + verifier present
+            // but the token has not been exchanged yet), defer to the code-exchange effect
+            // below — do NOT run page-load validation or toggle loading here, or we would race
+            // the login callback and flash the login screen mid-redirect.
+            const codeExchangePending =
+                !getExternalOAuth2Token().accessToken &&
+                !!localStorage.getItem("auth_state") &&
+                !!localStorage.getItem("code_verifier");
+            if (codeExchangePending) {
+                return;
             }
+            setIsLoading(true);
+            ensureValidSession().then((valid) => {
+                if (valid) {
+                    setisLoggedIn(true);
+                } else {
+                    setisLoggedIn(false);
+                    resetSession();
+                }
+                setIsLoading(false);
+            });
         }
     }, [triggerExternalOAuth]); // triggerExternalOAuth dependency is needed to for the useEffect to execute in the right order
 
@@ -522,19 +599,25 @@ const Auth: React.FC<AuthProps> = (props) => {
                 }
             });
 
-            //Check/set for being logged for subsequent page loads
-            getCurrentUser()
-                .then((currentUser) => {
-                    localStorage.setItem(
-                        "user",
-                        JSON.stringify({ username: currentUser.username })
-                    );
-                    setisLoggedIn(true);
-                    console.log("Cognito Page Load - Login set for Page Load");
-                })
-                .catch((error) =>
-                    console.log("Cognito Page Load - Not signed in... sending to login - ", error)
-                );
+            //Validate the session on page load (refresh-token-aware) before deeming the
+            //user logged in, so a reload with a dead session lands on the login screen
+            //instead of a broken "logged-in" app whose API calls all 403. Only ever sets
+            //logged-in on success — never forces logged-out here, so a fresh login arriving
+            //via the Hub "signedIn" event (incl. the federated redirect-back) is not fought.
+            ensureValidSession().then((valid) => {
+                if (!valid) {
+                    return; // no valid session yet → leave default; login screen shows
+                }
+                getCurrentUser()
+                    .then((currentUser) => {
+                        localStorage.setItem(
+                            "user",
+                            JSON.stringify({ username: currentUser.username })
+                        );
+                        setisLoggedIn(true);
+                    })
+                    .catch((error) => console.log("Cognito Page Load - Not signed in... ", error));
+            });
 
             return amplifyHubLIstener;
         }
@@ -590,7 +673,10 @@ const Auth: React.FC<AuthProps> = (props) => {
             secureConfigFetchedRef.current = true;
             getSecureConfig()
                 .then((value) => {
-                    config.featuresEnabled = value.featuresEnabled;
+                    // Normalize to a string array so the many config.featuresEnabled.includes(...)
+                    // consumers cannot crash if the API returns a
+                    // non-array (e.g. a boolean or comma-separated string).
+                    config.featuresEnabled = normalizeFeaturesEnabled(value.featuresEnabled);
                     config.locationServiceApiUrl = value.locationServiceApiUrl;
                     config.webDeployedUrl = value.webDeployedUrl || "";
                     appCache.setItem("config", config);
@@ -602,11 +688,6 @@ const Auth: React.FC<AuthProps> = (props) => {
 
                     // Allow a retry on the next effect run if the fetch failed
                     secureConfigFetchedRef.current = false;
-
-                    // if response status code was 401 unauthorized, token may be invalid, so sign out
-                    if ((error as any).status === 401) {
-                        signOutWithError();
-                    }
                 });
             console.log("Fetched secure config");
         }
@@ -618,20 +699,15 @@ const Auth: React.FC<AuthProps> = (props) => {
             const user = JSON.parse(localStorage.getItem("user")!);
             fetchLoginProfile({ username: user.username })
                 .then((result) => {
-                    if (result[0] === true && result[1]?.Items?.[0]) {
+                    if (result[0] === true && result[1]?.userId) {
                         loginProfile = {};
-                        loginProfile.userId = result[1].Items[0].userId;
-                        loginProfile.email = result[1].Items[0].email;
+                        loginProfile.userId = result[1].userId;
+                        loginProfile.email = result[1].email;
                         appCache.setItem("loginProfile", loginProfile);
                     }
                 })
                 .catch((error: Error) => {
                     console.error("Error getting login-profile:", error.message);
-
-                    // if response status code was 401 unauthorized, token may be invalid, so sign out
-                    if ((error as any).status === 401) {
-                        signOutWithError();
-                    }
                 });
             console.log("Pinged LoginProfile API");
         }
@@ -676,6 +752,40 @@ const Auth: React.FC<AuthProps> = (props) => {
         );
         return () => clearInterval(renewInterval);
     }, [isLoggedIn]);
+
+    //Both Effect
+    //Schedule the expiry-aligned refresh timer and revalidate on focus/visibility
+    //(covers timer throttling during sleep or backgrounded tabs). One scheduler for
+    //all login routes; torn down on logout/unmount.
+    useEffect(() => {
+        if (!isLoggedIn) {
+            return;
+        }
+        void scheduleExpiryTimer();
+        const unregister = registerFocusRevalidation();
+        return () => {
+            unregister();
+            clearExpiryTimer();
+        };
+    }, [isLoggedIn]);
+
+    //Both Effect
+    //After a (re-)login, restore the route the user was on when their session expired
+    //and clear the expired flag/message. Works for both modes via HashRouter.
+    useEffect(() => {
+        if (!isLoggedIn) {
+            return;
+        }
+        const returnTo = localStorage.getItem(SESSION_RETURN_TO_KEY);
+        if (returnTo) {
+            localStorage.removeItem(SESSION_RETURN_TO_KEY);
+            window.location.hash = returnTo;
+        }
+        localStorage.removeItem(SESSION_EXPIRED_KEY);
+        if (sessionExpired) {
+            setSessionExpired(false);
+        }
+    }, [isLoggedIn, sessionExpired]);
 
     //External OAUTH Function for handling sign-in
     const handleExternalOauthSignIn = async (require_mfa = false) => {
@@ -747,27 +857,6 @@ const Auth: React.FC<AuthProps> = (props) => {
             setauthError(localStorage.getItem("auth_error"));
         }
     };
-
-    //Cognito Auth Effect
-    //Check access token validity, expirations, and refreshs
-    useEffect(() => {
-        if (!ampInit || !localStorage.getItem("user")) return;
-
-        // Trying to set amplify session
-        const currentUser = localStorage.getItem("user")
-            ? JSON.parse(localStorage.getItem("user")!)
-            : undefined;
-
-        if (!currentUser) {
-            return;
-        }
-
-        if (window.DISABLE_COGNITO === false) {
-            // Schedule check and refresh (when needed) of JWT's every 5 min:
-            const i = setInterval(() => fetchAuthSession(), 5 * 60 * 1000);
-            return () => clearInterval(i);
-        }
-    }, [ampInit]);
 
     //Initial loading screen when going through config init
     if (config === null) {
@@ -917,7 +1006,17 @@ const Auth: React.FC<AuthProps> = (props) => {
                                 </SpaceBetween>
                             </Box>
                         </div>
-                        {authError ? (
+                        {sessionExpired ? (
+                            <div className={styles.alertError}>
+                                <Alert
+                                    type="warning"
+                                    statusIconAriaLabel="Warning"
+                                    header="Session expired"
+                                >
+                                    Your session expired. Please sign in again to continue.
+                                </Alert>
+                            </div>
+                        ) : authError ? (
                             <div className={styles.alertError}>
                                 <Alert type="error" statusIconAriaLabel="Error" header="Error">
                                     Failed to login or session timed out. Please try again.
@@ -954,11 +1053,23 @@ const Auth: React.FC<AuthProps> = (props) => {
                         style={{
                             flex: 1,
                             display: "flex",
-                            justifyContent: "center",
-                            alignItems: "flex-start",
+                            flexDirection: "column",
+                            justifyContent: "flex-start",
+                            alignItems: "center",
                             paddingTop: "5vh",
                         }}
                     >
+                        {sessionExpired ? (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert
+                                    type="warning"
+                                    statusIconAriaLabel="Warning"
+                                    header="Session expired"
+                                >
+                                    Your session expired. Please sign in again to continue.
+                                </Alert>
+                            </Box>
+                        ) : null}
                         <Authenticator
                             components={cognitoAuthenticatorComponents}
                             loginMechanisms={["username"]}
@@ -969,8 +1080,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                 </div>
             );
         } else {
-            //Federated Login — show the native username/password form AND a
-            //federated login button together on the same screen.
+            //Federated Login
             return (
                 <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
                     <LoginHeader />
@@ -980,45 +1090,34 @@ const Auth: React.FC<AuthProps> = (props) => {
                             flex: 1,
                             display: "flex",
                             flexDirection: "column",
-                            justifyContent: "flex-start",
                             alignItems: "center",
-                            paddingTop: "5vh",
+                            justifyContent: "center",
                         }}
                     >
-                        <Authenticator
-                            components={cognitoAuthenticatorComponents}
-                            loginMechanisms={["username"]}
-                            hideSignUp={true}
-                        />
-                        <div
-                            style={{
-                                width: "100%",
-                                maxWidth: "460px",
-                                marginTop: "1rem",
-                            }}
-                        >
-                            <SpaceBetween size="xs" direction="vertical">
-                                <Box textAlign="center" color="text-body-secondary">
-                                    or
-                                </Box>
-                                <Button
-                                    variant="primary"
-                                    fullWidth={true}
-                                    data-testid="federated-login-button"
-                                    onClick={() =>
-                                        signInWithRedirect({
-                                            provider: {
-                                                custom:
-                                                    config.cognitoFederatedConfig
-                                                        ?.customFederatedIdentityProviderName || "",
-                                            },
-                                        })
-                                    }
+                        {sessionExpired ? (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert
+                                    type="warning"
+                                    statusIconAriaLabel="Warning"
+                                    header="Session expired"
                                 >
-                                    Login with {config.cognitoFederatedConfig?.idpDisplayName || "SSO"}
-                                </Button>
-                            </SpaceBetween>
-                        </div>
+                                    Your session expired. Please sign in again to continue.
+                                </Alert>
+                            </Box>
+                        ) : null}
+                        <FedLoginBox
+                            logoSrc={loginLogoSrc}
+                            idpDisplayName={config.cognitoFederatedConfig?.idpDisplayName}
+                            onLogin={() =>
+                                signInWithRedirect({
+                                    provider: {
+                                        custom:
+                                            config.cognitoFederatedConfig
+                                                ?.customFederatedIdentityProviderName || "",
+                                    },
+                                })
+                            }
+                        />
                     </div>
                     <PageFooter />
                 </div>
@@ -1066,49 +1165,6 @@ const parseJwt = (
     return JSON.parse(jsonPayload);
 };
 
-let refreshTimer: NodeJS.Timeout | null;
-const startAccessTokenRefreshTimer = (startNewTimer = false) => {
-    // If there was a previous refresh timer, the boolean param will clear it
-    if (startNewTimer && refreshTimer) {
-        clearTimeout(refreshTimer);
-        refreshTimer = null;
-    }
-
-    const oauth2Token = getExternalOAuth2Token();
-    const accessToken = oauth2Token.accessToken;
-
-    let refreshTimeLength = 5 * 60 * 1000; // Default to 5 minutes, if no expiresAt timestamp found below
-    const percentOfTokenLengthToRefresh = 0.75; // Percentage of time to trigger refresh, default to 75% per other oauth library recommendations
-
-    // If there is an oauth token and no refresh timer, calculate the percentage of it's lifetime from the expiration time and now
-    if (oauth2Token && !refreshTimer) {
-        const expiresAtTimestamp = oauth2Token.expiresAt;
-        if (expiresAtTimestamp) {
-            refreshTimeLength = Math.ceil(
-                (expiresAtTimestamp - Date.now()) * percentOfTokenLengthToRefresh
-            ); // rounding so we don't have fractions of a millisecond
-        }
-
-        // Start the timer that will run at the percentage of the expiration time calculated above
-        refreshTimer = setTimeout(async () => {
-            // Run the following logic when the timer triggers
-            if (!accessToken) {
-                // no access token found when trying to refresh
-                signOutWithError("auth_error", "No access token found when refreshing");
-                return;
-            }
-
-            try {
-                const oauth2TokenResponse = await oauth2Client.refreshToken(oauth2Token);
-                setExternalOauth2Token(oauth2TokenResponse); // Set when previous line is successful and within here, restart this timer
-            } catch (error) {
-                console.error("error: ", error);
-                signOutWithError("auth_error", "Failed to refresh access token.");
-            }
-        }, refreshTimeLength);
-    }
-};
-
 const signOutWithError = (key = "auth_error", value = "Unauthorized") => {
     // Reset amplify info
     signOut()
@@ -1136,7 +1192,7 @@ const resetSession = () => {
 const setExternalOauthLoginAndRefreshTimer = (oauth2Token: OAuth2Token) => {
     setExternalOauth2Token(oauth2Token); // Use utility function
     clearPreviousLoginErrors(); // Can remove old login errors since have token
-    startAccessTokenRefreshTimer(true); // Restart timer upon successfully setting the new oauth token
+    void scheduleExpiryTimer(); // Align refresh timer to the new token's expiry
 };
 
 function clearPreviousLoginErrors() {

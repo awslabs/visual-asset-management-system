@@ -11,13 +11,16 @@ from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="UserModels")
 
+# Opaque Cognito pagination token bound, matching the other listing models.
+MAX_LIST_TOKEN_LENGTH = 4096
+
 ######################## Cognito User Management API Models ##########################
 
 class ListCognitoUsersRequestModel(BaseModel, extra='ignore'):
     """Request model for listing Cognito users"""
     maxItems: Optional[int] = Field(default=60, ge=1, le=60)
     pageSize: Optional[int] = Field(default=60, ge=1, le=60)
-    startingToken: Optional[str] = None
+    startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
 class CreateCognitoUserRequestModel(BaseModel, extra='ignore'):

@@ -13,6 +13,12 @@ body {
     padding: 0;
 }
 
+/* Reserve the vertical scrollbar's space at all times so opening a modal/drawer (which locks body
+   scroll) does not remove the scrollbar and shift the fixed header, leaving a gap on the right. */
+html {
+    scrollbar-gutter: stable;
+}
+
 /* Firefox-specific rule to enable scrolling */
 @-moz-document url-prefix() {
     html,
@@ -146,6 +152,13 @@ code {
     margin-top: -20px;
     margin-bottom: -20px;
     box-sizing: border-box;
+}
+
+// The negative margins above offset page-level padding on the asset view page;
+// inside the file viewer modal they pull the viewer under the modal header
+.file-viewer-modal-content .visualizer-container {
+    margin-top: 0;
+    margin-bottom: 0;
 }
 
 .visualizer-footer {

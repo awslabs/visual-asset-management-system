@@ -10,7 +10,7 @@ VAMS operates within the AWS shared responsibility model. AWS manages the securi
 
 ## Authentication
 
-VAMS supports three authentication mechanisms, all validated by a custom Lambda authorizer attached to the Amazon API Gateway V2 HttpApi.
+VAMS supports three authentication mechanisms, all validated by a custom Lambda authorizer attached to the REST API.
 
 ### Amazon Cognito
 
@@ -25,6 +25,10 @@ The default authentication provider. VAMS deploys an Amazon Cognito User Pool wi
 #### SAML Federation
 
 SAML authentication enables federated access to VAMS through your organization's identity provider (such as Auth0, Active Directory, or Google Workspace). When enabled, Amazon Cognito acts as a SAML service provider.
+
+:::warning[Commercial partition only]
+SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS GovCloud (US) or the AWS European Sovereign Cloud. Configuration validation rejects `useSaml` in those partitions. Use the external OAuth identity provider option for federated sign-in there.
+:::
 
 **Configuration steps:**
 
@@ -61,7 +65,7 @@ When Amazon Cognito is not available, VAMS supports external OAuth identity prov
 
 ### API Keys
 
-VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes.
+VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes, caching each key's record per key for `API_KEY_CACHE_TTL` (15 seconds). A key that is not found is cached as a negative result for the same lifetime, so repeated requests presenting an invalid key do not re-query the table.
 
 ## Custom Lambda Authorizer
 
@@ -74,7 +78,9 @@ VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, provi
 -   **IP Range Restrictions**: Optional IP-based access control with configurable IP range pairs (validated before JWT verification for performance)
 -   **Payload Format Version 2.0**: Simple boolean responses (`isAuthorized: true/false`)
 -   **Comprehensive JWT Claims Context**: All JWT claims are passed to downstream Lambda functions
--   **Public Key Caching**: One-hour TTL for JWKS public keys to reduce external API calls
+-   **Public Key Caching**: `CACHE_TTL` (1 hour) for JWKS public keys to reduce external API calls
+-   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names
+-   **API Key Caching**: `API_KEY_CACHE_TTL` (15 seconds) per key, including negative results for unknown keys
 -   **Dedicated Lambda Layer**: Isolated dependencies for security and performance
 
 ### Authorizer Configuration
@@ -102,11 +108,11 @@ The authorizer behavior is controlled through `authProvider.authorizerOptions` i
 The authorizer uses a dedicated Lambda layer with the following dependencies:
 
 ```
-joserfc==1.6.1             # RFC-compliant JOSE (JWT/JWS/JWE) for Cognito
-PyJWT[crypto]==2.12.1      # External IDP JWT verification
-cryptography==45.0.6       # Cryptographic primitives
-requests==2.32.5           # HTTP requests for JWKS retrieval
-aws-lambda-powertools==3.19.0  # Lambda Powertools for logging
+joserfc             # RFC-compliant JOSE (JWT/JWS/JWE) for Cognito
+PyJWT[crypto]      # External IDP JWT verification
+cryptography       # Cryptographic primitives
+requests           # HTTP requests for JWKS retrieval
+aws-lambda-powertools  # Lambda Powertools for logging
 ```
 
 ### JWT Claims Context Integration
@@ -132,6 +138,16 @@ elif 'lambdaCrossCall' in event:
 | Amazon Cognito     | `sub`, `cognito:username`, `email`, `token_use`, `aud`, `iss`, `exp` |
 | External OAuth IDP | `sub`, `preferred_username`, `email`, `upn`, `username`              |
 | VAMS custom        | `vams:tokens`, `vams:roles`, `vams:externalAttributes`               |
+
+#### Role Resolution
+
+The `vams:roles` context value is resolved by the custom Lambda authorizer, which reads the caller's assigned roles from the user roles table after verifying the presented credential and passes them to handler Lambda functions through the authorizer context. Resolved roles are cached per user for `USER_ROLES_CACHE_TTL` (60 seconds); an empty role list is cached as well, so a user with no roles does not re-query the table on every request. Resolving roles at authorization time applies to every authentication mechanism — Amazon Cognito, an external OAuth identity provider, and API keys — and means a role assignment or revocation takes effect within that cache lifetime rather than persisting for the lifetime of an issued token. The Amazon Cognito pre-token-generation trigger therefore populates only `vams:tokens` and `email`, leaving `vams:roles` empty in the token itself.
+
+Authorization decisions do not depend on this context value: `CasbinEnforcer` independently reads the caller's roles from the user roles table when it builds policy. The context value carries the resolved roles for handler-side use and records them in the audit logs.
+
+For the full request path from the identity provider through the authorizer to both Casbin tiers, see [Authentication and Authorization Flow](../developer/security.md#authentication-and-authorization-flow) in the developer guide.
+
+The Lambda cross-call format is used for internal Lambda-to-Lambda invocations that carry no API Gateway request context (for example, workflow execution processing and bucket-sync ingestion). The `lambdaCrossCall` object supplies a `userName` claim identifying the acting user; when no user context applies, the reserved system user ID `SYSTEM_USER` is used. Because cross-call events bypass JWT verification, access to direct Lambda invocation is controlled through AWS IAM permissions.
 
 :::note[GovCloud Token Limitation]
 AWS GovCloud deployments with the GovCloud configuration enabled only support v1 of the Amazon Cognito Lambda triggers. This means only Access tokens (not ID tokens) can be used for VAMS API authentication in GovCloud.
@@ -164,13 +180,13 @@ Organizations can customize the authorizer behavior by modifying:
 
 ### Implementation Files
 
-| Component               | Path                                                             |
-| ----------------------- | ---------------------------------------------------------------- |
-| HTTP Authorizer         | `backend/backend/handlers/auth/apiGatewayAuthorizerHttp.py`      |
-| WebSocket Authorizer    | `backend/backend/handlers/auth/apiGatewayAuthorizerWebsocket.py` |
-| CDK Lambda Builders     | `infra/lib/lambdaBuilder/authFunctions.ts`                       |
-| Dedicated Lambda Layer  | `backend/lambdaLayers/authorizer/`                               |
-| Configuration Constants | `infra/config/config.ts`                                         |
+| Component               | Path                                                        |
+| ----------------------- | ----------------------------------------------------------- |
+| REST Authorizer         | `backend/backend/handlers/auth/apiGatewayAuthorizerRest.py` |
+| Shared Authorizer Core  | `backend/backend/common/auth/authorizerCore.py`             |
+| CDK Lambda Builders     | `infra/lib/lambdaBuilder/authFunctions.ts`                  |
+| Dedicated Lambda Layer  | `backend/lambdaLayers/authorizer/`                          |
+| Configuration Constants | `infra/config/config.ts`                                    |
 
 ## Authorization
 
@@ -202,32 +218,58 @@ flowchart TD
 
 The following fields can be used in ABAC policy rules:
 
-| Field                      | Description                                        |
-| -------------------------- | -------------------------------------------------- |
-| `databaseId`               | Database identifier                                |
-| `assetName`                | Asset name                                         |
-| `assetType`                | Asset type classification                          |
-| `tags`                     | Asset tags                                         |
-| `tagName`                  | Tag name                                           |
-| `tagTypeName`              | Tag type name                                      |
-| `roleName`                 | Role name                                          |
-| `userId`                   | User identifier                                    |
-| `pipelineId`               | Pipeline identifier                                |
-| `pipelineType`             | Pipeline type                                      |
-| `pipelineExecutionType`    | Pipeline execution type (Lambda, SQS, EventBridge) |
-| `workflowId`               | Workflow identifier                                |
-| `metadataSchemaName`       | Metadata schema name                               |
-| `metadataSchemaEntityType` | Metadata entity type                               |
-| `object__type`             | Entity type for Tier 2 enforcement                 |
-| `route__path`              | API route path for Tier 1 enforcement              |
+| Field                      | Description                                                                   |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `databaseId`               | Database identifier                                                           |
+| `assetName`                | Asset name                                                                    |
+| `assetType`                | Asset type classification                                                     |
+| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of` |
+| `tagName`                  | Tag name                                                                      |
+| `tagTypeName`              | Tag type name                                                                 |
+| `roleName`                 | Role name                                                                     |
+| `userId`                   | User identifier                                                               |
+| `pipelineId`               | Pipeline identifier                                                           |
+| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)     |
+| `workflowId`               | Workflow identifier                                                           |
+| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created |
+| `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
+| `metadataSchemaName`       | Metadata schema name                                                          |
+| `metadataSchemaEntityType` | Metadata entity type                                                          |
+| `object__type`             | Entity type for Tier 2 enforcement                                            |
+| `route__path`              | API route path for Tier 1 enforcement                                         |
+
+Each object type accepts only the fields that are meaningful for it. `category` and `name` are valid on the
+`pipeline` and `workflow` object types, which lets a role be scoped to a family of pipelines or workflows
+without listing every identifier — for example allowing GET where `category equals conversion`, or denying
+PUT where `name starts_with prod-`. The authoritative per-type field matrix is returned by
+`GET /auth/constraints/permissionObjects`, which is the same mapping the backend validates a submitted
+constraint against.
+
+:::note
+A pipeline's `name` and `pipelineExecutionType` are stored structurally on the pipeline record
+(`pipelineName` and `executionConfig.executionType`) and are surfaced as these flat fields on the Tier 2
+object before enforcement, so a constraint on either one evaluates against the real value.
+:::
 
 ### MFA-Aware Roles
 
 Roles can require MFA verification. When a role has `mfaRequired=True`, it is only active when the user's authentication claims include `mfaEnabled=True`. This provides an additional security layer for privileged operations.
 
+The API Gateway custom authorizer performs the MFA check: after verifying the caller's JWT, it calls the customizable `customMFATokenScopeCheckOverride` hook (`customConfigCommon/customAuthClaimsCheck.py`) and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. For Amazon Cognito, the default hook reads the user's MFA preference with the `AdminGetUser` API (cached per user per sign-in session); for external OAuth IDPs, organizations implement their own MFA verification in the hook. Handler Lambda functions read this context value and need no identity provider access of their own. The check runs against Amazon Cognito over the public service endpoint, so it requires the authorizer to have a network path to Amazon Cognito.
+
+:::warning[MFA requires the authorizer to run outside the VPC]
+VAMS does not create Amazon Cognito VPC interface endpoints, so an authorizer running inside the VPC has no in-VPC path to Amazon Cognito. When VAMS Lambda functions run in the VPC (`app.useGlobalVpc.useForAllLambdas`), the Cognito MFA check is disabled (`COGNITO_AUTH_ENABLED = FALSE` on the authorizer Lambda) and `mfaRequired` on a role has no effect. The MFA check (`COGNITO_AUTH_ENABLED = TRUE`) and MFA-aware role enforcement apply only when the authorizer runs outside the VPC.
+:::
+
 ### Policy Caching
 
-The Casbin enforcer caches user policies with a 60-second TTL per user. This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute.
+The Casbin enforcer caches compiled user policies per user for `CASBIN_REFRESH_POLICY_SECONDS` (60 seconds). This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute. Because a user's MFA state changes which of their roles are active, the cache is also keyed on that state and is invalidated when it changes.
+
+### Pipeline Lambda invocation scope
+
+Pipelines can invoke customer-registered AWS Lambda functions, so the pipeline-management Lambda holds an `iam:PassRole` grant scoped by role-name pattern rather than to a single fixed role ARN. This is intentional: it lets an operator register pipelines that run under different roles without a CDK change for each one. Two controls bound this openness — the Casbin API-tier authorization gates who may create or update a pipeline (`pipeline` object type), and `iam:PassRole` can only pass roles within the same account.
+
+To narrow the scope in a hardened deployment, give the roles VAMS pipelines are allowed to assume a common, dedicated name prefix (for example `\{config.name\}-pipeline-*`) and tighten the `iam:PassRole` resource in the pipeline Lambda builder to that prefix and to the deployment account, rather than an account-wildcard name-substring pattern. Keeping a prefix pattern (rather than a single ARN) preserves the ability to register multiple pipeline roles while removing the account wildcard.
 
 ## Encryption
 
@@ -243,9 +285,14 @@ All VAMS storage resources support encryption at rest:
 | Amazon SQS queues      | SQS managed encryption          | Customer-managed KMS key           |
 | Amazon CloudWatch Logs | N/A                             | Customer-managed KMS key           |
 | Amazon OpenSearch      | Service-managed                 | Customer-managed KMS key           |
+| Amazon EventBridge bus | AWS owned key                   | Customer-managed KMS key           |
 
 :::tip[Enabling KMS CMK Encryption]
 Set `useKmsCmkEncryption.enabled = true` in the deployment configuration. An external key can be imported via `useKmsCmkEncryption.optionalExternalCmkArn`. If no external key is provided, VAMS creates a new AWS KMS key with automatic key rotation enabled.
+:::
+
+:::note[EventBridge bus encryption in GovCloud / EU Sovereign Cloud]
+Amazon EventBridge does not support customer managed keys on event buses in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions. In those partitions, the orchestration bus uses EventBridge's default AWS owned key encryption at rest regardless of the `useKmsCmkEncryption` setting. All other storage resources continue to use the customer-managed key.
 :::
 
 ### KMS Key Policy
@@ -278,8 +325,25 @@ All data in transit is encrypted using TLS:
 -   **Amazon S3 bucket policies** enforce TLS by denying all `s3:*` actions when `aws:SecureTransport=false`
 -   **Amazon SNS topics** enforce SSL with the `enforceSSL` property
 -   **Amazon SQS queues** enforce SSL with the `enforceSSL` property
--   **Amazon API Gateway** uses HTTPS endpoints exclusively
+-   **Amazon API Gateway** uses HTTPS endpoints exclusively, with a security policy that sets the minimum TLS version
 -   **Amazon CloudFront / Application Load Balancer** terminates TLS at the edge
+
+#### REST API TLS Security Policy
+
+A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name.
+
+| Deployment                                               | Security policy                          | TLS versions accepted |
+| -------------------------------------------------------- | ---------------------------------------- | --------------------- |
+| Commercial                                               | `SecurityPolicy_TLS13_1_2_2021_06`       | TLS 1.3, TLS 1.2      |
+| GovCloud and EU Sovereign Cloud (`app.govCloud.enabled`) | Partition and Region default (unchanged) | TLS 1.3, TLS 1.2      |
+
+In the commercial partition, a Regional REST API would otherwise default to the `TLS_1_0` policy, which accepts TLS 1.0 and TLS 1.1. VAMS raises the floor to `SecurityPolicy_TLS13_1_2_2021_06`, which accepts TLS 1.3 and TLS 1.2 and rejects TLS 1.1 and TLS 1.0. That policy stays compatible with every supported fronting mode: Amazon CloudFront negotiates at most TLS 1.2 to a custom origin, so a TLS 1.3-only policy would fail every `/api/*` origin handshake.
+
+This policy is an enhanced policy, identified by the `SecurityPolicy_` prefix, and requires an endpoint access mode. VAMS sets `BASIC` rather than `STRICT`: the CloudFront `/api/*` origin request, the ALB redirect to `execute-api`, and direct `execute-api` access are cross-host or cross-endpoint-type by design, and `STRICT` rejects requests that do not originate from the same endpoint type with a matching SNI host.
+
+The GovCloud mode, which AWS European Sovereign Cloud deployments also enable for their partition guardrails, leaves the security policy unset so the API keeps the default its partition and Region apply. Those partitions do not offer the `TLS_1_0` policy for Regional APIs, and APIs created there are FIPS-compliant by default, so the minimum version is already TLS 1.2 without VAMS asserting a specific policy.
+
+Changing a security policy takes about 15 minutes to propagate. The API remains invocable while its status is `UPDATING`. To see which TLS version and cipher a client negotiated, use the `$context.tlsVersion` and `$context.cipherSuite` variables in the API access logs.
 
 The following bucket policy statement is applied to every Amazon S3 bucket in VAMS:
 
@@ -339,6 +403,29 @@ Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConf
 ## IP Range Restrictions
 
 The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation.
+
+## Presigned URL Network Restrictions
+
+VAMS supports optional network restrictions on Amazon S3 presigned URL access through bucket policies. When `app.assetBuckets.presignedUrlNetworkRestrictions` is configured with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 interface or gateway VPC endpoint IDs), these restrictions are enforced as bucket policy deny statements on the VAMS-created asset bucket and the auxiliary bucket. The restrictions apply only to presigned (query-string authenticated) requests, leaving backend operations and presigned URL lifetimes unchanged.
+
+-   **Allowed IP ranges** — Array of IPv4 and IPv6 CIDR blocks (for example, `["192.168.1.0/24", "2001:db8::/32"]`). Requests are evaluated against the `aws:SourceIp` condition key.
+-   **Allowed VPC endpoint IDs** — Array of Amazon S3 VPC endpoint IDs (for example, `["vpce-1234abcd"]`). Accepts both interface and gateway VPC endpoint IDs. Requests are evaluated against the `aws:SourceVpce` condition key.
+
+The two restriction types are mutually exclusive — configuration validation rejects setting both, because a request arrives either over the public path (`aws:SourceIp`) or through a VPC endpoint (`aws:SourceVpce`). Empty or omitted arrays mean no restrictions; no policy statement is emitted. The deny statement conditions include `StringEquals s3:authType=REST-QUERY-STRING` to scope it to presigned requests only, and `BoolIfExists aws:ViaAWSService=false` to exclude AWS service-to-service calls. All VAMS backend Lambda and pipeline operations use SDK header authentication and are never affected by these restrictions.
+
+Enforcement occurs at URL use time. Restriction changes applied through a redeployment take effect immediately for all URLs, including those that were issued before the restriction change and have not yet expired.
+
+For external (imported) asset buckets, VAMS does not apply resource policies to buckets it does not own. To restrict presigned URLs on an external bucket, the bucket owner applies an equivalent deny statement manually to the bucket policy. See [External Amazon S3 bucket setup](../deployment/external-s3-setup.md) for the complete statement and instructions.
+
+For custom bucket policy statements beyond network restrictions, `infra/config/policy/s3AdditionalBucketPolicyConfig.json` applies an operator-defined statement to all VAMS-created buckets. See the [configuration reference](../deployment/configuration-reference.md) for details.
+
+## AWS WAF and Rate Limiting
+
+When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
+
+The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the `X-Forwarded-For` client IP (`FORWARDED_IP`) rather than the immediate connection source, so it counts each real end user even when requests arrive through CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress IP. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
+
+When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit, aggregation key, and response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
 
 ## IAM Least Privilege
 
@@ -483,11 +570,12 @@ The following recommendations should be reviewed with your organization's securi
 3. **Bootstrap CDK with minimal permissions** — Run AWS CDK bootstrap with the least-privileged AWS IAM role needed to deploy CDK and VAMS environment components.
 4. **Review token timeouts** — Authentication access, ID, and file presigned URL token timeouts default to 1 hour per security best practices. Adjust as necessary for your organization's requirements.
 5. **Configure IP restrictions** — Consider configuring IP range restrictions using `authorizerOptions.allowedIpRanges` in the [deployment configuration](../deployment/configuration-reference.md) to limit API access to known networks.
-6. **Enable KMS encryption** — For production deployments, enable customer-managed KMS encryption (`useKmsCmkEncryption.enabled: true`) for all storage resources.
-7. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain.
-8. **Review Content Security Policy** — The CSP is dynamically generated based on deployment configuration. Review the generated policy headers for compliance with your organization's standards.
-9. **Enable audit logging review** — Regularly review audit logs in Amazon CloudWatch for suspicious activity patterns such as repeated authorization failures or unusual file download volumes.
-10. **Restrict constraint management to trusted administrators** — The constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, `/auth/constraintsTemplateImport`) allow a role to define the authorization policy itself. A role with this access can grant access to any resource, comparable to holding AWS Identity and Access Management (IAM) policy-editing permissions. In the default deployment these routes are granted only to the `admin` role. Do not delegate `api` access to these routes to general or untrusted roles, and treat changes to who can manage constraints as privileged administrative changes. Auth changes are recorded in the Auth Changes audit log group for review.
+6. **Configure presigned URL network restrictions** — For production deployments where asset access should be restricted to specific networks, configure `assetBuckets.presignedUrlNetworkRestrictions` with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 VPC endpoint IDs). These restrictions limit presigned URL access to the specified networks through bucket policy deny statements applied to the VAMS-created asset and auxiliary buckets.
+7. **Enable KMS encryption** — For production deployments, enable customer-managed KMS encryption (`useKmsCmkEncryption.enabled: true`) for all storage resources.
+8. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain.
+9. **Review Content Security Policy** — The CSP is dynamically generated based on deployment configuration. Review the generated policy headers for compliance with your organization's standards.
+10. **Enable audit logging review** — Regularly review audit logs in Amazon CloudWatch for suspicious activity patterns such as repeated authorization failures or unusual file download volumes.
+11. **Restrict constraint management to trusted administrators** — The constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, `/auth/constraintsTemplateImport`) allow a role to define the authorization policy itself. A role with this access can grant access to any resource, comparable to holding AWS Identity and Access Management (IAM) policy-editing permissions. In the default deployment these routes are granted only to the `admin` role. Do not delegate `api` access to these routes to general or untrusted roles, and treat changes to who can manage constraints as privileged administrative changes. Auth changes are recorded in the Auth Changes audit log group for review.
 
 :::warning[Shared Responsibility]
 VAMS is provided under the AWS shared responsibility model. Any customization for customer use must go through a security review to confirm that modifications do not introduce new vulnerabilities. Any team implementing VAMS takes on the responsibility of ensuring their implementation has gone through a proper security review.

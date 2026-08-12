@@ -5,16 +5,21 @@ from typing import List, Optional, Dict, Any, Literal
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from common.validators import validate, id_pattern, object_name_pattern, uuid_pattern
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="DatabaseModels")
 
+# Maximum length of a caller-supplied pagination token. Tokens this service issues
+# are a base64-encoded DynamoDB LastEvaluatedKey, well under this bound.
+MAX_PAGINATION_TOKEN_LENGTH = 4096
+
 ######################## Create Database API Models ##########################
 class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new database"""
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
-    defaultBucketId: str = Field(pattern=uuid_pattern)
+    defaultBucketId: str = Field(regex=uuid_pattern)
     restrictMetadataOutsideSchemas: Optional[bool] = False
     restrictFileUploadsToExtensions: Optional[str] = ""
 
@@ -56,17 +61,24 @@ class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
                     if ext.lower() == ".all":
                         continue  # .all is a special bypass value
                     if not ext.startswith('.'):
-                        raise ValueError(f"Extension '{ext}' must start with a dot (e.g., '.pdf')")
+                        raise ValueError("Each extension must start with a dot (e.g., '.pdf')")
                     if len(ext) < 2:
-                        raise ValueError(f"Extension '{ext}' is too short")
+                        raise ValueError("Each extension must have at least one character after the dot")
                     # Check for valid characters (alphanumeric and dot only)
                     if not all(c.isalnum() or c == '.' for c in ext):
-                        raise ValueError(f"Extension '{ext}' contains invalid characters")
+                        raise ValueError("Extensions may contain only letters, digits, and dots")
             
         (valid, message) = validate(validation_dict)
         if not valid:
             logger.error(message)
             raise ValueError(message)
+
+        # Reserved S3 keywords cannot be used as a databaseId: the ID becomes a path
+        # segment inside asset buckets and would collide with system-reserved folders.
+        database_id = values.get('databaseId')
+        if isinstance(database_id, str) and database_id.strip().lower() in RESERVED_S3_PREFIX_FOLDERS:
+            raise ValueError("databaseId is invalid. It matches a reserved keyword and cannot be used.")
+
         return values
 
 class CreateDatabaseResponseModel(BaseModel, extra='ignore'):
@@ -91,7 +103,7 @@ class GetDatabasesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing databases"""
     maxItems: Optional[int] = Field(default=30000, ge=1)
     pageSize: Optional[int] = Field(default=3000, ge=1)
-    startingToken: Optional[str] = None
+    startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
     showDeleted: Optional[bool] = False
 
 class GetDatabasesResponseModel(BaseModel, extra='ignore'):
@@ -102,7 +114,7 @@ class GetDatabasesResponseModel(BaseModel, extra='ignore'):
 class UpdateDatabaseRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a database"""
     description: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True)
-    defaultBucketId: Optional[str] = Field(None, pattern=uuid_pattern)
+    defaultBucketId: Optional[str] = Field(None, regex=uuid_pattern)
     restrictMetadataOutsideSchemas: Optional[bool] = None
     restrictFileUploadsToExtensions: Optional[str] = None
 
@@ -152,12 +164,12 @@ class UpdateDatabaseRequestModel(BaseModel, extra='ignore'):
                     if ext.lower() == ".all":
                         continue  # .all is a special bypass value
                     if not ext.startswith('.'):
-                        raise ValueError(f"Extension '{ext}' must start with a dot (e.g., '.pdf')")
+                        raise ValueError("Each extension must start with a dot (e.g., '.pdf')")
                     if len(ext) < 2:
-                        raise ValueError(f"Extension '{ext}' is too short")
+                        raise ValueError("Each extension must have at least one character after the dot")
                     # Check for valid characters (alphanumeric and dot only)
                     if not all(c.isalnum() or c == '.' for c in ext):
-                        raise ValueError(f"Extension '{ext}' contains invalid characters")
+                        raise ValueError("Extensions may contain only letters, digits, and dots")
         
         if validation_dict:
             (valid, message) = validate(validation_dict)
@@ -183,15 +195,20 @@ class DeleteDatabaseResponseModel(BaseModel, extra='ignore'):
 ######################## Bucket API Models ##########################
 class BucketModel(BaseModel, extra='ignore'):
     """Model for S3 bucket configuration"""
-    bucketId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    bucketId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
     bucketName: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     baseAssetsPrefix: str = Field(min_length=0, max_length=256, strip_whitespace=True)
+    # Marks the single bucket that houses all VAMS-managed pipeline data (template config/webform
+    # offload and execution-time run I/O under the `pipelines/` prefix). Exactly one bucket carries
+    # true. Defaults to false so a row written before the flag existed reads as non-default rather
+    # than absent, which keeps a client's boolean check total.
+    isDefault: bool = False
 
 class GetBucketsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing buckets"""
     maxItems: Optional[int] = Field(default=30000, ge=1)
     pageSize: Optional[int] = Field(default=3000, ge=1)
-    startingToken: Optional[str] = None
+    startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
 
 class GetBucketsResponseModel(BaseModel, extra='ignore'):
     """Response model for listing buckets"""

@@ -1,17 +1,49 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
-import os
 import boto3
 from typing import Tuple
 from typing import Any
 from typing import Dict
+from typing import List
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
 from models.common import VAMSGeneralErrorResponse
+from common.resourceNames import ResourceKeys, get_table_name
 
 logger = safeLogger(service_name="DynamoDBCommon")
 dynamodb_client = boto3.client('dynamodb')
 dynamodb = boto3.resource('dynamodb')
+
+
+def query_all_items(table, **query_kwargs) -> List[Dict]:
+    """Query a table, paging to exhaustion, and return every matching item.
+
+    A single DynamoDB query returns at most 1 MB of items, so a caller that reads only
+    `response['Items']` silently truncates once the matched set exceeds that page —
+    for an asset-version file snapshot this lands in the low thousands of files. This
+    follows LastEvaluatedKey so the caller always receives the complete set.
+
+    Use where completeness matters (internal reads that must reflect the whole set).
+    User-facing GETs that return a page plus a NextToken should page externally
+    instead — see Rule 15 in backend/CLAUDE.md.
+
+    Args:
+        table: A boto3 DynamoDB Table resource.
+        **query_kwargs: Passed through to Table.query (KeyConditionExpression, etc.).
+            ExclusiveStartKey is managed here and must not be supplied.
+
+    Returns:
+        List of every item matching the query.
+    """
+    items = []
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get('Items', []))
+
+        last_key = response.get('LastEvaluatedKey')
+        if not last_key:
+            return items
+        query_kwargs['ExclusiveStartKey'] = last_key
 
 def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], str]:
     """
@@ -43,9 +75,10 @@ def get_asset_object_from_id(databaseId, assetId):
         raise VAMSGeneralErrorResponse("Empty assetId or databaseId received")
 
     try:
-        asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+        asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     except Exception as e:
-        logger.exception("Failed Loading Environment Variables")
+        logger.exception("Failed resolving asset storage table name")
+        raise
 
     asset_table = dynamodb.Table(asset_table_name)
 

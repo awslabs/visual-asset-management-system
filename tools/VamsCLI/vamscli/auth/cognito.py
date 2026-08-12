@@ -45,8 +45,19 @@ class CognitoAuthenticator(BaseAuthenticator):
         ).digest()
         return base64.b64encode(dig).decode()
         
-    def authenticate(self, username: str, password: str) -> Dict[str, Any]:
-        """Authenticate user using Cognito SRP."""
+    def authenticate(self, username: str, password: str, new_password: Optional[str] = None,
+                     interactive: bool = True) -> Dict[str, Any]:
+        """Authenticate user using Cognito.
+
+        Args:
+            username: Cognito username.
+            password: Current password.
+            new_password: New password to satisfy a NEW_PASSWORD_REQUIRED challenge
+                without prompting (used for forced password changes).
+            interactive: When True, missing challenge responses are collected via
+                prompts. When False (e.g. JSON output mode), an unmet challenge
+                raises AuthenticationError instead of prompting.
+        """
         # Import logging here to avoid circular imports
         from ..utils.logging import log_auth_diagnostic
         
@@ -93,7 +104,10 @@ class CognitoAuthenticator(BaseAuthenticator):
                         status="challenge_required",
                         details={'challenge': response['ChallengeName']}
                     )
-                    return self._handle_auth_challenge(response, username, password)
+                    return self._handle_auth_challenge(
+                        response, username, password,
+                        new_password=new_password, interactive=interactive
+                    )
                     
                 # Extract tokens
                 auth_result = response['AuthenticationResult']
@@ -127,7 +141,10 @@ class CognitoAuthenticator(BaseAuthenticator):
                         details={'reason': 'USER_PASSWORD_AUTH not enabled'}
                     )
                     # Fall back to SRP authentication
-                    return self._authenticate_with_srp(username, password)
+                    return self._authenticate_with_srp(
+                        username, password,
+                        new_password=new_password, interactive=interactive
+                    )
                 else:
                     raise e
             
@@ -156,7 +173,8 @@ class CognitoAuthenticator(BaseAuthenticator):
             else:
                 raise AuthenticationError(f"Authentication failed: {error_message}")
     
-    def _authenticate_with_srp(self, username: str, password: str) -> Dict[str, Any]:
+    def _authenticate_with_srp(self, username: str, password: str, new_password: Optional[str] = None,
+                              interactive: bool = True) -> Dict[str, Any]:
         """Authenticate using SRP protocol."""
         from ..utils.logging import log_auth_diagnostic
         
@@ -226,7 +244,10 @@ class CognitoAuthenticator(BaseAuthenticator):
                     status="additional_challenge",
                     details={'challenge': response['ChallengeName']}
                 )
-                return self._handle_auth_challenge(response, username, password)
+                return self._handle_auth_challenge(
+                    response, username, password,
+                    new_password=new_password, interactive=interactive
+                )
                 
             # Extract tokens
             auth_result = response['AuthenticationResult']
@@ -277,19 +298,44 @@ class CognitoAuthenticator(BaseAuthenticator):
             else:
                 raise AuthenticationError(f"SRP Authentication failed: {error_message}")
                 
-    def _handle_auth_challenge(self, response: Dict[str, Any], username: str, password: str) -> Dict[str, Any]:
-        """Handle Cognito authentication challenges."""
+    def _handle_auth_challenge(self, response: Dict[str, Any], username: str, password: str,
+                              new_password: Optional[str] = None, interactive: bool = True) -> Dict[str, Any]:
+        """Handle Cognito authentication challenges.
+
+        When new_password is supplied, a NEW_PASSWORD_REQUIRED challenge is
+        answered without prompting. When interactive is False, any challenge
+        that would otherwise require a prompt raises AuthenticationError so the
+        caller (e.g. JSON output mode) can surface a clean error.
+        """
         challenge_name = response['ChallengeName']
         session = response['Session']
         challenge_parameters = response.get('ChallengeParameters', {})
-        
+
         if challenge_name == 'NEW_PASSWORD_REQUIRED':
-            new_password = click.prompt("New password required", hide_input=True, confirmation_prompt=True)
-            return self._respond_to_challenge(challenge_name, {'NEW_PASSWORD': new_password}, session, username)
+            if not new_password:
+                if not interactive:
+                    raise AuthenticationError(
+                        "A password change is required before you can sign in. "
+                        "Re-run the command with --new-password to set a new password."
+                    )
+                new_password = click.prompt("New password required", hide_input=True, confirmation_prompt=True)
+            result = self._respond_to_challenge(challenge_name, {'NEW_PASSWORD': new_password}, session, username)
+            # Signal that the password was set while satisfying the challenge so
+            # callers (e.g. change-password) can avoid a redundant change.
+            result['password_changed_via_challenge'] = True
+            return result
         elif challenge_name == 'SMS_MFA':
+            if not interactive:
+                raise AuthenticationError(
+                    "An SMS MFA code is required to sign in, which is not supported in non-interactive mode."
+                )
             mfa_code = click.prompt("Enter MFA code from SMS")
             return self._respond_to_challenge(challenge_name, {'SMS_MFA_CODE': mfa_code}, session, username)
         elif challenge_name == 'SOFTWARE_TOKEN_MFA':
+            if not interactive:
+                raise AuthenticationError(
+                    "An MFA code is required to sign in, which is not supported in non-interactive mode."
+                )
             mfa_code = click.prompt("Enter MFA code from authenticator app")
             return self._respond_to_challenge(challenge_name, {'SOFTWARE_TOKEN_MFA_CODE': mfa_code}, session, username)
         else:
@@ -299,9 +345,12 @@ class CognitoAuthenticator(BaseAuthenticator):
                             session: str, username: str) -> Dict[str, Any]:
         """Respond to authentication challenge."""
         try:
+            # Cognito requires USERNAME in the challenge response payload.
+            challenge_responses.setdefault('USERNAME', username)
+
             if self.client_secret:
                 challenge_responses['SECRET_HASH'] = self._calculate_secret_hash(username)
-                
+
             response = self.client.respond_to_auth_challenge(
                 ClientId=self.client_id,
                 ChallengeName=challenge_name,
@@ -327,7 +376,191 @@ class CognitoAuthenticator(BaseAuthenticator):
         except ClientError as e:
             error_message = e.response['Error']['Message']
             raise AuthenticationError(f"Challenge response failed: {error_message}")
-            
+
+    def change_password(self, access_token: str, previous_password: str,
+                       proposed_password: str) -> Dict[str, Any]:
+        """Change the password of the signed-in user via Cognito ChangePassword.
+
+        Args:
+            access_token: A valid Cognito access token for the user.
+            previous_password: The user's current password.
+            proposed_password: The new password to set.
+        """
+        from ..utils.logging import log_auth_diagnostic
+
+        log_auth_diagnostic(
+            auth_type="cognito_change_password",
+            status="attempting",
+            details={'flow': 'CHANGE_PASSWORD'}
+        )
+
+        try:
+            self.client.change_password(
+                PreviousPassword=previous_password,
+                ProposedPassword=proposed_password,
+                AccessToken=access_token
+            )
+
+            log_auth_diagnostic(
+                auth_type="cognito_change_password",
+                status="success",
+                details={}
+            )
+
+            return {'success': True, 'message': 'Password changed successfully'}
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+
+            log_auth_diagnostic(
+                auth_type="cognito_change_password",
+                status="failure",
+                details={'error_code': error_code},
+                error=e
+            )
+
+            if error_code == 'InvalidPasswordException':
+                raise AuthenticationError(
+                    f"New password does not meet the password policy: {error_message}"
+                )
+            elif error_code == 'NotAuthorizedException':
+                raise AuthenticationError(
+                    "Password change failed: the current password is incorrect or the session is no longer valid."
+                )
+            elif error_code == 'LimitExceededException':
+                raise AuthenticationError(
+                    "Attempt limit exceeded for password changes. Please wait and try again later."
+                )
+            elif error_code == 'UserNotFoundException':
+                raise AuthenticationError("User not found")
+            else:
+                raise AuthenticationError(f"Password change failed: {error_message}")
+
+    def forgot_password(self, username: str) -> Dict[str, Any]:
+        """Start a self-service password reset by sending a verification code.
+
+        Calls the Cognito ForgotPassword API, which sends a confirmation code to
+        the user's verified email or phone. Returns the code delivery details.
+        """
+        from ..utils.logging import log_auth_diagnostic
+
+        log_auth_diagnostic(
+            auth_type="cognito_forgot_password",
+            status="attempting",
+            details={'user_id': username, 'flow': 'FORGOT_PASSWORD'}
+        )
+
+        try:
+            params = {
+                'ClientId': self.client_id,
+                'Username': username
+            }
+            if self.client_secret:
+                params['SecretHash'] = self._calculate_secret_hash(username)
+
+            response = self.client.forgot_password(**params)
+
+            log_auth_diagnostic(
+                auth_type="cognito_forgot_password",
+                status="success",
+                details={'user_id': username}
+            )
+
+            return {'code_delivery': response.get('CodeDeliveryDetails', {})}
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+
+            log_auth_diagnostic(
+                auth_type="cognito_forgot_password",
+                status="failure",
+                details={'error_code': error_code, 'user_id': username},
+                error=e
+            )
+
+            if error_code == 'UserNotFoundException':
+                raise AuthenticationError("User not found")
+            elif error_code in ('LimitExceededException', 'TooManyRequestsException'):
+                raise AuthenticationError(
+                    "Attempt limit exceeded for password reset requests. Please wait and try again later."
+                )
+            elif error_code == 'InvalidParameterException':
+                raise AuthenticationError(
+                    "Cannot reset the password for this user. The account may not have a verified "
+                    "email or phone number for code delivery."
+                )
+            else:
+                raise AuthenticationError(f"Password reset request failed: {error_message}")
+
+    def confirm_forgot_password(self, username: str, confirmation_code: str,
+                               new_password: str) -> Dict[str, Any]:
+        """Complete a self-service password reset using the emailed code.
+
+        Calls the Cognito ConfirmForgotPassword API with the verification code
+        and the new password.
+        """
+        from ..utils.logging import log_auth_diagnostic
+
+        log_auth_diagnostic(
+            auth_type="cognito_confirm_forgot_password",
+            status="attempting",
+            details={'user_id': username, 'flow': 'CONFIRM_FORGOT_PASSWORD'}
+        )
+
+        try:
+            params = {
+                'ClientId': self.client_id,
+                'Username': username,
+                'ConfirmationCode': confirmation_code,
+                'Password': new_password
+            }
+            if self.client_secret:
+                params['SecretHash'] = self._calculate_secret_hash(username)
+
+            self.client.confirm_forgot_password(**params)
+
+            log_auth_diagnostic(
+                auth_type="cognito_confirm_forgot_password",
+                status="success",
+                details={'user_id': username}
+            )
+
+            return {'success': True, 'message': 'Password reset successfully'}
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+
+            log_auth_diagnostic(
+                auth_type="cognito_confirm_forgot_password",
+                status="failure",
+                details={'error_code': error_code, 'user_id': username},
+                error=e
+            )
+
+            if error_code == 'CodeMismatchException':
+                raise AuthenticationError(
+                    "The verification code is incorrect. Request a new code and try again."
+                )
+            elif error_code == 'ExpiredCodeException':
+                raise AuthenticationError(
+                    "The verification code has expired. Request a new code and try again."
+                )
+            elif error_code == 'InvalidPasswordException':
+                raise AuthenticationError(
+                    f"New password does not meet the password policy: {error_message}"
+                )
+            elif error_code in ('LimitExceededException', 'TooManyRequestsException'):
+                raise AuthenticationError(
+                    "Attempt limit exceeded for password reset. Please wait and try again later."
+                )
+            elif error_code == 'UserNotFoundException':
+                raise AuthenticationError("User not found")
+            else:
+                raise AuthenticationError(f"Password reset failed: {error_message}")
+
     def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
         """Refresh access token using refresh token."""
         from ..utils.logging import log_auth_diagnostic

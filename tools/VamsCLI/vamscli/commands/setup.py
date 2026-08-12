@@ -19,11 +19,39 @@ def validate_base_url(url: str) -> bool:
         # Must have scheme and netloc
         if not parsed.scheme or not parsed.netloc:
             return False
-        
+
         # Must be HTTP or HTTPS
         return parsed.scheme.lower() in ['http', 'https']
     except Exception:
         return False
+
+
+# Default REST API deployment stage. The execute-api endpoint serves routes under a stage
+# path; a CloudFront/ALB front absorbs it, but a raw execute-api URL must include it.
+DEFAULT_API_STAGE = "api"
+
+
+def normalize_base_url_for_stage(url: str) -> str:
+    """Ensure a raw execute-api base URL includes the REST API stage path.
+
+    The REST API is served under a stage (default ``api``), so the real invoke path for a
+    route is ``/{stage}{routePath}``. A front (CloudFront/ALB) maps ``/api/*`` onto the
+    stage, but a client pointed directly at a bare ``*.execute-api.*`` host with no path
+    would otherwise miss the stage and get a 403 on the first call. When the URL is a raw
+    execute-api host with no path segment, append the default stage. URLs that already
+    carry a path (fronted domains, or an execute-api URL with the stage included) are left
+    unchanged.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    if ".execute-api." in (parsed.netloc or "").lower() and parsed.path.strip("/") == "":
+        # Rebuild from parsed components so the stage is inserted into the path segment,
+        # never appended after a query string or fragment (e.g. a "…amazonaws.com?x=1"
+        # base must become "…amazonaws.com/api?x=1", not "…amazonaws.com?x=1/api").
+        return parsed._replace(path="/" + DEFAULT_API_STAGE).geturl()
+    return url
 
 
 @click.command()
@@ -92,9 +120,19 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
     
     # Ensure URL doesn't end with slash
     base_url = base_url.rstrip('/')
-    
+
+    # A raw execute-api URL must include the REST API stage path; a fronted (CloudFront/ALB)
+    # or already-staged URL is returned unchanged.
+    normalized_base_url = normalize_base_url_for_stage(base_url)
+    if normalized_base_url != base_url:
+        output_info(
+            f"Detected a direct execute-api URL; using stage-inclusive base: {normalized_base_url}",
+            json_output
+        )
+        base_url = normalized_base_url
+
     profile_name = profile_manager.profile_name
-    
+
     # Status messages only in CLI mode
     output_status(f"Setting up VamsCLI with base URL: {base_url}", json_output)
     output_status(f"Profile: {profile_name}", json_output)

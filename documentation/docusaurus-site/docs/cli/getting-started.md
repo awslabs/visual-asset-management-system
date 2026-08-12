@@ -47,7 +47,7 @@ Before using VamsCLI, you must configure it to connect to your VAMS deployment. 
 vamscli setup https://your-vams-url.example.com
 ```
 
-The `setup` command accepts any HTTP or HTTPS URL that points to your VAMS deployment, including Amazon CloudFront distributions, Application Load Balancers (ALB), Amazon API Gateway endpoints, or custom domains.
+The `setup` command accepts any HTTP or HTTPS URL that points to your VAMS deployment, including Amazon CloudFront distributions, Application Load Balancers (ALB), Amazon API Gateway endpoints, or custom domains. When you point it directly at an Amazon API Gateway `execute-api` endpoint, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) automatically.
 
 :::tip[Multiple Environments]
 Use the `--profile` flag to configure separate profiles for different environments:
@@ -71,13 +71,25 @@ If your VAMS deployment uses Amazon Cognito for identity management:
 vamscli auth login -u your.email@example.com
 ```
 
-You will be prompted for your password. VamsCLI handles multi-factor authentication (MFA) challenges and forced password changes automatically through interactive prompts.
+You will be prompted for your password. VamsCLI handles multi-factor authentication (MFA) challenges and forced password changes automatically through interactive prompts. To complete a forced change non-interactively (for example, in JSON mode), pass `--new-password`.
 
 To save credentials for automatic re-authentication when tokens expire:
 
 ```bash
 vamscli auth login -u your.email@example.com --save-credentials
 ```
+
+Amazon Cognito access tokens are refreshed automatically using the stored refresh token when they expire during a command. You can also change or reset a password from the CLI:
+
+```bash
+# Change your password (you know the current one)
+vamscli auth change-password -u your.email@example.com
+
+# Reset a forgotten password using an emailed verification code
+vamscli auth forgot-password -u your.email@example.com
+```
+
+See [Setup and Authentication Commands](commands/setup-and-auth.md) for the full authentication command reference.
 
 ### Token Override Authentication
 
@@ -168,3 +180,4 @@ vamscli file list -d my-database -a my-asset-id
 -   [Command Reference](command-reference.md) -- Overview and index of all VamsCLI command groups
 -   [Detailed Command Pages](commands/setup-and-auth.md) -- Full option tables, JSON examples, and workflow guides for each command group
 -   [Automation and Scripting](automation.md) -- Using VamsCLI in scripts, CI/CD pipelines, and bulk operations
+-   [Development](development.md) -- Contributing to VamsCLI: code quality, testing, command architecture, and releasing

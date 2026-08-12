@@ -45,7 +45,7 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                     databaseId,
                     key: assetKey,
                     versionId: versionId,
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
 

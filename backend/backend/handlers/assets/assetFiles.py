@@ -35,6 +35,7 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_FILE,
@@ -42,11 +43,12 @@ from common.apiRoutes import (
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
 from common.validators import validate
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, query_all_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
@@ -76,16 +78,29 @@ logger = safeLogger(service_name="AssetFiles")
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_aux_bucket_name = os.environ.get("S3_ASSET_AUXILIARY_BUCKET", "")
-    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
-    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_database_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_version_files_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    try:
+        asset_aux_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    except Exception:
+        asset_aux_bucket_name = ""
+    try:
+        asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_table_name = None
+    try:
+        file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    except Exception:
+        file_attribute_table_name = None
+    try:
+        asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
+    except Exception:
+        asset_file_version_history_table_name = None
     send_email_function_name = os.environ.get("SEND_EMAIL_FUNCTION_NAME", "")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -98,6 +113,29 @@ asset_file_version_history_table = dynamodb.Table(asset_file_version_history_tab
 
 # Define allowed extensions
 allowed_previewFile_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
+
+# Per-page S3 list batch size used when paging a version snapshot to exhaustion.
+# This is a round-trip batch size, not a result cap — the version listing loops
+# over all pages so snapshots larger than one page are returned in full.
+VERSION_LISTING_PAGE_SIZE = 1500
+
+# Concurrency cap for parallel per-file S3 calls (head_object enrichment, version
+# checks). Bounds Lambda memory/thread usage; not a data cap.
+MAX_PARALLEL_S3_WORKERS = 10
+
+# Default list_objects_v2 page sizes for the current-file listing path. These are
+# per-page batch sizes; the current-file path returns a NextToken for external paging.
+DEFAULT_LIST_PAGE_SIZE_BASIC = 1500
+DEFAULT_LIST_PAGE_SIZE_FULL = 100
+
+# Default maxItems for the current-file listing path. The main object listing
+# returns a single page plus a NextToken (external paging), so this value only
+# bounds the supplemental archived delete-marker pagination within one response.
+DEFAULT_LIST_MAX_ITEMS = 10000
+
+# Default MaxItems for the supplemental archived delete-marker paginator when a
+# caller does not specify maxItems.
+DEFAULT_ARCHIVED_MARKERS_MAX_ITEMS = 1000
 
 # Change-provenance columns surfaced on file version-history entries.
 CHANGE_HISTORY_COLUMNS = (
@@ -300,49 +338,12 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         return resolved_path
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
-    """Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3_client.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
-            return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
-            try:
-                s3_client.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3_client.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3_client)
 
 def filter_archived_files(file_list: List[Dict], include_archived: bool = False) -> List[Dict]:
     """Filter out archived files unless explicitly requested
@@ -393,7 +394,7 @@ def build_change_metadata(change_source, user_id, from_db=None, from_asset=None,
 
     Args:
         change_source: One of the VAMS change source values.
-        user_id: Acting user id; None falls back to "SYSTEM".
+        user_id: Acting user id; None falls back to "SYSTEM_USER".
         from_db/from_asset/from_path: Source provenance for copy/move/rename.
         from_version: Source S3 version id for copy/move/rename/revert.
 
@@ -404,7 +405,7 @@ def build_change_metadata(change_source, user_id, from_db=None, from_asset=None,
     normalized_from_path = normalize_history_file_path(from_path) if from_path else ""
     return {
         VAMS_CHANGE_SOURCE_METADATA_KEY: change_source,
-        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM",
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
         VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "",
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "",
         VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY: from_asset or "",
@@ -474,7 +475,10 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Key=dest_key,
                 ExtraArgs={
                     'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE'
+                    'MetadataDirective': 'REPLACE',
+                    # Grant the destination bucket owner full control so an object written
+                    # into a cross-account asset bucket is owned/readable by that account.
+                    'ACL': 'bucket-owner-full-control'
                 }
             )
         else:
@@ -482,16 +486,40 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
-                Key=dest_key
+                Key=dest_key,
+                # Grant the destination bucket owner full control so an object written
+                # into a cross-account asset bucket is owned/readable by that account.
+                ExtraArgs={'ACL': 'bucket-owner-full-control'}
             )
         return True
     except Exception as e:
         logger.exception(f"Error copying S3 object from {source_key} to {dest_key}: {e}")
         return False
 
+def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
+    """Auxiliary-bucket base prefix holding the derived data for one asset file.
+
+    Auxiliary objects live under the database-scoped per-file layout
+    ``{databaseId}/{assetFileKey}/``; workflow preview/viewer data lands in the
+    ``preview`` subfolder of that base (see
+    ``common.workflows.executionRecords.aux_preview_file_prefix``, the writer of that
+    layout). ``asset_file_key`` is the full asset-bucket key, so a custom asset base
+    prefix is preserved; passing a folder key scopes the result to every file beneath it.
+
+    Args:
+        database_id: The database ID owning the asset
+        asset_file_key: Full asset-bucket key of the file, or a folder key
+
+    Returns:
+        The auxiliary-bucket prefix, with a trailing slash
+    """
+    key = (asset_file_key or "").strip('/')
+    base = (database_id or "").strip('/')
+    return f"{base}/{key}/" if key else f"{base}/"
+
 def delete_assetAuxiliary_files(prefix):
     """Delete auxiliary files for an asset
-    
+
     Args:
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
     """
@@ -732,58 +760,31 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
         List of deleted file keys
     """
     deleted_files = []
-    
+
     try:
         # Get all object versions under the prefix
         paginator = s3_client.get_paginator('list_object_versions')
-        
-        # Track keys we've already processed to avoid duplicates
+
+        # Collect unique keys across all pages (versions and delete markers)
+        keys_to_delete = []
         processed_keys = set()
-        
+
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            # Process all versions
-            for version in page.get('Versions', []):
-                key = version['Key']
-                
-                # Process folder markers separately
-                if key.endswith('/'):
-                    if key not in processed_keys:
-                        # Delete all versions of this folder marker
-                        if delete_s3_object_all_versions(bucket, key):
-                            deleted_files.append(key)
-                            processed_keys.add(key)
-                    continue
-                
-                # Skip if already processed
-                if key in processed_keys:
-                    continue
-                
-                # Delete all versions of this object
-                if delete_s3_object_all_versions(bucket, key):
-                    deleted_files.append(key)
+            for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
+                key = entry['Key']
+                if key not in processed_keys:
                     processed_keys.add(key)
-            
-            # Check for any keys in delete markers that weren't in versions
-            for marker in page.get('DeleteMarkers', []):
-                key = marker['Key']
-                
-                # Process folder markers separately
-                if key.endswith('/'):
-                    if key not in processed_keys:
-                        # Delete all versions of this folder marker
-                        if delete_s3_object_all_versions(bucket, key):
-                            deleted_files.append(key)
-                            processed_keys.add(key)
-                    continue
-                
-                # Skip if already processed
-                if key in processed_keys:
-                    continue
-                
-                # Delete all versions of this object
-                if delete_s3_object_all_versions(bucket, key):
-                    deleted_files.append(key)
-                    processed_keys.add(key)
+                    keys_to_delete.append(key)
+
+        # Delete each key's versions in parallel; per-key work is independent
+        if keys_to_delete:
+            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(
+                    lambda key: (key, delete_s3_object_all_versions(bucket, key)),
+                    keys_to_delete
+                ))
+            deleted_files.extend(key for key, ok in results if ok)
         
         # Check if the prefix folder itself exists and delete it if it does
         # Ensure the prefix ends with a slash for folder check
@@ -931,7 +932,10 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Key=dest_key,
                 ExtraArgs={
                     'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE'
+                    'MetadataDirective': 'REPLACE',
+                    # Grant the destination bucket owner full control so an object written
+                    # into a cross-account asset bucket is owned/readable by that account.
+                    'ACL': 'bucket-owner-full-control'
                 }
             )
         else:
@@ -939,7 +943,10 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
-                Key=dest_key
+                Key=dest_key,
+                # Grant the destination bucket owner full control so an object written
+                # into a cross-account asset bucket is owned/readable by that account.
+                ExtraArgs={'ACL': 'bucket-owner-full-control'}
             )
 
         # Delete the original object
@@ -1052,22 +1059,22 @@ def process_preview_files(
 
 def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False) -> Dict:
     """Get detailed metadata for an S3 object
-    
+
     Args:
         bucket: The S3 bucket
         key: The S3 object key
         include_versions: Whether to include version history
-        
+
     Returns:
         Dictionary containing object metadata and versions if requested
-        
+
     Raises:
         VAMSGeneralErrorResponse: If object not found or error retrieving metadata
     """
     try:
         # Get object metadata
         response = s3_client.head_object(Bucket=bucket, Key=key)
-        
+
         # Extract basic metadata
         result = {
             'fileName': os.path.basename(key),
@@ -1101,12 +1108,10 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
         # Include version history if requested
         if include_versions:
             try:
-                versions_response = s3_client.list_object_versions(
-                    Bucket=bucket,
-                    Prefix=key,
-                    MaxKeys=100  # Limit to 100 versions
-                )
-                
+                # Page through the full version history so files with many
+                # versions are not silently truncated.
+                versions_response = list_all_object_versions(bucket, key, client=s3_client)
+
                 versions = []
                 # Content versions
                 for version in versions_response.get('Versions', []):
@@ -1152,12 +1157,10 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
         if e.response['Error']['Code'] == 'NoSuchKey' or e.response['Error']['Code'] == '404':
             # Check if the file is archived (has delete markers)
             try:
-                versions_response = s3_client.list_object_versions(
-                    Bucket=bucket,
-                    Prefix=key,
-                    MaxKeys=100
-                )
-                
+                # Page through the full version history so archive status and
+                # version history are accurate for files with many versions.
+                versions_response = list_all_object_versions(bucket, key, client=s3_client)
+
                 # Check if the file has any delete markers or versions
                 has_delete_markers = any(marker['Key'] == key for marker in versions_response.get('DeleteMarkers', []))
                 has_versions = any(version['Key'] == key for version in versions_response.get('Versions', []))
@@ -1263,7 +1266,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         list_params = {
             'Bucket': bucket,
             'Prefix': prefix,
-            'MaxKeys': int(query_params.get('pageSize', 1500 if basic_mode else 100))
+            'MaxKeys': int(query_params.get('pageSize', DEFAULT_LIST_PAGE_SIZE_BASIC if basic_mode else DEFAULT_LIST_PAGE_SIZE_FULL))
         }
         
         # Add continuation token if provided
@@ -1301,10 +1304,12 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 'dateCreatedCurrentVersion': obj['LastModified'].isoformat(),
                 'storageClass': obj.get('StorageClass', 'STANDARD')
             }
-            
-            # Add size for non-folders
+
+            # ETag comes straight from the S3 list response, so it is populated in
+            # both basic and full modes.
             if not is_folder:
                 item['size'] = obj['Size']
+                item['etag'] = obj.get('ETag', '').strip('"') or None
             
             if basic_mode:
                 # Basic mode: Skip expensive head_object calls
@@ -1349,7 +1354,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                     item['primaryType'] = None
                 return item
 
-            max_workers = min(10, len(items_needing_enrichment))
+            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(items_needing_enrichment))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 enriched_items = list(executor.map(_enrich_item, items_needing_enrichment))
 
@@ -1367,8 +1372,8 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
             try:
                 # Configure pagination for versions
                 pagination_config = {
-                    'MaxItems': int(query_params.get('maxItems', 1000)),
-                    'PageSize': int(query_params.get('pageSize', 100))
+                    'MaxItems': int(query_params.get('maxItems', DEFAULT_ARCHIVED_MARKERS_MAX_ITEMS)),
+                    'PageSize': int(query_params.get('pageSize', DEFAULT_LIST_PAGE_SIZE_FULL))
                 }
                 
                 # Create a paginator for versions
@@ -1421,10 +1426,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                             'isArchived': True
                         }
                         
-                        # Add size if we found a version
+                        # Add size and ETag if we found a version
                         if latest_version:
                             item['size'] = latest_version.get('Size', 0)
-                        
+                            item['etag'] = latest_version.get('ETag', '').strip('"') or None
+
                         # Add to results
                         result["items"].append(item)
                         existing_keys.add(key)
@@ -1557,13 +1563,10 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
         logger.info(f"Searching for preview files (including archived) in bucket {bucket} with prefix {prefix}")
         logger.info(f"Looking for pattern: {pattern}")
         
-        # Use list_object_versions to find both current and archived files
-        versions_response = s3_client.list_object_versions(
-            Bucket=bucket,
-            Prefix=prefix,
-            MaxKeys=1000
-        )
-        
+        # Use list_object_versions to find both current and archived files.
+        # Page fully so preview files are not missed in directories with many versions.
+        versions_response = list_all_object_versions(bucket, prefix, client=s3_client)
+
         # Track keys we've already processed to avoid duplicates
         processed_keys = set()
         
@@ -1677,14 +1680,15 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
         if relativeFileKey:
             query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
 
-        response = asset_version_files_table.query(**query_kwargs)
-        
-        items = response.get('Items', [])
-        
+        # Page to exhaustion: a version snapshot can hold more files than fit in one
+        # 1 MB query page, and a partial file list would misreport the version. A
+        # single-file lookup (relativeFileKey set) returns one item and never pages.
+        items = query_all_items(asset_version_files_table, **query_kwargs)
+
         # If no items found, return None
         if not items:
             return None
-        
+
         # Reconstruct the file versions structure
         files = []
         for item in items:
@@ -2107,7 +2111,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
 
         # Delete aux files under prefix if they exist
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
@@ -2140,7 +2144,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         success = delete_s3_object_all_versions(bucket, full_key)
 
         # Delete aux files if they exist
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
         
         if not success:
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
@@ -2182,7 +2186,7 @@ def build_archive_history_record(database_id, asset_id, relative_file_path, vers
         "assetId": asset_id,
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
-        "changeUserId": user_id or "SYSTEM",
+        "changeUserId": user_id or "SYSTEM_USER",
         "recordCreated": datetime.utcnow().isoformat() + "Z",
         "s3LastModified": "",
     }
@@ -2257,7 +2261,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
     # Acting user for change-history provenance
-    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Archive file(s)
     affected_files = []
@@ -2342,61 +2346,32 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
     
-    # Check if file exists and is archived using list_object_versions instead of head_object
-    # since head_object will fail with 404 for archived files
+    # Find the delete marker and the most recent content version to restore.
+    # S3 returns versions newest-first per key, so the latest delete marker and
+    # latest version are at the head of the listing — a single bounded page
+    # suffices, avoiding a scan of the entire (potentially huge) version history.
+    # This single listing also covers the existence and archived-state checks, so
+    # we never list the key's versions more than once.
     try:
-        versions_response = s3_client.list_object_versions(
-            Bucket=bucket,
-            Prefix=full_key,
-            MaxKeys=100
+        versions_response = list_all_object_versions(
+            bucket, full_key, client=s3_client, max_keys=S3_VERSIONS_PAGE_SIZE
         )
-        
-        # Check if the file exists (has any versions or delete markers)
-        has_versions = any(version['Key'] == full_key for version in versions_response.get('Versions', []))
-        has_delete_markers = any(marker['Key'] == full_key for marker in versions_response.get('DeleteMarkers', []))
-        
-        if not (has_versions or has_delete_markers):
+
+        # Filter to entries for exactly this key (Prefix can match sibling keys).
+        file_versions = [v for v in versions_response.get('Versions', []) if v['Key'] == full_key]
+        file_markers = [m for m in versions_response.get('DeleteMarkers', []) if m['Key'] == full_key]
+
+        # File must exist (has any versions or delete markers)
+        if not (file_versions or file_markers):
             raise VAMSGeneralErrorResponse(f"File not found.")
-        
-        # Check if the file is archived (latest version is a delete marker)
-        is_archived = False
-        for marker in versions_response.get('DeleteMarkers', []):
-            if marker['Key'] == full_key and marker.get('IsLatest', False):
-                is_archived = True
-                break
-        
-        if not is_archived:
-            raise VAMSGeneralErrorResponse(f"File is not archived.")
-    except ClientError as e:
-        logger.exception(f"Error checking file archive status: {e}")
-        raise VAMSGeneralErrorResponse(f"Error checking file.")
-    
-    # Get version history to find the delete marker and the version before it
-    try:
-        versions_response = s3_client.list_object_versions(
-            Bucket=bucket,
-            Prefix=full_key,
-            MaxKeys=100  # Limit to 100 versions
-        )
-        
-        # Find the delete marker
-        delete_marker = None
-        for marker in versions_response.get('DeleteMarkers', []):
-            if marker['Key'] == full_key and marker.get('IsLatest', False):
-                delete_marker = marker
-                break
-        
+
+        # Must currently be archived (latest entry is a delete marker)
+        delete_marker = next((m for m in file_markers if m.get('IsLatest', False)), None)
         if not delete_marker:
-            raise VAMSGeneralErrorResponse(f"Could not find delete marker for file.")
-        
-        # Find the latest version before the delete marker
-        latest_version = None
-        for version in versions_response.get('Versions', []):
-            if version['Key'] == full_key:
-                # Found a version, check if it's the latest one before the delete marker
-                if not latest_version or version['LastModified'] > latest_version['LastModified']:
-                    latest_version = version
-        
+            raise VAMSGeneralErrorResponse(f"File is not archived.")
+
+        # Find the most recent content version before the delete marker
+        latest_version = max(file_versions, key=lambda v: v['LastModified'], default=None)
         if not latest_version:
             raise VAMSGeneralErrorResponse(f"Could not find a previous version for file.")
 
@@ -2409,7 +2384,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         metadata = version_head.get('Metadata', {}).copy()
 
         # Extract acting user for provenance tracking
-        acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         # Overlay unarchive provenance (no from-fields for unarchive)
         provenance = build_change_metadata(
@@ -2428,7 +2403,10 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             },
             ExtraArgs={
                 'Metadata': metadata,
-                'MetadataDirective': 'REPLACE'
+                'MetadataDirective': 'REPLACE',
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
         
@@ -2456,30 +2434,26 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                         logger.info(f"Preview file {preview_file} is not archived - skipping")
                         continue
                     
-                    # Get versions to find the latest version before the delete marker
-                    preview_versions_response = s3_client.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=preview_file,
-                        MaxKeys=100
+                    # Get the latest content version to restore. S3 returns versions
+                    # newest-first per key, so a single bounded page is sufficient.
+                    preview_versions_response = list_all_object_versions(
+                        bucket, preview_file, client=s3_client, max_keys=S3_VERSIONS_PAGE_SIZE
                     )
-                    
+
                     # Find all versions for this preview file
-                    preview_versions = []
-                    for version in preview_versions_response.get('Versions', []):
-                        if version['Key'] == preview_file:
-                            preview_versions.append(version)
-                    
+                    preview_versions = [
+                        v for v in preview_versions_response.get('Versions', [])
+                        if v['Key'] == preview_file
+                    ]
+
                     # If no versions, skip this preview file
                     if not preview_versions:
                         logger.info(f"Preview file {preview_file} has no versions - skipping")
                         continue
-                    
+
                     # Find the latest version
-                    preview_latest_version = None
-                    for version in preview_versions:
-                        if not preview_latest_version or version['LastModified'] > preview_latest_version['LastModified']:
-                            preview_latest_version = version
-                    
+                    preview_latest_version = max(preview_versions, key=lambda v: v['LastModified'])
+
                     if preview_latest_version:
                         # Copy the latest version to create a new current version (effectively unarchiving)
                         # Use copy() which automatically handles multipart for large files
@@ -2490,7 +2464,10 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                                 'VersionId': preview_latest_version['VersionId']
                             },
                             ExtraArgs={
-                                'MetadataDirective': 'COPY'
+                                'MetadataDirective': 'COPY',
+                                # Grant the bucket owner full control so a version written into a
+                                # cross-account asset bucket is owned/readable by that account.
+                                'ACL': 'bucket-owner-full-control'
                             }
                         )
                         logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
@@ -2585,7 +2562,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         raise VAMSGeneralErrorResponse(f"Destination file already exists.")
 
     # Extract acting user for provenance tracking
-    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Copy the file with change provenance
     success = copy_s3_object(
@@ -2620,7 +2597,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
 
     # Copy auxiliary files if they exist
-    copy_auxiliary_files(source_key, dest_key)
+    copy_auxiliary_files(
+        aux_bucket_asset_file_base(databaseId, source_key),
+        aux_bucket_asset_file_base(effective_dest_db, dest_key)
+    )
 
     # Copy metadata and attributes to the destination (merge with existing)
     source_rel = source_path.lstrip('/')
@@ -2732,7 +2712,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         raise VAMSGeneralErrorResponse("Error checking destination file.")
 
     # Extract acting user for provenance tracking
-    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Classify the change source (move vs rename)
     change_source = classify_move_change_source(source_path, dest_path)
@@ -2763,7 +2743,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     )
     
     # Move auxiliary files if they exist
-    move_auxiliary_files(source_key, dest_key)
+    move_auxiliary_files(
+        aux_bucket_asset_file_base(databaseId, source_key),
+        aux_bucket_asset_file_base(databaseId, dest_key)
+    )
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path
     source_rel = source_path.lstrip('/')
@@ -2848,7 +2831,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         # provenance so the new current version reflects the revert action.
         source_head = s3_client.head_object(Bucket=bucket, Key=full_key, VersionId=version_id)
         new_metadata = source_head.get('Metadata', {}).copy()
-        acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         new_metadata.update(build_change_metadata(VAMS_CHANGE_SOURCE_FILE_REVERT, acting_user, from_version=version_id))
 
         # Use copy() which automatically handles multipart for large files
@@ -2860,7 +2843,10 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
             },
             ExtraArgs={
                 'Metadata': new_metadata,
-                'MetadataDirective': 'REPLACE'
+                'MetadataDirective': 'REPLACE',
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
 
@@ -2872,8 +2858,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
-    #Delete aux files for asset as they don't match anymore with the version. 
-    delete_assetAuxiliary_files(full_key)
+    #Delete aux files for asset as they don't match anymore with the version.
+    delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -3104,9 +3090,12 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
         s3_client.put_object(
             Bucket=asset_bucket,
             Key=normalized_key_path,
-            Body=''
+            Body='',
+            # Grant the bucket owner full control so a folder marker written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control'
         )
-        
+
         logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
         
         return CreateFolderResponseModel(
@@ -3190,7 +3179,10 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             ExtraArgs={
                 'Metadata': new_metadata,
                 'MetadataDirective': 'REPLACE',
-                'ContentType': current_object.get('ContentType', 'binary/octet-stream')
+                'ContentType': current_object.get('ContentType', 'binary/octet-stream'),
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
         
@@ -3434,6 +3426,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                 'dateCreatedCurrentVersion': file_info.get('lastModified', ''),
                 'storageClass': 'STANDARD',
                 'versionId': file_info.get('versionId'),
+                'etag': (file_info.get('etag') or '').strip('"') or None,
                 'isArchived': False,
                 'primaryType': None,
                 'previewFile': "",
@@ -3461,18 +3454,29 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         # List all S3 objects including archived (delete-marker'd) files.
         # include_archived=True ensures soft-deleted files appear in the listing,
         # reducing the number of per-file list_object_versions checks needed.
-        resolved_query_params = {
-            'maxItems': 10000,
-            'pageSize': 1500,
-            'startingToken': None,
-            'prefix': None
-        }
+        # Page internally to exhaustion (following NextToken) so version snapshots
+        # with more than one page of files are returned in full.
+        all_s3_items = []
+        starting_token = None
+        while True:
+            resolved_query_params = {
+                'maxItems': VERSION_LISTING_PAGE_SIZE,
+                'pageSize': VERSION_LISTING_PAGE_SIZE,
+                'startingToken': starting_token,
+                'prefix': None
+            }
 
-        s3_result = list_s3_objects_with_archive_status(
-            bucket, key, resolved_query_params,
-            include_archived=True,
-            basic_mode=False
-        )
+            s3_result = list_s3_objects_with_archive_status(
+                bucket, key, resolved_query_params,
+                include_archived=True,
+                basic_mode=False
+            )
+
+            all_s3_items.extend(s3_result.get('items', []))
+
+            starting_token = s3_result.get('NextToken')
+            if not starting_token:
+                break
 
         # Filter and process — only include files from the version snapshot
         # Preview files from S3 are ignored; preview grouping is derived from the snapshot itself
@@ -3480,7 +3484,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         base_files = {}
         found_relative_keys = set()
 
-        for s3_item in s3_result.get('items', []):
+        for s3_item in all_s3_items:
             # Extract relative key from full S3 key
             if s3_item['key'].startswith(key):
                 relative_key = s3_item['key'][len(key):].lstrip('/')
@@ -3493,10 +3497,22 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
             # Check if this file is in the version snapshot
             if relative_key in versioned_file_lookup:
+                # Skip if already emitted. With include_archived=True a key that
+                # was archived-then-unarchived can appear twice in the listing
+                # (once live, once as a delete-marker entry); the snapshot pins a
+                # single version, so only the first occurrence is emitted.
+                if relative_key in found_relative_keys:
+                    continue
+
                 version_info = versioned_file_lookup[relative_key]
-                # Overlay saved versionId from the version snapshot
+                # Overlay saved versionId and ETag from the version snapshot so they
+                # reflect the requested version rather than the current S3 object.
                 s3_item['versionId'] = version_info.get('versionId')
+                s3_item['etag'] = (version_info.get('etag') or '').strip('"') or None
                 s3_item['currentAssetVersionFileVersionMismatch'] = None
+                # The snapshot represents a point-in-time live capture, so the file
+                # is presented as not-archived regardless of its current S3 state.
+                s3_item['isArchived'] = False
                 file_items.append(AssetFileItemModel(**s3_item))
                 base_files[s3_item['key']] = len(file_items) - 1
                 found_relative_keys.add(relative_key)
@@ -3529,7 +3545,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                     return relative_key_to_check, True
 
             # Parallelize S3 version checks for better performance with many missing files
-            max_workers = min(10, len(missing_relative_keys))
+            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(missing_relative_keys))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
                     executor.submit(_check_permanently_deleted, rk): rk
@@ -3552,6 +3568,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                             'dateCreatedCurrentVersion': version_info.get('lastModified', ''),
                             'storageClass': 'STANDARD',
                             'versionId': version_info.get('versionId'),
+                            'etag': (version_info.get('etag') or '').strip('"') or None,
                             'isArchived': False,
                             'isPermanentlyDeleted': True,
                             'primaryType': None,
@@ -3659,7 +3676,7 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3743,7 +3760,7 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3828,7 +3845,7 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3915,7 +3932,7 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4000,7 +4017,7 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4099,7 +4116,7 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4191,7 +4208,7 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4275,7 +4292,7 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4303,25 +4320,26 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    
+    aux_prefix = aux_bucket_asset_file_base(databaseId, full_key)
+
     # Check if auxiliary files exist under the prefix
     file_count = 0
     deleted_files = []
-    
+
     try:
         # List objects in the auxiliary bucket with the prefix
         paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=full_key):
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=aux_prefix):
             if 'Contents' in page:
                 file_count += len(page['Contents'])
                 for item in page['Contents']:
                     deleted_files.append(item['Key'])
-        
+
         if file_count == 0:
             raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix")
-        
+
         # Delete the auxiliary files
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_prefix)
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)
@@ -4439,7 +4457,7 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4523,7 +4541,7 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4609,7 +4627,7 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4663,23 +4681,23 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
 
-        # Apply defaults: maxItems=10000 for both modes, pageSize=1500 for basic, 100 for full
         # Parse basic flag first to determine defaults
         basic_mode = query_params.get('basic', 'false').lower() == 'true'
-        
-        # Parse query parameters with conditional defaults based on basic mode
-        # Convert string values to appropriate types
+
+        # Parse query parameters with conditional defaults based on basic mode.
+        # The current-file listing returns a NextToken for external paging, so
+        # maxItems only bounds the supplemental archived-marker pagination.
         max_items = query_params.get('maxItems')
         page_size = query_params.get('pageSize')
         if max_items is not None:
             query_params['maxItems'] = int(max_items)
         else:
-            query_params['maxItems']  = 10000  # Same for both modes
+            query_params['maxItems'] = DEFAULT_LIST_MAX_ITEMS  # Same for both modes
         
         if page_size is not None:
             query_params['pageSize'] = int(page_size)
         else:
-            query_params['pageSize'] = 1500 if basic_mode else 100  # 1500 for basic, 100 for full
+            query_params['pageSize'] = DEFAULT_LIST_PAGE_SIZE_BASIC if basic_mode else DEFAULT_LIST_PAGE_SIZE_FULL
 
         
         # Process request
@@ -4694,7 +4712,7 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4708,14 +4726,15 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset file operations
-    
+
     Args:
         event: The API Gateway event
         context: The Lambda context
-        
+
     Returns:
         APIGatewayProxyResponseV2 with the response
     """
+    normalize_event(event)
     try:
         # Get API path and method
         path = event['requestContext']['http']['path']

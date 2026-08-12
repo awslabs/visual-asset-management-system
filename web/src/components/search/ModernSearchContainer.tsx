@@ -7,7 +7,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { appCache } from "../../services/appCache";
 import { useNavigate } from "react-router-dom";
-import { Grid, Alert, SegmentedControl, Box } from "@cloudscape-design/components";
+import { Grid, SegmentedControl, Box } from "@cloudscape-design/components";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { SearchContainerProps, MetadataFilter, getTotalResultCount } from "./types";
 import { useSearchState } from "./hooks/useSearchState";
@@ -429,9 +429,6 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     if (useNoOpenSearch) {
         return (
             <Box>
-                <Alert type="info" header="Limited Search Mode">
-                    {`OpenSearch is disabled. Using basic ${Synonyms.asset} listing instead.`}
-                </Alert>
                 <ListPage
                     singularName={Synonyms.Asset}
                     singularNameTitleCase={Synonyms.Asset}

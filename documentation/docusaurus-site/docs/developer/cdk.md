@@ -49,15 +49,15 @@ graph TD
 
 ### Key Nested Stacks
 
-| Stack                   | File                                                         | Purpose                                                                                |
-| ----------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                 | VPC, subnets, VPC endpoints                                                            |
-| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`         | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
-| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`               | Amazon Cognito, SAML, external OAuth                                                   |
-| ApiGatewayV2Amplify     | `nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts` | Amazon API Gateway V2, Lambda authorizer                                               |
-| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`           | All API routes and Lambda wiring                                                       |
-| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`  | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
-| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`      | Processing pipeline orchestrator                                                       |
+| Stack                   | File                                                        | Purpose                                                                                |
+| ----------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                | VPC, subnets, VPC endpoints                                                            |
+| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`        | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
+| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`              | Amazon Cognito, SAML, external OAuth                                                   |
+| RestApiBuilder          | `nestedStacks/apiLambda/restApiBuilder-nestedStack.ts`      | REST API, Lambda authorizer, route registry                                            |
+| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`          | All API routes and Lambda wiring                                                       |
+| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
+| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`     | Processing pipeline orchestrator                                                       |
 
 ### Cross-Stack Shared Interfaces
 
@@ -135,7 +135,7 @@ Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization 
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `kmsKeyLambdaPermissionAddToResourcePolicy`        | Grants AWS KMS Decrypt, Encrypt, GenerateDataKey, ReEncrypt, ListKeys, CreateGrant, ListAliases                                                                                      |
 | `setupSecurityAndLoggingEnvironmentAndPermissions` | Adds env vars for auth tables and 9 audit log groups. Grants DynamoDB read on auth, constraints, userRoles, roles tables. Grants Amazon CloudWatch PutLogEvents on audit log groups. |
-| `globalLambdaEnvironmentsAndPermissions`           | Sets `COGNITO_AUTH_ENABLED` based on Amazon Cognito and VPC configuration                                                                                                            |
+| `globalLambdaEnvironmentsAndPermissions`           | Injects `VAMS_RESOURCE_PARAM_PREFIX` and grants AWS Systems Manager parameter read access for resource-name resolution                                                               |
 | `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards                                                                                                                    |
 
 ## API Route Wiring
@@ -237,11 +237,11 @@ if (config.app.myNewFeature.enabled && !config.app.myNewFeature.someOption) {
 }
 ```
 
-Also update both template files: `config.template.commercial.json` and `config.template.govcloud.json`.
+Also update all three template files: `config.template.commercial.json`, `config.template.govcloud.json`, and `config.template.eusovereign.json`.
 
 ## Service Helper
 
-The service helper provides partition-aware ARN and endpoint generation. It supports four AWS partitions: `aws` (commercial), `aws-us-gov` (GovCloud), `aws-cn` (China), and `aws-iso` (isolated).
+The service helper provides partition-aware ARN and endpoint generation. It supports the `aws` (commercial), `aws-us-gov` (GovCloud), `aws-eusc` (European Sovereign Cloud), `aws-cn` (China), and `aws-iso` (isolated) partitions.
 
 ### Initialization
 
@@ -291,6 +291,7 @@ When `config.app.govCloud.enabled` is `true`, several constraints apply.
 -   `AwsSolutions-COG3` CDK Nag rule suppressed (AdvancedSecurityMode not available)
 -   ALB deployment replaces Amazon CloudFront for static web hosting
 -   VPC endpoints are conditional on feature flags
+-   `useGlobalVpc.useForAllLambdas` is `false` in the GovCloud and AWS European Sovereign Cloud templates, so only the AWS Lambda functions that require the VPC run inside it. Set it to `true` to place all VAMS Lambda functions inside the VPC when stricter network isolation is needed or the Lambda functions must reach specific VPC network components.
 
 ## CDK Nag Compliance
 

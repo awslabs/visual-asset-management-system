@@ -19,7 +19,8 @@ from ..utils.exceptions import (
     FileDownloadError
 )
 from ..utils.download_manager import (
-    DownloadManager, DownloadFileInfo, DownloadProgress, format_file_size, format_duration
+    DownloadManager, DownloadFileInfo, DownloadProgress, format_file_size, format_duration,
+    parse_remote_timestamp
 )
 
 
@@ -258,7 +259,8 @@ async def download_export_files(
                 relative_key=f"{asset_id}/{file['relativePath']}",
                 local_path=file_local_path,
                 download_url=presigned_url,
-                file_size=file.get('size')
+                file_size=file.get('size'),
+                last_modified=parse_remote_timestamp(file.get('dateCreatedCurrentVersion'))
             ))
     
     if not download_files:

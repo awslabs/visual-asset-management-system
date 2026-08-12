@@ -785,6 +785,23 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                     change_info += "]"
 
                 lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{change_info}{archived}")
+
+                # Indented detail sub-lines for fields returned by the API
+                if item.get('dateCreatedCurrentVersion'):
+                    lines.append(f"      Created (current version): {item.get('dateCreatedCurrentVersion')}")
+                if not item.get('isFolder'):
+                    if item.get('versionId'):
+                        lines.append(f"      Version ID: {item.get('versionId')}")
+                    if item.get('etag'):
+                        lines.append(f"      ETag: {item.get('etag')}")
+                    if item.get('storageClass'):
+                        lines.append(f"      Storage Class: {item.get('storageClass')}")
+                    if item.get('previewFile'):
+                        lines.append(f"      Preview File: {item.get('previewFile')}")
+                    if item.get('currentAssetVersionFileVersionMismatch'):
+                        lines.append("      Version Mismatch: file version does not match the current asset version")
+                    if item.get('isPermanentlyDeleted'):
+                        lines.append("      Permanently Deleted: file no longer exists in storage")
             
             # Show nextToken for manual pagination
             if not data.get('autoPaginated') and data.get('NextToken'):
@@ -1183,6 +1200,8 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     lines.append(f"Primary Type: {data.get('primaryType')}")
             
             lines.append(f"Last Modified: {data.get('lastModified', 'N/A')}")
+            if not data.get('isFolder'):
+                lines.append(f"ETag: {data.get('etag', 'N/A')}")
             lines.append(f"Storage Class: {data.get('storageClass', 'N/A')}")
             lines.append(f"Archived: {'Yes' if data.get('isArchived') else 'No'}")
             

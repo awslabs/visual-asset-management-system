@@ -31,9 +31,11 @@ API_SET_PRIMARY_FILE = "/database/{databaseId}/assets/{assetId}/setPrimaryFile"
 
 # Asset Management API Endpoints
 API_ARCHIVE_ASSET = "/database/{databaseId}/assets/{assetId}/archiveAsset"
+API_UNARCHIVE_ASSET = "/database/{databaseId}/assets/{assetId}/unarchiveAsset"
 API_DELETE_ASSET = "/database/{databaseId}/assets/{assetId}/deleteAsset"
 API_DOWNLOAD_ASSET = "/database/{databaseId}/assets/{assetId}/download"
 API_ASSET_EXPORT = "/database/{databaseId}/assets/{assetId}/export"
+API_GET_ASSET_HISTORY = "/database/{databaseId}/assets/{assetId}/assetHistory"
 
 # Asset Version API Endpoints
 API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersion"
@@ -59,7 +61,7 @@ API_TAG_TYPE_DELETE = "/tag-types/{tagTypeId}"
 API_ASSET_LINKS = "/asset-links"
 API_ASSET_LINKS_SINGLE = "/asset-links/single/{assetLinkId}"
 API_ASSET_LINKS_UPDATE = "/asset-links/{assetLinkId}"
-API_ASSET_LINKS_DELETE = "/asset-links/{relationId}"
+API_ASSET_LINKS_DELETE = "/asset-links/{assetLinkId}"
 API_ASSET_LINKS_FOR_ASSET = "/database/{databaseId}/assets/{assetId}/asset-links"
 
 # Asset Links Metadata API Endpoints (New unified API)
@@ -83,6 +85,7 @@ API_ROLE_BY_ID = "/roles/{roleId}"
 API_CONSTRAINTS = "/auth/constraints"
 API_CONSTRAINT_BY_ID = "/auth/constraints/{constraintId}"
 API_CONSTRAINTS_TEMPLATE_IMPORT = "/auth/constraintsTemplateImport"
+API_AUTH_CONSTRAINT_PERMISSION_OBJECTS = "/auth/constraints/permissionObjects"
 
 # Auth Routes API Endpoints
 API_AUTH_ROUTES_API = "/auth/routes/api"
@@ -114,11 +117,47 @@ API_SEARCH = "/search"
 API_SEARCH_SIMPLE = "/search/simple"
 API_SEARCH_MAPPING = "/search"
 
+# Pipeline API Endpoints
+API_PIPELINES = "/pipelines"
+API_DATABASE_PIPELINES = "/database/{databaseId}/pipelines"
+API_DATABASE_PIPELINE = "/database/{databaseId}/pipelines/{pipelineId}"
+API_PIPELINE_TEMPLATES = "/database/{databaseId}/pipelines/{pipelineId}/templates"
+API_PIPELINE_TEMPLATE = "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}"
+API_PIPELINE_TEMPLATE_TAG_SCHEMA = (
+    "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSchema"
+)
+
 # Workflow API Endpoints
 API_WORKFLOWS = "/workflows"
 API_DATABASE_WORKFLOWS = "/database/{databaseId}/workflows"
+API_DATABASE_WORKFLOW = "/database/{databaseId}/workflows/{workflowId}"
+API_WORKFLOW_TRIGGERS = "/database/{databaseId}/workflows/{workflowId}/triggers"
+API_WORKFLOW_TRIGGER = "/database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}"
+
+# Workflow execution API Endpoints
+# Asset-scoped execution list (kept for per-asset history views).
 API_WORKFLOW_EXECUTIONS = "/database/{databaseId}/assets/{assetId}/workflows/executions"
-API_EXECUTE_WORKFLOW = "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}"
+# Asset-less multi-file execute (path uses workflowDatabaseId, not databaseId).
+API_EXECUTE_WORKFLOW = "/workflows/{workflowDatabaseId}/{workflowId}/execute"
+# Execution operations (keyed on executionId; executions may span multiple assets).
+API_WORKFLOW_EXECUTIONS_GLOBAL = "/workflows/executions"
+API_WORKFLOW_EXECUTION = "/workflows/executions/{executionId}"
+API_WORKFLOW_EXECUTION_DETAILS = "/workflows/executions/{executionId}/details"
+API_WORKFLOW_EXECUTION_DETAILS_METADATA = "/workflows/executions/{executionId}/details/metadata"
+API_WORKFLOW_EXECUTION_LOGS = "/workflows/executions/{executionId}/logs"
+API_WORKFLOW_EXECUTION_RERUN = "/workflows/executions/{executionId}/rerun"
+API_WORKFLOW_EXECUTION_PERMANENT = "/workflows/executions/{executionId}/permanent"
+
+# Workflow execution list page-size cap (Step Functions throttling on the asset-scoped list).
+MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50
+# Global execution list page-size cap (the handler clamps larger values to this).
+MAX_GLOBAL_EXECUTION_PAGE_SIZE = 100
+# Page ceiling for --auto-paginate on the execution list (rows are filtered after the page limit).
+MAX_EXECUTION_AUTO_PAGINATE_PAGES = 200
+# Paged execution-detail metadata: the collections the endpoint serves, and its page-size cap
+# (the handler clamps larger values rather than rejecting them).
+EXECUTION_DETAIL_METADATA_COLLECTIONS = ('input', 'inputDatabase', 'output')
+MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE = 500
 
 # Upload Configuration
 DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB
@@ -140,6 +179,11 @@ MAX_UPLOADS_PER_USER_PER_MINUTE = 20  # Rate limit for upload initialization
 DEFAULT_PARALLEL_DOWNLOADS = 5
 DEFAULT_DOWNLOAD_RETRY_ATTEMPTS = 3
 DEFAULT_DOWNLOAD_TIMEOUT = 300  # 5 minutes per file
+MAX_DOWNLOAD_KEYS_PER_REQUEST = 1500  # Backend cap per bulk presigned-URL request
+
+# Sync Configuration
+DEFAULT_IGNORE_FILE_NAME = ".vamsignore"
+SYNC_MTIME_TOLERANCE_SECONDS = 2  # Filesystem timestamp granularity tolerance (FAT32 = 2s)
 
 # File Extensions
 ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']

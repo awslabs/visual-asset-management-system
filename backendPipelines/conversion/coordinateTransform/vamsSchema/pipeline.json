@@ -1,0 +1,29 @@
+{
+    "pipelineName": "Coordinate Transform",
+    "category": "Conversion",
+    "description": "Coordinate Transform Pipeline - Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.e57", "*.las", "*.laz", "*.ply"],
+            "exclude": []
+        }
+    }
+}

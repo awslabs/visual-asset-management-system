@@ -71,7 +71,7 @@ The IAM principal used for deployment must have sufficient permissions to create
 -   Amazon S3 buckets and policies
 -   Amazon DynamoDB tables
 -   AWS Lambda functions and layers
--   Amazon API Gateway HTTP APIs
+-   Amazon API Gateway REST APIs
 -   Amazon Cognito user pools and identity pools
 -   Amazon CloudFront distributions (commercial deployments)
 -   Elastic Load Balancing Application Load Balancers (ALB deployments)
@@ -112,6 +112,15 @@ cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 :::info[GovCloud endpoint resolution]
 When bootstrapping an AWS GovCloud account, you must set the `AWS_REGION` environment variable so the AWS SDK resolves to GovCloud endpoints. Without this variable, the SDK defaults to commercial endpoints and the bootstrap operation will fail.
 :::
+
+**AWS European Sovereign Cloud Regions:**
+
+```bash
+export AWS_REGION=eusc-de-east-1
+cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
+```
+
+As with GovCloud, set the `AWS_REGION` environment variable so the AWS SDK resolves to the European Sovereign Cloud partition endpoints.
 
 ### FIPS endpoint configuration
 

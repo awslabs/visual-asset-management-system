@@ -1,0 +1,29 @@
+{
+    "workflowName": "NVIDIA Cosmos 3 Super (64B)",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos 3 Super (64B) omni world model",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.mp4", "*.mov", "*.jpg", "*.jpeg", "*.png", "*.webp"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:nvidia-cosmos3-super": "cosmos3-super-text2video"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "none",
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        },
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": true
+        }
+    }
+}

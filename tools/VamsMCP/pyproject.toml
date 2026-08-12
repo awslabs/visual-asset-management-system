@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vams-mcp"
+version = "0.2.0"
+description = "Model Context Protocol (MCP) server for the Visual Asset Management System (VAMS)"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "AWS Labs", email = "aws-labs@amazon.com" }]
+keywords = ["aws", "vams", "mcp", "agentic", "3d", "asset", "management"]
+requires-python = ">=3.12"
+dependencies = [
+    # Supports both the mcp 1.x FastMCP and the mcp 2.x MCPServer entry points.
+    "mcp>=1.2.0,<3.0.0",
+    "requests>=2.25.0",
+    # vamscli provides the battle-tested APIClient this server reuses.
+    # Install it into the same environment: `pip install -e ../VamsCLI`
+    "vamscli",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+vams-mcp = "vams_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["vams_mcp*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

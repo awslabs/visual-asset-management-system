@@ -81,11 +81,11 @@ export default function CreateSubscription({
         ...initState,
     });
 
-    const [selectedEvent, setSelectedEvent] = useState<OptionDefinition | null>({
+    const [selectedEvent, setSelectedEvent] = useState<any | null>({
         label: formState.eventName,
         value: formState.eventName,
     });
-    const [selectedEntityType, setSelectedEntityType] = useState<OptionDefinition | null>({
+    const [selectedEntityType, setSelectedEntityType] = useState<any | null>({
         label: formState.entityName,
         value: formState.entityName,
     });
@@ -383,7 +383,7 @@ export default function CreateSubscription({
                                 ]}
                                 disabled={createOrUpdate === "Update"}
                                 onChange={({ detail }) => {
-                                    setSelectedEvent(detail.selectedOption as OptionDefinition);
+                                    setSelectedEvent(detail.selectedOption as any);
                                     setFormState({
                                         ...formState,
                                         eventName: detail.selectedOption.label ?? "",
@@ -415,9 +415,7 @@ export default function CreateSubscription({
                                 onChange={({ detail }) => {
                                     setOptionError("");
                                     setEntityTypeError(null);
-                                    setSelectedEntityType(
-                                        detail.selectedOption as OptionDefinition
-                                    );
+                                    setSelectedEntityType(detail.selectedOption as any);
                                     setFormState({
                                         ...formState,
                                         entityName: detail.selectedOption.label ?? "",

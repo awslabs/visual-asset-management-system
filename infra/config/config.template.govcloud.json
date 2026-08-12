@@ -10,10 +10,18 @@
         "assetBuckets": {
             "createNewBucket": true,
             "defaultNewBucketSyncDatabaseId": "default",
+            "presignedUrlNetworkRestrictions": {
+                "allowedIpRanges": [],
+                "allowedVpceIds": []
+            },
             "externalAssetBuckets": null
         },
         "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
+        "iamRoleConfig": {
+            "useCustomBootstrapRoles": false,
+            "useCustomVamsStackRoles": false
+        },
         "useFips": true,
         "useWaf": true,
         "addStackCloudTrailLogs": true,
@@ -27,7 +35,7 @@
         },
         "useGlobalVpc": {
             "enabled": true,
-            "useForAllLambdas": true,
+            "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
             "optionalExternalIsolatedSubnetIds": null,
@@ -37,12 +45,22 @@
         },
         "openSearch": {
             "useServerless": {
-                "enabled": false
+                "enabled": false,
+                "nextGen": false,
+                "allowPublic": false,
+                "enableStandbyReplicas": false,
+                "minIndexingOcu": 2,
+                "maxIndexingOcu": 16,
+                "minSearchOcu": 2,
+                "maxSearchOcu": 16,
+                "deployDeferredIndexSchema": false
             },
             "useProvisioned": {
                 "enabled": true,
-                "dataNodeInstanceType": "r6g.large.search",
-                "masterNodeInstanceType": "r6g.large.search",
+                "availabilityZoneCount": 2,
+                "numberOfShards": 1,
+                "dataNodeInstanceType": "r7g.large.search",
+                "masterNodeInstanceType": "r7g.large.search",
                 "ebsInstanceNodeSizeGb": 120
             },
             "reindexOnCdkDeploy": false
@@ -68,6 +86,7 @@
             }
         },
         "pipelines": {
+            "deadlineCloudExecutionTypeEnabled": false,
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true
@@ -82,11 +101,16 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
+            "useConversionCoordinateTransform": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
+            },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true,
-                "sqsAutoRunOnAssetModified": false
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
@@ -96,6 +120,7 @@
             },
             "useSplatToolbox": {
                 "enabled": false,
+                "useCodeBuild": false,
                 "autoRegisterWithVAMS": true
             },
             "useRapidPipeline": {
@@ -196,6 +221,42 @@
                     }
                 }
             },
+            "useNvidiaCosmos3": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": false,
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "modelsOmni": {
+                    "nano16B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.4xlarge", "g6e.12xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "super64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "superText2Image64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "superImage2Video64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                        "maxVCpus": 192
+                    }
+                }
+            },
             "useNvidiaGr00t": {
                 "enabled": false,
                 "huggingFaceToken": "",
@@ -225,6 +286,7 @@
                 "apiBaseEndpoint": "https://app-api.physna.com/v3/",
                 "authTokenEndpoint": "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
                 "authType": "cognito",
+                "credentialsSecretArn": "",
                 "clientId": "",
                 "clientSecret": ""
             }
@@ -261,8 +323,14 @@
             "allowUnsafeEvalFeatures": false
         },
         "api": {
-            "globalRateLimit": 50,
-            "globalBurstLimit": 100
+            "apiType": "APIGATEWAY_REST",
+            "apiGatewayRest": {
+                "globalRateLimit": 50,
+                "globalBurstLimit": 100,
+                "endpointType": "REGIONAL",
+                "optionalExternalPrivateApigVPCEId": "",
+                "apiGatewayTimeoutTime": 29
+            }
         },
         "metadataSchema": {
             "autoLoadDefaultAssetLinksSchema": true,

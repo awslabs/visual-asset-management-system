@@ -35,8 +35,10 @@ import * as Config from "../../../../../../../config/config";
 import {
     generateUniqueNameHash,
     kmsKeyPolicyStatementGenerator,
+    grantExternalAssetBucketKmsKeys,
 } from "../../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
 export interface CosmosPredictConstructProps extends cdk.StackProps {
@@ -46,7 +48,7 @@ export interface CosmosPredictConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
     // From common construct:
     modelCacheBucket: s3.Bucket;
     efsFileSystem: efs.FileSystem;
@@ -77,13 +79,21 @@ export class CosmosPredictConstruct extends Construct {
 
         /**
          * HuggingFace Token stored in Secrets Manager
-         * The token value comes from the CDK config and is stored as a secret
-         * so Batch can inject it securely without exposing it in environment variables.
+         * Batch injects the secret into the container so the token is never an env var value.
+         * The secret is created EMPTY and populated at deploy time from config by a custom
+         * resource that carries the token in its code asset, so the token never lands in the
+         * synthesized CloudFormation template.
          */
         const hfTokenSecret = new secretsmanager.Secret(this, "CosmosHfTokenSecret", {
             description: "HuggingFace API token for downloading NVIDIA Cosmos models",
-            secretStringValue: cdk.SecretValue.unsafePlainText(cosmosConfig.huggingFaceToken),
         });
+
+        populateHuggingFaceTokenSecret(
+            this,
+            "CosmosHfTokenSecretPopulate",
+            hfTokenSecret,
+            cosmosConfig.huggingFaceToken
+        );
 
         NagSuppressions.addResourceSuppressions(
             hfTokenSecret,
@@ -144,7 +154,11 @@ export class CosmosPredictConstruct extends Construct {
             statements: [
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
                         actions: [
@@ -156,7 +170,7 @@ export class CosmosPredictConstruct extends Construct {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -239,6 +253,11 @@ export class CosmosPredictConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         /**
          * Batch Compute Environment
@@ -372,7 +391,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 instanceTypes: instanceTypes,
                 ec2Configuration: [
                     {
-                        imageType: "ECS_AL2",
+                        imageType: "ECS_AL2023_NVIDIA",
                     },
                 ],
                 subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),
@@ -484,7 +503,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         instanceTypes: instanceTypes14B,
                         ec2Configuration: [
                             {
-                                imageType: "ECS_AL2",
+                                imageType: "ECS_AL2023_NVIDIA",
                             },
                         ],
                         subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),
@@ -634,6 +653,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 },
                 environment: [
                     { name: "MODEL_TYPE", value: modelType },
+                    { name: "MODEL_SIZE", value: modelSize },
                     { name: "MODEL_VERSION", value: modelVersion },
                     { name: "AWS_REGION", value: region },
                     { name: "S3_MODEL_BUCKET", value: modelCacheBucket.bucketName },
@@ -751,8 +771,6 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     command: [...sfn.JsonPath.listAt("$.definition")],
                     environment: {
                         AWS_REGION: region,
-                        INPUT_PARAMETERS: sfn.JsonPath.stringAt("$.inputParameters"),
-                        INPUT_METADATA: sfn.JsonPath.stringAt("$.inputMetadata"),
                         S3_MODEL_BUCKET: modelCacheBucket.bucketName,
                     },
                 },
@@ -788,7 +806,10 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 `CosmosPredict-${modelKey}-StateMachine`,
                 {
                     definitionBody: sfn.DefinitionBody.fromChainable(sfnDefinition),
-                    timeout: Duration.hours(5),
+                    // Envelopes the Batch attempt (attemptDurationSeconds 28800) so a long-running
+                    // job reaches its own failure path — and the task-token callback — rather than
+                    // being cut short by the state machine.
+                    timeout: Duration.hours(9),
                     logs: {
                         destination: stateMachineLogGroup,
                         includeExecutionData: true,
@@ -811,6 +832,8 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 props.config,
                 props.vpc,
                 props.pipelineSubnets,
+                props.storageResources.eventBridge.orchestrationBus,
+                stateMachineLogGroup,
                 props.storageResources.encryption.kmsKey,
                 modelKey // Use modelKey (unique per model, e.g., "text2world2B_v2") not modelType
             );
@@ -844,61 +867,40 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             }
 
             /**
-             * Auto-Registration with VAMS
+             * Auto-Registration with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template
+             * tables). Each model variant has its own per-model bundle under
+             * vamsSchema/<modelType>-<modelSize> (e.g. text2world-2b).
              */
             if (isAutoRegister) {
-                const importFunction = lambda.Function.fromFunctionArn(
-                    this,
-                    `ImportFunction-${modelKey}`,
-                    `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                        props.importGlobalPipelineWorkflowFunctionName
-                    }`
-                );
-
-                const importProvider = new cr.Provider(this, `ImportProvider-${modelKey}`, {
-                    onEventHandler: importFunction,
-                });
-
-                NagSuppressions.addResourceSuppressionsByPath(
-                    Stack.of(this),
-                    `/${this.toString()}/ImportProvider-${modelKey}/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
-                    [
-                        {
-                            id: "AwsSolutions-IAM5",
-                            reason: "Custom resource provider requires wildcard permissions to invoke the import global pipeline workflow function with version qualifiers. Scope is limited to the single import function.",
-                            appliesTo: [
-                                `Resource::arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
-                            ],
-                        },
-                    ],
-                    true
-                );
-
-                new cdk.CustomResource(this, `CosmosPredict-${modelKey}-PipelineWorkflow`, {
-                    serviceToken: importProvider.serviceToken,
-                    properties: {
-                        pipelineId: pipelineId,
-                        pipelineDescription: pipelineDescription,
-                        pipelineType: "standardFile",
-                        pipelineExecutionType: "Lambda",
-                        assetType: ".all",
-                        outputType: ".mp4",
-                        waitForCallback: "Enabled",
+                new VamsSchemaRegistration(this, `CosmosPredict-${modelKey}-Registration`, {
+                    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                    artefactsBucket: props.storageResources.s3.artefactsBucket,
+                    vamsSchemaDir: path.join(
+                        __dirname,
+                        "..",
+                        "..",
+                        "..",
+                        "..",
+                        "..",
+                        "..",
+                        "..",
+                        "..",
+                        "backendPipelines",
+                        "genAi",
+                        "nvidia",
+                        "cosmos",
+                        "predict",
+                        "vamsSchema",
+                        `${modelType}-${modelSize.toLowerCase()}`
+                    ),
+                    resourceOverrides: {
                         lambdaName: vamsExecuteFunction.functionName,
-                        taskTimeout: "28800",
-                        taskHeartbeatTimeout: "",
-                        inputParameters: JSON.stringify({
-                            MODEL_TYPE: modelType,
-                            MODEL_SIZE: modelSize,
-                            DISABLE_GUARDRAILS: "true",
-                            OFFLOAD_TEXT_ENCODER: "true",
-                            OFFLOAD_TOKENIZER: "true",
-                            OFFLOAD_DIFFUSION_MODEL: "true",
-                        }),
-                        workflowId: pipelineId,
-                        workflowDescription: pipelineDescription,
-                        autoTriggerOnFileExtensionsUpload: autoTriggerExtensions,
                     },
+                    idOverrides: {
+                        pipelineId: pipelineId,
+                        workflowId: pipelineId,
+                    },
+                    triggerEnabled: autoTriggerExtensions !== "",
                 });
             }
 

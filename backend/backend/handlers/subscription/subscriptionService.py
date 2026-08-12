@@ -1,12 +1,14 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
+import copy
 import boto3
 import json
 
 from botocore.exceptions import ClientError
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -23,7 +25,7 @@ dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
 sns_client = boto3.client('sns')
 
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 # Hard-coded allowed values for subscription fields
 ALLOWED_EVENT_NAMES = [
@@ -36,25 +38,38 @@ ALLOWED_ENTITY_NAMES = [
 
 def validate_subscription_fields(body):
     """Validate subscription fields against allowed values"""
-    
+
     # Validate eventName
     if body['eventName'] not in ALLOWED_EVENT_NAMES:
         raise ValueError(f"Invalid eventName. Allowed values: {', '.join(ALLOWED_EVENT_NAMES)}")
-    
+
     # Validate entityName
     if body['entityName'] not in ALLOWED_ENTITY_NAMES:
         raise ValueError(f"Invalid entityName. Allowed values: {', '.join(ALLOWED_ENTITY_NAMES)}")
-    
+
     return True
 
 try:
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    user_table_name = os.environ["USER_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving subscriptions table name")
+    subscription_table_name = None
+
+try:
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset table name")
+    asset_table_name = None
+
+try:
+    user_table_name = get_table_name(ResourceKeys.USER_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving user table name")
+    user_table_name = None
+
+if not (subscription_table_name and asset_table_name and user_table_name):
     main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
+        {"message": "Failed resolving required table names"})
 
 
 def get_name_for_asset_ids(asset_ids):
@@ -76,7 +91,7 @@ def get_name_for_asset_ids(asset_ids):
 
 
 def get_subscriptions(query_params):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     deserializer = TypeDeserializer()
     paginator = dynamodb_client.get_paginator('scan')
 
@@ -152,11 +167,21 @@ def add_sns_topic_in_asset(asset_id, database_id, sns_topic):
         logger.error(f"No asset found - {asset_id}.")
         return
 
-    asset_table.update_item(
-        Key={'databaseId': database_id, 'assetId': asset_id},
-        UpdateExpression='SET snsTopic = :sns_topic',
-        ExpressionAttributeValues={':sns_topic': sns_topic}
-    )
+    # Conditional on the record still existing: the asset may be archived or
+    # deleted between the query above and this update, and an unconditional
+    # update_item would re-create a phantom record containing only the key
+    try:
+        asset_table.update_item(
+            Key={'databaseId': database_id, 'assetId': asset_id},
+            UpdateExpression='SET snsTopic = :sns_topic',
+            ConditionExpression='attribute_exists(assetId)',
+            ExpressionAttributeValues={':sns_topic': sns_topic}
+        )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset no longer exists; skipping snsTopic update - {asset_id}")
+            return
+        raise
 
 
 def get_asset(asset_id):
@@ -186,10 +211,19 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
 
     if delete_sns:
         sns_client.delete_topic(TopicArn=asset_obj.get("snsTopic"))
-        asset_table.update_item(
-            Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
-            UpdateExpression=f"REMOVE snsTopic"
-        )
+        # Conditional on the record still existing: a REMOVE-only update on a
+        # missing key would otherwise create a key-only phantom record
+        try:
+            asset_table.update_item(
+                Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
+                UpdateExpression="REMOVE snsTopic",
+                ConditionExpression='attribute_exists(assetId)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.warning(f"Asset no longer exists; skipping snsTopic removal - {asset_id}")
+            else:
+                raise
     else:
         resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
         subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]
@@ -261,7 +295,7 @@ def get_userProfile_Email(userId):
 
 
 def create_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     
     # Validate subscription fields against allowed values
@@ -325,7 +359,7 @@ def create_subscription(body):
 
 
 def update_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     
     # Validate subscription fields against allowed values
@@ -389,7 +423,7 @@ def update_subscription(body):
 
 
 def delete_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     try:
         subscription_table.delete_item(
@@ -418,7 +452,8 @@ def delete_subscription(body):
 
 
 def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
+    normalize_event(event)
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     try:
         httpMethod = event['requestContext']['http']['method']
 

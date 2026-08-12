@@ -18,13 +18,14 @@ from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ..utils.exceptions import (
     AssetNotFoundError, AssetAlreadyExistsError, DatabaseNotFoundError,
-    InvalidAssetDataError, AssetAlreadyArchivedError, AssetDeletionError, 
+    InvalidAssetDataError, AssetAlreadyArchivedError, AssetNotArchivedError, AssetDeletionError,
     FileDownloadError, DownloadError, AssetDownloadError, PreviewNotFoundError,
     AssetNotDistributableError, DownloadTreeError, APIError
 )
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, DownloadProgress, StreamingDownloadProgress,
-    FileTreeBuilder, AssetTreeTraverser, format_file_size, format_duration
+    FileTreeBuilder, AssetTreeTraverser, format_file_size, format_duration,
+    parse_remote_timestamp, generate_presigned_urls
 )
 
 
@@ -46,6 +47,19 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
             raise click.BadParameter(
                 f"Invalid JSON input: '{json_input}' is neither valid JSON nor a readable file path"
             )
+
+
+def build_list_files_params(asset_version_id: Optional[str] = None,
+                            include_archived: bool = False) -> Dict[str, Any]:
+    """Build listFiles query params, scoping to an asset version snapshot when given.
+
+    When an asset version is selected, the file listing must reflect that
+    version's snapshot (files as they existed then) rather than current files.
+    """
+    params: Dict[str, Any] = {'includeArchived': 'true' if include_archived else 'false'}
+    if asset_version_id:
+        params['assetVersionId'] = asset_version_id
+    return params
 
 
 def list_all_asset_files(api_client, database_id: str, asset_id: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -376,6 +390,8 @@ def archive(ctx: click.Context, asset_id: str, database: str, reason: Optional[s
             lines.append("")
             lines.append("The asset has been moved to archived state and will not appear in normal listings.")
             lines.append("Use 'vamscli assets get --show-archived' to view archived assets.")
+            lines.append("Unarchiving restores the asset record only by default; use --unarchive-files")
+            lines.append("with 'vamscli assets unarchive' to also restore the files archived by this operation.")
             return '\n'.join(lines)
         
         output_result(
@@ -401,6 +417,107 @@ def archive(ctx: click.Context, asset_id: str, database: str, reason: Optional[s
             json_output,
             error_type="Asset Already Archived",
             helpful_message=f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to view the archived asset."
+        )
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+
+
+@assets.command()
+@click.argument('asset_id')
+@click.option('-d', '--database', required=True, help='Database ID containing the asset')
+@click.option('--reason', help='Reason for unarchiving the asset')
+@click.option('--unarchive-files', is_flag=True,
+              help='Also restore the files that were archived by the asset archive operation')
+@click.option('--json-input', type=click.File('r'), help='JSON file with parameters')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def unarchive(ctx: click.Context, asset_id: str, database: str, reason: Optional[str], unarchive_files: bool, json_input: Optional[click.File], json_output: bool):
+    """
+    Unarchive an asset (restore from soft delete).
+
+    This command restores a previously archived asset record to active state so
+    it appears in normal listings again. By default the asset's files remain
+    archived. Pass --unarchive-files to also restore the files that the asset
+    archive operation archived; files archived individually beforehand always
+    stay archived and can be restored with 'vamscli file unarchive'.
+
+    Examples:
+        vamscli assets unarchive my-asset -d my-database
+        vamscli assets unarchive my-asset -d my-database --unarchive-files
+        vamscli assets unarchive my-asset -d my-database --reason "Restoring for review"
+        vamscli assets unarchive my-asset -d my-database --json-input unarchive-params.json
+        vamscli assets unarchive my-asset -d my-database --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Handle JSON input
+        if json_input:
+            try:
+                json_data = json.load(json_input)
+                # Override command line parameters with JSON data
+                database = json_data.get('databaseId', database)
+                asset_id = json_data.get('assetId', asset_id)
+                reason = json_data.get('reason', reason)
+                unarchive_files = json_data.get('unarchiveFiles', unarchive_files)
+            except json.JSONDecodeError as e:
+                raise click.BadParameter(f"Invalid JSON in input file: {e}")
+
+        output_status(f"Unarchiving asset '{asset_id}' in database '{database}'...", json_output)
+
+        # Unarchive the asset
+        result = api_client.unarchive_asset(database, asset_id, reason, unarchive_files)
+
+        def format_unarchive_result(data):
+            """Format unarchive result for CLI display."""
+            lines = []
+            lines.append(f"  Asset ID: {asset_id}")
+            lines.append(f"  Database: {database}")
+            lines.append(f"  Operation: {data.get('operation', 'unarchive')}")
+            lines.append(f"  Timestamp: {data.get('timestamp', 'N/A')}")
+            lines.append(f"  Message: {data.get('message', 'Asset unarchived')}")
+            lines.append("")
+            lines.append("The asset record has been restored to active state and will appear in normal listings.")
+            if not unarchive_files:
+                lines.append("Files previously archived remain archived. Use 'vamscli file unarchive' to restore")
+                lines.append("individual files, or rerun with --unarchive-files to restore the files archived")
+                lines.append("by the asset archive operation.")
+            return '\n'.join(lines)
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset unarchived successfully!",
+            cli_formatter=format_unarchive_result
+        )
+
+        return result
+
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to check if the archived asset exists."
+        )
+        raise click.ClickException(str(e))
+    except AssetNotArchivedError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Archived",
+            helpful_message=f"Only archived assets can be unarchived. Use 'vamscli assets get -d {database} {asset_id}' to check the asset's state."
         )
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:
@@ -887,6 +1004,185 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
 
 
 @assets.command()
+@click.option('-d', '--database', required=True, help='Database ID containing the asset')
+@click.option('-a', '--asset', required=True, help='Asset ID to get history for')
+@click.option('--page-size', type=int, help='Number of items per page')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
+@click.option('--json-input', help='JSON input file path or JSON string with parameters')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def history(ctx: click.Context, database: str, asset: str, page_size: int,
+            max_items: int, starting_token: str, auto_paginate: bool,
+            json_input: Optional[str], json_output: bool):
+    """
+    List the lifecycle history records for an asset.
+
+    This command retrieves an asset's history records (create, edit, archive,
+    unarchive, permanent delete) newest first, including the acting user, the
+    origin of each change, and a snapshot of the asset fields after each
+    operation.
+
+    Examples:
+        vamscli assets history -d my-database -a my-asset
+        vamscli assets history -d my-database -a my-asset --auto-paginate
+        vamscli assets history -d my-database -a my-asset --page-size 50
+        vamscli assets history -d my-database -a my-asset --starting-token "token123" --page-size 50
+        vamscli assets history -d my-database -a my-asset --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Handle JSON input
+        if json_input:
+            json_data = parse_json_input(json_input)
+            database = json_data.get('databaseId', database)
+            asset = json_data.get('assetId', asset)
+            page_size = json_data.get('pageSize', page_size)
+            starting_token = json_data.get('startingToken', starting_token)
+
+        # Validate pagination options
+        if auto_paginate and starting_token:
+            raise click.ClickException(
+                "Cannot use --auto-paginate with --starting-token. "
+                "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+            )
+
+        # Warn if max-items used without auto-paginate
+        if max_items and not auto_paginate:
+            output_status("Warning: --max-items only applies with --auto-paginate. Ignoring --max-items.", json_output)
+            max_items = None
+
+        if auto_paginate:
+            # Auto-pagination mode: fetch all items up to max_items (default 10,000)
+            max_total_items = max_items or 10000
+            output_status(f"Listing history for asset '{asset}' (auto-paginating up to {max_total_items} items)...", json_output)
+
+            all_items = []
+            next_token = None
+            total_fetched = 0
+            page_count = 0
+
+            while True:
+                page_count += 1
+
+                # Prepare query parameters for this page
+                params = {}
+                if page_size:
+                    params['pageSize'] = page_size
+                if next_token:
+                    params['startingToken'] = next_token
+
+                # Note: maxItems is NOT passed to API - it's CLI-side limit only
+                page_result = api_client.get_asset_history(database, asset, params)
+
+                # Aggregate items
+                items = page_result.get('Items', [])
+                all_items.extend(items)
+                total_fetched += len(items)
+
+                # Show progress in CLI mode
+                if not json_output:
+                    output_status(f"Fetched {total_fetched} history record(s) (page {page_count})...", False)
+
+                # Check if we should continue
+                next_token = page_result.get('NextToken')
+                if not next_token or total_fetched >= max_total_items:
+                    break
+
+            # Create final result
+            result = {
+                'Items': all_items,
+                'totalItems': len(all_items),
+                'autoPaginated': True,
+                'pageCount': page_count
+            }
+
+            if total_fetched >= max_total_items and next_token:
+                result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
+
+        else:
+            # Manual pagination mode: single API call
+            output_status(f"Listing history for asset '{asset}' in database '{database}'...", json_output)
+
+            # Prepare query parameters
+            params = {}
+            if page_size:
+                params['pageSize'] = page_size
+            if starting_token:
+                params['startingToken'] = starting_token
+
+            result = api_client.get_asset_history(database, asset, params)
+
+        def format_history_list(data):
+            """Format asset history records for CLI display."""
+            items = data.get('Items', [])
+            if not items:
+                return "No history records found."
+
+            lines = []
+
+            # Show auto-pagination info if present
+            if data.get('autoPaginated'):
+                lines.append(f"\nAuto-paginated: Retrieved {data.get('totalItems', 0)} items in {data.get('pageCount', 0)} page(s)")
+                if data.get('note'):
+                    lines.append(f"⚠️  {data['note']}")
+                lines.append("")
+
+            lines.append(f"Found {len(items)} history record(s):")
+            lines.append("-" * 80)
+
+            for record in items:
+                lines.append(f"Date: {record.get('recordDate', 'N/A')}")
+                lines.append(f"Action: {record.get('changeSource', 'N/A')}")
+                lines.append(f"User: {record.get('changeUserId', 'N/A')}")
+                if record.get('migratedRecord'):
+                    lines.append("Migrated Record: Yes")
+
+                # Snapshot is open-schema; render whatever keys exist
+                snapshot = record.get('assetSnapshot', {})
+                if snapshot:
+                    lines.append("Snapshot:")
+                    for key, value in snapshot.items():
+                        lines.append(f"  {key}: {value}")
+
+                lines.append("-" * 80)
+
+            # Show nextToken for manual pagination
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                lines.append(f"\nNext token: {data['NextToken']}")
+                lines.append("Use --starting-token to get the next page")
+
+            return '\n'.join(lines)
+
+        output_result(result, json_output, cli_formatter=format_history_list)
+
+        return result
+
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset} --show-archived' to check if the asset exists."
+        )
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+
+
+@assets.command()
 @click.argument('local_path', required=False)
 @click.option('-d', '--database', required=True, help='Database ID containing the asset')
 @click.option('-a', '--asset', required=True, help='Asset ID to download from')
@@ -897,6 +1193,9 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
 @click.option('--file-previews', is_flag=True, help='Additionally download file preview files')
 @click.option('--asset-version-id', type=str, default=None, help='Asset version ID to download files from')
 @click.option('--asset-version-alias', type=str, default=None, help='Asset version alias to download files from')
+@click.option('--version-id', 'version_id', type=str, default=None,
+              help='S3 version ID for a specific file version (single --file-key only; '
+                   'mutually exclusive with --asset-version-id/--asset-version-alias)')
 @click.option('--asset-link-children-tree-depth', type=int, help='Traverse asset link children tree to specified depth')
 @click.option('--shareable-links-only', is_flag=True, help='Return presigned URLs without downloading')
 @click.option('--parallel-downloads', type=int, default=DEFAULT_PARALLEL_DOWNLOADS,
@@ -914,6 +1213,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             file_key: Optional[str], recursive: bool, flatten_download_tree: bool,
             asset_preview: bool, file_previews: bool,
             asset_version_id: Optional[str], asset_version_alias: Optional[str],
+            version_id: Optional[str],
             asset_link_children_tree_depth: Optional[int],
             shareable_links_only: bool, parallel_downloads: int, retry_attempts: int, timeout: int,
             json_input: Optional[str], json_output: bool, hide_progress: bool):
@@ -985,6 +1285,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
         file_previews = json_data.get('file_previews', file_previews)
         asset_version_id = json_data.get('asset_version_id', asset_version_id)
         asset_version_alias = json_data.get('asset_version_alias', asset_version_alias)
+        version_id = json_data.get('version_id', version_id)
         asset_link_children_tree_depth = json_data.get('asset_link_children_tree_depth', asset_link_children_tree_depth)
         shareable_links_only = json_data.get('shareable_links_only', shareable_links_only)
         parallel_downloads = json_data.get('parallel_downloads', parallel_downloads)
@@ -1022,6 +1323,15 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             raise click.ClickException("Cannot specify both --asset-version-id and --asset-version-alias. Use one or the other.")
         if asset_preview and (asset_version_id or asset_version_alias):
             raise click.ClickException("Cannot specify --asset-preview with --asset-version-id or --asset-version-alias")
+        # Per-file S3 version applies to a single file only and cannot combine
+        # with a whole-set asset version pin
+        if version_id:
+            if asset_version_id or asset_version_alias:
+                raise click.ClickException("Cannot specify --version-id with --asset-version-id or --asset-version-alias")
+            if asset_preview:
+                raise click.ClickException("Cannot specify --version-id with --asset-preview")
+            if recursive or not file_key:
+                raise click.ClickException("--version-id requires a single --file-key (not a folder or whole-asset download)")
         
         # Handle shareable links only mode
         if shareable_links_only:
@@ -1062,38 +1372,45 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         }
                     else:
                         # Get all files (with pagination)
-                        all_files = list_all_asset_files(api_client, database, asset, {
-                            'includeArchived': 'false'
-                        })
+                        all_files = list_all_asset_files(api_client, database, asset,
+                            build_list_files_params(asset_version_id))
                         target_files = [f for f in all_files if not f.get('isFolder')]
 
                         if not target_files:
                             raise FileDownloadError(f"Asset '{asset}' currently has no files to download")
 
+                        url_map = generate_presigned_urls(
+                            api_client, database, asset,
+                            [f.get('relativePath', '') for f in target_files],
+                            asset_version_id=asset_version_id,
+                            asset_version_alias=asset_version_alias
+                        )
                         shareable_links = []
+                        skipped_links = []
                         for file_item in target_files:
                             relative_path = file_item.get('relativePath', '')
-                            try:
-                                download_response = api_client.download_asset_file(
-                                    database, asset, relative_path,
-                                    asset_version_id=asset_version_id,
-                                    asset_version_alias=asset_version_alias
-                                )
+                            url_entry = url_map.get(relative_path, {})
+                            if url_entry.get('downloadUrl'):
                                 shareable_links.append({
                                     "filePath": relative_path,
-                                    "downloadUrl": download_response.get('downloadUrl'),
-                                    "expiresIn": download_response.get('expiresIn', 86400),
+                                    "downloadUrl": url_entry['downloadUrl'],
+                                    "expiresIn": 86400,
                                     "downloadType": "assetFile"
                                 })
-                            except Exception as e:
-                                # Skip files that can't be downloaded
-                                pass
-                        
+                            else:
+                                skipped_links.append(relative_path)
+
+                        message = "Shareable links generated successfully"
+                        if skipped_links:
+                            message += (f" ({len(skipped_links)} file(s) skipped - "
+                                        "not available for download)")
                         result = {
                             "shareableLinks": shareable_links,
                             "totalFiles": len(shareable_links),
-                            "message": "Shareable links generated successfully"
+                            "message": message
                         }
+                        if skipped_links:
+                            result["skippedFiles"] = skipped_links
                         
                 except Exception as e:
                     raise AssetDownloadError(f"Failed to generate shareable links: {e}")
@@ -1159,7 +1476,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                     relative_key=f"{asset_id}/{relative_path}",
                                     local_path=file_local_path,
                                     download_url=download_response.get('downloadUrl'),
-                                    file_size=file_item.get('size')
+                                    file_size=file_item.get('size'),
+                                    last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
                                 ))
                             except Exception as e:
                                 output_warning(f"Skipping file {relative_path} from asset {asset_id}: {e}", json_output)
@@ -1170,9 +1488,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     
                     if recursive or file_key.endswith('/'):
                         # Download folder contents (with pagination)
-                        all_files = list_all_asset_files(api_client, database, asset, {
-                            'includeArchived': 'false'
-                        })
+                        all_files = list_all_asset_files(api_client, database, asset,
+                            build_list_files_params(asset_version_id))
 
                         # Get files under the specified prefix
                         target_files = FileTreeBuilder.get_files_under_prefix(
@@ -1201,26 +1518,30 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
 
                                 # nosemgrep: useless-inner-function
                                 async def _produce():  # nosemgrep: useless-inner-function
-                                    total = len(target_files)
-                                    for idx, file_item in enumerate(target_files):
-                                        rp = file_item.get('relativePath', '')
-                                        lp = Path(local_path) / rp.lstrip('/')
-                                        try:
-                                            dr = api_client.download_asset_file(
-                                                database, asset, rp,
-                                                asset_version_id=asset_version_id,
-                                                asset_version_alias=asset_version_alias
-                                            )
+                                    try:
+                                        url_map = generate_presigned_urls(
+                                            api_client, database, asset,
+                                            [f.get('relativePath', '') for f in target_files],
+                                            asset_version_id=asset_version_id,
+                                            asset_version_alias=asset_version_alias
+                                        )
+                                        for file_item in target_files:
+                                            rp = file_item.get('relativePath', '')
+                                            lp = Path(local_path) / rp.lstrip('/')
+                                            url_entry = url_map.get(rp, {})
+                                            if not url_entry.get('downloadUrl'):
+                                                output_warning(f"Skipping file {rp}: "
+                                                               f"{url_entry.get('error', 'URL generation failed')}",
+                                                               json_output)
+                                                continue
                                             await queue.put(DownloadFileInfo(
                                                 relative_key=rp, local_path=lp,
-                                                download_url=dr.get('downloadUrl'),
-                                                file_size=file_item.get('size')
+                                                download_url=url_entry['downloadUrl'],
+                                                file_size=file_item.get('size'),
+                                                last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
                                             ))
-                                        except Exception:
-                                            pass
-                                        if not json_output and total > 10 and (idx + 1) % 25 == 0:
-                                            output_status(f"Preparing downloads... {idx + 1}/{total} files", False)
-                                    await queue.put(None)
+                                    finally:
+                                        await queue.put(None)
 
                                 async with DownloadManager(
                                     api_client, max_parallel=parallel_downloads,
@@ -1239,33 +1560,34 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                             ) for k, v in streaming_progress.file_progress.items()]
                             streamed_download_done = True
                         else:
-                            # Sequential: generate all URLs first, then download
-                            total_target = len(target_files)
-                            for idx, file_item in enumerate(target_files):
+                            # Non-streamed: generate all URLs first (bulk), then download
+                            url_map = generate_presigned_urls(
+                                api_client, database, asset,
+                                [f.get('relativePath', '') for f in target_files],
+                                asset_version_id=asset_version_id,
+                                asset_version_alias=asset_version_alias
+                            )
+                            for file_item in target_files:
                                 relative_path = file_item.get('relativePath', '')
-
-                                if not json_output and total_target > 10 and (idx + 1) % 25 == 0:
-                                    output_status(f"Preparing downloads... {idx + 1}/{total_target} files", False)
 
                                 if flatten_download_tree:
                                     file_local_path = Path(local_path) / Path(relative_path).name
                                 else:
                                     file_local_path = Path(local_path) / relative_path.lstrip('/')
 
-                                try:
-                                    download_response = api_client.download_asset_file(
-                                        database, asset, relative_path,
-                                        asset_version_id=asset_version_id,
-                                        asset_version_alias=asset_version_alias
-                                    )
-                                    files_to_download.append(DownloadFileInfo(
-                                        relative_key=relative_path,
-                                        local_path=file_local_path,
-                                        download_url=download_response.get('downloadUrl'),
-                                        file_size=file_item.get('size')
-                                    ))
-                                except Exception as e:
-                                    output_warning(f"Skipping file {relative_path}: {e}", json_output)
+                                url_entry = url_map.get(relative_path, {})
+                                if not url_entry.get('downloadUrl'):
+                                    output_warning(f"Skipping file {relative_path}: "
+                                                   f"{url_entry.get('error', 'URL generation failed')}",
+                                                   json_output)
+                                    continue
+                                files_to_download.append(DownloadFileInfo(
+                                    relative_key=relative_path,
+                                    local_path=file_local_path,
+                                    download_url=url_entry['downloadUrl'],
+                                    file_size=file_item.get('size'),
+                                    last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
+                                ))
 
                             if file_previews:
                                 for file_item in target_files:
@@ -1294,6 +1616,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         # Download single file
                         download_response = api_client.download_asset_file(
                             database, asset, file_key,
+                            version_id=version_id,
                             asset_version_id=asset_version_id,
                             asset_version_alias=asset_version_alias
                         )
@@ -1332,9 +1655,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     # Download all files from asset (with pagination)
                     output_status("Fetching all files from asset...", json_output)
 
-                    all_files = list_all_asset_files(api_client, database, asset, {
-                        'includeArchived': 'false'
-                    })
+                    all_files = list_all_asset_files(api_client, database, asset,
+                        build_list_files_params(asset_version_id))
                     target_files = [f for f in all_files if not f.get('isFolder')]
                     
                     if not target_files:
@@ -1353,26 +1675,30 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
 
                         # nosemgrep: useless-inner-function
                         async def _produce():  # nosemgrep: useless-inner-function
-                            total = len(target_files)
-                            for idx, file_item in enumerate(target_files):
-                                rp = file_item.get('relativePath', '')
-                                lp = Path(local_path) / rp.lstrip('/')
-                                try:
-                                    dr = api_client.download_asset_file(
-                                        database, asset, rp,
-                                        asset_version_id=asset_version_id,
-                                        asset_version_alias=asset_version_alias
-                                    )
+                            try:
+                                url_map = generate_presigned_urls(
+                                    api_client, database, asset,
+                                    [f.get('relativePath', '') for f in target_files],
+                                    asset_version_id=asset_version_id,
+                                    asset_version_alias=asset_version_alias
+                                )
+                                for file_item in target_files:
+                                    rp = file_item.get('relativePath', '')
+                                    lp = Path(local_path) / rp.lstrip('/')
+                                    url_entry = url_map.get(rp, {})
+                                    if not url_entry.get('downloadUrl'):
+                                        output_warning(f"Skipping file {rp}: "
+                                                       f"{url_entry.get('error', 'URL generation failed')}",
+                                                       json_output)
+                                        continue
                                     await queue.put(DownloadFileInfo(
                                         relative_key=rp, local_path=lp,
-                                        download_url=dr.get('downloadUrl'),
-                                        file_size=file_item.get('size')
+                                        download_url=url_entry['downloadUrl'],
+                                        file_size=file_item.get('size'),
+                                        last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
                                     ))
-                                except Exception:
-                                    pass
-                                if not json_output and total > 10 and (idx + 1) % 25 == 0:
-                                    output_status(f"Preparing downloads... {idx + 1}/{total} files", False)
-                            await queue.put(None)
+                            finally:
+                                await queue.put(None)
 
                         async with DownloadManager(
                             api_client, max_parallel=parallel_downloads,

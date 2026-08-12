@@ -69,16 +69,6 @@ function buildCommonPhysnaLambda(props: BuildPhysnaLambdaProps): lambda.Function
             PHYSNA_TOKEN_URL: config.app.addons.usePhysnaSync.authTokenEndpoint,
             PHYSNA_AUTH_TYPE: config.app.addons.usePhysnaSync.authType,
             PHYSNA_CREDS_SECRET_ARN: credsSecret.secretArn,
-
-            // VAMS storage table names
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
-                storageResources.dynamo.fileAttributeStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
         },
     });
 
@@ -88,6 +78,7 @@ function buildCommonPhysnaLambda(props: BuildPhysnaLambdaProps): lambda.Function
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.syncTrackingOutboundStorageTable.grantReadWriteData(fun);
 
     // S3 read access to all asset buckets for file downloads
     grantReadPermissionsToAllAssetBuckets(fun);
@@ -179,13 +170,6 @@ export function buildPhysnaViewerFunction(
             PHYSNA_TOKEN_URL: config.app.addons.usePhysnaSync.authTokenEndpoint,
             PHYSNA_AUTH_TYPE: config.app.addons.usePhysnaSync.authType,
             PHYSNA_CREDS_SECRET_ARN: credsSecret.secretArn,
-
-            // VAMS storage table names needed for two-tier authorization
-            // and asset lookup. The viewer does not read file-level metadata
-            // or stream bytes from S3, so the metadata / attribute / S3
-            // bucket tables are intentionally omitted.
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
 

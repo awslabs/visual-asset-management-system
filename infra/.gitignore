@@ -10,3 +10,7 @@ cdk.out
 cdk.out.*
 .idea
 outfile*
+
+cdk.context.json
+
+.codegraph/

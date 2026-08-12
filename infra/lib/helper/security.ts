@@ -10,8 +10,9 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../config/config";
 import { Construct } from "constructs";
-import { Service } from "../helper/service-helper";
+import { Service, IAMArn } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
+import { Stack } from "aws-cdk-lib";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as s3AssetBuckets from "./s3AssetBuckets";
 import { readFileSync } from "fs";
@@ -125,22 +126,77 @@ function mergeCSPSources(existingSources: string[], additionalSources?: string[]
     return merged;
 }
 
+/**
+ * Module-level set to guard against duplicate SSM lookup stack suppressions.
+ * Used by globalLambdaEnvironmentsAndPermissions() to apply the SSM parameter
+ * wildcard suppression only once per stack, since many Lambda functions in the
+ * same stack share the SSM policy grant.
+ */
+const ssmLookupSuppressedStacks = new Set<string>();
+
+/**
+ * Module-level set to guard against duplicate audit log group stack suppressions.
+ * Used by setupSecurityAndLoggingEnvironmentAndPermissions() to apply the audit
+ * log group wildcard suppression only once per stack, since many Lambda functions
+ * in the same stack share the audit logging policy grant.
+ */
+const auditLogSuppressedStacks = new Set<string>();
+
+/**
+ * Whether the API Gateway authorizer Lambda can reach Amazon Cognito to perform the
+ * MFA-preference check. The check runs only in the authorizer (its result is passed to
+ * handler Lambdas through the authorizer context), so only the authorizer's own VPC
+ * placement matters.
+ *
+ * VAMS does not create Cognito VPC interface endpoints, so an authorizer running inside
+ * the VPC has no in-VPC path to Amazon Cognito. The check is therefore enabled only when
+ * the authorizer runs outside the VPC — that is, when Lambda functions are not placed in
+ * the VPC (`useForAllLambdas`). When the authorizer runs in the VPC the check is disabled
+ * regardless of partition, and `mfaRequired` on a role has no effect.
+ */
+export function isCognitoMfaCheckEnabled(config: Config.Config): boolean {
+    const authorizerInVpc =
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+    return config.app.authProvider.useCognito.enabled && !authorizerInVpc;
+}
+
 export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction: lambda.Function,
     config: Config.Config
 ) {
-    //We don't want to enable cognito for lambdas as any lambda behind a VPC isolated subnet won't be able to conduct cognito auth calls
-    //This will disable MFA check capabilities for these scenarios
-    if (
-        config.app.authProvider.useCognito.enabled &&
-        !(
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            config.app.openSearch.useProvisioned.enabled
-        )
-    ) {
-        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE");
-    } else {
-        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE");
+    // Resource-name resolution: prefix for SSM Parameter Store lookups
+    lambdaFunction.addEnvironment("VAMS_RESOURCE_PARAM_PREFIX", config.resourceNamesSSMParamPrefix);
+    const resourceParamPathNoSlash = config.resourceNamesSSMParamPrefix.replace(/^\//, "");
+    lambdaFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+            resources: [
+                IAMArn(resourceParamPathNoSlash).ssm,
+                IAMArn(`${resourceParamPathNoSlash}/*`).ssm,
+            ],
+        })
+    );
+
+    // Apply stack-level CDK Nag suppression for the SSM parameter grant. Stack suppressions
+    // are evaluated at check time against every finding in the stack, so they cover synthesis-
+    // time resources (OverflowPolicy1, OverflowPolicy2, etc.) that do not exist when per-construct
+    // suppressions are applied. Only add once per stack (many Lambdas in the same stack share
+    // the SSM policy grant).
+    const lambdaStack = Stack.of(lambdaFunction);
+    if (!ssmLookupSuppressedStacks.has(lambdaStack.node.addr)) {
+        ssmLookupSuppressedStacks.add(lambdaStack.node.addr);
+        NagSuppressions.addStackSuppressions(lambdaStack, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Wildcard is scoped to the deployment-specific SSM resource-name parameter prefix (/{name}-{baseStackName}/resourceNames/*) that Lambda functions read at cold start to resolve DynamoDB table, S3 bucket, and CloudWatch log group names.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::arn:.*:ssm:.*:parameter\\/.*\\/resourceNames(\\/\\*)?$/g",
+                    },
+                ],
+            },
+        ]);
     }
 
     // Optional default role granted to authenticated users with no assigned role
@@ -163,64 +219,7 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     lambdaFunction: lambda.Function,
     storageResources: storageResources
 ): void {
-    // Add authentication and authorization environment variables
-    lambdaFunction.addEnvironment(
-        "AUTH_TABLE_NAME",
-        storageResources.dynamo.authEntitiesStorageTable.tableName
-    );
-    lambdaFunction.addEnvironment(
-        "CONSTRAINTS_TABLE_NAME",
-        storageResources.dynamo.constraintsStorageTable.tableName
-    );
-    lambdaFunction.addEnvironment(
-        "USER_ROLES_TABLE_NAME",
-        storageResources.dynamo.userRolesStorageTable.tableName
-    );
-    lambdaFunction.addEnvironment(
-        "ROLES_TABLE_NAME",
-        storageResources.dynamo.rolesStorageTable.tableName
-    );
-
-    // Add CloudWatch audit log group environment variables
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHENTICATION",
-        storageResources.cloudWatchAuditLogGroups.authentication.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHORIZATION",
-        storageResources.cloudWatchAuditLogGroups.authorization.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_FILEUPLOAD",
-        storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_FILEDOWNLOAD",
-        storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_FILEDOWNLOAD_STREAMED",
-        storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHOTHER",
-        storageResources.cloudWatchAuditLogGroups.authOther.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHCHANGES",
-        storageResources.cloudWatchAuditLogGroups.authChanges.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_ACTIONS",
-        storageResources.cloudWatchAuditLogGroups.actions.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_ERRORS",
-        storageResources.cloudWatchAuditLogGroups.errors.logGroupName
-    );
-
     // Grant read permissions to authentication and authorization tables
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.constraintsStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);
@@ -243,6 +242,28 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
             ],
         })
     );
+
+    // Apply stack-level CDK Nag suppression for the audit log group grant. Stack
+    // suppressions are evaluated at check time against every finding in the stack, so
+    // they cover synthesis-time resources (OverflowPolicy1, OverflowPolicy2, etc. created
+    // when a role's policy document is split) that do not exist when per-construct
+    // suppressions are applied. Only add once per stack (many Lambdas in the same stack
+    // share the audit logging policy grant).
+    const lambdaStack = Stack.of(lambdaFunction);
+    if (!auditLogSuppressedStacks.has(lambdaStack.node.addr)) {
+        auditLogSuppressedStacks.add(lambdaStack.node.addr);
+        NagSuppressions.addStackSuppressions(lambdaStack, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Wildcard is scoped to log streams (:*) within the nine deployment-specific VAMS audit CloudWatch log groups that every Lambda function writes audit events to.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::<.*AuditLogGroup.*\\.Arn>:\\*$/g",
+                    },
+                ],
+            },
+        ]);
+    }
 }
 
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
@@ -271,6 +292,54 @@ export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
 
         bucket.addToResourcePolicy(iam.PolicyStatement.fromJson(policyStatementJSON));
     }
+}
+
+/**
+ * Adds a bucket policy Deny statement restricting where S3 presigned URLs for the
+ * bucket may be used from (allowed IP CIDR ranges and/or VPC endpoint IDs). The
+ * statement is scoped to query-string-authenticated requests (s3:authType =
+ * REST-QUERY-STRING), so SDK header-authenticated calls from Lambda functions and
+ * pipeline containers are never affected. No-op when no restrictions are configured.
+ * Only applies to VAMS-owned buckets; imported buckets do not receive resource
+ * policies from VAMS (the bucket owner applies an equivalent policy — see the
+ * external S3 setup documentation).
+ */
+export function addPresignedUrlNetworkRestrictionsToBucketPolicy(
+    bucket: s3.IBucket,
+    restrictions: Config.ConfigPresignedUrlNetworkRestrictions | undefined
+): void {
+    const allowedIpRanges = restrictions?.allowedIpRanges || [];
+    const allowedVpceIds = restrictions?.allowedVpceIds || [];
+    if (allowedIpRanges.length == 0 && allowedVpceIds.length == 0) {
+        return;
+    }
+
+    // Conditions AND together: the Deny fires only for a presigned request outside
+    // every allowed CIDR AND not through an allowed VPC endpoint (interface or
+    // gateway), exempting AWS-service forwarded calls. IP and VPCE conditions are
+    // included only when configured so an unconfigured dimension does not deny its
+    // entire request class.
+    const conditions: { [operator: string]: { [key: string]: string | string[] } } = {
+        StringEquals: { "s3:authType": "REST-QUERY-STRING" },
+        BoolIfExists: { "aws:ViaAWSService": "false" },
+    };
+    if (allowedIpRanges.length > 0) {
+        conditions["NotIpAddressIfExists"] = { "aws:SourceIp": allowedIpRanges };
+    }
+    if (allowedVpceIds.length > 0) {
+        conditions["StringNotEqualsIfExists"] = { "aws:SourceVpce": allowedVpceIds };
+    }
+
+    bucket.addToResourcePolicy(
+        new iam.PolicyStatement({
+            sid: "DenyPresignedUrlOutsideAllowedNetworks",
+            effect: iam.Effect.DENY,
+            principals: [new iam.AnyPrincipal()],
+            actions: ["s3:*"],
+            resources: [`${bucket.bucketArn}/*`],
+            conditions: conditions,
+        })
+    );
 }
 
 export function kmsKeyLambdaPermissionAddToResourcePolicy(
@@ -389,7 +458,7 @@ export function generateContentSecurityPolicy(
         "blob:",
         "data:",
         `https://${apiUrl}`,
-        `https://${Service("S3").Endpoint}/`,
+        `https://${Service("S3", false).Endpoint}/`,
     ];
 
     // `'unsafe-inline'` is used intentionally here instead of per-script SHA
@@ -405,9 +474,9 @@ export function generateContentSecurityPolicy(
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
-    let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
+    let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
 
-    let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
+    let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
 
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];
@@ -421,8 +490,8 @@ export function generateContentSecurityPolicy(
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
-        connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
-        connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+        connectSrc.push(`https://${Service("COGNITO_IDP", false).Endpoint}/`);
+        connectSrc.push(`https://${Service("COGNITO_IDENTITY", false).Endpoint}/`);
     }
 
     //If authDomain is non-null and not empty string, add to connectSrc
@@ -437,7 +506,7 @@ export function generateContentSecurityPolicy(
 
     //Add GeoLocation service URL if feature turned on
     if (config.app.useLocationService.enabled) {
-        connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
+        connectSrc.push(`https://maps.${Service("GEO", false).Endpoint}/`);
     }
 
     // When the Physna add-on is enabled the viewer plugin embeds Physna's
@@ -610,6 +679,18 @@ export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
                     ],
                 },
                 {
+                    id: "AwsSolutions-IAM5",
+                    reason: "CDK framework roles (BucketDeployment uploader, custom-resource providers) require wildcard S3 object access on the CDK staging + destination buckets to stage assets, and a function-qualifier ':*' wildcard to invoke their target Lambda. Scope is the framework resource's own generated policy.",
+                    appliesTo: [
+                        {
+                            regex: "/^Action::s3:(.*)\\*$/g",
+                        },
+                        {
+                            regex: "/^Resource::.*\\*$/g",
+                        },
+                    ],
+                },
+                {
                     id: "AwsSolutions-IAM4",
                     reason: "Intend to use AWSLambdaVPCAccessExecutionRole as is at this stage of this project.",
                     appliesTo: [
@@ -664,6 +745,36 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
 }
 
 /**
+ * Grants a principal access to the customer managed KMS keys of any external asset
+ * buckets that declare one. The bucket grant covers S3 object actions, but a bucket
+ * encrypted with a key the VAMS account does not own additionally requires explicit
+ * KMS permissions on that external key (the VAMS-owned key grant does not cover it).
+ * No-op for buckets without an external key, so same-account/SSE-managed setups are
+ * unaffected.
+ * @param grantable The IAM grantable (lambda function or role) to grant permissions to
+ */
+export function grantExternalAssetBucketKmsKeys(grantable: iam.IGrantable): void {
+    const externalKeyArns = Array.from(
+        new Set(
+            s3AssetBuckets
+                .getS3AssetBucketRecords()
+                .map((record) => record.kmsKeyArn)
+                .filter((keyArn): keyArn is string => !!keyArn)
+        )
+    );
+
+    if (externalKeyArns.length > 0) {
+        grantable.grantPrincipal.addToPrincipalPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["kms:Decrypt", "kms:GenerateDataKey*", "kms:DescribeKey"],
+                resources: externalKeyArns,
+            })
+        );
+    }
+}
+
+/**
  * Grants read permissions to a lambda function for all asset buckets defined in s3AssetBuckets
  * @param lambdaFunction The lambda function to grant permissions to
  */
@@ -673,6 +784,9 @@ export function grantReadPermissionsToAllAssetBuckets(lambdaFunction: lambda.Fun
     for (const record of bucketRecords) {
         record.bucket.grantRead(lambdaFunction);
     }
+
+    // Grant external bucket KMS keys (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(lambdaFunction);
 
     // // Add CDK Nag suppressions
     // const reason = "Lambda needs read access to all asset buckets to perform its operations";
@@ -706,6 +820,9 @@ export function grantReadWritePermissionsToAllAssetBuckets(lambdaFunction: lambd
     for (const record of bucketRecords) {
         record.bucket.grantReadWrite(lambdaFunction);
     }
+
+    // Grant external bucket KMS keys (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(lambdaFunction);
 
     // Add CDK Nag suppressions
     //suppressCdkNagErrorsByGrantReadWrite(lambdaFunction);

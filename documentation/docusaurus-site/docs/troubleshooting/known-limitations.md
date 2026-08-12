@@ -36,7 +36,7 @@ Metadata schema validation is enforced only when metadata is created or updated 
 
 ### API Gateway Timeout for Large Operations
 
-Amazon API Gateway enforces a **29-second timeout** on all HTTP responses. The underlying AWS Lambda function continues executing for up to **15 minutes**. This affects:
+Amazon API Gateway waits for the integration timeout configured in `app.api.apiGatewayRest.apiGatewayTimeoutTime` — `29` seconds by default — before returning a `504`. The underlying AWS Lambda function continues executing for up to **15 minutes**. This affects:
 
 | Operation                              | Impact                                             |
 | -------------------------------------- | -------------------------------------------------- |
@@ -44,6 +44,8 @@ Amazon API Gateway enforces a **29-second timeout** on all HTTP responses. The u
 | Asset export with deep link trees      | Large response payloads take time to assemble      |
 | Bulk metadata operations               | Individual batch writes continue after timeout     |
 | Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504 |
+
+Deployments that routinely operate on assets with many files or many relationships can raise the integration timeout up to `300` seconds so these operations complete within a single synchronous request. Values above `29` seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md). The 15-minute AWS Lambda timeout remains the outer bound.
 
 :::info
 When a 504 timeout occurs, check Amazon CloudWatch Logs for the relevant Lambda function to verify whether the operation completed successfully.
@@ -55,7 +57,37 @@ Re-indexing hundreds of thousands to millions of files may not complete within t
 
 ### File Upload Rate Limiting
 
-File upload initialization (stage 1) is limited to **10 upload initializations per user per minute**. This is a security measure to minimize abuse potential. Both the web interface and the VamsCLI have built-in mechanisms for bulk uploading with automatic chunking, retry logic, and throttle recovery.
+File upload initialization (stage 1) is limited to **20 upload initializations per user per minute**. This is a security measure to minimize abuse potential. Both the web interface and the VamsCLI have built-in mechanisms for bulk uploading with automatic chunking, retry logic, and throttle recovery.
+
+### Upload Request Size Limits
+
+A single upload-initialize request is bounded by three limits, each defined as a named constant in the backend:
+
+| Limit                                  | Value      | Purpose                                                                                                                                         |
+| -------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Files per request                      | **1,000**  | Bounds the request body size. Bulk uploads beyond this are split into multiple requests by the web app and VamsCLI.                             |
+| Parts per file                         | **10,000** | Matches the Amazon S3 hard limit on parts per multipart object.                                                                                 |
+| Total parts across all files (request) | **5,000**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
+
+:::note[Why the 5,000 total-parts cap is also a response-size guard]
+The upload-initialize response returns one presigned URL per part. The total-parts-per-request cap therefore directly bounds the response payload, keeping it under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. This value is not purely a throttle — raising it requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+:::
+
+### Internal Pagination of Large Listings
+
+Several backend reads page through their data source **internally** (server-side), so callers always receive the complete result without supplying pagination parameters:
+
+-   **File version history** — the backend pages through all Amazon S3 object versions, so files with large version histories report complete history. Archive-status checks for a specific version use a single `HeadObject` call (constant time regardless of version count) rather than scanning the version list.
+-   **Preview file discovery** — pages through all versions in a file's directory.
+-   **Asset version file listings** — the detailed listing for a specific asset version pages through all objects in the version snapshot.
+
+These reads still execute within a single AWS Lambda invocation and are therefore subject to the API Gateway timeout above for extremely large datasets.
+
+Asset-type detection on upload is intentionally **not** exhaustive: it samples up to **1,000 objects** under the asset prefix to classify the asset as empty, single-file, or a folder. This is a best-effort visibility classification, so a sample is sufficient and avoids adding latency to the upload path for very large assets.
+
+### Metadata Retrieval Pagination
+
+Metadata GET endpoints (asset, file, database, and asset link metadata) return results in pages of a default size (**3,000 records**, with a per-response ceiling of **30,000**) plus a `NextToken` when more records exist. Schema enrichment and ordering are applied to the full record set before paging, so the ordering is stable across pages. The VamsCLI and web application automatically follow `NextToken` to retrieve the complete set; direct API consumers that do not follow `NextToken` receive only the first page. This is separate from the per-entity **500 metadata and attribute record** creation limit described above.
 
 ---
 
@@ -120,9 +152,9 @@ The web application file selector for asset uploads supports folder selection in
 
 ## Deployment Limitations
 
-### AWS GovCloud Restrictions
+### AWS GovCloud and EU Sovereign Cloud Restrictions
 
-When deploying to AWS GovCloud (US) regions, the following services are not available:
+When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud, the following services are not available:
 
 | Feature                          | Restriction                                 |
 | -------------------------------- | ------------------------------------------- |

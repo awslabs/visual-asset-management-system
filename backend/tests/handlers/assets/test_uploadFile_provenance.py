@@ -33,7 +33,7 @@ def test_build_upload_change_metadata_sets_type_and_user():
 def test_build_upload_change_metadata_defaults_user_to_system():
     from backend.backend.handlers.assets import uploadFile
     md = uploadFile.build_upload_change_metadata(None)
-    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM"
+    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM_USER"
 
 
 @pytest.mark.unit
@@ -54,9 +54,9 @@ def test_external_upload_with_workflow_uses_workflow_type():
         VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     )
-    change_metadata = uploadFile.build_workflow_change_metadata("SYSTEM", "wf-1", "exec-1") or uploadFile.build_upload_change_metadata("SYSTEM")
+    change_metadata = uploadFile.build_workflow_change_metadata("SYSTEM_USER", "wf-1", "exec-1") or uploadFile.build_upload_change_metadata("SYSTEM_USER")
     assert change_metadata[VAMS_CHANGE_SOURCE_METADATA_KEY] == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
-    assert change_metadata[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM"
+    assert change_metadata[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM_USER"
     assert change_metadata[VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY] == "wf-1"
     assert change_metadata[VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY] == "exec-1"
 
@@ -71,12 +71,12 @@ def test_external_complete_model_accepts_workflow_fields():
         uploadType="assetFile",
         files=[{"relativeKey": "/a.glb", "tempKey": "temp/upload123/a.glb"}],
         workflowId="wf-abc123",
-        workflowExecutionId="exec-xyz789",
-        changeUserId="SYSTEM",
+        workflowExecutionId="b9a3aba3c092475f978ad39e5d5a2657",
+        changeUserId="SYSTEM_USER",
     )
     assert m.workflowId == "wf-abc123"
-    assert m.workflowExecutionId == "exec-xyz789"
-    assert m.changeUserId == "SYSTEM"
+    assert m.workflowExecutionId == "b9a3aba3c092475f978ad39e5d5a2657"
+    assert m.changeUserId == "SYSTEM_USER"
 
 
 @pytest.mark.unit
@@ -144,3 +144,44 @@ def test_external_complete_model_rejects_invalid_change_user_id():
     except ValidationError as e:
         error_str = str(e).lower()
         assert "changeuserid" in error_str  # Field name in error message
+
+
+@pytest.mark.unit
+class TestWorkflowExecutionIdProvenanceIsGuidValidated:
+    """The provenance field records WHICH execution produced a file, so it takes an execution id.
+
+    Every writer supplies one from `executionRecords.new_guid()` (32 hex) or the dashed uuid Step
+    Functions assigns as an execution name. Validating it as STRING_256 accepted arbitrary text into a
+    field read back as provenance, so it now uses the same GUID validator the execution routes apply.
+    """
+
+    def _model(self, execution_id):
+        from backend.backend.models.assetsV3 import CompleteExternalUploadRequestModel
+        return CompleteExternalUploadRequestModel(
+            assetId="test-asset",
+            databaseId="db-123",
+            uploadType="assetFile",
+            files=[{"relativeKey": "/a.glb", "tempKey": "temp/upload123/a.glb"}],
+            workflowId="wf-abc123",
+            workflowExecutionId=execution_id,
+            changeUserId="SYSTEM_USER",
+        )
+
+    @pytest.mark.parametrize("execution_id", [
+        "b9a3aba3c092475f978ad39e5d5a2657",       # new_guid(): 32 lowercase hex
+        "b9a3aba3-c092-475f-978a-d39e5d5a2657",   # the dashed uuid Step Functions assigns
+        "B9A3ABA3-C092-475F-978A-D39E5D5A2657",   # the dashed form is case-insensitive
+    ])
+    def test_a_real_execution_id_is_accepted(self, execution_id):
+        assert self._model(execution_id).workflowExecutionId == execution_id
+
+    @pytest.mark.parametrize("bad", [
+        "exec-xyz789",                             # the placeholder shape this once allowed
+        "not-an-execution-id",
+        "B9A3ABA3C092475F978AD39E5D5A2657",        # undashed stays lowercase-only (exact DDB key)
+        "b9a3aba3c092475f978ad39e5d5a26",          # too short
+        "'; DROP TABLE assets; --",
+    ])
+    def test_a_value_that_is_not_an_execution_id_is_rejected(self, bad):
+        with pytest.raises(Exception):
+            self._model(bad)

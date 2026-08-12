@@ -25,6 +25,7 @@ from vamscli.constants import (
     MAX_SEQUENCE_SIZE, MAX_PREVIEW_FILE_SIZE, MAX_FILES_PER_REQUEST, 
     MAX_TOTAL_PARTS_PER_REQUEST, MAX_PARTS_PER_FILE
 )
+from tests.conftest import CoroutineClosingMock  # noqa: E402
 
 
 # File-level fixtures for file-specific testing patterns
@@ -453,7 +454,7 @@ class TestFileUploadCommand:
                 }
                 
                 # Mock asyncio.run to return success result
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 1,
@@ -514,7 +515,7 @@ class TestFileUploadCommand:
                     'restrictFileUploadsToExtensions': ''
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 2,
@@ -572,7 +573,7 @@ class TestFileUploadCommand:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.side_effect = AuthenticationError("Authentication failed")
                     
                     result = cli_runner.invoke(cli, [
@@ -603,7 +604,7 @@ class TestFileUploadCommand:
                     'restrictFileUploadsToExtensions': ''
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     # Mock result with large file async handling
                     mock_run.return_value = {
                         "overall_success": True,
@@ -657,7 +658,7 @@ class TestFileUploadCommand:
                     'restrictFileUploadsToExtensions': ''
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     # Mock result without large file async handling
                     mock_run.return_value = {
                         "overall_success": True,
@@ -719,7 +720,7 @@ class TestFileUploadCommandJSONHandling:
                     'restrictFileUploadsToExtensions': ''
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 1,
@@ -770,7 +771,7 @@ class TestFileUploadCommandJSONHandling:
                     'restrictFileUploadsToExtensions': ''
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 1,
@@ -825,7 +826,7 @@ class TestFileUploadCommandJSONHandling:
                     'restrictFileUploadsToExtensions': ''
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     expected_result = {
                         "overall_success": True,
                         "total_files": 1,
@@ -871,7 +872,7 @@ class TestFileUploadCommandEdgeCases:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": False,
                         "total_files": 2,
@@ -916,7 +917,7 @@ class TestFileUploadCommandEdgeCases:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": False,
                         "total_files": 1,
@@ -983,7 +984,7 @@ class TestFileUploadCommandEdgeCases:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.side_effect = APIError("API request failed")
                     
                     result = cli_runner.invoke(cli, [
@@ -1149,7 +1150,7 @@ class TestFileUploadCommandNewRestrictions:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 1,
@@ -1235,7 +1236,7 @@ class TestFileUploadCommandIntegration:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 1,
@@ -1280,7 +1281,7 @@ class TestRateLimitingCompatibility:
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
                 # Mock the upload manager to simulate rate limiting during upload
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     # Simulate rate limiting being handled by the API client
                     mock_run.return_value = {
                         "overall_success": True,
@@ -1320,7 +1321,7 @@ class TestRateLimitingCompatibility:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.side_effect = RetryExhaustedError(
                         "Rate limit exceeded. All 5 retry attempts exhausted."
                     )
@@ -1444,7 +1445,7 @@ class TestZeroByteFileSupport:
                 with patch('vamscli.commands.file.collect_files_from_list') as mock_collect:
                     mock_collect.return_value = [FileInfo(tmp_path, "empty.txt", 0)]
                     
-                    with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                         mock_run.return_value = {
                             "overall_success": True,
                             "total_files": 1,
@@ -1593,7 +1594,7 @@ class TestFileExtensionValidation:
                 # Mock database config (no restrictions)
                 mocks['api_client'].get_database.return_value = {'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     # Mock database config with restrictions
                     mocks['api_client'].get_database.return_value = {
                         'databaseId': 'test-db',
@@ -1702,7 +1703,7 @@ class TestFileExtensionValidation:
                     'restrictFileUploadsToExtensions': ''
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 1,
@@ -1742,7 +1743,7 @@ class TestFileExtensionValidation:
                     'restrictFileUploadsToExtensions': '.glb'
                 }
                 
-                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
                     mock_run.return_value = {
                         "overall_success": True,
                         "total_files": 1,

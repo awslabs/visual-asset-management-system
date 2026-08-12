@@ -139,7 +139,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                             <strong>Created:</strong> {formatDate(version.DateModified)}
                         </div>
                         <div>
-                            <strong>Created By:</strong> {version.createdBy || "System"}
+                            <strong>Created By:</strong> {version.createdBy || "SYSTEM_USER"}
                         </div>
                         {version.Comment && (
                             <div>

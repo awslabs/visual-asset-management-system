@@ -43,7 +43,7 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                     databaseId: databaseId,
                     key: assetKey || "",
                     versionId: versionId,
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
 

@@ -12,6 +12,7 @@ from vamscli.utils.exceptions import (
     FileNotFoundError, FileOperationError, InvalidPathError, FilePermissionError,
     FileAlreadyExistsError, FileArchivedError, InvalidVersionError
 )
+from tests.conftest import CoroutineClosingMock  # noqa: E402
 
 
 # File-level fixtures for file-specific testing patterns
@@ -73,7 +74,7 @@ class TestFileUploadCommand:
                      patch('vamscli.commands.file.validate_preview_files_have_base_files') as mock_validate_preview, \
                      patch('vamscli.commands.file.create_upload_sequences') as mock_sequences, \
                      patch('vamscli.commands.file.get_upload_summary') as mock_summary, \
-                     patch('vamscli.commands.file.asyncio.run') as mock_asyncio:
+                     patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_asyncio:
                     
                     # Setup mocks
                     mock_file_info = Mock()
@@ -182,7 +183,7 @@ class TestFileUploadCommand:
                      patch('vamscli.commands.file.validate_preview_files_have_base_files') as mock_validate_preview, \
                      patch('vamscli.commands.file.create_upload_sequences') as mock_sequences, \
                      patch('vamscli.commands.file.get_upload_summary') as mock_summary, \
-                     patch('vamscli.commands.file.asyncio.run') as mock_asyncio:
+                     patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_asyncio:
                     
                     # Setup mocks
                     mock_file_info = Mock()
@@ -404,7 +405,7 @@ class TestFileListCommand:
                         'size': 2048,
                         'isArchived': False,
                         'changeSource': 'workflowExecution',
-                        'changeUserId': 'SYSTEM'
+                        'changeUserId': 'SYSTEM_USER'
                     }
                 ]
             }
@@ -419,7 +420,68 @@ class TestFileListCommand:
             assert 'upload' in result.output
             assert 'alice' in result.output
             assert 'workflowExecution' in result.output
-            assert 'SYSTEM' in result.output
+            assert 'SYSTEM_USER' in result.output
+
+    def test_list_shows_file_detail_fields(self, cli_runner, file_command_mocks):
+        """Test file list shows detail sub-lines for fields returned by the API."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 1024,
+                        'isArchived': False,
+                        'dateCreatedCurrentVersion': '2023-01-01T00:00:00Z',
+                        'versionId': 'version-123',
+                        'etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                        'storageClass': 'STANDARD',
+                        'previewFile': '/model.previewFile.png'
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Created (current version): 2023-01-01T00:00:00Z' in result.output
+            assert 'Version ID: version-123' in result.output
+            assert 'ETag: d41d8cd98f00b204e9800998ecf8427e' in result.output
+            assert 'Storage Class: STANDARD' in result.output
+            assert 'Preview File: /model.previewFile.png' in result.output
+
+    def test_list_shows_version_mismatch_and_deleted_flags(self, cli_runner, file_command_mocks):
+        """Test file list surfaces version mismatch and permanently-deleted flags."""
+        with file_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = {
+                'items': [
+                    {
+                        'fileName': 'model.gltf',
+                        'relativePath': '/model.gltf',
+                        'isFolder': False,
+                        'size': 1024,
+                        'isArchived': False,
+                        'dateCreatedCurrentVersion': '2023-01-01T00:00:00Z',
+                        'currentAssetVersionFileVersionMismatch': True,
+                        'isPermanentlyDeleted': True
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'file', 'list',
+                '-d', 'test-db',
+                '-a', 'test-asset'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Version Mismatch' in result.output
+            assert 'Permanently Deleted' in result.output
 
     def test_list_no_setup(self, cli_runner, file_no_setup_mocks):
         """Test list without setup."""
@@ -850,24 +912,26 @@ class TestFileInfoCommand:
                 'size': 1024,
                 'contentType': 'model/gltf+json',
                 'lastModified': '2023-01-01T00:00:00Z',
+                'etag': 'd41d8cd98f00b204e9800998ecf8427e',
                 'storageClass': 'STANDARD',
                 'isArchived': False,
                 'primaryType': 'primary',
                 'previewFile': '/model.previewFile.png'
             }
-            
+
             result = cli_runner.invoke(cli, [
                 'file', 'info',
                 '-d', 'test-db',
                 '-a', 'test-asset',
                 '-p', '/model.gltf'
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ File information retrieved' in result.output
             assert 'File: model.gltf' in result.output
             assert 'Size: 1024 bytes' in result.output
             assert 'Primary Type: primary' in result.output
+            assert 'ETag: d41d8cd98f00b204e9800998ecf8427e' in result.output
             
             # Verify API call
             expected_params = {
@@ -947,7 +1011,7 @@ class TestFileInfoCommand:
                         'lastModified': '2023-01-01T00:00:00Z',
                         'size': 1024,
                         'changeSource': 'workflowExecution',
-                        'changeUserId': 'SYSTEM',
+                        'changeUserId': 'SYSTEM_USER',
                         'changeWorkflowId': 'wf-1',
                         'changeWorkflowExecutionId': 'exec-1'
                     },

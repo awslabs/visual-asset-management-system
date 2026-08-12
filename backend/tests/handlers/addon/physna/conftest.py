@@ -26,6 +26,7 @@ os.environ.setdefault("DATABASE_STORAGE_TABLE_NAME", "test-databases")
 os.environ.setdefault("ASSET_FILE_METADATA_STORAGE_TABLE_NAME", "test-file-metadata")
 os.environ.setdefault("FILE_ATTRIBUTE_STORAGE_TABLE_NAME", "test-file-attributes")
 os.environ.setdefault("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME", "test-s3-buckets")
+os.environ.setdefault("SYNC_TRACKING_OUTBOUND_STORAGE_TABLE_NAME", "test-sync-tracking")
 
 # The Physna Viewer handler imports models.common, which in turn pulls in
 # customLogging.auditLogging. The root test conftest installs customLogging

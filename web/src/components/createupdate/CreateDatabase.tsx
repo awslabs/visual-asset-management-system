@@ -40,6 +40,8 @@ interface BucketOption {
     bucketId: string;
     bucketName: string;
     baseAssetsPrefix: string;
+    // The VAMS default asset bucket, which houses pipeline template data and execution-time run I/O.
+    isDefault?: boolean;
 }
 
 // when a string is all lower case, return null, otherwise return the string "All lower case letters only"
@@ -239,7 +241,7 @@ export default function CreateDatabase({
                                         } else {
                                             // Display the actual error message from the API
                                             const msg =
-                                                res[1] ||
+                                                (res as any[])[1] ||
                                                 `Unable to ${createOrUpdate} ${Synonyms.database}`;
                                             setFormError(msg);
                                         }
@@ -335,7 +337,7 @@ export default function CreateDatabase({
                                         bucket.baseAssetsPrefix
                                             ? ` - ${bucket.baseAssetsPrefix}`
                                             : ""
-                                    }`,
+                                    }${bucket.isDefault ? " (VAMS default)" : ""}`,
                                     value: bucket.bucketId,
                                 }))}
                                 placeholder="Select a bucket"

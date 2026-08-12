@@ -17,15 +17,23 @@ except:
 
 def customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent):
 
-    #Handle both claims from APIGateway standard authorizer format, lambda authorizers, or lambda cross-calls
-    if 'jwt' in lambdaRequestEvent['requestContext']['authorizer'] and 'claims' in lambdaRequestEvent['requestContext']['authorizer']['jwt']:
-        claims = lambdaRequestEvent['requestContext']['authorizer']['jwt']['claims']
-    elif 'lambda' in lambdaRequestEvent['requestContext']['authorizer']:
-        claims = lambdaRequestEvent['requestContext']['authorizer']['lambda']
-    elif 'lambdaCrossCall' in lambdaRequestEvent: #currently this case wouldn't apply for now due to check above
+    #Handle claims from: lambda cross-calls, HTTP API JWT authorizer, HTTP API lambda
+    #authorizer (v2), or REST API REQUEST lambda authorizer (flat string map under
+    #'authorizer'). The REST case is the shape VAMS deploys today; the nested forms are
+    #retained so a customized copy of this hook keeps working against either.
+    if 'lambdaCrossCall' in lambdaRequestEvent:
         claims = lambdaRequestEvent['lambdaCrossCall']
     else:
-        claims = {}
+        authorizer_ctx = (lambdaRequestEvent.get('requestContext', {}) or {}).get('authorizer') or {}
+        if 'jwt' in authorizer_ctx and 'claims' in authorizer_ctx['jwt']:
+            claims = authorizer_ctx['jwt']['claims']
+        elif 'lambda' in authorizer_ctx:
+            claims = authorizer_ctx['lambda']
+        elif isinstance(authorizer_ctx, dict):
+            #REST REQUEST authorizer: context is a flat map of string values.
+            claims = {k: v for k, v in authorizer_ctx.items() if k != 'principalId'}
+        else:
+            claims = {}
 
     ###################ADD CUSTOM LOGIC TO GET USER PROFILE DATA AT LOGIN FOR USER PROFILE###################
 

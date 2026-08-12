@@ -82,6 +82,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
             {files.length > 0 ? (
                 <div
                     key={getViewerKey()}
+                    className="file-viewer-modal-content"
                     style={{
                         width: "100%",
                     }}

@@ -21,6 +21,7 @@ import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
+import { RouteRegistry } from "../../apiLambda/apiRouteRegistry";
 import * as Config from "../../../../config/config";
 import {
     buildPhysnaFileSyncFunction,
@@ -28,8 +29,9 @@ import {
     buildPhysnaViewerFunction,
 } from "./lambdaBuilder/physnaSyncFunctions";
 import { Service } from "../../../helper/service-helper";
-import { attachFunctionToApi } from "../../apiLambda/apiBuilder-nestedStack";
+import { attachFunctionToApi } from "../../apiLambda/apiRouteRegistry";
 import { NagSuppressions } from "cdk-nag";
+import { populatePhysnaSecret } from "./customResources/populatePhysnaSecret";
 
 export interface PhysnaSyncBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -37,7 +39,7 @@ export interface PhysnaSyncBuilderNestedStackProps extends cdk.StackProps {
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    api: apigwv2.HttpApi;
+    registry: RouteRegistry;
 }
 
 const defaultProps: Partial<PhysnaSyncBuilderNestedStackProps> = {};
@@ -67,14 +69,41 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
             ? kms.Key.fromKeyArn(this, "PhysnaCredsKmsKeyRef", sharedKmsKey.keyArn)
             : undefined;
 
-        const credsSecret = new secretsmanager.Secret(this, "PhysnaCredentialsSecret", {
-            description: "Physna OAuth2 client credentials used by the VAMS Physna Sync add-on",
-            encryptionKey: credsSecretEncryptionKey,
-            secretObjectValue: {
-                clientId: cdk.SecretValue.unsafePlainText(physnaConfig.clientId),
-                clientSecret: cdk.SecretValue.unsafePlainText(physnaConfig.clientSecret),
-            },
-        });
+        // Physna OAuth2 client credentials. Two modes:
+        //   1. credentialsSecretArn set — import an operator-managed secret by ARN.
+        //   2. otherwise (default) — VAMS creates the secret and populates it from the
+        //      config clientId/clientSecret via a custom resource whose Lambda carries the
+        //      values in its CODE ASSET (content-hashed, uploaded to the assets bucket).
+        //      The credential value therefore never appears in the CloudFormation template
+        //      or template properties, yet no secret needs to be created ahead of deploy.
+        let credsSecret: secretsmanager.ISecret;
+        const configuredSecretArn = physnaConfig.credentialsSecretArn;
+        if (configuredSecretArn && configuredSecretArn.length > 0) {
+            credsSecret = secretsmanager.Secret.fromSecretCompleteArn(
+                this,
+                "PhysnaCredentialsSecret",
+                configuredSecretArn
+            );
+        } else {
+            // Create the secret empty (no value in the template), then populate it at
+            // deploy time from the config credentials via the code-asset custom resource.
+            const createdSecret = new secretsmanager.Secret(this, "PhysnaCredentialsSecret", {
+                description:
+                    "Physna OAuth2 client credentials used by the VAMS Physna Sync add-on.",
+                encryptionKey: credsSecretEncryptionKey,
+            });
+
+            populatePhysnaSecret(
+                this,
+                "PhysnaCredentialsSecretPopulate",
+                createdSecret,
+                physnaConfig.clientId || "",
+                physnaConfig.clientSecret || "",
+                credsSecretEncryptionKey
+            );
+
+            credsSecret = createdSecret;
+        }
 
         // Build lambdas (pass the secret in so they can grant-read it)
         const fileSyncFunction = buildPhysnaFileSyncFunction(
@@ -110,7 +139,7 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, viewerFunction, {
             routePath: "/addon/physna/viewer",
             method: apigwv2.HttpMethod.GET,
-            api: props.api,
+            registry: props.registry,
         });
 
         // SQS queues — one per SNS topic subscription
@@ -210,15 +239,20 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
             ],
             true
         );
-        NagSuppressions.addResourceSuppressions(
-            credsSecret,
-            [
-                {
-                    id: "AwsSolutions-SMG4",
-                    reason: "Phase 1 of the Physna add-on does not rotate the client secret automatically. Rotation is a planned future enhancement; operators are instructed to rotate manually.",
-                },
-            ],
-            true
-        );
+        // Only the VAMS-created secret carries a rotation config in this stack; an
+        // imported (operator-managed) secret is governed by the owning stack, so the
+        // SMG4 suppression applies only when VAMS created the secret here.
+        if (!(configuredSecretArn && configuredSecretArn.length > 0)) {
+            NagSuppressions.addResourceSuppressions(
+                credsSecret,
+                [
+                    {
+                        id: "AwsSolutions-SMG4",
+                        reason: "The Physna add-on does not rotate the client secret automatically. Operators rotate the credential manually, or supply an operator-managed secret via credentialsSecretArn.",
+                    },
+                ],
+                true
+            );
+        }
     }
 }

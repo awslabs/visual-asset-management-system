@@ -1,5 +1,6 @@
 """Tag type management commands for VamsCLI."""
 
+import builtins
 import json
 import click
 from typing import Dict, Any, Optional, List
@@ -35,6 +36,22 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
             raise click.BadParameter(
                 f"Invalid JSON in file '{json_input}': file contains invalid JSON format"
             )
+
+
+def flatten_tag_type_input(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a single flat tag type object for the tag-types API.
+
+    The API accepts one flat object per request ({tagTypeName, description, required}).
+    A legacy wrapped shape ({"tagTypes": [ {...} ]}) is unwrapped to its first element
+    so previously documented JSON input continues to work.
+    """
+    # NOTE: this module defines a `list` command, so the builtin `list` name is shadowed
+    # here — use `builtins.list` for the isinstance check.
+    if isinstance(data, dict):
+        wrapped = data.get('tagTypes')
+        if isinstance(wrapped, builtins.list) and wrapped:
+            return wrapped[0]
+    return data
 
 
 def format_tag_type_output(tag_type_data: Dict[str, Any], json_output: bool = False) -> str:
@@ -95,53 +112,51 @@ def tag_type():
 
 
 @tag_type.command()
-@click.option('--tag-type-name', required=True, help='Tag type name')
-@click.option('--description', required=True, help='Tag type description')
+@click.option('--tag-type-name', help='Tag type name (required unless using --json-input)')
+@click.option('--description', help='Tag type description (required unless using --json-input)')
 @click.option('--required', is_flag=True, help='Mark this tag type as required')
 @click.option('--json-input', help='JSON input file path or JSON string with tag type data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def create(ctx: click.Context, tag_type_name: Optional[str], description: Optional[str], 
+def create(ctx: click.Context, tag_type_name: Optional[str], description: Optional[str],
           required: bool, json_input: Optional[str], json_output: bool):
     """
     Create a new tag type in VAMS.
-    
+
     This command creates a new tag type with the specified name and description.
     You can provide tag type details via individual options or use --json-input for
     complex data structures.
-    
+
     Examples:
         vamscli tag-type create --tag-type-name "priority" --description "Priority levels"
         vamscli tag-type create --tag-type-name "status" --description "Processing status" --required
-        vamscli tag-type create --json-input '{"tagTypes":[{"tagTypeName":"priority","description":"Priority levels","required":"True"}]}'
+        vamscli tag-type create --json-input '{"tagTypeName":"priority","description":"Priority levels","required":"True"}'
         vamscli tag-type create --json-input tag-types.json --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Build tag type data
         if json_input:
-            # Use JSON input
-            tag_types_data = parse_json_input(json_input)
+            # Use JSON input (flat object; a legacy {"tagTypes":[...]} wrapper is unwrapped)
+            tag_types_data = flatten_tag_type_input(parse_json_input(json_input))
         else:
             # Build from individual options
             if not all([tag_type_name, description]):
                 raise click.BadParameter(
                     "Both --tag-type-name and --description are required when not using --json-input"
                 )
-            
+
             tag_types_data = {
-                'tagTypes': [{
-                    'tagTypeName': tag_type_name,
-                    'description': description,
-                    'required': 'True' if required else 'False'
-                }]
+                'tagTypeName': tag_type_name,
+                'description': description,
+                'required': 'True' if required else 'False'
             }
-        
+
         output_status("Creating tag type(s)...", json_output)
         
         # Create the tag type(s)
@@ -177,69 +192,72 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
 
 
 @tag_type.command()
-@click.option('--tag-type-name', required=True, help='Tag type name to update')
+@click.option('--tag-type-name', help='Tag type name to update (required unless using --json-input)')
 @click.option('--description', help='New tag type description')
 @click.option('--required/--not-required', default=None, help='Update required flag')
 @click.option('--json-input', help='JSON input file path or JSON string with tag type data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def update(ctx: click.Context, tag_type_name: str, description: Optional[str], 
+def update(ctx: click.Context, tag_type_name: Optional[str], description: Optional[str],
           required: Optional[bool], json_input: Optional[str], json_output: bool):
     """
     Update an existing tag type in VAMS.
-    
+
     This command updates an existing tag type's description and/or required flag.
     You can update individual fields or use --json-input for complex updates.
-    
+
     Examples:
         vamscli tag-type update --tag-type-name "priority" --description "Updated description"
         vamscli tag-type update --tag-type-name "priority" --required
-        vamscli tag-type update --json-input '{"tagTypes":[{"tagTypeName":"priority","description":"Updated","required":"True"}]}'
+        vamscli tag-type update --json-input '{"tagTypeName":"priority","description":"Updated","required":"True"}'
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Build update data
         if json_input:
-            # Use JSON input
-            tag_types_data = parse_json_input(json_input)
+            # Use JSON input (flat object; a legacy {"tagTypes":[...]} wrapper is unwrapped)
+            tag_types_data = flatten_tag_type_input(parse_json_input(json_input))
         else:
             # Build from individual options
+            if not tag_type_name:
+                raise click.BadParameter(
+                    "--tag-type-name is required when not using --json-input"
+                )
+
             if not any([description, required is not None]):
                 raise click.BadParameter(
                     "At least one field must be provided for update. "
                     "Use --description, --required/--not-required, or --json-input."
                 )
-            
+
             # We need to get the current tag type data first to preserve unchanged fields
             output_status("Retrieving current tag type data...", json_output)
             current_tag_types = api_client.get_tag_types()
             current_tag_type = None
-            
+
             # Find the tag type in the response
             tag_types_list = current_tag_types.get('message', {}).get('Items', [])
             for tag_type in tag_types_list:
                 if tag_type.get('tagTypeName') == tag_type_name:
                     current_tag_type = tag_type
                     break
-            
+
             if not current_tag_type:
                 raise TagTypeNotFoundError(f"Tag type '{tag_type_name}' not found")
-            
+
             # Build update data with current values as defaults
             tag_types_data = {
-                'tagTypes': [{
-                    'tagTypeName': tag_type_name,
-                    'description': description or current_tag_type.get('description'),
-                    'required': 'True' if required else ('False' if required is False else current_tag_type.get('required', 'False'))
-                }]
+                'tagTypeName': tag_type_name,
+                'description': description or current_tag_type.get('description'),
+                'required': 'True' if required else ('False' if required is False else current_tag_type.get('required', 'False'))
             }
-        
-        output_status(f"Updating tag type '{tag_type_name}'...", json_output)
+
+        output_status(f"Updating tag type '{tag_type_name or tag_types_data.get('tagTypeName', 'unknown')}'...", json_output)
         
         # Update the tag type(s)
         result = api_client.update_tag_types(tag_types_data)

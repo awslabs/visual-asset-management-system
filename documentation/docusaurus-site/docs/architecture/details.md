@@ -10,7 +10,7 @@ VAMS supports multiple authentication providers: Amazon Cognito (with optional S
 sequenceDiagram
     participant User
     participant IDP as Cognito / External OAuth IDP
-    participant APIGW as API Gateway V2
+    participant APIGW as API Gateway REST API
     participant Authorizer as Custom Lambda Authorizer
     participant DDB as DynamoDB (Auth Tables)
     participant Handler as Lambda Handler
@@ -271,17 +271,17 @@ Configuration values resolve through a four-tier fallback chain:
 
 ### Feature Flags
 
-| Feature Flag                    | Description                                    |
-| ------------------------------- | ---------------------------------------------- |
-| `GOVCLOUD`                      | AWS GovCloud deployment mode                   |
-| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy |
-| `LOCATIONSERVICES`              | Amazon Location Service enabled                |
-| `ALBDEPLOY`                     | Application Load Balancer deployment mode      |
-| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode              |
-| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                     |
-| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider         |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation            |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider               |
+| Feature Flag                    | Description                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------ |
+| `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments) |
+| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                       |
+| `LOCATIONSERVICES`              | Amazon Location Service enabled                                                      |
+| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                            |
+| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                    |
+| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                               |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
 
 ## Nested Stack Dependency Chain
 
@@ -309,31 +309,20 @@ graph TD
     Core --> FE["CustomFeatureEnabledConfig"]
 ```
 
-## Environment Variable Injection
+## Resource Name Resolution
 
-All Lambda functions receive their configuration through environment variables injected by CDK Lambda builder functions. This ensures no resource names are hardcoded in application code.
+VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes 39 SSM String parameters under `/{config.name}-{baseStackName}/resourceNames/` with resource names (28 DynamoDB tables, 2 S3 buckets, 9 audit log groups). Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
 
-### Common Environment Variables (All Lambdas)
+At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, or `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which caches the parameter fetch for 60 minutes. This centralizes name management, enables environment variable overrides for testing, and reduces CDK template size by removing per-handler table/bucket/log-group environment variables (pipelines in `backendPipelines/` retain their direct environment variables).
 
-| Variable                          | Source                     | Purpose                               |
-| --------------------------------- | -------------------------- | ------------------------------------- |
-| `AUTH_TABLE_NAME`                 | `authEntitiesStorageTable` | Authentication entities table         |
-| `CONSTRAINTS_TABLE_NAME`          | `constraintsStorageTable`  | Permission constraints table          |
-| `USER_ROLES_TABLE_NAME`           | `userRolesStorageTable`    | User-role mappings table              |
-| `ROLES_TABLE_NAME`                | `rolesStorageTable`        | Role definitions table                |
-| `COGNITO_AUTH_ENABLED`            | Computed from config       | Whether Amazon Cognito auth is active |
-| `AUDIT_LOG_AUTHENTICATION`        | CloudWatch Log Group       | Authentication audit events           |
-| `AUDIT_LOG_AUTHORIZATION`         | CloudWatch Log Group       | Authorization audit events            |
-| `AUDIT_LOG_FILEUPLOAD`            | CloudWatch Log Group       | File upload audit events              |
-| `AUDIT_LOG_FILEDOWNLOAD`          | CloudWatch Log Group       | File download audit events            |
-| `AUDIT_LOG_FILEDOWNLOAD_STREAMED` | CloudWatch Log Group       | Streamed download audit events        |
-| `AUDIT_LOG_AUTHOTHER`             | CloudWatch Log Group       | Other auth audit events               |
-| `AUDIT_LOG_AUTHCHANGES`           | CloudWatch Log Group       | Auth changes audit events             |
-| `AUDIT_LOG_ACTIONS`               | CloudWatch Log Group       | General action audit events           |
-| `AUDIT_LOG_ERRORS`                | CloudWatch Log Group       | Error audit events                    |
+### Resolution Order
+
+1. **Environment variable override** — check for a legacy-style env var (e.g., `ASSET_STORAGE_TABLE_NAME`), used by tests and local utilities
+2. **In-module cache** — 60-minute TTL per resource key
+3. **SSM GetParametersByPath** — one paginated call fetching all parameters under the prefix on first access
 
 :::tip[Lambda Builder Pattern]
-Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Each builder follows a strict pattern: create function, grant Amazon DynamoDB permissions, then call four required security helpers (`kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions`, `suppressCdkNagErrorsByGrantReadWrite`).
+Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Non-pipeline builders inject only handler-specific environment variables (e.g., `PRESIGNED_URL_TIMEOUT_SECONDS`); resource names are resolved from SSM. Each builder calls four required security helpers: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions` (injects `VAMS_RESOURCE_PARAM_PREFIX` and grants SSM read), and `suppressCdkNagErrorsByGrantReadWrite`.
 :::
 
 ## Next Steps
