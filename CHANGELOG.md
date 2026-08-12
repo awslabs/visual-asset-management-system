@@ -204,6 +204,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Previous Cognito MFA checks were erroring, defaulting MFA validation to false. Cognito MFA checks now use the AdminGetUser to cognito to properly fetch MFA status for when cognito is enabled.
 -   Fixed FIPS configuration endpoints using the FIPS endpoints for AWS data plane operations instead of just the control plane.
 -   Updated the GenAI Metadata Labeling Use-case Pipeline primary lambda to timeout after `15` minutes instead of `5`. This should give more breathing room for larger 3D models that take more time to process.
+-   **Web** Asset file components on the website no longer offer to export or view files when an asset is marked as not distributable. The file manager hides its Export menu, View File button, and viewer popup links, the asset preview thumbnail and its enlarged view are omitted, and the file view page renders only versions and metadata in place of the visualizer. The API already refuses download, streaming, and preview requests for such an asset, so these controls previously led only to an error.
 
 ### Chores
 

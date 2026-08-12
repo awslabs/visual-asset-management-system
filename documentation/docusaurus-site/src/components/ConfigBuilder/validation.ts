@@ -39,20 +39,32 @@ const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f
 const IPV4_PATTERN =
     /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 /**
- * Region-name prefix to partition DNS suffix, matching what `region_info.RegionInfo.get(region)`
- * resolves at synth time (config.ts:1822 builds the SQS pattern from that suffix). A region with no
- * listed prefix is commercial. Verified against every Region aws-cdk-lib knows.
+ * Region-name prefix to partition name and DNS suffix, matching what
+ * `region_info.RegionInfo.get(region)` resolves at synth time (config.ts:1822 builds the SQS pattern
+ * from that suffix). A region with no listed prefix is commercial. Verified against every Region
+ * aws-cdk-lib knows. Ordered longest-prefix-first so `us-isob-` is not shadowed by `us-iso-`.
  */
-const PARTITION_DNS_SUFFIXES: { prefix: string; suffix: string }[] = [
-    { prefix: "us-gov-", suffix: "amazonaws.com" },
-    { prefix: "cn-", suffix: "amazonaws.com.cn" },
-    { prefix: "eusc-", suffix: "amazonaws.eu" },
-    { prefix: "us-isob-", suffix: "sc2s.sgov.gov" },
-    { prefix: "us-isof-", suffix: "csp.hci.ic.gov" },
-    { prefix: "us-iso-", suffix: "c2s.ic.gov" },
-    { prefix: "eu-isoe-", suffix: "cloud.adc-e.uk" },
+const PARTITION_DNS_SUFFIXES: { prefix: string; partition: string; suffix: string }[] = [
+    { prefix: "us-gov-", partition: "aws-us-gov", suffix: "amazonaws.com" },
+    { prefix: "cn-", partition: "aws-cn", suffix: "amazonaws.com.cn" },
+    { prefix: "eusc-", partition: "aws-eusc", suffix: "amazonaws.eu" },
+    { prefix: "us-isob-", partition: "aws-iso-b", suffix: "sc2s.sgov.gov" },
+    { prefix: "us-isof-", partition: "aws-iso-f", suffix: "csp.hci.ic.gov" },
+    { prefix: "us-iso-", partition: "aws-iso", suffix: "c2s.ic.gov" },
+    { prefix: "eu-isoe-", partition: "aws-iso-e", suffix: "cloud.adc-e.uk" },
 ];
 const COMMERCIAL_DNS_SUFFIX = "amazonaws.com";
+
+/**
+ * The partition implied by `env.region`, or undefined when the region is unset — the deploy-time
+ * region can still come from CDK context or the environment, which the browser cannot read, so the
+ * partition is unknowable and partition-specific rules stay silent.
+ */
+function partitionForRegionName(region: unknown): string | undefined {
+    if (isUnset(region) || typeof region !== "string") return undefined;
+    const match = PARTITION_DNS_SUFFIXES.find((entry) => region.startsWith(entry.prefix));
+    return match ? match.partition : "aws";
+}
 
 /**
  * The partition DNS suffix implied by `env.region`, or undefined when the region is unset — the
@@ -200,7 +212,37 @@ function hasExternalVpc(cfg: ConfigShape): boolean {
     );
 }
 
+/** True for every ISO partition variant (aws-iso, aws-iso-b, aws-iso-e, aws-iso-f). */
+function isIsoPartitionRegion(region: unknown): boolean {
+    return (partitionForRegionName(region) ?? "").startsWith("aws-iso");
+}
+
+/** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts:828-831). */
+function requiresGovCloudFlag(region: unknown): boolean {
+    const partition = partitionForRegionName(region);
+    return partition === "aws-us-gov" || partition === "aws-eusc" || isIsoPartitionRegion(region);
+}
+
 export const RULES: Rule[] = [
+    // ----- Restricted-partition flag agreement (config.ts:820-848) -----
+    {
+        id: "restricted-partition-requires-govcloud-flag",
+        severity: "error",
+        fieldPaths: ["env.region", "app.govCloud.enabled"],
+        appliesWhen: (c) =>
+            requiresGovCloudFlag(g(c, "env.region")) && g(c, "app.govCloud.enabled") !== true,
+        message:
+            "Deploying to the AWS GovCloud, AWS European Sovereign Cloud, or an ISO partition requires app.govCloud.enabled to be true. The flag gates that partition's capability downgrades (including removing unsupported EventSourceMapping tags), so leaving it false deploys resources the partition rejects.",
+    },
+    {
+        id: "iso-partition-requires-il6",
+        severity: "error",
+        fieldPaths: ["env.region", "app.govCloud.il6Compliant"],
+        appliesWhen: (c) =>
+            isIsoPartitionRegion(g(c, "env.region")) && g(c, "app.govCloud.il6Compliant") !== true,
+        message: "Deploying to an ISO partition requires app.govCloud.il6Compliant to be true.",
+    },
+
     // ----- GovCloud (config.ts:415-432) -----
     {
         id: "govcloud-requires-vpc",
@@ -1046,6 +1088,18 @@ export const RULES: Rule[] = [
             g(c, "app.govCloud.enabled"),
         message:
             "openSearch.useServerless.nextGen is not supported when app.govCloud.enabled is true (GovCloud and EU Sovereign Cloud). Set nextGen to false for these partitions.",
+    },
+    {
+        id: "aoss-serverless-not-in-eusovereign",
+        severity: "error",
+        fieldPaths: ["app.openSearch.useServerless.enabled", "env.region"],
+        // Keyed on the region's partition rather than app.govCloud.enabled: GovCloud supports
+        // OpenSearch Serverless, only the EU Sovereign Cloud (aws-eusc) does not.
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            partitionForRegionName(g(c, "env.region")) === "aws-eusc",
+        message:
+            "openSearch.useServerless is not supported in the EU Sovereign Cloud (aws-eusc). Set useServerless.enabled to false and use openSearch.useProvisioned instead.",
     },
     {
         id: "aoss-nextgen-requires-standby-replicas",

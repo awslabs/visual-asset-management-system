@@ -321,4 +321,68 @@ describe("TagSchemaBuilder", () => {
         await user.type(enumInput, "dev, ");
         expect(enumInput.value).toBe("dev, ");
     });
+
+    it("reports cleared enum values upward so a live preview cannot show the deleted list", async () => {
+        // Withholding the emit while a row is invalid froze the caller's preview on the last valid
+        // schema, so an emptied enum kept listing the values just deleted and they appeared to merge
+        // with whatever was typed next. Validity is reported separately via onValidityChange.
+        const user = userEvent.setup();
+        const onChange = jest.fn();
+        const onValidityChange = jest.fn();
+        render(
+            <TagSchemaBuilder value={[]} onChange={onChange} onValidityChange={onValidityChange} />
+        );
+        await user.click(screen.getByRole("button", { name: /add tag/i }));
+        await user.type(screen.getByLabelText(/tag key/i), "ENVIRONMENT");
+        await user.selectOptions(screen.getByLabelText(/^type/i), "enum");
+
+        const enumInput = screen.getByLabelText(/enum values/i) as HTMLInputElement;
+        await user.type(enumInput, "test,derp,fert");
+        await waitFor(() => {
+            expect(onChange.mock.calls.at(-1)?.[0]?.[0]?.enumValues).toEqual([
+                "test",
+                "derp",
+                "fert",
+            ]);
+        });
+
+        await user.clear(enumInput);
+        // The emptied list must reach the caller even though the row is now invalid.
+        await waitFor(() => {
+            expect(onChange.mock.calls.at(-1)?.[0]?.[0]?.enumValues).toEqual([]);
+        });
+        expect(onValidityChange).toHaveBeenLastCalledWith(false);
+
+        await user.type(enumInput, "dood,pood");
+        await waitFor(() => {
+            expect(onChange.mock.calls.at(-1)?.[0]?.[0]?.enumValues).toEqual(["dood", "pood"]);
+        });
+        expect(onValidityChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("labels the type options with readable names rather than the wire values", async () => {
+        const user = userEvent.setup();
+        render(<TagSchemaBuilder value={[]} onChange={jest.fn()} />);
+        await user.click(screen.getByRole("button", { name: /add tag/i }));
+
+        const typeSelect = screen.getByLabelText(/^type/i) as HTMLSelectElement;
+        const options = Array.from(typeSelect.options);
+        // The stored values stay the wire format the backend validates against.
+        expect(options.map((o) => o.value)).toEqual([
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "string-list",
+            "enum",
+        ]);
+        // Every option reads as a capitalized label plus a hint, and none is the bare wire value.
+        for (const option of options) {
+            expect(option.textContent).toMatch(/^[A-Z].* — .+/);
+            expect(option.textContent).not.toBe(option.value);
+        }
+        // Selecting by the wire value still works, so the contract is unchanged.
+        await user.selectOptions(typeSelect, "string-list");
+        expect(typeSelect.value).toBe("string-list");
+    });
 });

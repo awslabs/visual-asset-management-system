@@ -212,6 +212,51 @@ runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as na
 constants with a rationale comment — keep them. CLI and web clients that consume a
 paginated GET must follow `NextToken` to retrieve the complete set.
 
+### **Rule 4: Keep handlers portable across AWS partitions**
+
+Handlers run in `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign, region
+`eusc-de-east-1`), and potentially `aws-cn` / `aws-iso*`. A partition defect is
+invisible in commercial tests and surfaces as a runtime 500 or a validation
+rejection that reproduces **only** in the affected partition. There is deliberately
+no central partition helper in the backend — these four rules are the contract.
+
+1. **Never build an ARN from a hardcoded partition.** Either parameterize it
+   (`common/workflows/stepfunctions_builder.py` threads a `partition` argument
+   through every state-machine integration ARN, sourced from the `AWS_PARTITION`
+   Lambda env var read in `common/workflows/workflowAsl.py`), or parse an ARN you
+   already hold (`handlers/workflows/executionService.py` splits a resource ARN,
+   falling back to the execution log-group ARN, to recover
+   partition/region/account). Prefer parsing when an ARN is in hand — no env var,
+   cannot drift. `AWS_PARTITION` is set on the `workflowService` Lambda only, so a
+   handler needing it must have its CDK builder updated or derive it from an ARN.
+
+2. **Never hardcode an endpoint hostname or DNS suffix.** Suffixes differ per
+   partition — `amazonaws.com`, `amazonaws.com.cn`, **`amazonaws.eu`** (EU
+   Sovereign), `c2s.ic.gov`, `sc2s.sgov.gov`, `cloud.adc-e.uk`, `csp.hci.ic.gov`.
+   Construct plain boto3 clients with **no `endpoint_url`** and let the SDK resolve
+   per region; read service endpoints (e.g. the OpenSearch host) from SSM. Region
+   comes from `os.environ["AWS_REGION"]` — avoid a `"us-east-1"` default, which
+   silently points at the wrong partition if the variable is ever missing.
+
+3. **New ARN/URL validators must accept every partition.** Compose them from
+   `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and
+   `aws_dns_suffix_group` in `common/validators.py`; never inline `arn:aws:`. A
+   commercial-only pattern passes every commercial test and rejects legitimate
+   input only in the affected partition — the hardest failure to attribute.
+   `infra/lib/helper/const.ts` (`SERVICE_LOOKUP`) is the authoritative partition +
+   suffix list; keep these groups in step with it.
+
+4. **A service or model may not exist everywhere.** Bedrock model ids differ (both
+   restricted config templates pin an older Sonnet), OpenSearch engine versions
+   differ, and some services are absent. Take such values from configuration the
+   CDK layer supplies per partition rather than hard-coding them.
+
+The `GOVCLOUD` feature switch is present in `featuresEnabled` for **both** GovCloud
+and EU Sovereign (both templates set `app.govCloud.enabled: true`), so treat it as
+"restricted partition" rather than literally GovCloud. The CDK-side rules —
+including the `AWS::Lambda::EventSourceMapping` tag restriction that fails a
+GovCloud deploy outright — are in `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`.
+
 ## 🔐 **Security Guidelines for Exception Handling**
 
 ### **Critical Security Rule: Secure Exception Handling**

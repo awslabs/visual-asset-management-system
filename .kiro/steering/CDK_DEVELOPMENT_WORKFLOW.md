@@ -2553,6 +2553,64 @@ dependentStack.addDependency(newFeatureStack);
 -   [ ] Update documentation
 -   [ ] Notify stakeholders
 
+## 🌍 **Partition Portability (Commercial / GovCloud / EU Sovereign)**
+
+VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eusc-de-east-1`), and potentially `aws-cn` / `aws-iso*`. Partition defects are invisible in commercial synth and unit tests, and usually surface as a `CREATE_FAILED` **mid-deploy**, rolling back the whole core stack (~30 min).
+
+### **`govCloud.enabled` is the restricted-partition flag, not a GovCloud flag**
+
+**Both `config.template.govcloud.json` and `config.template.eusovereign.json` set `app.govCloud.enabled: true`**; only commercial sets `false`. Read it as "this partition has reduced service/feature capability" — gating a capability downgrade on it covers EU Sovereign automatically.
+
+-   Use `config.app.govCloud.enabled` for a downgrade shared by every restricted partition (the EventSourceMapping tag strips, the Cognito feature downgrades, the API Gateway TLS-policy skip).
+-   Use `config.env.partition` / `Partition()` when the decision must hold regardless of operator flag hygiene, or is genuinely partition-specific (the commercial-only EventBridge bus CMK, the SAML and Deadline Cloud `=== "aws"` gates, the `aws-eusc` OpenSearch version pick).
+-   **Never write `Partition() === "aws-us-gov"`** — it misses EU Sovereign. When a deny-list is needed, name every restricted partition explicitly (the VPC builder's Cognito-PrivateLink check is the model: it excludes `aws-us-gov`, `aws-eusc`, `aws-iso*` while still allowing `aws-cn`, where the service exists).
+
+> **Known gap:** nothing validates that `app.govCloud.enabled` agrees with `config.env.partition`. Deploying to a restricted partition with the flag left `false` passes synth, then fails at the first EventSourceMapping with "Tags not supported in request."
+
+### **Checklist for new infrastructure**
+
+1. **Event source mappings — never call `fun.addEventSource()` unconditionally.** CDK stamps the stack tags onto the underlying `AWS::Lambda::EventSourceMapping`, which GovCloud/EU Sovereign Lambda rejects. This covers SQS (`eventSourceArn`) and DynamoDB streams (`tableStreamArn`) alike; it is the only CFN resource type in VAMS needing a property stripped for partition reasons.
+
+    ```typescript
+    queue.grantConsumeMessages(fun); // addEventSource() did this implicitly; do it explicitly now
+    if (config.app.govCloud.enabled) {
+        const esm = new lambda.EventSourceMapping(scope, "MyQueueSqsEventSource", {
+            eventSourceArn: queue.queueArn,
+            target: fun,
+            batchSize: 10,
+            maxBatchingWindow: Duration.seconds(3),
+        });
+        (esm.node.defaultChild as lambda.CfnEventSourceMapping).addPropertyDeletionOverride("Tags");
+    } else {
+        fun.addEventSource(
+            new eventsources.SqsEventSource(queue, {
+                batchSize: 10,
+                maxBatchingWindow: Duration.seconds(3),
+            })
+        );
+    }
+    ```
+
+    No CDK aspect can do this for you — the L1 is created lazily inside `addEventSource()`, after aspects finish visiting the tree. Regression coverage: `infra/test/eventSourceMappingGovCloudTags.test.ts`.
+
+2. **Never hardcode a partition, DNS suffix, or region.** Use `Service("X").ARN(...)` / `.Endpoint` / `.Principal`, `IAMArn(name)`, `Partition()`. Suffixes differ (`.amazonaws.com`, `.amazonaws.com.cn`, **`.amazonaws.eu`** for `aws-eusc`, `.c2s.ic.gov`, …), while service **principals** stay `.amazonaws.com` in `aws-us-gov` and `aws-eusc` — so a literal `ServicePrincipal("lambda.amazonaws.com")` happens to work there but is wrong in `aws-cn`/ISO.
+
+3. **A new `Service()` call means checking `SERVICE_LOOKUP` coverage.** `ServiceFormatter` **throws** at synth (`Service ${name} not found in partition ${partition}`) when the partition entry is missing. `AOSS`, `GEO`, `CLOUDFRONT`, and `COGNITO_HOSTED_UI` are not present for every partition. Resolve it one of two ways — a product decision, not a mechanical one: **add the partition entry** in `infra/lib/helper/const.ts` if the service exists there, or **forbid the feature in `getConfig()`** if it does not. Prefer the validation when the service is genuinely unavailable, because a `Service ${name} not found` throw names the service rather than the configuration field that caused it and sends the operator to the wrong file. Worked example: OpenSearch Serverless is not offered in the EU Sovereign Cloud, so `getConfig()` rejects `openSearch.useServerless.enabled` for `aws-eusc` and points at `useProvisioned`.
+
+4. **Gate unavailable services in `getConfig()`** so a bad combination fails at synth with a clear message rather than mid-deploy; mirror the rule into `ConfigBuilder/validation.ts` by hand.
+
+5. **Service versions and model ids can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates.
+
+6. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign).
+
+7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
+
+8. **IAM resource matching is case-sensitive.** `/aws/vendedlogs/*` grants are explicit allow-lists, and pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*` (both granted). A new pipeline inventing a third casing silently loses log-read access.
+
+### **Verifying a partition change**
+
+Assert the restricted output **and** the commercial output — otherwise a correct tag strip is indistinguishable from a resource that was never emitted. Inspect the emitted nested template, not the construct tree, and prefer a Jest test over a one-off synth (see `infra/test/eventSourceMappingGovCloudTags.test.ts`, which tags its test stack the way `core-stack.ts` does so the assertion is load-bearing rather than vacuous).
+
 ## 📖 **Best Practices Summary**
 
 1. **Always** make features configurable through the config system

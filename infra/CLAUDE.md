@@ -307,6 +307,82 @@ Partition(): string  // Returns current partition
 
 ---
 
+## Partition Portability (Commercial / GovCloud / EU Sovereign)
+
+VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eusc-de-east-1`), and potentially `aws-cn` / `aws-iso*`. A partition defect is expensive in a way ordinary bugs are not: it is invisible in commercial synth, invisible in unit tests, and typically surfaces as a `CREATE_FAILED` **mid-deploy**, which rolls back the whole core stack (~30 min). Treat the checklist below as part of writing any new construct.
+
+### `govCloud.enabled` is the restricted-partition flag, not a GovCloud flag
+
+**Both the govcloud and the eusovereign config templates set `app.govCloud.enabled: true`** (`config.template.govcloud.json`, `config.template.eusovereign.json`); only commercial sets `false`. Read it as "this partition has reduced service/feature capability." Gating a capability downgrade on it therefore covers EU Sovereign automatically — which is why the EventSourceMapping tag strip, the Cognito feature downgrades, and the API Gateway TLS-policy skip are all keyed on this one flag.
+
+Choose between the two forms deliberately:
+
+| Use                                    | When                                                                                                                                                                                                                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.app.govCloud.enabled`          | A capability downgrade shared by every restricted partition. Matches every existing EventSourceMapping tag strip and the Cognito/TLS branches.                                                                                                                                                     |
+| `config.env.partition` / `Partition()` | The decision must hold regardless of operator flag hygiene, or it is genuinely partition-specific. Used for the commercial-only EventBridge bus CMK (`storageBuilder-nestedStack.ts`), the SAML and Deadline Cloud `=== "aws"` gates in `getConfig()`, and the `aws-eusc` OpenSearch version pick. |
+
+When writing a partition deny-list, **name every restricted partition explicitly** — the VPC builder's Cognito-PrivateLink check is the model to copy, because it excludes `aws-us-gov`, `aws-eusc`, and `aws-iso*` while still allowing `aws-cn`, where the service does exist. A check written as `Partition() === "aws-us-gov"` would silently miss EU Sovereign.
+
+> **Known gap:** nothing validates that `app.govCloud.enabled` agrees with `config.env.partition`. Deploying to GovCloud/EU Sovereign while leaving the flag `false` is representable, passes synth, and then fails at the first EventSourceMapping with "Tags not supported in request."
+
+### Checklist for new infrastructure
+
+1. **Event source mappings — never call `fun.addEventSource()` unconditionally.** CDK's high-level construct stamps the stack tags onto the underlying `AWS::Lambda::EventSourceMapping`, and GovCloud/EU Sovereign Lambda rejects Tags outright. Every mapping needs the branch below. This applies to SQS (`eventSourceArn`) and DynamoDB streams (`tableStreamArn`) alike; `AWS::Lambda::EventSourceMapping` is the only CFN resource type in VAMS that needs a property stripped for partition reasons.
+
+    ```typescript
+    queue.grantConsumeMessages(fun); // addEventSource() did this implicitly; do it explicitly now
+    if (config.app.govCloud.enabled) {
+        const esm = new lambda.EventSourceMapping(scope, "MyQueueSqsEventSource", {
+            eventSourceArn: queue.queueArn,
+            target: fun,
+            batchSize: 10,
+            maxBatchingWindow: Duration.seconds(3),
+        });
+        (esm.node.defaultChild as lambda.CfnEventSourceMapping).addPropertyDeletionOverride("Tags");
+    } else {
+        fun.addEventSource(
+            new eventsources.SqsEventSource(queue, {
+                batchSize: 10,
+                maxBatchingWindow: Duration.seconds(3),
+            })
+        );
+    }
+    ```
+
+    There is no CDK aspect that can do this for you: the L1 is created lazily inside `addEventSource()`, after an aspect has finished visiting the construct tree. Regression coverage: `test/eventSourceMappingGovCloudTags.test.ts`.
+
+2. **Never hardcode a partition, DNS suffix, or region.** Use `Service("X").ARN(...)` / `.Endpoint` / `.Principal`, `IAMArn(name)`, and `Partition()`. The DNS suffix differs per partition (`.amazonaws.com`, `.amazonaws.com.cn`, **`.amazonaws.eu`** for `aws-eusc`, `.c2s.ic.gov`, …), while service **principals** stay `.amazonaws.com` in `aws-us-gov` and `aws-eusc` — so a literal `ServicePrincipal("lambda.amazonaws.com")` happens to work in those two but is wrong in `aws-cn`/ISO. Prefer `Service("LAMBDA").Principal` in new code.
+
+3. **Adding a `Service()` call means checking `SERVICE_LOOKUP` coverage.** `ServiceFormatter` **throws** at synth (`Service ${name} not found in partition ${partition}`) when the service has no entry for the deployment's partition. Several entries are commercial-only or commercial+GovCloud (`AOSS`, `GEO`, `CLOUDFRONT`, `COGNITO_HOSTED_UI`). Two ways to resolve it, and the choice is a product decision, not a mechanical one: **add the partition entry** in `lib/helper/const.ts` if the service exists there, or **forbid the feature in `getConfig()`** if it does not. Prefer the validation when the service is genuinely unavailable — a `Service ${name} not found` throw names the service rather than the configuration field that caused it, which sends the operator to the wrong file. `AOSS` in `aws-eusc` is the worked example: OpenSearch Serverless is not offered in the EU Sovereign Cloud, so `getConfig()` rejects `openSearch.useServerless.enabled` there and points at `useProvisioned` instead of leaving the operator with an opaque service-lookup failure.
+
+4. **A new service/feature may not exist everywhere.** Add the validation to `getConfig()` (Rule 1 / Rule 3) so a bad combination fails at synth with a clear message rather than mid-deploy. Mirror it into `ConfigBuilder/validation.ts` by hand.
+
+5. **Service versions can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates. Check availability before pinning a version or a model.
+
+6. **All three config templates must be updated together** (Rule 1 step 4) — `commercial`, `govcloud`, `eusovereign`. They are structurally identical and differ only in values; a missed template silently falls back to a `getConfig()` default and drops the operator's value. Note `useFips` is the one capability flag where the two restricted templates disagree (`true` for GovCloud, `false` for EU Sovereign).
+
+7. **No internet egress at build time.** A restricted-partition build host generally cannot reach commercial endpoints, so a `curl`/download inside a Docker bundling command hardcoded to a commercial S3 host will fail there.
+
+8. **IAM resource matching is case-sensitive.** Log-group grants for `/aws/vendedlogs/*` are explicit allow-lists, and the pipeline constructs are split across two casings (`VAMSStateMachine-*` and `VAMSstateMachine-*`), both of which `workflowFunctions.ts` grants. A new pipeline that invents a third casing silently loses log-read access — reuse an existing casing.
+
+### How to verify a partition change before shipping
+
+Synth is the only cheap check, and it must be a **paired** one — assert the restricted output AND the commercial output, or you cannot tell a correct strip from a resource that was never emitted:
+
+```bash
+# Temporarily point config.json at the govcloud template (set env.region/account, then restore it)
+npx cdk synth --all -o /tmp/gcsynth
+# Inspect the emitted nested template, not the construct tree
+node -e "const t=require('/abs/path/to/gcsynth/<stack>.nested.template.json');
+  Object.entries(t.Resources).filter(([,v])=>v.Type==='AWS::Lambda::EventSourceMapping')
+    .forEach(([k,v])=>console.log(k, 'Tags?', 'Tags' in v.Properties));"
+```
+
+A `cdk synth` against a placeholder account still emits templates (the context-lookup and CDK-Nag errors it prints are artifacts of the fake account); the templates are what matter. Prefer encoding the check as a Jest test over a one-off synth — see `test/eventSourceMappingGovCloudTags.test.ts`, which tags its test stack the way `core-stack.ts` does so the assertion is load-bearing rather than vacuous.
+
+---
+
 ## OpenSearch Serverless Connectivity
 
 A **private** OpenSearch Serverless collection (`allowPublic = false`) is reached only through a VPC endpoint whose **type is selected by the collection generation**:
@@ -412,6 +488,8 @@ Most correspond to a Development Rule above; the rule text is the full guidance.
 8. **Ignoring GovCloud constraints**: features conditional on GovCloud (CloudFront, Location Service, Cognito AdvancedSecurityMode) must be checked before use.
 9. **Forgetting stack dependencies** — see Rule 3. Stacks using `storageResources` must call `addDependency(storageResourcesNestedStack)`.
 10. **Using `grantReadWrite` without Nag suppression** — see Rule 2. Pair with `suppressCdkNagErrorsByGrantReadWrite(scope)`.
+11. **Calling `fun.addEventSource()` without the `govCloud.enabled` branch** — see Partition Portability item 1. CDK tags the underlying `AWS::Lambda::EventSourceMapping`, which GovCloud and EU Sovereign reject, failing the deploy and rolling back the core stack.
+12. **Writing a partition check as `Partition() === "aws-us-gov"`** — see Partition Portability. It misses EU Sovereign (`aws-eusc`); name every restricted partition, or gate on `config.app.govCloud.enabled`, which both restricted templates set.
 
 ---
 

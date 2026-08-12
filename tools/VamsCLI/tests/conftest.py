@@ -79,12 +79,32 @@ def isolate_logging_globals():
 
 
 @pytest.fixture(autouse=True)
+def redirect_log_dir(tmp_path_factory):
+    """Point the log directory at a temp dir for every test, real logging or mocked.
+
+    `initialize_logging()` builds a `RotatingFileHandler`, which opens the file eagerly and raises
+    `FileNotFoundError` if the parent directory is missing. Patching `ensure_log_dir` (as
+    `mock_logging` does) removes the only thing that would have created it, so a test calling the
+    real `initialize_logging` — one that imported it directly, so the `initialize_logging` patch
+    never applies — fails on a machine with no `~/.config/vamscli/logs`. That is every fresh CI
+    runner, while a developer box passes because ordinary CLI use already created the directory.
+
+    Redirecting `get_log_dir` fixes it at the source: every log path in `vamscli.utils.logging`
+    derives from that one function, so the whole subsystem stays inside `tmp_path` and no test
+    writes to the real user config directory. Guarded by `tests/test_logging_dir_isolation.py`.
+    """
+    log_dir = tmp_path_factory.mktemp("vamscli-logs")
+    with patch('vamscli.utils.logging.get_log_dir', return_value=log_dir):
+        yield log_dir
+
+
+@pytest.fixture(autouse=True)
 def mock_logging(request):
     """Mock logging initialization to prevent file system operations during tests.
-    
+
     This fixture is automatically used for all tests to prevent the logging
     system from creating directories and files during test execution.
-    
+
     To disable this fixture for specific tests that need real logging,
     use the 'no_mock_logging' marker:
         @pytest.mark.no_mock_logging
@@ -95,7 +115,7 @@ def mock_logging(request):
     if 'no_mock_logging' in request.keywords:
         yield None
         return
-    
+
     with patch('vamscli.utils.logging.ensure_log_dir'), \
          patch('vamscli.utils.logging.initialize_logging'), \
          patch('vamscli.utils.logging.get_logger') as mock_get_logger:

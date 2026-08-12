@@ -68,6 +68,20 @@ interface ValidationError {
 
 const TAG_TYPES: TagType[] = ["string", "integer", "number", "boolean", "string-list", "enum"];
 
+/**
+ * Display labels for the type selector. The stored values are the wire format the backend validates
+ * against, so only the presentation changes here. Each entry carries a short hint describing what the
+ * execute form renders and what the tag accepts, shown alongside the label in the open list.
+ */
+const TAG_TYPE_LABELS: Record<TagType, { label: string; hint: string }> = {
+    string: { label: "String", hint: "any single-line text value" },
+    integer: { label: "Number", hint: "no decimals" },
+    number: { label: "Decimal", hint: "decimals allowed" },
+    boolean: { label: "Boolean", hint: "true / false checkbox" },
+    "string-list": { label: "String Multi-line", hint: "several line values" },
+    enum: { label: "List", hint: "pick one of the values from a list" },
+};
+
 // Mirrors _TAG_KEY_PATTERN in common/workflows/templateTagSchema.py: only these characters are
 // captured by a {{tag}} placeholder, so a key outside the set can be declared but never rendered.
 export const TAG_KEY_PATTERN = /^[A-Za-z0-9_]+$/;
@@ -172,10 +186,12 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
         const validationErrors = validateFields(updatedFields);
         setErrors(validationErrors);
 
-        // Only emit valid fields (no errors)
-        if (validationErrors.length === 0) {
-            onChange(updatedFields);
-        }
+        // Emit on every edit, valid or not, so the caller's live preview always mirrors the editor.
+        // Withholding an invalid schema froze the preview on the last valid one: clearing an enum's
+        // values leaves it momentarily invalid, so the preview kept listing the values just deleted
+        // and appeared to merge them with whatever was typed next. Validity travels separately
+        // through onValidityChange, which is what gates advancing the wizard and saving.
+        onChange(updatedFields);
     };
 
     const handleAddField = () => {
@@ -190,9 +206,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
         const validationErrors = validateFields(updatedFields);
         setErrors(validationErrors);
 
-        if (validationErrors.length === 0) {
-            onChange(updatedFields);
-        }
+        onChange(updatedFields);
     };
 
     const handleRemoveField = (index: number) => {
@@ -236,7 +250,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
                                     `Tag ${index + 1}`
                                 )}
                                 <span className="ml-2 px-2 py-0.5 text-xs rounded bg-surface-secondary text-text-secondary">
-                                    {field.type}
+                                    {TAG_TYPE_LABELS[field.type]?.label || field.type}
                                 </span>
                                 {field.required && (
                                     <span className="ml-1 px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
@@ -298,7 +312,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
                                 >
                                     {TAG_TYPES.map((type) => (
                                         <option key={type} value={type}>
-                                            {type}
+                                            {`${TAG_TYPE_LABELS[type].label} — ${TAG_TYPE_LABELS[type].hint}`}
                                         </option>
                                     ))}
                                 </select>

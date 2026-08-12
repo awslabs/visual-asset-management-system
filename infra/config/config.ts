@@ -817,6 +817,36 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //app.govCloud.enabled is the restricted-partition switch, not literally a GovCloud switch: the
+    //GovCloud, EU Sovereign Cloud, and ISO partitions all set it. Every capability downgrade keyed on
+    //it — most consequentially stripping Tags from each AWS::Lambda::EventSourceMapping, which those
+    //partitions reject outright — is skipped when it is left false. Nothing downstream detects that,
+    //so the deployment synthesizes cleanly and then fails partway through creating the core stack,
+    //rolling the whole stack back. Assert the flag against the resolved partition here instead.
+    //Defaulted to "" so an unrecognized region — whose partition resolves to undefined — surfaces as
+    //whatever validation owns that region rather than a TypeError raised from here.
+    const resolvedPartition = config.env.partition ?? "";
+    const isIsoPartition = resolvedPartition.startsWith("aws-iso");
+    const restrictedPartitionRequiringFlag =
+        resolvedPartition === "aws-us-gov" || resolvedPartition === "aws-eusc" || isIsoPartition;
+    if (restrictedPartitionRequiringFlag && config.app.govCloud.enabled !== true) {
+        throw new Error(
+            `Configuration Error: deploying to the '${resolvedPartition}' partition requires ` +
+                "app.govCloud.enabled to be true. The flag gates the partition's capability " +
+                "downgrades (including removing unsupported EventSourceMapping tags), so leaving it " +
+                "false deploys resources the partition rejects."
+        );
+    }
+
+    //The ISO partitions are accredited for classified workloads, so they additionally require the IL6
+    //control set rather than treating it as opt-in.
+    if (isIsoPartition && config.app.govCloud.il6Compliant !== true) {
+        throw new Error(
+            `Configuration Error: deploying to the '${resolvedPartition}' partition requires ` +
+                "app.govCloud.il6Compliant to be true."
+        );
+    }
+
     //If we are govCloud, check for certain features that are required to be on or off.
     //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
@@ -1364,6 +1394,19 @@ export function getConfig(app: cdk.App): Config {
         throw new Error(
             "Configuration Error: openSearch.useServerless.nextGen is not supported when app.govCloud.enabled " +
                 "is true (GovCloud and EU Sovereign Cloud). Set openSearch.useServerless.nextGen to false for these partitions."
+        );
+    }
+
+    //OpenSearch Serverless is not supported in the EU Sovereign Cloud: the aoss service has no
+    //endpoint entry for the aws-eusc partition, so the security helper's Service("AOSS") lookup
+    //throws mid-synth with a message that names the service rather than the configuration field
+    //that caused it. Keyed on the partition rather than app.govCloud.enabled because GovCloud does
+    //have an aoss entry and only the EU Sovereign Cloud is affected. Use useProvisioned there.
+    if (config.app.openSearch.useServerless.enabled && config.env.partition === "aws-eusc") {
+        throw new Error(
+            "Configuration Error: openSearch.useServerless is not supported in the 'aws-eusc' partition for VAMS" +
+                "(EU Sovereign Cloud). Set openSearch.useServerless.enabled to false and use " +
+                "openSearch.useProvisioned instead."
         );
     }
 
