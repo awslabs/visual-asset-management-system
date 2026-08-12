@@ -2652,6 +2652,20 @@ npm run format                     # Format code
 npm run gen                        # Generate API endpoints
 ```
 
+### **Platform-specific native bindings in the lockfile**
+
+`esbuild` is a direct dependency of `infra/` because `NodejsFunction` bundling runs it at synth (e.g. the OpenSearch schema-deploy Lambda). npm records only the compiled binary matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on a different platform does **not** add the missing one — a lockfile written on Windows leaves a Linux CI runner without `@esbuild/linux-x64`.
+
+`infra/package.json` therefore declares the other platforms explicitly under `optionalDependencies` (`@esbuild/linux-x64`, `@esbuild/darwin-arm64`, `@esbuild/darwin-x64`). Each carries its own `os`/`cpu` constraints, so only the matching binary is installed.
+
+**The versions are coupled to `esbuild` and no test catches drift.** When bumping it, re-pin these to the version `npm ls esbuild` reports, then confirm every platform is still recorded:
+
+```bash
+node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
+```
+
+Expect `darwin`, `linux`, **and** `win32`. If one is missing, add it with `npm install --package-lock-only --save-optional <pkg>@<version>`; `npm install --force` and the `--os`/`--cpu` flags do **not** repair an already-pruned lockfile. `web/` needs the same treatment for rolldown and esbuild (see `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md`).
+
 ## 🔧 **Troubleshooting Common Issues**
 
 ### **Configuration Errors**

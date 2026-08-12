@@ -518,6 +518,26 @@ npx cdk destroy      # Tear down stack
 
 Note: `test/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock config. Tests may need updates when adding features.
 
+### Platform-Specific Native Bindings in the Lockfile
+
+`esbuild` is a direct dependency here because `NodejsFunction` bundling runs it at synth (e.g. the OpenSearch schema-deploy Lambda). npm records only the compiled binary matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on a different platform does **not** add the missing one — so a lockfile written on Windows leaves a Linux CI runner without `@esbuild/linux-x64`. `infra/package.json` declares the other platforms explicitly:
+
+```json
+"optionalDependencies": {
+    "@esbuild/darwin-arm64": "^0.28.1",
+    "@esbuild/darwin-x64": "^0.28.1",
+    "@esbuild/linux-x64": "^0.28.1"
+}
+```
+
+Each package carries its own `os`/`cpu` constraints, so only the matching binary is ever installed. **The versions are coupled to `esbuild` and no test catches drift** — when bumping it, re-pin these to the version `npm ls esbuild` reports, then confirm `darwin`, `linux`, and `win32` are all still recorded:
+
+```bash
+node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
+```
+
+`npm install --force` and the `--os`/`--cpu` flags do **not** repair an already-pruned lockfile; use `npm install --package-lock-only --save-optional <pkg>@<version>`. `web/` needs the same treatment for rolldown and esbuild — see `web/CLAUDE.md` Rule 5.
+
 ---
 
 ## Key Files Quick Reference

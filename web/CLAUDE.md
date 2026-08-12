@@ -233,6 +233,44 @@ npm run build
 yarn install
 ```
 
+### Rule 5: Keep the Platform-Specific Native Bindings in `optionalDependencies`
+
+`vite build` loads **rolldown's** native binding, and `vite.config.ts` imports **esbuild** in the `jsxInJs` plugin, so both need a compiled binary for the machine running the build. npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) — a lockfile written on Windows lists `@rolldown/binding-win32-x64-msvc` and nothing else, and a later `npm install` on Linux does **not** add the missing one. The build then dies with:
+
+```
+Error: Cannot find native binding.
+  cause: Cannot find module '@rolldown/binding-linux-x64-gnu'
+```
+
+`web/package.json` therefore declares the bindings for every platform VAMS is built on explicitly:
+
+```json
+"optionalDependencies": {
+    "@esbuild/darwin-arm64": "^0.28.1",
+    "@esbuild/darwin-x64": "^0.28.1",
+    "@esbuild/linux-x64": "^0.28.1",
+    "@rolldown/binding-darwin-arm64": "^1.1.5",
+    "@rolldown/binding-darwin-x64": "^1.1.5",
+    "@rolldown/binding-linux-x64-gnu": "^1.1.5"
+}
+```
+
+Each package carries its own `os`/`cpu` constraints, so a developer only ever installs their own platform's binary — declaring them costs nothing on disk and keeps the Linux CI build working. The Windows binding stays in the lockfile through the ordinary dependency graph.
+
+**These versions are coupled to `vite` and `esbuild` and no test catches drift.** When bumping `vite`, `rolldown`, or `esbuild`:
+
+1. Read the resolved versions: `npm ls rolldown esbuild`.
+2. Re-pin every entry above to match, then `npm install`.
+3. Confirm all platforms are still recorded — a bump can silently prune them again:
+
+    ```bash
+    node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
+    ```
+
+    Expect `darwin`, `linux`, **and** `win32` rows for both `@rolldown/binding-*` and `@esbuild/*`. If a platform is missing, `npm install --package-lock-only --save-optional <pkg>@<version>` adds it. Note `npm install --force` and `--os`/`--cpu` do **not** repair an already-pruned lockfile.
+
+A mismatch between the pinned binding version and the version `vite` resolves is the failure mode to watch for: npm installs the stale binding, rolldown asks for the new one, and the build fails exactly as above. `infra/` carries the same `@esbuild/*` entries for the same reason — see `infra/CLAUDE.md`.
+
 ### Rule 6: HashRouter URLs
 
 All routing uses `HashRouter`, meaning URLs are `/#/path`. When constructing internal links or navigation:

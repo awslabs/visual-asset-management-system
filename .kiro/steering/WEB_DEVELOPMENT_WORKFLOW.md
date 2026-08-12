@@ -322,6 +322,25 @@ npm run build
 yarn install
 ```
 
+#### Keep the platform-specific native bindings in `optionalDependencies`
+
+`vite build` loads **rolldown's** native binding, and `vite.config.ts` imports **esbuild** in the `jsxInJs` plugin, so both need a compiled binary for the machine running the build. npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on Linux does **not** add the missing one — so a lockfile written on Windows breaks the Linux CI build with:
+
+```
+Error: Cannot find native binding.
+  cause: Cannot find module '@rolldown/binding-linux-x64-gnu'
+```
+
+`web/package.json` declares the other platforms explicitly (`@rolldown/binding-{linux-x64-gnu,darwin-arm64,darwin-x64}` and `@esbuild/{linux-x64,darwin-arm64,darwin-x64}`). Each carries its own `os`/`cpu` constraints, so a developer only installs their own platform's binary.
+
+**The versions are coupled to `vite`/`esbuild` and no test catches drift.** When bumping `vite`, `rolldown`, or `esbuild`: read the resolved versions with `npm ls rolldown esbuild`, re-pin every entry, run `npm install`, then confirm all platforms are still recorded —
+
+```bash
+node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
+```
+
+Expect `darwin`, `linux`, **and** `win32` for both families. If one is missing, `npm install --package-lock-only --save-optional <pkg>@<version>` adds it; `npm install --force` and the `--os`/`--cpu` flags do **not** repair an already-pruned lockfile. `infra/` needs the same for `@esbuild/*` (see `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`).
+
 ### **Rule 10: React 18 (Upgraded)**
 
 This project uses React 18.3 (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot`. React 18 APIs (`useId`, `useTransition`, `useDeferredValue`) are allowed in the orchestration module but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.

@@ -134,5 +134,13 @@
         "ts-node": "^10.9.1",
         "vite": "^8.0.16",
         "vite-plugin-node-polyfills": "^0.28.0"
+    },
+    "optionalDependencies": {
+        "@esbuild/darwin-arm64": "^0.28.1",
+        "@esbuild/darwin-x64": "^0.28.1",
+        "@esbuild/linux-x64": "^0.28.1",
+        "@rolldown/binding-darwin-arm64": "^1.1.5",
+        "@rolldown/binding-darwin-x64": "^1.1.5",
+        "@rolldown/binding-linux-x64-gnu": "^1.1.5"
     }
 }

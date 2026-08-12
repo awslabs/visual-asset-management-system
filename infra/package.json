@@ -48,5 +48,10 @@
         "@istanbuljs/load-nyc-config": {
             "js-yaml": "^4.2.0"
         }
+    },
+    "optionalDependencies": {
+        "@esbuild/darwin-arm64": "^0.28.1",
+        "@esbuild/darwin-x64": "^0.28.1",
+        "@esbuild/linux-x64": "^0.28.1"
     }
 }
