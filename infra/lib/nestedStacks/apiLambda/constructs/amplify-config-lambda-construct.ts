@@ -58,6 +58,13 @@ interface InlineLambdaProps {
     cognitoIdentityPoolId: string;
 
     /**
+     * Partition-aware Cognito user pool (IDP) endpoint for the front-end.
+     * Required because Amplify JS resolves only the `aws` / `aws-cn` partitions and
+     * would otherwise build a `.amazonaws.com` host in the EU Sovereign Cloud.
+     */
+    cognitoUserPoolEndpoint: string;
+
+    /**
      * Additional configuration needed for federated auth
      */
     cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
@@ -169,6 +176,15 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                         : "undefined",
                     cognitoIdentityPoolId: props.config.app.authProvider.useCognito.enabled
                         ? props.authResources.cognito.identityPoolId
+                        : "undefined",
+                    // Amplify JS only knows the `aws` and `aws-cn` partitions, so it resolves
+                    // every region to the commercial `.amazonaws.com` suffix. In the EU
+                    // Sovereign Cloud the correct suffix is `.amazonaws.eu`, so the frontend
+                    // must be given explicit endpoints. Service() is partition-aware and
+                    // already backs the CSP allow-list, so this stays correct in every
+                    // partition (commercial and GovCloud keep resolving to .amazonaws.com).
+                    cognitoUserPoolEndpoint: props.config.app.authProvider.useCognito.enabled
+                        ? `https://${Service("COGNITO_IDP", false).Endpoint}`
                         : "undefined",
                     cognitoFederatedConfig: props.cognitoFederatedConfig,
                     externalOAuthIdpURL:

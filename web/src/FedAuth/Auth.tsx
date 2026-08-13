@@ -105,6 +105,14 @@ interface Config {
     cognitoIdentityPoolId: string;
 
     /**
+     * Partition-aware Cognito endpoints supplied by /api/amplify-config.
+     * Amplify JS only resolves the `aws` and `aws-cn` partitions, so in the EU
+     * Sovereign Cloud it would build `cognito-idp.<region>.amazonaws.com` instead
+     * of `.amazonaws.eu`. Optional so older backends without these fields still work.
+     */
+    cognitoUserPoolEndpoint?: string;
+
+    /**
      * Additional configuration needed for cognito federated auth
      */
     cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
@@ -206,6 +214,15 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                 Cognito: {
                     userPoolId: config.cognitoUserPoolId,
                     userPoolClientId: config.cognitoAppClientId,
+                    // Amplify JS resolves endpoints only for the `aws` and `aws-cn`
+                    // partitions, so in the EU Sovereign Cloud it builds
+                    // `cognito-idp.<region>.amazonaws.com` and sign-in fails (blocked by
+                    // the CSP, which correctly allows only `.amazonaws.eu`). The backend
+                    // supplies a partition-correct endpoint; honour it when present.
+                    ...(config.cognitoUserPoolEndpoint &&
+                        config.cognitoUserPoolEndpoint !== "undefined" && {
+                            userPoolEndpoint: config.cognitoUserPoolEndpoint,
+                        }),
                     loginWith: {
                         oauth: {
                             domain: cognitoAuthDomain,
