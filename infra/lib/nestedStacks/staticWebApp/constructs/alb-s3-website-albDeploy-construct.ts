@@ -235,7 +235,12 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                     port: "443",
                     protocol: "HTTPS",
                     path: `/${props.apiStageName}/#{path}`,
-                    permanent: true,
+                    // Must be a temporary (302) redirect: the target is the API Gateway hostname, which
+                    // is regenerated whenever the API is replaced. Browsers cache 301s indefinitely (no
+                    // Cache-Control is set here), so a permanent redirect leaves returning users pointing
+                    // at the previous deployment's hostname, which no longer resolves — the app then fails
+                    // at startup with "Failed to fetch" and only a manual cache clear recovers it.
+                    permanent: false,
                 }),
                 conditions: [elbv2.ListenerCondition.pathPatterns(["/api*"])],
             }
@@ -253,7 +258,8 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                     port: "443",
                     protocol: "HTTPS",
                     path: `/${props.apiStageName}/#{path}`,
-                    permanent: true,
+                    // Temporary (302) for the same reason as the /api* rule above.
+                    permanent: false,
                 }),
                 conditions: [elbv2.ListenerCondition.pathPatterns(["/secure-config*"])],
             }
