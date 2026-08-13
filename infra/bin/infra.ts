@@ -128,6 +128,14 @@ if (config.app.useWaf) {
                     id: "AwsSolutions-COG3",
                     reason: "Cognito AdvancedSecurityMode feature does not exist in GovCloud",
                 },
+                {
+                    // NOTE: cdk-nag >=2.36 removed AwsSolutions-COG3 (AdvancedSecurityMode) and
+                    // replaced it with AwsSolutions-COG8 (user pool feature plan / Plus tier).
+                    // Without this entry the COG3 suppression above is inert and synthesis fails
+                    // with an error on every govCloud/EU Sovereign Cloud deployment.
+                    id: "AwsSolutions-COG8",
+                    reason: "Cognito Plus tier / advanced security feature plan does not exist in GovCloud or the EU Sovereign Cloud",
+                },
             ],
             true
         );
@@ -160,6 +168,14 @@ else {
                 {
                     id: "AwsSolutions-COG3",
                     reason: "Cognito AdvancedSecurityMode feature does not exist in GovCloud",
+                },
+                {
+                    // NOTE: cdk-nag >=2.36 removed AwsSolutions-COG3 (AdvancedSecurityMode) and
+                    // replaced it with AwsSolutions-COG8 (user pool feature plan / Plus tier).
+                    // Without this entry the COG3 suppression above is inert and synthesis fails
+                    // with an error on every govCloud/EU Sovereign Cloud deployment.
+                    id: "AwsSolutions-COG8",
+                    reason: "Cognito Plus tier / advanced security feature plan does not exist in GovCloud or the EU Sovereign Cloud",
                 },
             ],
             true
