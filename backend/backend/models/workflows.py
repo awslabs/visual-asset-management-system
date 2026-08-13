@@ -254,6 +254,7 @@ class WorkflowRecordV2(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -321,6 +322,7 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = Field(default_factory=dict)
     subDashboardUrl: Optional[str] = Field("", max_length=2048)
     enabled: Optional[bool] = True
+    isSystem: Optional[bool] = False
 
     @root_validator
     def validate_fields(cls, values):
@@ -390,6 +392,7 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = ""
     enabled: bool = True
     archived: bool = False
+    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""

@@ -132,6 +132,13 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Metadata Schema Name", "value": "metadataSchemaName"},
         {"label": "Metadata Schema Entity Type", "value": "metadataSchemaEntityType"}]},
+    "complianceSchema": {"label": "Compliance Schema", "fields": [
+        {"label": "Schema Name", "value": "complianceSchemaName"}]},
+    "complianceEvaluation": {"label": "Compliance Evaluation", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Compliance State", "value": "complianceState"}]},
+    "complianceCascade": {"label": "Compliance Cascade", "fields": [
+        {"label": "Cascade ID", "value": "cascadeId"}]},
 }
 
 # Display labels for the constraint criteria operators (editor view).
@@ -316,6 +323,13 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Metadata Schema Name", "value": "metadataSchemaName"},
         {"label": "Metadata Schema Entity Type", "value": "metadataSchemaEntityType"}]},
+    "complianceSchema": {"label": "Compliance Schema", "fields": [
+        {"label": "Schema Name", "value": "complianceSchemaName"}]},
+    "complianceEvaluation": {"label": "Compliance Evaluation", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Compliance State", "value": "complianceState"}]},
+    "complianceCascade": {"label": "Compliance Cascade", "fields": [
+        {"label": "Cascade ID", "value": "cascadeId"}]},
 }
 
 # Display labels for the constraint criteria operators (editor view).

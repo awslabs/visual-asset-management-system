@@ -66,7 +66,7 @@
             "reindexOnCdkDeploy": false
         },
         "useLocationService": {
-            "enabled": false
+            "enabled": true
         },
         "useAlb": {
             "enabled": false,
@@ -336,7 +336,7 @@
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
         },
-        "federatedModelManagement": {
+            "federatedModelManagement": {
             "enabled": false,
             "autoLoadDefaultSchema": true
         }

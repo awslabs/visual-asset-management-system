@@ -315,6 +315,12 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
             }
 
+            // Deadline Cloud pipeline execution-type support (createJob workflow task
+            // states + the job-callback lambda deployed in the API builder stack).
+            if (props.config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.DEADLINECLOUD_PIPELINES);
+            }
+
             let fmmBuilderNestedStack: FMMBuilderNestedStack | undefined;
             if (props.config.app.federatedModelManagement.enabled) {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.FMM);
@@ -329,10 +335,12 @@ export class CoreVAMSStack extends cdk.Stack {
                         vpc: this.vpc,
                         subnets: this.subnetsIsolated,
                         registry: apiRouteRegistry,
+                        executeWorkflowFunction: apiBuilder2NestedStack.executeWorkflowV2Function,
                     }
                 );
                 fmmBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
                 fmmBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+                fmmBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
             }
 
             // Deadline Cloud pipeline execution-type support (createJob workflow task

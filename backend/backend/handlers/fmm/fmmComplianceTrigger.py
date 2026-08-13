@@ -1,11 +1,12 @@
 """FMM Compliance Trigger handler.
 
-Subscribes to the asset indexer SNS topic and triggers compliance
-evaluation when assets are created or updated.
+Subscribes to the asset and file indexer SNS topics and triggers
+compliance evaluation when assets are created or updated.
 
-This Lambda is triggered by SNS messages from the asset creation flow.
-It checks if the asset has a registered compliance schema and, if so,
-initiates a compliance evaluation.
+This Lambda is triggered by SNS messages from the indexing system.
+It checks if the asset's database has auto-eval enabled, then verifies
+if the asset has a registered compliance schema and, if so, initiates
+a compliance evaluation.
 """
 
 import json
@@ -31,6 +32,7 @@ try:
     schema_table_name = os.environ["FMM_SCHEMA_STORAGE_TABLE_NAME"]
     asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
     cascade_table_name = os.environ["FMM_CASCADE_STORAGE_TABLE_NAME"]
+    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -42,27 +44,145 @@ database_table = dynamodb.Table(database_table_name)
 schema_table = dynamodb.Table(schema_table_name)
 asset_links_table = dynamodb.Table(asset_links_table_name)
 cascade_table = dynamodb.Table(cascade_table_name)
+asset_table = dynamodb.Table(asset_table_name)
 
 
 def lambda_handler(event, context):
-    """Process SNS messages for asset creation/update events."""
+    """Process SNS messages for asset/file change events."""
     for record in event.get("Records", []):
         try:
             sns_message = record.get("Sns", {})
             message_body = json.loads(sns_message.get("Message", "{}"))
-            process_asset_event(message_body)
+            _dispatch_event(message_body)
         except Exception as e:
             logger.exception(f"Error processing SNS record: {e}")
             continue
 
 
-def process_asset_event(message):
-    """Check if asset has compliance schema and trigger evaluation."""
-    database_id = message.get("databaseId")
-    asset_id = message.get("assetId")
+def _dispatch_event(message):
+    """Route the SNS message to the appropriate handler based on format."""
+    if message.get("eventName") in ("INSERT", "MODIFY", "REMOVE"):
+        _process_stream_record(message)
+    elif message.get("s3") or message.get("Records"):
+        _process_file_event(message)
+    elif message.get("databaseId") and message.get("assetId"):
+        _process_compliance_event(message.get("databaseId"), message.get("assetId"))
+    else:
+        logger.info("Unrecognized message format, skipping")
+
+
+def _process_stream_record(message):
+    """Handle a DynamoDB stream record from the asset indexer SNS topic."""
+    event_name = message.get("eventName")
+    if event_name == "REMOVE":
+        return
+
+    dynamodb_data = message.get("dynamodb", {})
+    new_image = dynamodb_data.get("NewImage", {})
+    keys = dynamodb_data.get("Keys", {})
+
+    database_id = (
+        new_image.get("databaseId", {}).get("S")
+        or keys.get("databaseId", {}).get("S")
+    )
+    asset_id = (
+        new_image.get("assetId", {}).get("S")
+        or keys.get("assetId", {}).get("S")
+    )
 
     if not database_id or not asset_id:
-        logger.info("SNS message missing databaseId or assetId, skipping")
+        logger.info("Stream record missing databaseId or assetId, skipping")
+        return
+
+    if database_id.endswith("#deleted"):
+        return
+
+    _process_compliance_event(database_id, asset_id)
+
+
+def _process_file_event(message):
+    """Handle a file indexer SNS message (S3 event format)."""
+    s3_info = message.get("s3")
+    if not s3_info:
+        records = message.get("Records", [])
+        if records:
+            s3_info = records[0].get("s3")
+    if not s3_info:
+        logger.info("File event has no s3 data, skipping")
+        return
+
+    object_key = s3_info.get("object", {}).get("key", "")
+    prefix = message.get("ASSET_BUCKET_PREFIX", "")
+
+    asset_id = _extract_asset_id_from_key(object_key, prefix)
+    if not asset_id:
+        logger.info(f"Could not extract assetId from key: {object_key}")
+        return
+
+    database_id = _resolve_database_for_asset(asset_id)
+    if not database_id:
+        logger.info(f"Could not resolve databaseId for asset: {asset_id}")
+        return
+
+    _process_compliance_event(database_id, asset_id)
+
+
+def _extract_asset_id_from_key(object_key, prefix):
+    """Extract assetId from S3 key by stripping the prefix."""
+    if prefix and prefix != "/" and prefix != "":
+        if not prefix.endswith("/"):
+            prefix = prefix + "/"
+        if object_key.startswith(prefix):
+            object_key = object_key[len(prefix):]
+
+    parts = object_key.split("/")
+    if parts and parts[0]:
+        return parts[0]
+    return None
+
+
+def _resolve_database_for_asset(asset_id):
+    """Look up the databaseId for an asset via the assetIdGSI."""
+    try:
+        response = asset_table.query(
+            IndexName="assetIdGSI",
+            KeyConditionExpression=Key("assetId").eq(asset_id),
+            Limit=1,
+        )
+        items = response.get("Items", [])
+        if not items:
+            return None
+        database_id = items[0].get("databaseId", "")
+        if database_id.endswith("#deleted"):
+            database_id = database_id[: -len("#deleted")]
+        return database_id or None
+    except Exception as e:
+        logger.exception(f"Error resolving database for asset {asset_id}: {e}")
+        return None
+
+
+def _check_auto_eval_enabled(database_id):
+    """Check if the database has complianceAutoEval enabled."""
+    try:
+        response = database_table.get_item(Key={"databaseId": database_id})
+        db_item = response.get("Item")
+        if not db_item:
+            return False
+        return db_item.get("complianceAutoEval") is True
+    except Exception as e:
+        logger.exception(
+            f"Error checking auto-eval for database {database_id}: {e}"
+        )
+        return False
+
+
+def _process_compliance_event(database_id, asset_id):
+    """Check if asset has compliance schema and trigger evaluation."""
+    if not _check_auto_eval_enabled(database_id):
+        logger.info(
+            f"Database {database_id} does not have complianceAutoEval enabled, "
+            "skipping"
+        )
         return
 
     compliance_record = compliance_table.get_item(

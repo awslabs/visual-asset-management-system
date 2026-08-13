@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from customLogging.logger import safeLogger
@@ -57,28 +58,27 @@ def lambda_handler(event, context):
         "output": "{...}"
     }
 
-    The execution input includes standard VAMS fields (bucketAsset, assetId,
-    databaseId) plus FMM context (evaluationId, fmmContext). The compliance
-    output JSON is written by the pipeline to the metadata output path.
+    Correlates the execution to an FMM evaluation via the ExecutionArnIndex GSI
+    on the evaluation table (populated when the evaluation engine invokes
+    workflow executions via Lambda cross-call).
     """
     try:
         detail = event.get("detail", {})
         execution_status = detail.get("status", "UNKNOWN")
-        execution_input = json.loads(detail.get("input", "{}"))
-        execution_output = json.loads(detail.get("output", "{}"))
+        execution_input = json.loads(detail.get("input") or "{}")
+        execution_output = json.loads(detail.get("output") or "{}")
+        execution_arn = detail.get("executionArn", "")
+        start_date = detail.get("startDate")
+        stop_date = detail.get("stopDate")
 
-        evaluation_id = execution_input.get("evaluationId")
-        if not evaluation_id:
-            logger.info("No evaluationId in execution input, skipping")
+        evaluation = _find_evaluation_by_execution(execution_arn)
+        if not evaluation:
+            logger.info(
+                f"No FMM evaluation found for execution {execution_arn}, skipping"
+            )
             return {"statusCode": 200, "body": "Not a compliance execution"}
 
-        evaluation = evaluation_table.get_item(
-            Key={"evaluationId": evaluation_id}
-        ).get("Item")
-
-        if not evaluation:
-            logger.warning(f"Evaluation {evaluation_id} not found")
-            return {"statusCode": 404, "body": "Evaluation not found"}
+        evaluation_id = evaluation["evaluationId"]
 
         if evaluation.get("status") != "pending_pipeline":
             logger.info(
@@ -101,6 +101,7 @@ def lambda_handler(event, context):
         pipeline_results = _process_pipeline_results(
             execution_status, execution_input, execution_output,
             pending_rules, database_id, asset_id,
+            start_date, stop_date,
         )
 
         all_results = [
@@ -207,6 +208,75 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
 
 
+def _find_evaluation_by_execution(
+    execution_arn: str,
+) -> Optional[Dict[str, Any]]:
+    """Look up an FMM evaluation record by the workflow execution ARN.
+
+    The SFN execution name (last segment of the ARN) equals the VAMS
+    executionId stored on the evaluation record. Primary lookup: query
+    the ExecutionArnIndex GSI (covers legacy records that stored the full
+    ARN). Fallback: scan pending evaluations matching the executionId
+    extracted from the ARN.
+    """
+    if not execution_arn:
+        return None
+
+    # Extract execution name (= VAMS executionId) from the ARN
+    execution_name = execution_arn.rsplit(":", 1)[-1] if ":" in execution_arn else ""
+
+    # Primary: GSI lookup by full ARN (legacy records)
+    try:
+        response = evaluation_table.query(
+            IndexName="ExecutionArnIndex",
+            KeyConditionExpression=Key("executionArn").eq(execution_arn),
+            Limit=1,
+        )
+        items = response.get("Items", [])
+        if items:
+            return items[0]
+    except Exception as e:
+        logger.exception(
+            f"Failed querying ExecutionArnIndex for {execution_arn}: {e}"
+        )
+
+    # Fallback: scan pending evaluations matching executionId
+    if not execution_name:
+        return None
+    try:
+        response = evaluation_table.scan(
+            FilterExpression=(
+                Attr("status").eq("pending_pipeline")
+                & Attr("executionId").eq(execution_name)
+            ),
+            Limit=200,
+        )
+        items = response.get("Items", [])
+        if items:
+            return items[0]
+    except Exception as e:
+        logger.exception(
+            f"Failed scanning for pending evaluations: {e}"
+        )
+
+    # Final fallback: check executionMappings list
+    try:
+        response = evaluation_table.scan(
+            FilterExpression=Attr("status").eq("pending_pipeline"),
+            Limit=200,
+        )
+        for item in response.get("Items", []):
+            mappings = item.get("executionMappings", [])
+            for m in mappings:
+                if m.get("executionId") == execution_name:
+                    return item
+    except Exception as e:
+        logger.exception(
+            f"Failed scanning executionMappings: {e}"
+        )
+    return None
+
+
 def _process_pipeline_results(
     execution_status: str,
     execution_input: Dict[str, Any],
@@ -214,6 +284,8 @@ def _process_pipeline_results(
     pending_rules: List[Dict[str, Any]],
     database_id: str,
     asset_id: str,
+    start_date: Optional[Any] = None,
+    stop_date: Optional[Any] = None,
 ) -> List[RuleResult]:
     """Process pipeline execution results against pending rules."""
     results = []
@@ -236,17 +308,9 @@ def _process_pipeline_results(
     )
 
     if compliance_output is None:
-        for pending in pending_rules:
-            rule_name = pending["ruleName"]
-            rule_data = pending["rule"]
-            results.append(RuleResult(
-                ruleName=rule_name,
-                ruleType="pipeline",
-                enforcement=rule_data.get("enforcement", "quarantine"),
-                passed=False,
-                message="No compliance output found from pipeline",
-            ))
-        return results
+        compliance_output = _compute_default_metrics(
+            execution_status, start_date, stop_date
+        )
 
     if compliance_output.get("status") == "error":
         errors = compliance_output.get("errors", [])
@@ -310,6 +374,39 @@ def _process_pipeline_results(
         ))
 
     return results
+
+
+def _compute_default_metrics(
+    execution_status: str,
+    start_date: Optional[Any],
+    stop_date: Optional[Any],
+) -> Dict[str, Any]:
+    """Compute generic compliance measurements from execution results.
+
+    Provides default metrics for pipelines that do not produce their own
+    compliance-output.json. Available measurements:
+      - execution_success: 1.0 if pipeline succeeded, 0.0 otherwise
+      - processing_duration_seconds: wall-clock execution time
+    """
+    measurements: Dict[str, Any] = {}
+
+    measurements["execution_success"] = (
+        1.0 if execution_status == "SUCCEEDED" else 0.0
+    )
+
+    if start_date is not None and stop_date is not None:
+        try:
+            duration = (float(stop_date) - float(start_date)) / 1000.0
+            measurements["processing_duration_seconds"] = round(duration, 2)
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "complianceOutput": True,
+        "status": "success",
+        "measurements": measurements,
+        "errors": [],
+    }
 
 
 def _read_compliance_output(

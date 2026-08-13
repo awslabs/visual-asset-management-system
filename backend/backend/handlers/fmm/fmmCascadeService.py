@@ -53,14 +53,14 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
 
     try:
+        claims_and_roles = request_to_claims(event)
+        if "statusCode" in claims_and_roles:
+            return claims_and_roles
+
         http_method = event["requestContext"]["http"]["method"]
         path = event["requestContext"]["http"]["path"]
         path_params = event.get("pathParameters", {}) or {}
         cascade_id = path_params.get("cascadeId")
-
-        claims_and_roles = request_to_claims(event)
-        if "statusCode" in claims_and_roles:
-            return claims_and_roles
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:

@@ -64,15 +64,15 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
 
     try:
+        claims_and_roles = request_to_claims(event)
+        if "statusCode" in claims_and_roles:
+            return claims_and_roles
+
         http_method = event["requestContext"]["http"]["method"]
         path = event["requestContext"]["http"]["path"]
         path_params = event.get("pathParameters", {}) or {}
         database_id = path_params.get("databaseId")
         asset_id = path_params.get("assetId")
-
-        claims_and_roles = request_to_claims(event)
-        if "statusCode" in claims_and_roles:
-            return claims_and_roles
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
@@ -128,9 +128,18 @@ def bind_schema_to_database(database_id, body):
         if not casbin_enforcer.enforce(obj, "PUT"):
             return authorization_error()
 
-    if not schema_exists(schema_name):
+    if not schema_visible_for_database(schema_name, database_id):
+        if not schema_exists(schema_name):
+            return validation_error(
+                body={"message": f"Schema '{schema_name}' not found"}
+            )
         return validation_error(
-            body={"message": f"Schema '{schema_name}' not found"}
+            body={
+                "message": (
+                    "Schema is not available for this database. "
+                    "Only GLOBAL or database-scoped schemas can be assigned."
+                )
+            }
         )
 
     db_response = database_table.get_item(Key={"databaseId": database_id})
@@ -143,10 +152,20 @@ def bind_schema_to_database(database_id, body):
     actor = claims_and_roles.get("sub", "system")
     old_schema = db_response["Item"].get("complianceSchemaName")
 
+    auto_eval = body.get("complianceAutoEval", True)
+
     database_table.update_item(
         Key={"databaseId": database_id},
-        UpdateExpression="SET complianceSchemaName = :schema, complianceSchemaUpdatedAt = :now",
-        ExpressionAttributeValues={":schema": schema_name, ":now": now},
+        UpdateExpression=(
+            "SET complianceSchemaName = :schema,"
+            " complianceSchemaUpdatedAt = :now,"
+            " complianceAutoEval = :autoEval"
+        ),
+        ExpressionAttributeValues={
+            ":schema": schema_name,
+            ":now": now,
+            ":autoEval": auto_eval,
+        },
     )
 
     affected = mark_database_assets_pending(database_id, schema_name, now)
@@ -203,7 +222,10 @@ def unbind_schema_from_database(database_id):
 
     database_table.update_item(
         Key={"databaseId": database_id},
-        UpdateExpression="REMOVE complianceSchemaName, complianceSchemaUpdatedAt",
+        UpdateExpression=(
+            "REMOVE complianceSchemaName, complianceSchemaUpdatedAt,"
+            " complianceAutoEval"
+        ),
     )
 
     removed = _remove_database_compliance_records(database_id)
@@ -245,9 +267,18 @@ def bind_schema_to_asset(database_id, asset_id, body):
         if not casbin_enforcer.enforce(obj, "PUT"):
             return authorization_error()
 
-    if not schema_exists(schema_name):
+    if not schema_visible_for_database(schema_name, database_id):
+        if not schema_exists(schema_name):
+            return validation_error(
+                body={"message": f"Schema '{schema_name}' not found"}
+            )
         return validation_error(
-            body={"message": f"Schema '{schema_name}' not found"}
+            body={
+                "message": (
+                    "Schema is not available for this database. "
+                    "Only GLOBAL or database-scoped schemas can be assigned."
+                )
+            }
         )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -392,6 +423,7 @@ def get_bindings(database_id):
         )
 
     db_schema = db_item.get("complianceSchemaName")
+    auto_eval = db_item.get("complianceAutoEval", False)
 
     asset_overrides = []
     response = compliance_table.query(
@@ -408,6 +440,7 @@ def get_bindings(database_id):
     return success(body={
         "databaseId": database_id,
         "databaseSchema": db_schema,
+        "complianceAutoEval": auto_eval,
         "assetOverrides": asset_overrides,
         "assetOverrideCount": len(asset_overrides),
     })
@@ -486,6 +519,9 @@ def _remove_database_compliance_records(database_id):
     return removed
 
 
+GLOBAL_DATABASE_ID = "GLOBAL"
+
+
 def schema_exists(schema_name):
     """Check if a schema exists in the schema registry."""
     response = schema_table.query(
@@ -493,6 +529,23 @@ def schema_exists(schema_name):
         Limit=1,
     )
     return len(response.get("Items", [])) > 0
+
+
+def schema_visible_for_database(schema_name, database_id):
+    """Check if a schema is visible to a database.
+
+    A schema is visible if it is GLOBAL or scoped to the specific database.
+    """
+    response = schema_table.query(
+        KeyConditionExpression=Key("schemaName").eq(schema_name),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    items = response.get("Items", [])
+    if not items:
+        return False
+    schema_db_id = items[0].get("databaseId", GLOBAL_DATABASE_ID)
+    return schema_db_id in (GLOBAL_DATABASE_ID, database_id)
 
 
 def write_audit(database_id, asset_id, event_type, actor, schema_name=None,

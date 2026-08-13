@@ -33,7 +33,8 @@ from models.fmm import (
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 dynamodb_client = boto3.client("dynamodb", config=retry_config)
-sfn_client = boto3.client("stepfunctions", config=retry_config)
+lambda_client = boto3.client("lambda", config=retry_config)
+s3_client = boto3.client("s3", config=retry_config)
 logger = safeLogger(service_name="FMMEvaluationEngine")
 
 try:
@@ -48,6 +49,7 @@ try:
     asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     s3_auxiliary_bucket = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
+    execute_workflow_function_name = os.environ["EXECUTE_WORKFLOW_FUNCTION_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -576,13 +578,13 @@ def _invoke_pipeline_rules(
     database_id: str,
     asset_id: str,
 ) -> None:
-    """Invoke Step Functions workflows for pipeline rules.
+    """Invoke workflow executions for pipeline rules via the V2 execute API.
 
-    Builds a standard VAMS workflow execution input (bucketAsset,
-    inputAssetFileKey, etc.) so the existing workflow ASL can resolve
-    its States.Format path expressions. FMM-specific context is passed
-    in the 'fmmContext' field which pipelines can read for compliance
-    output generation.
+    Uses a Lambda cross-call to the executeWorkflow handler which handles
+    all pre-flight setup (manifest writing, record creation, proper SFN input
+    construction). The evaluationId is stored on the FMM evaluation record
+    along with the returned executionId so the callback can correlate
+    completions.
     """
     asset_info = _get_asset_info(database_id, asset_id)
     if not asset_info:
@@ -593,15 +595,8 @@ def _invoke_pipeline_rules(
         return
 
     for rule_name, rule in pipeline_rules:
-        workflow_arn = _get_workflow_arn(
-            rule.pipelineRef.databaseId, rule.pipelineRef.workflowId
-        )
-        if not workflow_arn:
-            logger.error(
-                f"Workflow not found for pipeline rule '{rule_name}': "
-                f"{rule.pipelineRef.databaseId}/{rule.pipelineRef.workflowId}"
-            )
-            continue
+        workflow_db_id = rule.pipelineRef.databaseId
+        workflow_id = rule.pipelineRef.workflowId
 
         fmm_context = {
             "evaluationId": evaluation_id,
@@ -610,42 +605,119 @@ def _invoke_pipeline_rules(
             "inputParameters": rule.inputParameters or {},
         }
 
-        input_metadata = {
-            "fmmContext": fmm_context,
-        }
+        asset_file_key = asset_info["assetFileKey"]
+        asset_prefix = asset_info["assetPrefix"]
+        relative_key = asset_file_key
+        if relative_key.startswith(asset_prefix):
+            relative_key = relative_key[len(asset_prefix):]
+        if not relative_key.startswith("/"):
+            relative_key = "/" + relative_key
 
-        execution_input = {
-            "bucketAsset": asset_info["bucketName"],
-            "bucketAssetAuxiliary": s3_auxiliary_bucket,
-            "inputAssetLocationKey": asset_info["assetLocationKey"],
-            "inputAssetFileKey": asset_info["assetFileKey"],
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "workflowDatabaseId": rule.pipelineRef.databaseId,
-            "workflowId": rule.pipelineRef.workflowId,
-            "inputMetadata": json.dumps(input_metadata),
-            "executingUserName": "fmm-compliance-engine",
-            "executingRequestContext": json.dumps({}),
-            "evaluationId": evaluation_id,
+        execute_body: Dict[str, Any] = {
+            "inputFiles": [{
+                "databaseId": database_id,
+                "assetId": asset_id,
+                "relativeFileKey": relative_key,
+            }],
+        }
+        if rule.pipelineRef.templateId:
+            execute_body["pipelineExecutionParameters"] = {
+                rule.pipelineRef.workflowId: {
+                    "templateId": rule.pipelineRef.templateId,
+                },
+            }
+
+        cross_call_event = {
+            "lambdaCrossCall": {
+                "tokens": ["SYSTEM_USER"],
+                "sub": "SYSTEM_USER",
+                "roles": ["admin"],
+            },
+            "requestContext": {
+                "http": {
+                    "method": "POST",
+                    "path": f"/workflows/{workflow_db_id}/{workflow_id}/execute",
+                }
+            },
+            "pathParameters": {
+                "workflowDatabaseId": workflow_db_id,
+                "workflowId": workflow_id,
+            },
+            "body": json.dumps(execute_body),
         }
 
         try:
-            response = sfn_client.start_execution(
-                stateMachineArn=workflow_arn,
-                input=json.dumps(execution_input),
+            response = lambda_client.invoke(
+                FunctionName=execute_workflow_function_name,
+                InvocationType="RequestResponse",
+                Payload=json.dumps(cross_call_event),
             )
-            execution_arn = response["executionArn"]
-            logger.info(
-                f"Started SFN execution for rule '{rule_name}': {execution_arn}"
-            )
+            payload = json.loads(response["Payload"].read())
+            status_code = payload.get("statusCode", 500)
+
+            if status_code == 200:
+                body = json.loads(payload.get("body", "{}"))
+                message = body.get("message", {})
+                if isinstance(message, str):
+                    message = {}
+                execution_id = message.get("executionId", "")
+                logger.info(
+                    f"Started workflow execution for rule '{rule_name}': "
+                    f"{execution_id}"
+                )
+                _record_execution_mapping(
+                    evaluation_id, rule_name, execution_id
+                )
+            else:
+                logger.error(
+                    f"Execute workflow failed for rule '{rule_name}': "
+                    f"status={status_code}, body={payload.get('body', '')}"
+                )
         except Exception as e:
             logger.exception(
-                f"Failed to start SFN execution for rule '{rule_name}': {e}"
+                f"Failed to invoke workflow for rule '{rule_name}': {e}"
             )
+
+
+def _record_execution_mapping(
+    evaluation_id: str,
+    rule_name: str,
+    execution_id: str,
+) -> None:
+    """Store the mapping between FMM evaluation and workflow execution.
+
+    Stores the executionId (which is the SFN execution name) so the
+    callback can correlate completions by extracting the execution name
+    from the EventBridge executionArn.
+    """
+    try:
+        mapping_entry = {
+            "ruleName": rule_name,
+            "executionId": execution_id,
+        }
+        evaluation_table.update_item(
+            Key={"evaluationId": evaluation_id},
+            UpdateExpression=(
+                "SET executionId = :eid, "
+                "pipelineRuleName = :rn, "
+                "executionMappings = list_append("
+                "if_not_exists(executionMappings, :empty), :mapping)"
+            ),
+            ExpressionAttributeValues={
+                ":eid": execution_id,
+                ":rn": rule_name,
+                ":empty": [],
+                ":mapping": [mapping_entry],
+            },
+        )
+    except Exception as e:
+        logger.exception(
+            f"Failed to record execution mapping for {evaluation_id}: {e}"
+        )
 
 
 def _get_asset_info(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
-    """Look up asset bucket and file key for workflow execution."""
+    """Look up asset bucket and first file key for workflow execution."""
     response = asset_table.query(
         KeyConditionExpression=(
             Key("databaseId").eq(database_id)
@@ -659,10 +731,10 @@ def _get_asset_info(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]
 
     asset = items[0]
     asset_location = asset.get("assetLocation", {})
-    asset_file_key = asset_location.get("Key", "")
+    asset_prefix = asset_location.get("Key", "")
     bucket_id = asset.get("bucketId")
 
-    if not bucket_id or not asset_file_key:
+    if not bucket_id or not asset_prefix:
         return None
 
     bucket_response = s3_asset_buckets_table.query(
@@ -677,26 +749,26 @@ def _get_asset_info(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]
     if not bucket_name:
         return None
 
+    prefix = asset_prefix if asset_prefix.endswith("/") else asset_prefix + "/"
+    s3_resp = s3_client.list_objects_v2(
+        Bucket=bucket_name, Prefix=prefix, MaxKeys=20,
+    )
+    first_file_key = None
+    for obj in s3_resp.get("Contents", []):
+        key = obj.get("Key", "")
+        if key and not key.endswith("/"):
+            first_file_key = key
+            break
+
+    if not first_file_key:
+        return None
+
     return {
         "bucketName": bucket_name,
-        "assetLocationKey": asset_file_key,
-        "assetFileKey": asset_file_key,
+        "assetPrefix": prefix,
+        "assetFileKey": first_file_key,
     }
 
-
-def _get_workflow_arn(workflow_database_id: str, workflow_id: str) -> Optional[str]:
-    """Look up the Step Functions state machine ARN from the workflow table."""
-    response = workflow_table.query(
-        KeyConditionExpression=(
-            Key("databaseId").eq(workflow_database_id)
-            & Key("workflowId").eq(workflow_id)
-        ),
-        Limit=1,
-    )
-    items = response.get("Items", [])
-    if not items:
-        return None
-    return items[0].get("workflow_arn")
 
 
 def _get_current_compliance_state(

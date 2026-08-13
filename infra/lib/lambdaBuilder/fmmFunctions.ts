@@ -18,7 +18,11 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     setupSecurityAndLoggingEnvironmentAndPermissions,
+    suppressCdkNagLambda,
+    suppressCdkNagErrorsByGrantReadWrite,
+    grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
+import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 
 export function buildFMMSchemaService(
     scope: Construct,
@@ -58,6 +62,8 @@ export function buildFMMSchemaService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -68,7 +74,8 @@ export function buildFMMEvaluateService(
     storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    executeWorkflowFunction: lambda.Function
 ): lambda.Function {
     const name = "fmmEvaluateService";
     const fun = new lambda.Function(scope, name, {
@@ -114,6 +121,7 @@ export function buildFMMEvaluateService(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             S3_ASSETAUXILIARY_STORAGE_BUCKET:
                 storageResources.s3.assetAuxiliaryBucket.bucketName,
+            EXECUTE_WORKFLOW_FUNCTION_NAME: executeWorkflowFunction.functionName,
         },
     });
     storageResources.dynamo.fmmSchemaStorageTable.grantReadData(fun);
@@ -129,12 +137,23 @@ export function buildFMMEvaluateService(
     storageResources.dynamo.fmmCascadeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["states:StartExecution"],
-            resources: ["*"],
-        })
-    );
+    executeWorkflowFunction.grantInvoke(fun);
+    for (const record of s3AssetBuckets.getS3AssetBucketRecords()) {
+        const prefix = record.prefix || "/";
+        const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+        const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["s3:ListBucket", "s3:GetObject"],
+                resources: [
+                    record.bucket.bucketArn,
+                    `${record.bucket.bucketArn}/${objectPrefix}*`,
+                ],
+            })
+        );
+    }
+    grantExternalAssetBucketKmsKeys(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["sns:Publish"],
@@ -144,6 +163,8 @@ export function buildFMMEvaluateService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -190,6 +211,8 @@ export function buildFMMQuarantineService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -200,7 +223,8 @@ export function buildFMMCascadeService(
     storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    executeWorkflowFunction: lambda.Function
 ): lambda.Function {
     const name = "fmmCascadeService";
     const fun = new lambda.Function(scope, name, {
@@ -239,6 +263,11 @@ export function buildFMMCascadeService(
                 storageResources.dynamo.workflowStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSETAUXILIARY_STORAGE_BUCKET:
+                storageResources.s3.assetAuxiliaryBucket.bucketName,
+            EXECUTE_WORKFLOW_FUNCTION_NAME: executeWorkflowFunction.functionName,
         },
     });
     storageResources.dynamo.fmmCascadeStorageTable.grantReadWriteData(fun);
@@ -251,12 +280,8 @@ export function buildFMMCascadeService(
     storageResources.dynamo.metadataSchemaStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["states:StartExecution"],
-            resources: ["*"],
-        })
-    );
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    executeWorkflowFunction.grantInvoke(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["sns:Publish"],
@@ -266,6 +291,8 @@ export function buildFMMCascadeService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -303,6 +330,8 @@ export function buildFMMAuditService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -313,7 +342,8 @@ export function buildFMMComplianceTrigger(
     storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    executeWorkflowFunction: lambda.Function
 ): lambda.Function {
     const name = "fmmComplianceTrigger";
     const fun = new lambda.Function(scope, name, {
@@ -354,6 +384,11 @@ export function buildFMMComplianceTrigger(
                 storageResources.dynamo.workflowStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSETAUXILIARY_STORAGE_BUCKET:
+                storageResources.s3.assetAuxiliaryBucket.bucketName,
+            EXECUTE_WORKFLOW_FUNCTION_NAME: executeWorkflowFunction.functionName,
         },
     });
     storageResources.dynamo.fmmAssetComplianceStorageTable.grantReadWriteData(fun);
@@ -367,12 +402,8 @@ export function buildFMMComplianceTrigger(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["states:StartExecution"],
-            resources: ["*"],
-        })
-    );
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    executeWorkflowFunction.grantInvoke(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["sns:Publish"],
@@ -382,6 +413,8 @@ export function buildFMMComplianceTrigger(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -431,6 +464,8 @@ export function buildFMMSchemaBindingService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -477,6 +512,8 @@ export function buildFMMPipelineCallback(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }

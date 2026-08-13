@@ -2105,6 +2105,19 @@ export function storageResourcesBuilder(
         },
     });
 
+    fmmSchemaStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "schemaName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const fmmAssetComplianceStorageTable = new dynamodb.Table(
         scope,
         "FMMAssetComplianceStorageTable",
@@ -2154,6 +2167,15 @@ export function storageResourcesBuilder(
         },
         sortKey: {
             name: "evaluatedAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    fmmEvaluationStorageTable.addGlobalSecondaryIndex({
+        indexName: "ExecutionArnIndex",
+        partitionKey: {
+            name: "executionArn",
             type: dynamodb.AttributeType.STRING,
         },
         projectionType: dynamodb.ProjectionType.ALL,
@@ -2282,6 +2304,13 @@ export function storageResourcesBuilder(
             userRolesStorageTable: userRolesStorageTable,
             userStorageTable: userStorageTable,
             apiKeyStorageTable: apiKeyStorageTable,
+            // Pipeline + workflow V2 data model tables
+            pipelineStorageTableV2: pipelineStorageTableV2,
+            pipelineTemplatesStorageTable: pipelineTemplatesStorageTable,
+            pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
+            workflowStorageTableV2: workflowStorageTableV2,
+            workflowTriggersStorageTable: workflowTriggersStorageTable,
+            // FMM tables
             fmmSchemaStorageTable: fmmSchemaStorageTable,
             fmmAssetComplianceStorageTable: fmmAssetComplianceStorageTable,
             fmmEvaluationStorageTable: fmmEvaluationStorageTable,

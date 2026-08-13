@@ -752,6 +752,7 @@ class PipelineResponseModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = {}
     enabled: bool = True
     archived: bool = False
+    isSystem: Optional[bool] = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""

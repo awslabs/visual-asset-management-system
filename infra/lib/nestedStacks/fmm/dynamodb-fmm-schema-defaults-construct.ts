@@ -78,6 +78,7 @@ export class DynamoDbFmmSchemaDefaultsConstruct extends Construct {
                 Item: {
                     schemaName: { S: "default-compliance-schema" },
                     internalVersion: { N: "1" },
+                    databaseId: { S: "GLOBAL" },
                     description: {
                         S: "Default compliance schema requiring name, owner, and classification fields. Deployed automatically with VAMS.",
                     },

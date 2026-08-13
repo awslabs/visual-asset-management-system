@@ -82,6 +82,7 @@ const TAG_TYPE_LABELS: Record<TagType, { label: string; hint: string }> = {
     enum: { label: "List", hint: "pick one of the values from a list" },
 };
 
+
 // Mirrors _TAG_KEY_PATTERN in common/workflows/templateTagSchema.py: only these characters are
 // captured by a {{tag}} placeholder, so a key outside the set can be declared but never rendered.
 export const TAG_KEY_PATTERN = /^[A-Za-z0-9_]+$/;

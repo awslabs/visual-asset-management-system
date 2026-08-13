@@ -76,6 +76,8 @@ export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
     // register their built-in pipeline/workflow into the V2 tables at deploy (via VamsSchemaRegistration).
     public importGlobalPipelineWorkflowV2FunctionName = "";
+    // V2 execute workflow Lambda, exposed for cross-stack invoke (e.g. FMM compliance engine).
+    public executeWorkflowV2Function!: lambda.Function;
 
     constructor(parent: Construct, name: string, props: ApiBuilder2NestedStackProps) {
         super(parent, name);
@@ -483,6 +485,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
+        this.executeWorkflowV2Function = executeWorkflowV2;
         attachFunctionToApi(this, executeWorkflowV2, {
             routePath: "/workflows/{workflowDatabaseId}/{workflowId}/execute",
             method: apigateway.HttpMethod.POST,

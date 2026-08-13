@@ -16,6 +16,7 @@ import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import {
@@ -37,13 +38,14 @@ export interface FMMBuilderNestedStackProps extends cdk.StackProps {
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
     registry: RouteRegistry;
+    executeWorkflowFunction: lambda.Function;
 }
 
 export class FMMBuilderNestedStack extends NestedStack {
     constructor(parent: Construct, name: string, props: FMMBuilderNestedStackProps) {
         super(parent, name);
 
-        const { config, lambdaCommonBaseLayer, storageResources, vpc, subnets, registry } = props;
+        const { config, lambdaCommonBaseLayer, storageResources, vpc, subnets, registry, executeWorkflowFunction } = props;
 
         // Schema Management
         const fmmSchemaService = buildFMMSchemaService(
@@ -82,7 +84,8 @@ export class FMMBuilderNestedStack extends NestedStack {
             storageResources,
             config,
             vpc,
-            subnets
+            subnets,
+            executeWorkflowFunction
         );
         attachFunctionToApi(this, fmmEvaluateService, {
             routePath: "/compliance/evaluate/{databaseId}/{assetId}",
@@ -142,7 +145,8 @@ export class FMMBuilderNestedStack extends NestedStack {
             storageResources,
             config,
             vpc,
-            subnets
+            subnets,
+            executeWorkflowFunction
         );
         attachFunctionToApi(this, fmmCascadeService, {
             routePath: "/compliance/cascades",
@@ -232,10 +236,14 @@ export class FMMBuilderNestedStack extends NestedStack {
             storageResources,
             config,
             vpc,
-            subnets
+            subnets,
+            executeWorkflowFunction
         );
         fmmComplianceTrigger.addEventSource(
             new eventsources.SnsEventSource(storageResources.sns.assetIndexerSnsTopic)
+        );
+        fmmComplianceTrigger.addEventSource(
+            new eventsources.SnsEventSource(storageResources.sns.fileIndexerSnsTopic)
         );
 
         // Pipeline Callback - EventBridge rule for SFN execution completion
@@ -277,7 +285,7 @@ export class FMMBuilderNestedStack extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Wildcard permissions required for DynamoDB GSI index access on FMM tables and states:StartExecution on dynamically-created Step Functions state machines. Scope is limited to deployment-specific FMM tables and compliance workflows.",
+                    reason: "Wildcard permissions required for DynamoDB GSI index access on FMM tables and SNS Publish for compliance notifications. Scope is limited to deployment-specific FMM tables.",
                 },
             ],
             true

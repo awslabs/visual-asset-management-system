@@ -203,6 +203,7 @@ Evaluation Engine                   Step Functions                    EventBridg
 | --- | --- |
 | `pipelineRef.databaseId` | Database containing the workflow (use `GLOBAL` for cross-database workflows) |
 | `pipelineRef.workflowId` | The VAMS workflow ID to execute |
+| `pipelineRef.templateId` | Optional. The workflow template to use. If omitted, the workflow's default template is selected (single-template workflows auto-promote their only template to default). |
 | `checks[].name` | Human-readable check name |
 | `checks[].outputField` | Key in the pipeline's output `measurements` object to evaluate |
 | `checks[].tolerance` | Comparison criteria (operator + value/min/max) |
@@ -233,7 +234,22 @@ Pipelines can read `inputParameters` to configure their processing (for example,
 
 #### Pipeline compliance output contract
 
-When the workflow completes successfully, the pipeline container must write a `compliance-output.json` file to the metadata output path in Amazon S3. The file structure:
+Pipeline rules support two modes of operation: **default metrics** (zero-modification) and **custom compliance output** (advanced).
+
+##### Default metrics (zero-modification pipelines)
+
+Any existing VAMS workflow can be used for pipeline rule compliance without modification. When a workflow completes and no `compliance-output.json` file is found, the pipeline callback automatically computes default metrics from the execution metadata:
+
+| Default metric | Type | Description |
+| --- | --- | --- |
+| `execution_success` | float | `1.0` if the workflow succeeded, `0.0` otherwise |
+| `processing_duration_seconds` | float | Wall-clock duration of the AWS Step Functions execution in seconds |
+
+These default metrics are available as `outputField` values in the rule's `checks` array. For example, a rule can enforce that a workflow succeeds and completes within a time budget without requiring any changes to the pipeline containers.
+
+##### Custom compliance output (advanced)
+
+For domain-specific measurements (geometric accuracy, coverage ratios, noise levels), the pipeline container writes a `compliance-output.json` file to the metadata output path in Amazon S3. The file structure:
 
 ```json
 {
@@ -266,8 +282,9 @@ If the Step Functions execution fails, times out, or is aborted:
 - The failure reason includes the execution status (FAILED, TIMED_OUT, ABORTED)
 - The evaluation proceeds to verdict determination using the failed results
 - If any failed pipeline rule has `quarantine` enforcement, the asset is quarantined
+- The `execution_success` default metric is set to `0.0`
 
-If the pipeline succeeds but no `compliance-output.json` is found, or the output has `status: "error"`, all checks for that rule are also marked as failed.
+If the pipeline succeeds but the custom `compliance-output.json` has `status: "error"`, all checks for that rule are marked as failed.
 
 #### Tolerance operators
 
