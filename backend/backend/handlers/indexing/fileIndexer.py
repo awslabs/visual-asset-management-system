@@ -30,7 +30,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
@@ -1948,7 +1948,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 results.append(result)
             except ValidationError as v:
                 logger.exception(f"Validation error: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Summarize results
         successful = sum(1 for r in results if r.success)
@@ -1963,7 +1963,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

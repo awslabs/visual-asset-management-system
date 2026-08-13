@@ -1,0 +1,5 @@
+{
+    "workflowName": "VNTANA ModelOps 3D Optimization",
+    "category": "Conversion",
+    "description": "Automated workflow for 3D model optimization and conversion using the ModelOps 3D Task Handler (VNTANA Intelligent 3D Optimization Engine)."
+}

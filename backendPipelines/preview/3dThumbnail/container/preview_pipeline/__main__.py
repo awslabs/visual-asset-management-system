@@ -35,7 +35,9 @@ def main():
             '"outputFiles": {"bucketName": "localTest", "objectDir": "/data/output"}, '
             '"outputMetadata": {"bucketName": "localTest", "objectDir": "/data/output"}, '
             '"temporaryFiles": {"bucketName": "localTest", "objectDir": "/tmp/work"}}], '
-            '"inputMetadata":"", "inputParameters":"'
+            # localTest passes the input configuration inline (no S3); the container's
+            # manifest_io parses a non-s3 value as inline JSON. Metadata location is empty.
+            '"inputMetadataS3Location":"", "inputConfigurationS3Location":"'
             + inputParametersEscaped
             + '", '
             '"externalSfnTaskToken":"", "localTest":"True"}'

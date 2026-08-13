@@ -1,0 +1,12 @@
+{
+    "workflowName": "NVIDIA Cosmos Text-to-World 14B v2",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos Text-to-World 14B v2 - Generate high-quality videos from text prompts (Predict2.5)",
+    "systemConfig": {
+        "inputFileArity": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": true
+        }
+    }
+}

@@ -25,7 +25,6 @@ import AssetDetailsPane from "./AssetDetailsPane";
 import TabbedContainer from "./TabbedContainer";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
-import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import { MetadataContainer } from "../metadataV2";
 import localforage from "localforage";
 import Synonyms from "../../synonyms";
@@ -72,7 +71,6 @@ export default function ViewAsset() {
     const [assetLinks, setAssetLinks] = useState<any>({});
     const [openUpdateAsset, setOpenUpdateAsset] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
-    const [workflowOpen, setWorkflowOpen] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
     const [showApiError, setShowApiError] = useState(false);
     const [apiErrorType, setApiErrorType] = useState<AlertProps.Type>("error");
@@ -271,21 +269,6 @@ export default function ViewAsset() {
         setShowDeleteModal(true);
     };
 
-    // Handle opening the workflow selector modal
-    const handleExecuteWorkflow = () => {
-        setWorkflowOpen(true);
-    };
-
-    // State to trigger workflow tab refresh - this will be managed by TabbedContainer
-    const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
-
-    // Function to refresh the workflow tab - this will be called by WorkflowSelectorWithModal
-    // and will trigger TabbedContainer's callback
-    const refreshWorkflowTab = useCallback(() => {
-        console.log("ViewAsset: refreshWorkflowTab called, incrementing trigger");
-        setWorkflowRefreshTrigger((prev) => prev + 1);
-    }, []);
-
     return (
         <AssetDetailContext.Provider value={{ state, dispatch }}>
             <StatusMessageProvider>
@@ -350,9 +333,6 @@ export default function ViewAsset() {
                                     assetName={asset?.assetName || ""}
                                     assetId={assetId || ""}
                                     databaseId={databaseId || ""}
-                                    onExecuteWorkflow={handleExecuteWorkflow}
-                                    onWorkflowExecuted={refreshWorkflowTab}
-                                    workflowExecutedTrigger={workflowRefreshTrigger}
                                     filePathToNavigate={filePathToNavigate}
                                     assetVersionId={selectedVersionId || undefined}
                                     onSelectedPathChange={handleSelectedPathChange}
@@ -389,14 +369,6 @@ export default function ViewAsset() {
                         }}
                     />
                 )}
-
-                <WorkflowSelectorWithModal
-                    assetId={assetId || ""}
-                    databaseId={databaseId || ""}
-                    open={workflowOpen}
-                    setOpen={setWorkflowOpen}
-                    onWorkflowExecuted={refreshWorkflowTab}
-                />
 
                 <AssetDeleteModal
                     visible={showDeleteModal}

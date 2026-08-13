@@ -88,9 +88,12 @@ Records per-version file change provenance (who created a version and how). Popu
 
 **Global Secondary Indexes:**
 
-| GSI Name                 | Partition Key        | Sort Key    | Projection |
-| ------------------------ | -------------------- | ----------- | ---------- |
-| `DatabaseIdAssetIdIndex` | `databaseId:assetId` | `versionId` | ALL        |
+| GSI Name                   | Partition Key               | Sort Key                      | Projection |
+| -------------------------- | --------------------------- | ----------------------------- | ---------- |
+| `DatabaseIdAssetIdIndex`   | `databaseId:assetId`        | `versionId`                   | ALL        |
+| `WorkflowExecutionIdIndex` | `changeWorkflowExecutionId` | `databaseId:assetId:filePath` | ALL        |
+
+The `WorkflowExecutionIdIndex` is sparse: only versions produced by a workflow execution carry `changeWorkflowExecutionId`, so direct uploads and other change sources are absent from the index. It resolves which asset file versions a given workflow execution produced.
 
 ### Asset History Storage Table
 
@@ -237,27 +240,27 @@ Stores metadata attached to asset relationships.
 
 **DynamoDB Streams:** NEW_IMAGE
 
-### Pipeline Storage Table
+### Pipeline Storage Table (legacy)
 
-Stores pipeline definitions scoped to a database.
+Stores pipeline definitions scoped to a database. Retained as the migration source for the V2 pipeline table.
 
 | Attribute    | Type   | Key           |
 | ------------ | ------ | ------------- |
 | `databaseId` | String | Partition Key |
 | `pipelineId` | String | Sort Key      |
 
-### Workflow Storage Table
+### Workflow Storage Table (legacy)
 
-Stores workflow definitions scoped to a database.
+Stores workflow definitions scoped to a database. Retained as the migration source for the V2 workflow table.
 
 | Attribute    | Type   | Key           |
 | ------------ | ------ | ------------- |
 | `databaseId` | String | Partition Key |
 | `workflowId` | String | Sort Key      |
 
-### Workflow Executions Storage Table
+### Workflow Executions Storage Table (legacy)
 
-Stores individual workflow execution records.
+Stores individual workflow execution records. Retained as the migration source for the V2 execution tables.
 
 | Attribute            | Type   | Key           |
 | -------------------- | ------ | ------------- |
@@ -276,6 +279,171 @@ Stores individual workflow execution records.
 | ---------------- | ------------------------------- | ------------- | ---------- |
 | `WorkflowGSI`    | `workflowDatabaseId:workflowId` | `executionId` | Keys Only  |
 | `ExecutionIdGSI` | `workflowId`                    | `executionId` | Keys Only  |
+
+### Pipeline Storage Table (V2)
+
+Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)` composite key keeps a pipeline unique even when its id is overridden to a known value.
+
+| Attribute    | Type   | Key           |
+| ------------ | ------ | ------------- |
+| `databaseId` | String | Partition Key |
+| `pipelineId` | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                 | Partition Key         | Sort Key       | Projection | Purpose                                          |
+| ------------------------ | --------------------- | -------------- | ---------- | ------------------------------------------------ |
+| `PipelinesByDatabaseGSI` | `databaseId`          | `dateModified` | ALL        | List a database's pipelines newest-first         |
+| `PipelinesByCategoryGSI` | `databaseId:category` | `pipelineId`   | ALL        | List a database's pipelines within a category    |
+| `PipelinesByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) pipeline list as a query |
+
+The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
+
+### Workflow Storage Table (V2)
+
+Stores workflow definitions scoped to a database.
+
+| Attribute    | Type   | Key           |
+| ------------ | ------ | ------------- |
+| `databaseId` | String | Partition Key |
+| `workflowId` | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                 | Partition Key         | Sort Key       | Projection | Purpose                                          |
+| ------------------------ | --------------------- | -------------- | ---------- | ------------------------------------------------ |
+| `WorkflowsByDatabaseGSI` | `databaseId`          | `dateModified` | ALL        | List a database's workflows newest-first         |
+| `WorkflowsByCategoryGSI` | `databaseId:category` | `workflowId`   | ALL        | List a database's workflows within a category    |
+| `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
+
+The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+### Workflow Triggers Storage Table
+
+Stores the triggers that auto-launch a workflow. A workflow may carry several triggers of one type, each
+with its own input-file filters and default templates.
+
+| Attribute                       | Type   | Key           | Notes                                                                                                                                      |
+| ------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `workflowDatabaseId:workflowId` | String | Partition Key | Composite key matching the workflow table                                                                                                  |
+| `triggerType`                   | String | Sort Key      | The trigger's key: the bare type (`fileUpload`) for a workflow's first trigger of that type, or `<type>#<triggerId>` for an additional one |
+| `triggerBaseType`               | String |               | The bare type, always unsuffixed. The by-type index partitions on this                                                                     |
+| `triggerId`                     | String |               | Distinguishes several triggers of one type; empty for the first trigger of a type                                                          |
+| `triggerConfig`                 | Map    |               | For `fileUpload`: `inputFileFilters` plus `defaultTemplateIds` keyed by `<pipelineDatabaseId>:<pipelineId>`                                |
+| `enabled`                       | Bool   |               | A disabled trigger never fires                                                                                                             |
+
+**Global Secondary Indexes:**
+
+| GSI Name                | Partition Key     | Sort Key                        | Projection | Purpose                                                        |
+| ----------------------- | ----------------- | ------------------------------- | ---------- | -------------------------------------------------------------- |
+| `TriggersByBaseTypeGSI` | `triggerBaseType` | `workflowDatabaseId:workflowId` | ALL        | Find every workflow with a trigger of a type, without scanning |
+
+The index partitions on `triggerBaseType` rather than on the sort key because the upload dispatcher looks
+a type up by exact match: a suffixed value would place each additional trigger in its own partition, and
+that trigger would sit in the table without ever firing.
+
+### Workflow Executions Storage Table (V2)
+
+Stores the main workflow execution record. Executions are workflow-keyed; asset and database linkage lives in the workflow/pipeline input tables.
+
+| Attribute                       | Type   | Key           |
+| ------------------------------- | ------ | ------------- |
+| `workflowExecutionId`           | String | Partition Key |
+| `workflowDatabaseId:workflowId` | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                          | Partition Key                   | Sort Key             | Projection | Purpose                                                 |
+| --------------------------------- | ------------------------------- | -------------------- | ---------- | ------------------------------------------------------- |
+| `WorkflowExecutionsByWorkflowGSI` | `workflowDatabaseId:workflowId` | `executionStartDate` | ALL        | List a workflow's executions newest-first               |
+| `WorkflowExecutionsByGroupGSI`    | `executionGroupId`              | `executionStartDate` | ALL        | Enumerate a group's executions (sparse; abort-by-group) |
+| `WorkflowExecutionsByDateGSI`     | `allListPartition`              | `executionStartDate` | ALL        | Global executions list as a newest-first query          |
+
+The `allListPartition` attribute holds the constant value `execution` on every row, so the global executions list resolves as a single newest-first query bounded by an `executionStartDate` key condition (default 90-day recency window) rather than an unordered scan that could drop recent executions off the first page. `WorkflowExecutionsByGroupGSI` is sparse — only grouped executions carry `executionGroupId`.
+
+An execution migrated from a release before the workflow overhaul may carry `startDateEstimated`. Those rows never started and recorded no start instant, so their `executionStartDate` is derived from the creation date of the workflow they referenced (a bound the execution cannot predate) to keep them in the date-ordered indexes. `startDateEstimated = true` marks the date as derived rather than recorded; a row without the attribute carries the start date its run reported.
+
+The per-pipeline and per-input execution detail records live in supporting tables (`PipelineExecutionsStorageTable`, `PipelineExecutionInput*`/`Output*StorageTable`, `PipelineExecutionLogsStorageTable`, `WorkflowExecutionInputsStorageTable`, `WorkflowExecutionConfigurationStorageTable`), all keyed by `pipelineExecutionId` or `workflowExecutionId`. See [AWS Resources Inventory](aws-resources.md#workflow-execution-tables-v2-data-model) for the full table and index list.
+
+#### What an execution stores
+
+An execution is a snapshot as much as a status record: templates, tag schemas and pipeline configuration
+can all change or be archived after a run finishes, so each run records what it was actually built from
+rather than pointing at definitions that may since have moved.
+
+**Main row** (`WorkflowExecutionsStorageTableV2`) — identity and status only: `executionStatus`,
+`executionStartDate` / `executionStopDate`, `triggerType`, `triggeredByUserId`, `executionGroupId`,
+`executionError`, the full `executionLog`, the Step Functions ARNs, and `lastSfnSyncCheckDate` (which
+bounds how often a status read polls Step Functions). Deliberately carries no output-target or
+configuration fields — those live on the configuration rows below, so a status list never pays to read
+them.
+
+**Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
+`configuration`) — the run's workflow-level inputs:
+
+| Attribute                                                                     | What it records                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `specifiedPipelinesSnapshot`                                                  | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                                                                                  |
+| `inputMetadata` / `inputMetadataTruncated`                                    | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                                                                                          |
+| `outputLocationType`, `outputAssetId`, `outputDatabaseId`                     | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                                                                                      |
+| `outputFileBaseExecutionPathExtension`                                        | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags                                                                  |
+| `inputMetadataDatabaseId` / `inputMetadataFileS3Key` | Provenance of the metadata source. `inputMetadataDatabaseId` is the single database the caller **named**, populated only for a run with no input files                                                                 |
+| `metadataSourceDatabases` / `metadataSourceAssets`                            | Every database the run actually captured metadata from, and the assets named purely as metadata sources — the read paths gate access on the databases listed here, and a re-run reconstructs the same source selection |
+| `outputDatabaseId:outputAssetId`                                              | Composite index key backing the by-output-asset GSI below. Written only when the run targets an asset                                                                                                                  |
+
+This row also carries the index that answers "which executions wrote to this asset?":
+
+| GSI Name                             | Partition Key                    | Sort Key             | Projection | Purpose                                                   |
+| ------------------------------------ | -------------------------------- | -------------------- | ---------- | --------------------------------------------------------- |
+| `WorkflowExecConfigByOutputAssetGSI` | `outputDatabaseId:outputAssetId` | `executionStartDate` | ALL        | List executions whose **output** target was a given asset |
+
+An asset's execution history is the union of two queries: the executions that consumed the asset as an
+input (via `WorkflowExecutionInputsStorageTable`) and the executions that wrote to it as an output (via
+this GSI). Without the second, a run that produced a file in an asset without reading anything from it —
+the normal case for a conversion writing into a different asset — would not appear in that asset's history.
+
+The GSI is **sparse**: the `outputDatabaseId:outputAssetId` attribute is written only when
+`outputLocationType` is `asset` and both ids are present, so results-only runs stay out of the index
+entirely rather than crowding it. Because a DynamoDB item missing the partition attribute is absent from
+the index altogether, every path that writes a configuration row — including data migration — has to set
+the attribute, or those executions silently vanish from the by-output-asset listing.
+
+**Per-pipeline configuration row** (`PipelineExecutionInputConfigurationStorageTable`, `recordType` =
+`configuration`) — one per pipeline step, recording the settings and configuration that step ran under:
+
+| Attribute                                                 | What it records                                                                                                                                                                                            |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputConfiguration` / `inputConfigurationTruncated`      | The final rendered configuration body actually sent to the pipeline. The complete body is the per-execution S3 file at `inputConfigurationFileS3Key`; the inline copy is truncated to fit the item         |
+| `configFormat`                                            | Format of that body (`json`, `yaml`, `openjd`, `xml`, `raw`), so a viewer highlights it correctly                                                                                                          |
+| `templateId`, `templateSchemaVersion`, `tagSchemaVersion` | The template and schema versions resolved at run time — the run stays readable after the template changes or is archived                                                                                   |
+| `templateTags`                                            | The resolved dynamic tag values passed (for example a prompt entered on the execute screen)                                                                                                                |
+| `customTemplateOverrideUsed` / `customTemplateOverride`   | Whether a caller supplied a one-off configuration body, and the RAW pre-render body when they did — a template-less override run has no `templateId` to re-resolve, so a re-run needs this to reproduce it |
+| `effectiveSystemConfig`                                   | **The systemConfig this step actually ran under**: the pipeline's own `systemConfig` merged with the chosen template's `overrides`. Only knowable at execute time, because the template is chosen per run  |
+| `templateOverrides`                                       | Just the keys that template overrode, so a reader can see _why_ the effective config differs from the pipeline's own (for example a template raising `inputFileArity` from `none` to `one`)                |
+
+`effectiveSystemConfig` is what makes a finished execution self-describing: without it the stored run
+names its template but not the `inputFileArity` / `assetScope` / `metadataInputs` / `inputFileFilters`
+that were enforced. Both fields are absent on runs recorded before they were captured, so readers treat
+a missing value as "not recorded" rather than as empty settings.
+
+**Input and output rows** — the two input tables record the same selected files at different scopes, and
+only one of them pins a version:
+
+-   `WorkflowExecutionInputsStorageTable` is the run-wide, asset-scoped source of truth. Each row carries
+    the locator (`databaseId`, `assetId`, `inputAssetFileKey`) plus `s3Bucket` and `assetRootS3Key` — the
+    bucket and bucket-relative asset-root prefix of _that file's own_ asset, stored per file because a
+    single run can read files from several assets in different buckets — and the concrete S3 `versionId`
+    the run read (empty for a folder or whole-asset selection, which has no single version). Capturing the
+    version is what makes the history show the exact bytes used rather than the time-relative "latest".
+-   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
+    carry only the `databaseId` / `assetId` / `inputAssetFileKey` locator and the owning
+    `workflowExecutionId`; there is no `versionId` attribute, because the version for a given file is
+    already pinned once per run on the workflow-inputs row.
+
+`PipelineExecutionOutputFilesStorageTable` records each produced file with its `fileType` (`file` or
+`preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
+and `Output*Results` records carry metadata written back to the asset and results text from a results-only
+run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
 
 ### Authorization Tables
 
@@ -358,17 +526,37 @@ When pipelines write output files adjacent to input files, the relative subdirec
 
 ### Auxiliary Bucket
 
-The auxiliary bucket stores non-versioned working files and special viewer data:
+The auxiliary bucket stores non-versioned working files and viewer data. It uses two layouts, one keyed
+by the input file that the data was derived from and one keyed by the execution that produced it:
 
 ```
-{assetId}/{viewer_type}/{generated_files}
+{databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}
+pipelines/{pipelineName}/{executionId}/{working_files}
 ```
+
+Where:
+
+-   `databaseId` scopes every derived object to the database that owns the asset, so a read is confined to
+    one database's key space
+-   `assetFileKey` is the **full asset-bucket key** of the input file (asset root location key plus the
+    relative file path), not just the `assetId` — a bucket configured with a custom `baseAssetsPrefix`
+    keeps that prefix in the auxiliary key
+-   `preview` is the reserved subfolder for viewer data; a pipeline that writes viewer data appends its own
+    subfolder (for example `PotreeViewer`) so several viewers can coexist for one file
+-   `pipelineName` / `executionId` scope temporary working files to a single run, so concurrent runs of the
+    same pipeline cannot collide
 
 Common uses:
 
 -   Potree octree data for point cloud visualization
 -   Temporary pipeline processing files
 -   Pipeline intermediate outputs
+
+:::note
+Because the preview layout is keyed per input file, every file of an asset gets its own viewer-data
+location, and the auxiliary objects for an asset are found by listing the `\{databaseId\}/\{assetRootKey\}/`
+prefix rather than a bare `\{assetId\}/` prefix.
+:::
 
 ### Web App Bucket
 

@@ -1,0 +1,9 @@
+{
+    "templateId": "rapid-pipeline-to-gltf",
+    "templateName": "Optimize to GLTF",
+    "description": "Optimize and convert a 3D model to GLTF using DGG RapidPipeline.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".gltf\"}",
+    "allowCustomEdit": false,
+    "inputInstructions": "Optimizes and decimates a 3D model with RapidPipeline (Amazon ECS) and outputs glTF (.gltf). Requires a licensed RapidPipeline deployment. Select the source model as the input file.\n\nThis pipeline reads no asset or file metadata — optimization settings come from this template."
+}

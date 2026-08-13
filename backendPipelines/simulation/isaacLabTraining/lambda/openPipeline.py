@@ -4,16 +4,22 @@
 """
 ConstructPipeline Lambda
 Builds the Batch job definition for IsaacLab training or evaluation.
-Downloads and parses config file from S3 if provided.
+The run configuration comes from the manifest-delivered input configuration; a JSON input file may
+supply standing defaults for the fields it leaves blank.
 """
 
 import json
+import re
+from datetime import datetime, timezone
 import boto3
 from urllib.parse import urlparse
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="OpenPipelineIsaacLabTraining")
 s3_client = boto3.client("s3")
+
+# Sort floor for a checkpoint whose S3 object carries no LastModified.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 DEFAULT_TASK = "Isaac-Cartpole-v0"
 DEFAULT_NUM_ENVS_TRAIN = 4096
@@ -25,19 +31,18 @@ DEFAULT_NUM_EPISODES = 50
 def lambda_handler(event, context):
     logger.info(f"Event: {event}")
 
-    # Load config from S3 file if provided
+    # Standing defaults a JSON input file may carry; the manifest configuration outranks them.
     file_config = load_config_from_s3(event.get("inputS3AssetFilePath"))
-    
-    # Merge configs: inputParameters (defaults) < file_config (user's specific config takes priority)
+
     training_config = merge_configs(
-        event.get("trainingConfig", {}),
-        file_config.get("trainingConfig", {})
+        file_config.get("trainingConfig", {}),
+        event.get("trainingConfig", {})
     )
     compute_config = merge_configs(
-        event.get("computeConfig", {}),
-        file_config.get("computeConfig", {})
+        file_config.get("computeConfig", {}),
+        event.get("computeConfig", {})
     )
-    
+
     mode = training_config.get("mode", "train")
     task = training_config.get("task", DEFAULT_TASK)
     rl_library = training_config.get("rlLibrary", "rsl_rl")
@@ -55,8 +60,8 @@ def lambda_handler(event, context):
         "jobName": event.get("jobName"),
         "definition": json.dumps(job_config),
         "numNodes": job_config.get("computeConfig", {}).get("numNodes", 1),
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "outputS3AssetFilesPath": job_config.get("outputS3AssetFilesPath", ""),
@@ -65,28 +70,56 @@ def lambda_handler(event, context):
 
 
 def load_config_from_s3(s3_uri: str) -> dict:
-    """Download and parse JSON config file from S3."""
+    """Standing defaults from a JSON input file, or {} when the file carries none.
+
+    An input file is an ASSET file the operator selected, not the run's configuration, so anything
+    it holds is a fallback only. A file that is not JSON, is not a JSON object, or does not parse
+    yields no defaults rather than an error.
+    """
     if not s3_uri:
         return {}
-    
+
     try:
         parsed = urlparse(s3_uri)
         bucket = parsed.netloc
         key = parsed.path.lstrip("/")
-        
-        # Only parse JSON files
+
         if not key.endswith(".json"):
             logger.info(f"Input file is not JSON, skipping config parsing: {key}")
             return {}
-        
+
         response = s3_client.get_object(Bucket=bucket, Key=key)
         content = response["Body"].read().decode("utf-8")
         config = json.loads(content)
-        logger.info(f"Loaded config from S3: {config}")
+        if not isinstance(config, dict):
+            logger.info(f"Input JSON file is not a config object, skipping: {key}")
+            return {}
+        logger.info(f"Loaded config defaults from S3: {config}")
         return config
     except Exception as e:
         logger.warning(f"Failed to load config from S3: {e}")
         return {}
+
+
+def _as_utc(last_modified) -> datetime:
+    """A comparable timezone-aware timestamp for an S3 object's LastModified. A missing value or a
+    naive datetime is normalized so run folders always compare against each other."""
+    if not isinstance(last_modified, datetime):
+        return _EPOCH
+    if last_modified.tzinfo is None:
+        return last_modified.replace(tzinfo=timezone.utc)
+    return last_modified
+
+
+def checkpoint_iteration(key: str) -> int:
+    """The training iteration encoded in a checkpoint file name (``model_1500.pt`` -> 1500).
+
+    Reads the last run of digits in the file name; a name carrying no digits yields -1 so it sorts
+    below every numbered checkpoint.
+    """
+    file_name = key.rsplit("/", 1)[-1]
+    digits = re.findall(r"\d+", file_name)
+    return int(digits[-1]) if digits else -1
 
 
 def discover_policy_file(bucket: str, asset_location_key: str) -> str:
@@ -96,6 +129,10 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
     root), not under the input file's parent directory. The asset root is the
     only reliable starting point — input files may live at arbitrary depths
     beneath it, and deriving the root from the input file path is unsafe.
+
+    Each training run writes its checkpoints under its own execution folder, so selection is
+    per-run: the run folder holding the most recently written checkpoint wins, and within it the
+    highest training iteration (numeric, not lexicographic).
 
     Args:
         bucket: The asset S3 bucket name (bucketAsset).
@@ -112,17 +149,24 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
 
         logger.info(f"Searching for .pt files under asset root s3://{bucket}/{prefix}")
 
-        pt_files = []
+        # Per run folder (the checkpoint's parent prefix): its checkpoints and its newest write time.
+        runs = {}
         paginator = s3_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
-                if obj["Key"].endswith(".pt"):
-                    pt_files.append(obj["Key"])
+                key = obj["Key"]
+                if not key.endswith(".pt"):
+                    continue
+                run_prefix = key.rsplit("/", 1)[0]
+                run = runs.setdefault(run_prefix, {"keys": [], "lastModified": _EPOCH})
+                run["keys"].append(key)
+                last_modified = _as_utc(obj.get("LastModified"))
+                if last_modified > run["lastModified"]:
+                    run["lastModified"] = last_modified
 
-        if pt_files:
-            # Sort descending to get latest model (e.g., model_1500.pt > model_1000.pt)
-            pt_files.sort(reverse=True)
-            policy_key = pt_files[0]
+        if runs:
+            newest_run_prefix = max(runs, key=lambda p: (runs[p]["lastModified"], p))
+            policy_key = max(runs[newest_run_prefix]["keys"], key=checkpoint_iteration)
             policy_uri = f"s3://{bucket}/{policy_key}"
             logger.info(f"Discovered policy file: {policy_uri}")
             return policy_uri
@@ -135,10 +179,16 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
 
 
 def merge_configs(base: dict, override: dict) -> dict:
-    """Merge two config dicts, with override taking priority."""
-    result = base.copy()
+    """Merge two config sections, with override taking priority per key.
+
+    A key the override leaves absent, null, or blank falls through to the base, which is what lets an
+    input file hold a standing default for a field the run's configuration does not set.
+    """
+    result = base.copy() if isinstance(base, dict) else {}
+    if not isinstance(override, dict):
+        return result
     for key, value in override.items():
-        if value is not None:
+        if value is not None and str(value).strip() != "":
             result[key] = value
     return result
 
@@ -226,8 +276,8 @@ def build_training_config(event, training_config, compute_config, task, rl_libra
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "customEnvironmentS3Uri": custom_env_s3_uri,
         "outputS3AssetFilesPath": output_path,
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
 
@@ -304,7 +354,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "customEnvironmentS3Uri": custom_env_s3_uri,
         "outputS3AssetFilesPath": output_path,
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }

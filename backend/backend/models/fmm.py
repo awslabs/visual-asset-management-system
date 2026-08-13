@@ -66,6 +66,7 @@ class PipelineRef(BaseModel, extra='ignore'):
     """Reference to a VAMS workflow for pipeline rule execution."""
     databaseId: str = Field(min_length=1, max_length=256)
     workflowId: str = Field(min_length=1, max_length=256)
+    templateId: Optional[str] = Field(None, max_length=256)
 
 
 class PipelineCheck(BaseModel, extra='ignore'):
@@ -255,6 +256,7 @@ class CreateSchemaRequestModel(BaseModel, extra='ignore'):
     schemaName: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     description: Optional[str] = Field(None, max_length=1024)
     schemaBody: Dict[str, Any]
+    databaseId: str = Field("GLOBAL", min_length=1, max_length=256)
 
     @root_validator
     def validate_fields(cls, values):
@@ -268,6 +270,7 @@ class UpdateSchemaRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a compliance schema."""
     description: Optional[str] = Field(None, max_length=1024)
     schemaBody: Optional[Dict[str, Any]] = None
+    databaseId: Optional[str] = Field(None, min_length=1, max_length=256)
 
     @root_validator
     def validate_fields(cls, values):

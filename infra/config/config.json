@@ -66,7 +66,7 @@
             "reindexOnCdkDeploy": false
         },
         "useLocationService": {
-            "enabled": false
+            "enabled": true
         },
         "useAlb": {
             "enabled": false,
@@ -86,6 +86,7 @@
             }
         },
         "pipelines": {
+            "deadlineCloudExecutionTypeEnabled": false,
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true
@@ -109,8 +110,7 @@
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true,
-                "sqsAutoRunOnAssetModified": false
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
@@ -120,6 +120,7 @@
             },
             "useSplatToolbox": {
                 "enabled": false,
+                "useCodeBuild": false,
                 "autoRegisterWithVAMS": true
             },
             "useRapidPipeline": {
@@ -325,7 +326,8 @@
                 "globalRateLimit": 50,
                 "globalBurstLimit": 100,
                 "endpointType": "REGIONAL",
-                "optionalExternalPrivateApigVPCEId": ""
+                "optionalExternalPrivateApigVPCEId": "",
+                "apiGatewayTimeoutTime": 29
             }
         },
         "metadataSchema": {
@@ -334,7 +336,7 @@
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
         },
-        "federatedModelManagement": {
+            "federatedModelManagement": {
             "enabled": false,
             "autoLoadDefaultSchema": true
         }

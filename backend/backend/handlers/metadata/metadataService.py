@@ -29,7 +29,7 @@ from common.metadataSchemaValidation import (
     validate_metadata_keys_against_schema,
     enrich_metadata_with_schema
 )
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from handlers.assets.assetVersions import validate_asset_version_exists, get_asset_metadata_version
 from models.metadata import (
     # Asset Link Metadata Models
@@ -1313,7 +1313,7 @@ def handle_asset_link_metadata_get(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse query parameters
         try:
@@ -1325,7 +1325,7 @@ def handle_asset_link_metadata_get(event):
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Get metadata
         response = get_asset_link_metadata(path_request_model.assetLinkId, query_params, claims_and_roles)
@@ -1351,7 +1351,7 @@ def handle_asset_link_metadata_post(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -1379,7 +1379,7 @@ def handle_asset_link_metadata_post(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -1400,7 +1400,7 @@ def handle_asset_link_metadata_put(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -1428,7 +1428,7 @@ def handle_asset_link_metadata_put(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -1449,7 +1449,7 @@ def handle_asset_link_metadata_delete(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -1477,7 +1477,7 @@ def handle_asset_link_metadata_delete(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -2494,7 +2494,7 @@ def handle_asset_metadata_get(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse query parameters
         try:
@@ -2507,7 +2507,7 @@ def handle_asset_metadata_get(event):
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Get metadata
         response = get_asset_metadata(path_request_model.databaseId, path_request_model.assetId, query_params, claims_and_roles)
@@ -2533,7 +2533,7 @@ def handle_asset_metadata_post(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -2561,7 +2561,7 @@ def handle_asset_metadata_post(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -2582,7 +2582,7 @@ def handle_asset_metadata_put(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -2610,7 +2610,7 @@ def handle_asset_metadata_put(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -2631,7 +2631,7 @@ def handle_asset_metadata_delete(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -2659,7 +2659,7 @@ def handle_asset_metadata_delete(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -3746,7 +3746,8 @@ def handle_file_metadata_get(event):
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -3786,7 +3787,8 @@ def handle_file_metadata_post(event):
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -3826,7 +3828,8 @@ def handle_file_metadata_put(event):
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -3866,7 +3869,8 @@ def handle_file_metadata_delete(event):
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -4686,7 +4690,8 @@ def handle_database_metadata_post(event):
         response = create_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -4719,7 +4724,8 @@ def handle_database_metadata_put(event):
         response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -4752,7 +4758,8 @@ def handle_database_metadata_delete(event):
         response = delete_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -4836,7 +4843,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

@@ -295,18 +295,22 @@ class IsaacVAMSConnector:
     # Workflows
     # -------------------------------------------------------------------------
 
-    def list_workflows(self, database_id: Optional[str] = None) -> List[Workflow]:
+    def list_workflows(self, database_id: Optional[str] = None,
+                       include_unrunnable: bool = False) -> List[Workflow]:
         """
         List available workflows.
 
         Args:
             database_id: Optional database ID to filter workflows.
                          If None, lists workflows across all databases.
+            include_unrunnable: Keep disabled workflows in the result. They are dropped by default
+                                because executing one is rejected; archived workflows are already
+                                absent from the listing.
 
         Returns:
             List of Workflow objects.
         """
-        return self._cli.list_workflows(database_id)
+        return self._cli.list_workflows(database_id, include_unrunnable=include_unrunnable)
 
     def list_workflow_executions(
         self,
@@ -340,18 +344,19 @@ class IsaacVAMSConnector:
         file_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a workflow on an asset.
+        Execute a workflow on one file of an asset, or on the whole asset.
 
         Args:
             database_id: The database ID containing the asset.
             asset_id: The asset ID to run the workflow on.
             workflow_id: The workflow ID to execute.
             workflow_database_id: The database ID that owns the workflow.
-            file_key: Optional file key within the asset. If not specified,
-                      the workflow runs on the top-level asset ("/").
+            file_key: Optional relative file key within the asset. If not specified,
+                      the workflow runs on the whole asset ("/").
 
         Returns:
-            Dict with execution result (includes execution ID in 'message' field).
+            Dict with execution result (includes 'executionId', and 'warnings' when
+            the run started with a bounded metadata capture).
         """
         return self._cli.execute_workflow(
             database_id, asset_id, workflow_id, workflow_database_id, file_key

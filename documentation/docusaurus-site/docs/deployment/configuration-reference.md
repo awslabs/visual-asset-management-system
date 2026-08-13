@@ -51,14 +51,15 @@ Nested stack: `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` (`S
 
 Each element in `externalAssetBuckets` has the following fields:
 
-| Field                   | Type   | Description                                                                                                                                                                                 |
-| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bucketArn`             | string | Amazon Resource Name (ARN) of the existing Amazon S3 bucket. Must use the same partition as the deployment. May be repeated to register the bucket under multiple non-overlapping prefixes. |
-| `baseAssetsPrefix`      | string | Base prefix to use for cataloging and syncing assets. Use `/` for the bucket root. Must end with `/`.                                                                                       |
-| `defaultSyncDatabaseId` | string | Database ID to associate with asset changes synced from this bucket. If the database does not exist, VAMS creates it.                                                                       |
-| `bucketAccountId`       | string | Optional. The 12-digit AWS account ID that owns the bucket. Set for cross-account buckets so VAMS imports them as cross-account and scopes notification source policies.                    |
-| `bucketRegion`          | string | Optional. The AWS Region of the bucket. Defaults to the deployment Region when omitted.                                                                                                     |
-| `bucketKmsKeyArn`       | string | Optional. ARN of the AWS KMS key the bucket is encrypted with. When set, VAMS grants this key to its Lambda and pipeline roles. Required if the bucket uses SSE-KMS.                        |
+| Field                   | Type    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucketArn`             | string  | Amazon Resource Name (ARN) of the existing Amazon S3 bucket. Must use the same partition as the deployment. May be repeated to register the bucket under multiple non-overlapping prefixes.                                                                                                                                                                                                                                                   |
+| `baseAssetsPrefix`      | string  | Base prefix to use for cataloging and syncing assets. Use `/` for the bucket root. Must end with `/`.                                                                                                                                                                                                                                                                                                                                         |
+| `defaultSyncDatabaseId` | string  | Database ID to associate with asset changes synced from this bucket. If the database does not exist, VAMS creates it.                                                                                                                                                                                                                                                                                                                         |
+| `isDefault`             | boolean | Optional. Marks this bucket as the VAMS default asset bucket, which holds all pipeline template bodies and execution run I/O (manifests, config, auxiliary output) under the `pipelines/` prefix. At most one entry may set `isDefault` to `true`. When `createNewBucket` is `false`, exactly one entry must set it to `true`; when `createNewBucket` is `true`, an entry that sets it to `true` overrides the created bucket as the default. |
+| `bucketAccountId`       | string  | Optional. The 12-digit AWS account ID that owns the bucket. Set for cross-account buckets so VAMS imports them as cross-account and scopes notification source policies.                                                                                                                                                                                                                                                                      |
+| `bucketRegion`          | string  | Optional. The AWS Region of the bucket. Defaults to the deployment Region when omitted.                                                                                                                                                                                                                                                                                                                                                       |
+| `bucketKmsKeyArn`       | string  | Optional. ARN of the AWS KMS key the bucket is encrypted with. When set, VAMS grants this key to its Lambda and pipeline roles. Required if the bucket uses SSE-KMS.                                                                                                                                                                                                                                                                          |
 
 ### Presigned URL restriction object
 
@@ -133,17 +134,22 @@ When `app.useWaf` is enabled, the rules attached to the web ACL(s) are defined b
 
 The file has two sections:
 
-| Section             | Purpose                                                                                                                                                                                                                            |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `managedRuleGroups` | AWS or third-party managed rule groups to attach. Each entry sets `name`, `vendorName`, `managedRuleGroupName`, `priority`, and `block` (`true` applies the group's own block actions; `false` runs the group in count-only mode). |
-| `rateBasedRules`    | Rate-based rules for L7 DDoS and brute-force throttling. Each entry sets `name`, `priority`, `limit` (requests per 5-minute window per aggregate key), and `aggregateKeyType` (`IP` or `FORWARDED_IP`).                            |
+| Section             | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `managedRuleGroups` | AWS or third-party managed rule groups to attach. Each entry sets `name`, `vendorName`, `managedRuleGroupName`, `priority`, and `block` (`true` applies the group's own block actions; `false` runs the group in count-only mode). An optional `ruleActionOverrides` array changes individual rules inside the group without disabling the whole group: each override sets `name` (a rule within the group, for example `SizeRestrictions_BODY`) and `action` (`count`, `allow`, or `block`). This runs a single rule in `count` mode while every other rule in the group still blocks. |
+| `rateBasedRules`    | Rate-based rules for L7 DDoS and brute-force throttling. Each entry sets `name`, `priority`, `limit` (requests per 5-minute window per aggregate key), and `aggregateKeyType` (`IP` or `FORWARDED_IP`). When `aggregateKeyType` is `FORWARDED_IP`, an optional `forwardedIPConfig` sets the `headerName` (default `X-Forwarded-For`) and `fallbackBehavior` (`MATCH` or `NO_MATCH`, default `NO_MATCH`) used to read the true client IP. An optional `blockResponseCode` (default `429`) sets the HTTP status returned when the rule blocks.                                            |
 
-The shipped file applies the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a 2,000-request-per-IP rate limit. The web ACL default action remains `allow`, so only requests matching a rule are blocked or counted.
+The shipped file applies the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule limiting each client to 10,000 requests per 5-minute window. Within the AWS Common Rule Set, two rules are overridden to `count` (through `ruleActionOverrides`) while every other rule continues to block:
+
+-   **`SizeRestrictions_BODY`** — so that large request bodies, such as the multi-part upload initialize and complete requests up to the Amazon API Gateway REST API maximum payload of 10 MB, are observed rather than blocked. This is the only Common Rule Set rule that acts on body size alone; the remaining body-inspecting rules match on attack signatures, not size, so leaving them in block mode does not affect large payloads.
+-   **`SizeRestrictions_QUERYSTRING`** — so that requests with a long query string are observed rather than blocked. The rule blocks any query string over 2048 bytes. The SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter, and a presigned URL that carries a session security token exceeds that threshold, so the request for the viewer page is rejected with an HTTP 403 before the file is ever fetched. The web ACL default action remains `allow`, so only requests matching a rule are blocked or counted.
+
+The rate-based rule aggregates on `FORWARDED_IP` (the `X-Forwarded-For` client IP) so it counts each real end-user rather than a shared upstream address — important when VAMS is fronted by Amazon CloudFront or an Application Load Balancer, or when many users reach the deployment through a shared corporate NAT gateway or VPN egress IP. The same policy applies to both the CloudFront-scoped and regional web ACLs. VAMS is chatty per active user (the executions board polls for live status, uploads issue multi-part requests, and viewers stream large files), so the limit is set well above a single user's normal request rate while still stopping request floods. When the rule blocks, it returns HTTP `429 Too Many Requests` with a small JSON body — the correct throttle status, distinct from the `403` returned for an authorization denial — so clients can recognize throttling and retry. The VAMS web application and the VAMS CLI both treat a `429` as a transient, retryable condition: they honor the `Retry-After` header and retry with backoff rather than surfacing it as an authentication or permission failure.
 
 If the file is empty or absent, VAMS applies its baseline rule set: a single AWS Common Rule Set in count-only mode. Populate the file to enable enforced protection.
 
 :::tip[Validate before enabling block mode]
-Managed rule groups can match legitimate traffic (for example, large multipart uploads or presigned-URL flows). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives.
+Managed rule groups can match legitimate traffic (for example, large multipart uploads or presigned-URL flows). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives. When only a single rule is the source of false positives, prefer a `ruleActionOverrides` entry that sets that rule's `action` to `count` over dropping the whole group to count mode — this is how the shipped policy handles `SizeRestrictions_BODY`, allowing multi-part upload bodies up to the Amazon API Gateway REST 10 MB limit while the rest of the Common Rule Set keeps blocking.
 :::
 
 ### KMS encryption (`app.useKmsCmkEncryption`)
@@ -234,7 +240,7 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 | RapidPipeline ECS (`useRapidPipeline.useEcs`)             | Yes                        | Yes            | 2                                | Batch compute                   |
 | RapidPipeline EKS (`useRapidPipeline.useEks`)             | Yes                        | Yes            | 2                                | EKS cluster                     |
 | ModelOps (`useModelOps`)                                  | Yes                        | Yes            | 2                                | Batch compute                   |
-| Gaussian Splatting (`useSplatToolbox`)                    | Yes                        | Yes            | 2                                | Batch compute                   |
+| Gaussian Splatting (`useSplatToolbox`)                    | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
 | Coordinate Transform (`useConversionCoordinateTransform`) | Yes                        | Yes            | 2                                | Batch compute                   |
 | Isaac Lab Training (`useIsaacLabTraining`)                | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
 | NVIDIA Cosmos (`useNvidiaCosmos`)                         | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
@@ -451,9 +457,18 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/api-nestedStack.ts` (`ApiNestedS
 | `app.api.apiGatewayRest.globalRateLimit`                   | number | `50`                | Global rate limit in requests per second for the Amazon API Gateway. Must be a positive number.                                                                                                                                                                                                                                                                                                                                    |
 | `app.api.apiGatewayRest.globalBurstLimit`                  | number | `100`               | Global burst limit for the Amazon API Gateway. Must be greater than or equal to `globalRateLimit`.                                                                                                                                                                                                                                                                                                                                 |
 | `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` | string | `""`                | Id of a pre-existing execute-api interface VPC endpoint to use for a `"PRIVATE"` endpoint when VAMS does not create one (`useGlobalVpc.addVpcEndpoints = false`). Applies only to `"PRIVATE"`; it is ignored (with a configuration warning) for a `"REGIONAL"` endpoint.                                                                                                                                                           |
+| `app.api.apiGatewayRest.apiGatewayTimeoutTime`             | number | `29`                | Integration timeout in seconds — how long Amazon API Gateway waits for a backend Lambda function to respond before returning a `504`. Must be a whole number between `29` and `300`. Applies to every API route, for both `"REGIONAL"` and `"PRIVATE"` endpoint types. Values above `29` require an approved account-level quota increase first (see the warning below).                                                           |
 
 :::warning[PRIVATE endpoint requirements]
 Setting `app.api.apiGatewayRest.endpointType` to `"PRIVATE"` requires `useGlobalVpc.enabled = true` and an execute-api interface VPC endpoint: either set `useGlobalVpc.addVpcEndpoints = true` so VAMS creates one, or set `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` to an existing endpoint id. A `PRIVATE` endpoint is incompatible with Amazon CloudFront (which cannot reach a private API); you must front it with the ALB (`useCloudFront.enabled = false`, `useAlb.enabled = true`), and that ALB must run in isolated (non-public) subnets (`useAlb.usePublicSubnet = false`). A public-subnet ALB would expose an internet-facing path to the private API, defeating its isolation. Configuration validation enforces all of these.
+:::
+
+:::warning[Raising the integration timeout requires an AWS quota increase first]
+`app.api.apiGatewayRest.apiGatewayTimeoutTime` defaults to `29` seconds, the Amazon API Gateway default integration timeout. Setting it higher requires an approved increase to the account-level **Integration timeout** quota (`L-E5AE38E3`) in the deployment Region, requested through the AWS Service Quotas console or AWS Support. Request and receive the increase **before** deploying with a higher value — Amazon API Gateway rejects an integration timeout above the account's approved quota, which fails the deployment.
+
+The increase applies to both `"REGIONAL"` and `"PRIVATE"` endpoint types, which are the two types VAMS supports. Raising this quota may require a compensating reduction in the Region-level request throttle quota for the account, so review both quotas together. A configuration warning is emitted at synthesis time whenever the value exceeds `29` seconds as a reminder.
+
+A longer timeout lets operations on assets with many files or many relationships complete within a single synchronous request instead of returning a `504` while the Lambda function continues working in the background. The AWS Lambda function timeout (15 minutes) remains the outer bound, so a value above the `300`-second maximum would not extend the useful window for a synchronous request.
 :::
 
 :::note[Execute-API VPC endpoint]
@@ -466,6 +481,21 @@ Changing `app.api.apiGatewayRest.endpointType` on a deployment that already exis
 Amazon API Gateway itself does **not** remove a previously-set resource policy when an update simply stops supplying one, which is why VAMS always writes an explicit policy: switching `PRIVATE` → `REGIONAL` overwrites the `aws:SourceVpce`-restricted policy with the public allow-all policy, and `REGIONAL` → `PRIVATE` re-applies the VPC-endpoint restriction. If a resource policy left over from an out-of-band change ever remains in place after a switch (for example, a `PRIVATE` policy on a now-public endpoint), every request — including the CORS preflight — is denied at the resource-policy layer with `403 AccessDeniedException` ("no resource-based policy allows the execute-api:Invoke action"). Because that denial precedes the CORS response, a browser reports it as a missing `Access-Control-Allow-Origin` / failed-preflight error rather than an authorization error. Re-running the VAMS deployment restores the correct policy for the configured `endpointType`.
 :::
 
+:::note[REST API TLS security policy]
+VAMS sets the minimum TLS version and cipher suite on the REST API itself, so it applies to the default `execute-api` endpoint. The policy is derived from the deployment configuration and is not a separate configuration option.
+
+| Deployment                                               | Security policy                          | TLS versions accepted |
+| -------------------------------------------------------- | ---------------------------------------- | --------------------- |
+| Commercial                                               | `SecurityPolicy_TLS13_1_2_2021_06`       | TLS 1.3, TLS 1.2      |
+| GovCloud and EU Sovereign Cloud (`app.govCloud.enabled`) | Partition and Region default (unchanged) | TLS 1.3, TLS 1.2      |
+
+In the commercial partition, a Regional REST API would otherwise default to the `TLS_1_0` policy, which accepts TLS 1.0 and TLS 1.1. VAMS raises the floor to `SecurityPolicy_TLS13_1_2_2021_06` and sets the required endpoint access mode to `BASIC`, so the Amazon CloudFront origin request, the ALB redirect to `execute-api`, and direct `execute-api` access all continue to work. A TLS 1.3-only policy is not used because CloudFront negotiates at most TLS 1.2 to a custom origin.
+
+The GovCloud mode, which AWS European Sovereign Cloud deployments also enable, leaves the policy unset so the API keeps its partition and Region default. Those partitions do not offer the `TLS_1_0` policy for Regional APIs and their APIs are FIPS-compliant by default, so the minimum version is already TLS 1.2.
+
+A security policy change takes about 15 minutes to propagate, and the API stays invocable while its status is `UPDATING`. See [Security](../architecture/security.md) for the full description.
+:::
+
 ## Web UI (`app.webUi`)
 
 :::note[Implemented by]
@@ -475,7 +505,7 @@ Consumed by the static web hosting stack `infra/lib/nestedStacks/staticWebApp/st
 | Field                                 | Type    | Default | Description                                                                                                                                                                                                          |
 | ------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.webUi.optionalBannerHtmlMessage` | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                   |
-| `app.webUi.allowUnsafeEvalFeatures`   | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (for example, Needle USD WASM viewer, ThreeJS CAD viewer). Consult your security team before enabling. |
+| `app.webUi.allowUnsafeEvalFeatures`   | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and the Three.js CAD formats). Consult your security team before enabling. |
 
 ## Metadata schema (`app.metadataSchema`)
 
@@ -509,6 +539,8 @@ Controls the Federated Model Management (FMM) compliance feature. When enabled, 
 :::note[Implemented by]
 All pipelines are orchestrated by `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` (`PipelineBuilderNestedStack`). Each enabled pipeline below is conditionally instantiated as its own child nested stack (named in each section).
 :::
+
+The **Default** column in the pipeline tables is the value the shipped `config.template.*.json` files carry. When a pipeline block is present but omits a field, `getConfig()` fills in a fallback that may be more conservative than the template: `enabled` falls back to `false` (`useConversion3dBasic.enabled` falls back to `true`), `autoRegisterWithVAMS` falls back to `true`, and `autoRegisterAutoTriggerOnFileUpload` falls back to `false` so an omitted key never arms an upload trigger. A pipeline block that is absent entirely is disabled, so its remaining fields have no effect.
 
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
 
@@ -556,12 +588,11 @@ Processes E57, LAS, and LAZ point cloud files for Potree web viewing. **Requires
 Nested stack: `infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack.ts` (`PcPotreeViewerBuilderNestedStack`).
 :::
 
-| Field                                                                        | Type    | Default | Description                                                               |
-| ---------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
-| `app.pipelines.usePreviewPcPotreeViewer.enabled`                             | boolean | `false` | Enables the point cloud Potree viewer pipeline.                           |
-| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS`                | boolean | `false` | Automatically registers the pipeline during deployment.                   |
-| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads.                      |
-| `app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified`           | boolean | `false` | Automatically runs the pipeline via Amazon SQS when an asset is modified. |
+| Field                                                                        | Type    | Default | Description                                             |
+| ---------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------- |
+| `app.pipelines.usePreviewPcPotreeViewer.enabled`                             | boolean | `false` | Enables the point cloud Potree viewer pipeline.         |
+| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment. |
+| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads.    |
 
 ### 3D preview thumbnail (`app.pipelines.usePreview3dThumbnail`)
 
@@ -574,8 +605,8 @@ Nested stack: `infra/lib/nestedStacks/pipelines/preview/3dThumbnail/preview3dThu
 | Field                                                                     | Type    | Default | Description                                                                           |
 | ------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------- |
 | `app.pipelines.usePreview3dThumbnail.enabled`                             | boolean | `false` | Enables the 3D preview thumbnail pipeline.                                            |
-| `app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS`                | boolean | `false` | Automatically registers the pipeline during deployment.                               |
-| `app.pipelines.usePreview3dThumbnail.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Automatically triggers the pipeline on file uploads matching supported 3D file types. |
+| `app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                               |
+| `app.pipelines.usePreview3dThumbnail.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads matching supported 3D file types. |
 
 ### GenAI metadata labeling (`app.pipelines.useGenAiMetadata3dLabeling`)
 
@@ -600,11 +631,11 @@ Generates Gaussian splat reconstructions from media files. **Requires VPC.**
 Nested stack: `infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/splatToolboxBuilder-nestedStack.ts` (`SplatToolboxBuilderNestedStack`) — AWS Batch on GPU instances.
 :::
 
-| Field                                                     | Type    | Default | Description                                                               |
-| --------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
-| `app.pipelines.useSplatToolbox.enabled`                   | boolean | `false` | Enables the Gaussian splatting pipeline.                                  |
-| `app.pipelines.useSplatToolbox.autoRegisterWithVAMS`      | boolean | `true`  | Automatically registers the pipeline during deployment.                   |
-| `app.pipelines.useSplatToolbox.sqsAutoRunOnAssetModified` | boolean | `false` | Automatically runs the pipeline via Amazon SQS when an asset is modified. |
+| Field                                                | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useSplatToolbox.enabled`              | boolean | `false` | Enables the Gaussian splatting pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `app.pipelines.useSplatToolbox.useCodeBuild`         | boolean | `false` | Build the container image via AWS CodeBuild + Amazon ECR instead of a local Docker build. Recommended for this pipeline — the image is a large CUDA/PyTorch build. CodeBuild runs in the same private VPC subnets as the pipeline Batch compute environments, with NAT Gateway egress. Builds run asynchronously and continue after the deployment finishes; if a build fails, check the CodeBuild project name in the CDK stack outputs. When `false`, the image is built locally with a CDK `DockerImageAsset` (requires local Docker). |
+| `app.pipelines.useSplatToolbox.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers the pipeline during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ### Mesh to Gaussian Splat (`app.pipelines.useMesh2Splat`)
 
@@ -807,6 +838,18 @@ Nested stack: `infra/lib/nestedStacks/pipelines/genAi/nvidia/gr00t/gr00tBuilder-
 | `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.autoRegisterWithVAMS` | boolean | `true`                                           | Automatically registers the fine-tuning pipeline during deployment.                                                                                                                                                             |
 | `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes`        | array   | `["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Multiple types listed for regional capacity flexibility. g6e.4xlarge (1 GPU) for LoRA, g6e.12xlarge (4 GPU) for full fine-tuning, g5.12xlarge as fallback. |
 | `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.maxVCpus`             | number  | `192`                                            | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                                                                            |
+
+### Deadline Cloud Execution Type (`app.pipelines.deadlineCloudExecutionTypeEnabled`)
+
+Support for the `DeadlineCloud` pipeline execution type: workflow task states submit OpenJD jobs to an operator-owned AWS Deadline Cloud farm/queue via `createJob`, and a job-callback Lambda resolves the workflow's task token from Deadline Cloud job status events on the account's default Amazon EventBridge bus. Deadline Cloud pipelines are asynchronous only (callback required). Not available in GovCloud. The Deadline Cloud farm must reside in the same account and Region as the VAMS deployment, and the queue's service role must have read access to the execution input locations and write access to the execution output prefixes in the asset bucket.
+
+:::note[Implemented by]
+Lambda builder: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildDeadlineCloudJobCallbackFunction`) — deployed in the API builder stack with an EventBridge rule on the default bus.
+:::
+
+| Setting                                           | Type    | Default | Description                                                                                                          |
+| ------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.deadlineCloudExecutionTypeEnabled` | boolean | `false` | Deploys the Deadline Cloud job-callback Lambda + default-bus rule and grants the workflow role `deadline:CreateJob`. |
 
 ## Addons (`app.addons`)
 

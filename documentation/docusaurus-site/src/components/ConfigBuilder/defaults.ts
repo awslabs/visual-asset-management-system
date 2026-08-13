@@ -223,6 +223,7 @@ const COMMERCIAL: ConfigShape = {
             },
         },
         pipelines: {
+            deadlineCloudExecutionTypeEnabled: false,
             useConversion3dBasic: {
                 enabled: true,
                 autoRegisterWithVAMS: true,
@@ -247,7 +248,6 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
-                sqsAutoRunOnAssetModified: false,
             },
             useGenAiMetadata3dLabeling: {
                 enabled: false,
@@ -257,6 +257,7 @@ const COMMERCIAL: ConfigShape = {
             },
             useSplatToolbox: {
                 enabled: false,
+                useCodeBuild: false,
                 autoRegisterWithVAMS: true,
             },
             useRapidPipeline: {
@@ -359,6 +360,7 @@ const COMMERCIAL: ConfigShape = {
                 globalBurstLimit: 100,
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
+                apiGatewayTimeoutTime: 29,
             },
         },
         metadataSchema: {

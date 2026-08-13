@@ -109,9 +109,9 @@ if (config.app.useWaf) {
         synthesizer: buildBootstrapSynthesizer(config),
     });
 
-    coreVamsStack.addDependency(regionalWafStack);
+    coreVamsStack.addStackDependency(regionalWafStack);
     if (cloudfrontWafStack) {
-        coreVamsStack.addDependency(cloudfrontWafStack);
+        coreVamsStack.addStackDependency(cloudfrontWafStack);
     }
 
     //Stack level NAG supressions

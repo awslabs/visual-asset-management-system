@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
+import manifest_io
+from evaluation import run_evaluation
 from inference import run_training
 from model_manager import ensure_models_cached, backup_cache_to_s3
 
@@ -58,7 +60,19 @@ DEFAULTS = {
     "tuneDiffusionModel": "true",
     "embodimentTag": "new_embodiment",
     "videoBackend": "torchvision_av",
+    # Evaluation-only. checkpointFolder empty means "the newest gr00tOutput_* folder on the asset",
+    # which is what makes an evaluation step usable straight after a training step.
+    "checkpointFolder": "",
+    "evalTrajectories": 5,
+    "evalSteps": 150,
+    "evalStartTrajectory": 0,
 }
+
+# Container mode. finetune trains; evaluate scores an existing checkpoint. Set on the Batch job
+# definition, so one image and one compute environment serve both pipelines.
+MODE_FINETUNE = "finetune"
+MODE_EVALUATE = "evaluate"
+CHECKPOINT_DIR = Path("/tmp/checkpoint")
 
 
 def load_pipeline_definition() -> Dict:
@@ -96,6 +110,76 @@ def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
     return bucket, key
+
+
+def resolve_checkpoint_folder(s3_asset_path: str, requested: str) -> str:
+    """The gr00tOutput_* folder to evaluate. An explicit name wins; otherwise the NEWEST one is used.
+
+    Newest-by-default is what lets an evaluation step follow a training step without the operator
+    copying a folder name across: training names its output with a UTC timestamp
+    (gr00tOutput_{model}_trainingjob_{YYYYmmddTHHMMSS}_{job}), so lexical ordering is chronological.
+    """
+    if requested:
+        return requested.strip().strip("/")
+
+    bucket, prefix = parse_s3_uri(s3_asset_path)
+    prefix = prefix.rstrip("/") + "/" if prefix else ""
+    result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+        ["aws", "s3api", "list-objects-v2", "--bucket", bucket, "--prefix", prefix,
+         "--delimiter", "/", "--query", "CommonPrefixes[].Prefix", "--output", "json"],
+        capture_output=True, text=True,
+    )  # nosemgrep: dangerous-subprocess-use-audit
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not list asset folders to find a checkpoint: {result.stderr}")
+
+    try:
+        prefixes = json.loads(result.stdout or "[]") or []
+    except json.JSONDecodeError:
+        prefixes = []
+    folders = sorted(
+        p[len(prefix):].rstrip("/") for p in prefixes
+        if p[len(prefix):].startswith("gr00tOutput_")
+    )
+    if not folders:
+        raise ValueError(
+            "No gr00tOutput_* folder found on the asset. Run the fine-tuning pipeline first, or set "
+            "checkpointFolder to the checkpoint you want evaluated.")
+    logger.info(f"Checkpoint folders found: {folders}")
+    return folders[-1]
+
+
+def download_checkpoint_from_s3(s3_asset_path: str, checkpoint_folder: str, local_dir: Path) -> str:
+    """Download ONE gr00tOutput_* folder. Deliberately separate from the asset sync, which excludes
+    these folders so a training run does not re-download every previous checkpoint.
+
+    Prefers the folder ROOT (where training writes the final model) over its checkpoint-N
+    subdirectories, which are intermediate saves.
+    """
+    local_dir.mkdir(parents=True, exist_ok=True)
+    source = f"{s3_asset_path.rstrip('/')}/{checkpoint_folder}/"
+    logger.info(f"Downloading checkpoint: {source} -> {local_dir}")
+
+    result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+        ["aws", "s3", "sync", source, str(local_dir)],
+        capture_output=True, text=True,
+    )  # nosemgrep: dangerous-subprocess-use-audit
+    if result.returncode != 0:
+        raise RuntimeError(f"Checkpoint download failed: {result.stderr}")
+
+    # The final model sits at the folder root; fall back to the highest-numbered checkpoint-N when a
+    # run was interrupted before the final save.
+    if (local_dir / "config.json").exists():
+        return str(local_dir)
+    numbered = sorted(
+        (d for d in local_dir.glob("checkpoint-*") if d.is_dir()),
+        key=lambda d: int(d.name.split("-")[-1]) if d.name.split("-")[-1].isdigit() else -1,
+    )
+    if numbered:
+        logger.info(f"No model at the checkpoint root; using {numbered[-1].name}")
+        return str(numbered[-1])
+    raise ValueError(
+        f"Downloaded checkpoint folder '{checkpoint_folder}' contains no model (no config.json at its "
+        "root and no checkpoint-N subdirectory).")
 
 
 def download_asset_from_s3(s3_asset_path: str, local_dir: Path) -> None:
@@ -210,6 +294,18 @@ def main():
         hf_token = os.environ.get("HF_TOKEN")
         s3_model_bucket = os.environ.get("S3_MODEL_BUCKET")
         batch_job_id = os.environ.get("AWS_BATCH_JOB_ID", "unknown")
+        # Which job this image is running. Carried on the pipeline DEFINITION (which constructPipeline
+        # passes as the container argv) rather than on the Batch job definition, so training and
+        # evaluation share one job definition, one queue, and one state machine — the env var is kept
+        # as an override for running the image by hand. Defaults to finetune, so an older definition
+        # with no mode behaves exactly as before.
+        mode = (definition.get("mode") or os.environ.get("GROOT_MODE")
+                or MODE_FINETUNE)
+        mode = str(mode).strip().lower()
+        if mode not in (MODE_FINETUNE, MODE_EVALUATE):
+            raise ValueError(
+                f"GROOT_MODE must be '{MODE_FINETUNE}' or '{MODE_EVALUATE}', got '{mode}'.")
+        logger.info(f"Container mode: {mode}")
 
         # Set HF_HOME for native HuggingFace cache on EFS
         hf_home = HF_CACHE_BASE
@@ -218,15 +314,19 @@ def main():
         if hf_token:
             os.environ["HF_TOKEN"] = hf_token
 
-        # Check for model invalidation flag
+        # Check for model invalidation flag (input configuration read from S3)
         invalidate_models = False
         try:
-            input_params = definition.get("inputParameters", "")
-            if input_params:
-                params = json.loads(input_params) if isinstance(input_params, str) else input_params
-                invalidate_models = str(params.get("INVALIDATE_GROOT_MODELS", "")).lower() == "true"
-                if invalidate_models:
-                    logger.info("INVALIDATE_GROOT_MODELS=true: will clear EFS/S3 cache")
+            params = manifest_io.fetch_input_configuration(definition.get("inputConfigurationS3Location", ""))
+            invalidate_models = str(params.get("INVALIDATE_GROOT_MODELS", "")).lower() == "true"
+            if invalidate_models:
+                logger.info("INVALIDATE_GROOT_MODELS=true: will clear EFS/S3 cache")
+        # A configuration that EXISTS but cannot be parsed is not something to tolerate: the
+        # broad handler below would leave the run on its defaults and still report success,
+        # with every caller-supplied parameter silently dropped. Placed ABOVE that handler --
+        # below it this arm would be dead code.
+        except manifest_io.InputConfigurationError:
+            raise
         except Exception:
             pass
 
@@ -279,34 +379,59 @@ def main():
 
         logger.info(f"Dataset path resolved: {dataset_path}")
 
-        # Step 4: Run fine-tuning
-        logger.info("=" * 80)
-        logger.info("Step 4: Running fine-tuning")
-        logger.info("=" * 80)
-
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-        run_training(
-            config=config,
-            dataset_path=dataset_path,
-            output_dir=str(OUTPUT_DIR),
-            hf_home=hf_home,
-            hf_token=hf_token,
-        )
-
-        # Step 5: Build output folder name and upload
-        logger.info("=" * 80)
-        logger.info("Step 5: Uploading training output to S3")
-        logger.info("=" * 80)
-
         # Extract short model name from path (e.g., "nvidia/GR00T-N1.5-3B" -> "N1.5-3B")
         model_path = config.get("baseModelPath", "nvidia/GR00T-N1.5-3B")
         model_short = model_path.split("/")[-1].replace("GR00T-", "") if "/" in model_path else model_path
-
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
         job_id_short = batch_job_id.split("-")[0] if "-" in batch_job_id else batch_job_id[:8]
-        output_folder_name = f"gr00tOutput_{model_short}_trainingjob_{timestamp}_{job_id_short}"
 
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+        if mode == MODE_EVALUATE:
+            # Step 4: score an existing checkpoint. The asset sync above excluded gr00tOutput_*, so the
+            # checkpoint is fetched separately -- that exclusion exists to stop a TRAINING run
+            # re-downloading every past checkpoint, and evaluation should not regress it.
+            logger.info("=" * 80)
+            logger.info("Step 4: Running evaluation")
+            logger.info("=" * 80)
+
+            checkpoint_folder = resolve_checkpoint_folder(
+                input_s3_asset_path, str(config.get("checkpointFolder", "") or ""))
+            logger.info(f"Evaluating checkpoint folder: {checkpoint_folder}")
+            checkpoint_path = download_checkpoint_from_s3(
+                input_s3_asset_path, checkpoint_folder, CHECKPOINT_DIR)
+
+            metrics = run_evaluation(
+                config=config,
+                checkpoint_path=checkpoint_path,
+                dataset_path=dataset_path,
+                output_dir=str(OUTPUT_DIR),
+                hf_home=hf_home,
+                hf_token=hf_token,
+            )
+            logger.info(f"Evaluation average MSE: {metrics.get('averageMse')}")
+            output_folder_name = (
+                f"gr00tEval_{model_short}_evaljob_{timestamp}_{job_id_short}")
+        else:
+            # Step 4: Run fine-tuning
+            logger.info("=" * 80)
+            logger.info("Step 4: Running fine-tuning")
+            logger.info("=" * 80)
+
+            run_training(
+                config=config,
+                dataset_path=dataset_path,
+                output_dir=str(OUTPUT_DIR),
+                hf_home=hf_home,
+                hf_token=hf_token,
+            )
+            output_folder_name = (
+                f"gr00tOutput_{model_short}_trainingjob_{timestamp}_{job_id_short}")
+
+        # Step 5: Upload the output
+        logger.info("=" * 80)
+        logger.info("Step 5: Uploading output to S3")
+        logger.info("=" * 80)
         logger.info(f"Output folder name: {output_folder_name}")
 
         s3_dest = upload_output_to_s3(OUTPUT_DIR, output_s3_asset_files_path, output_folder_name)

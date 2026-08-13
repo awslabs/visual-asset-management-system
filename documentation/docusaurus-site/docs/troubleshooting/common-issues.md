@@ -239,7 +239,7 @@ WASM-based viewers require Cross-Origin Isolation headers (`Cross-Origin-Opener-
 -   **Amazon CloudFront deployment:** Headers are set automatically by the CloudFront distribution.
 -   **Application Load Balancer (ALB) deployment:** A front-end service worker attempts to set the headers. If your organization's security policy blocks service workers, WASM viewers will not function.
 
-For the Needle USD Viewer, the SuperSplat Editor, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
+For the Needle USD Viewer, the SuperSplat Editor, the ThatOpen IFC BIM Viewer, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
 
 ### Safari Limitations for WASM Viewers
 
@@ -306,7 +306,7 @@ Increasing rate limits raises the potential cost of Amazon API Gateway usage and
 
 ### Timeout on Large Operations
 
-Amazon API Gateway imposes a 29-second timeout on HTTP responses, while the underlying AWS Lambda function continues processing for up to 15 minutes.
+Amazon API Gateway returns a timeout once the configured integration timeout elapses (`app.api.apiGatewayRest.apiGatewayTimeoutTime`, 29 seconds by default), while the underlying AWS Lambda function continues processing for up to 15 minutes.
 
 **Symptoms:**
 
@@ -321,7 +321,9 @@ Amazon API Gateway imposes a 29-second timeout on HTTP responses, while the unde
 
 **Resolution:**
 
-For operations that may exceed 29 seconds, check your AWS Lambda function logs in Amazon CloudWatch to confirm whether the operation completed. The VamsCLI provides automatic pagination and retry logic that handles timeout scenarios for bulk operations.
+For operations that may exceed the integration timeout, check your AWS Lambda function logs in Amazon CloudWatch to confirm whether the operation completed. The VamsCLI provides automatic pagination and retry logic that handles timeout scenarios for bulk operations.
+
+Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
 
 ### Amazon OpenSearch Indexing Delays After Bulk Operations
 

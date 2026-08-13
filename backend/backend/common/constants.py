@@ -59,10 +59,12 @@ PERMISSION_CONSTRAINT_FIELDS = {
             "userId": "",
 
             "pipelineId": "",
-            "pipelineType": "",
             "pipelineExecutionType": "",
 
             "workflowId": "",
+
+            "category": "",
+            "name": "",
 
             "metadataSchemaName": "",
             "metadataSchemaEntityType": "",
@@ -118,15 +120,25 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
     "pipeline": {"label": "Pipeline", "fields": [
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Pipeline ID", "value": "pipelineId"},
-        {"label": "Pipeline Type", "value": "pipelineType"},
-        {"label": "Pipeline Execution Type", "value": "pipelineExecutionType"}]},
+        {"label": "Pipeline Execution Type", "value": "pipelineExecutionType"},
+        {"label": "Category", "value": "category"},
+        {"label": "Name", "value": "name"}]},
     "workflow": {"label": "Workflow", "fields": [
         {"label": "Database ID", "value": "databaseId"},
-        {"label": "Workflow ID", "value": "workflowId"}]},
+        {"label": "Workflow ID", "value": "workflowId"},
+        {"label": "Category", "value": "category"},
+        {"label": "Name", "value": "name"}]},
     "metadataSchema": {"label": "Metadata Schema", "fields": [
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Metadata Schema Name", "value": "metadataSchemaName"},
         {"label": "Metadata Schema Entity Type", "value": "metadataSchemaEntityType"}]},
+    "complianceSchema": {"label": "Compliance Schema", "fields": [
+        {"label": "Schema Name", "value": "complianceSchemaName"}]},
+    "complianceEvaluation": {"label": "Compliance Evaluation", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Compliance State", "value": "complianceState"}]},
+    "complianceCascade": {"label": "Compliance Cascade", "fields": [
+        {"label": "Cascade ID", "value": "cascadeId"}]},
 }
 
 # Display labels for the constraint criteria operators (editor view).
@@ -233,11 +245,13 @@ PERMISSION_CONSTRAINT_FIELDS = {
             "userId": "",
 
             "pipelineId": "",
-            "pipelineType": "",
             "pipelineExecutionType": "",
             "isSystem": False,
 
             "workflowId": "",
+
+            "category": "",
+            "name": "",
 
             "metadataSchemaName": "",
             "metadataSchemaEntityType": "",
@@ -297,15 +311,25 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
     "pipeline": {"label": "Pipeline", "fields": [
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Pipeline ID", "value": "pipelineId"},
-        {"label": "Pipeline Type", "value": "pipelineType"},
-        {"label": "Pipeline Execution Type", "value": "pipelineExecutionType"}]},
+        {"label": "Pipeline Execution Type", "value": "pipelineExecutionType"},
+        {"label": "Category", "value": "category"},
+        {"label": "Name", "value": "name"}]},
     "workflow": {"label": "Workflow", "fields": [
         {"label": "Database ID", "value": "databaseId"},
-        {"label": "Workflow ID", "value": "workflowId"}]},
+        {"label": "Workflow ID", "value": "workflowId"},
+        {"label": "Category", "value": "category"},
+        {"label": "Name", "value": "name"}]},
     "metadataSchema": {"label": "Metadata Schema", "fields": [
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Metadata Schema Name", "value": "metadataSchemaName"},
         {"label": "Metadata Schema Entity Type", "value": "metadataSchemaEntityType"}]},
+    "complianceSchema": {"label": "Compliance Schema", "fields": [
+        {"label": "Schema Name", "value": "complianceSchemaName"}]},
+    "complianceEvaluation": {"label": "Compliance Evaluation", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Compliance State", "value": "complianceState"}]},
+    "complianceCascade": {"label": "Compliance Cascade", "fields": [
+        {"label": "Cascade ID", "value": "cascadeId"}]},
 }
 
 # Display labels for the constraint criteria operators (editor view).

@@ -13,11 +13,36 @@ logger = safeLogger(service_name="AuthRoutesModels")
 # Maximum number of web routes accepted in a single check request.
 MAX_WEB_ROUTES_PER_REQUEST = 500
 
+# HTTP methods a web route check may be submitted for. The value becomes the Casbin
+# action, so anything outside this set can never match a policy.
+ALLOWED_WEB_ROUTE_METHODS = ('GET', 'PUT', 'POST', 'DELETE')
+
 
 class WebRouteCheckItemModel(BaseModel, extra='ignore'):
     """A single web route to check access for"""
     method: str = Field(min_length=1, max_length=10, strip_whitespace=True)
     route__path: str = Field(min_length=1, max_length=512, strip_whitespace=True)
+
+    @root_validator
+    def validate_fields(cls, values):
+        """Constrain the method to a known HTTP action and the path to one line.
+
+        Both values are echoed back in the response and fed to Casbin as the
+        action and object; a newline in the path would let a caller shape
+        multi-line content into an audit log entry.
+        """
+        method = values.get('method')
+        if method is not None and method not in ALLOWED_WEB_ROUTE_METHODS:
+            message = f"method must be one of: {', '.join(ALLOWED_WEB_ROUTE_METHODS)}"
+            logger.error(message)
+            raise ValueError(message)
+
+        route_path = values.get('route__path')
+        if route_path is not None and ('\n' in route_path or '\r' in route_path):
+            message = "route__path cannot contain newline characters"
+            logger.error(message)
+            raise ValueError(message)
+        return values
 
 
 class CheckWebRoutesRequestModel(BaseModel, extra='ignore'):

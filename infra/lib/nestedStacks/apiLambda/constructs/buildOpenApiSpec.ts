@@ -13,6 +13,8 @@ export interface OpenApiSpecOptions {
     endpointType: "REGIONAL" | "PRIVATE";
     vpcEndpointIds?: string[];
     title: string;
+    /** Integration timeout applied to every Lambda proxy integration, in seconds. */
+    timeoutSeconds: number;
 }
 
 // Authenticated routes: cache keyed by the Authorization header (per-token), short TTL.
@@ -77,6 +79,10 @@ export function buildOpenApiSpec(routes: ApiRouteDescriptor[], opts: OpenApiSpec
                 httpMethod: "POST", // Lambda proxy integration is always POST
                 uri: lambdaProxyUri(opts.partition, opts.region, r.lambdaFn.functionArn),
                 payloadFormatVersion: "1.0",
+                // How long API Gateway waits for the handler before returning 504. Applies to
+                // every route; the CORS OPTIONS MOCK integration below is unaffected (it
+                // returns immediately and has no backend to wait on).
+                timeoutInMillis: opts.timeoutSeconds * 1000,
             },
         };
         // Every route is protected by a custom authorizer. Authenticated routes use the

@@ -47,7 +47,15 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!potreeInstance || !assetKey || loaded || !config) return;
 
             try {
-                const fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
+                // Pass only the asset-relative path (not the databaseId or the leading assetId).
+                // The stream endpoint prepends {databaseId}/{assetLocationKey} to resolve the
+                // database-scoped per-file aux preview location. If assetKey is the full,
+                // assetId-prefixed key, strip that leading assetId segment first.
+                let relativeAssetKey = assetKey || "";
+                if (relativeAssetKey.startsWith(assetId + "/")) {
+                    relativeAssetKey = relativeAssetKey.slice(assetId.length + 1);
+                }
+                const fileKey = relativeAssetKey + "/preview/PotreeViewer/metadata.json";
                 const url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)

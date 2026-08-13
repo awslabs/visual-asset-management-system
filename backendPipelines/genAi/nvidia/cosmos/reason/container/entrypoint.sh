@@ -1,15 +1,14 @@
 #!/bin/bash
 set -e
 
-# Use CUDA forward-compat libraries to bridge host driver/container CUDA version gaps.
-# The compat libcuda.so symlink and ldconfig entry are set up in the Dockerfile.
-# At runtime, prepend to LD_LIBRARY_PATH so the compat libs take precedence.
-COMPAT_DIR=$(find /usr/local/cuda*/compat -maxdepth 0 2>/dev/null | head -1)
-if [ -n "$COMPAT_DIR" ] && [ -d "$COMPAT_DIR" ]; then
-    export LD_LIBRARY_PATH="${COMPAT_DIR}:${LD_LIBRARY_PATH}"
-fi
+# The CUDA forward-compatibility libraries in /usr/local/cuda*/compat are deliberately NOT placed on
+# LD_LIBRARY_PATH. Forward compatibility only applies when the host driver is OLDER than the
+# container's CUDA version; the AL2023 NVIDIA AMI ships a newer driver, so a compat libcuda.so.1 that
+# precedes the host-mounted driver makes CUDA initialization fail with error 803, "system has
+# unsupported display driver / cuda driver combination". The compat directory stays on disk for
+# Triton's compile-time linking (see the Dockerfile's library_dirs injection).
 
-# Re-run ldconfig at runtime to pick up host-mounted NVIDIA driver libraries
+# Pick up the host-mounted NVIDIA driver libraries the container runtime injects.
 ldconfig 2>/dev/null || true
 
 # Ensure Python.h is findable for Triton JIT compilation.

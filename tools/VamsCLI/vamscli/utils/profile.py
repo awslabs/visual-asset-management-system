@@ -16,9 +16,32 @@ from ..constants import (
     CONFIG_FILE, AUTH_PROFILE_FILE, CREDENTIALS_FILE
 )
 from .exceptions import (
-    ConfigurationError, ProfileNotFoundError, ProfileError, 
+    ConfigurationError, ProfileNotFoundError, ProfileError,
     InvalidProfileNameError, ProfileAlreadyExistsError
 )
+
+
+def read_active_profile_name() -> str:
+    """The profile name `profile switch` last selected, or the default when none is set.
+
+    Module-level so a caller can resolve the profile BEFORE constructing a ProfileManager: the
+    instance method of the same purpose needs a ProfileManager to read the file, so a caller that
+    has not chosen a profile yet cannot use it, and every such caller fell back to the literal
+    default — making `profile switch` a no-op for commands invoked without `--profile`.
+    """
+    active_file = get_config_dir() / ACTIVE_PROFILE_FILE
+    if not active_file.exists():
+        return DEFAULT_PROFILE_NAME
+    try:
+        with open(active_file, 'r') as f:
+            name = json.load(f).get('active_profile', DEFAULT_PROFILE_NAME)
+        return name if isinstance(name, str) and name else DEFAULT_PROFILE_NAME
+    except Exception:
+        # Best-effort by design: this runs on EVERY command invocation, so a marker file that is
+        # missing, truncated, mid-write, or unreadable must degrade to the default profile rather
+        # than abort the command. (It also keeps a test that patches builtins.open for its own
+        # purposes from failing on an unrelated read.)
+        return DEFAULT_PROFILE_NAME
 
 
 class ProfileManager:

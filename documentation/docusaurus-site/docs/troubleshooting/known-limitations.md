@@ -36,7 +36,7 @@ Metadata schema validation is enforced only when metadata is created or updated 
 
 ### API Gateway Timeout for Large Operations
 
-Amazon API Gateway enforces a **29-second timeout** on all HTTP responses. The underlying AWS Lambda function continues executing for up to **15 minutes**. This affects:
+Amazon API Gateway waits for the integration timeout configured in `app.api.apiGatewayRest.apiGatewayTimeoutTime` — `29` seconds by default — before returning a `504`. The underlying AWS Lambda function continues executing for up to **15 minutes**. This affects:
 
 | Operation                              | Impact                                             |
 | -------------------------------------- | -------------------------------------------------- |
@@ -44,6 +44,8 @@ Amazon API Gateway enforces a **29-second timeout** on all HTTP responses. The u
 | Asset export with deep link trees      | Large response payloads take time to assemble      |
 | Bulk metadata operations               | Individual batch writes continue after timeout     |
 | Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504 |
+
+Deployments that routinely operate on assets with many files or many relationships can raise the integration timeout up to `300` seconds so these operations complete within a single synchronous request. Values above `29` seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md). The 15-minute AWS Lambda timeout remains the outer bound.
 
 :::info
 When a 504 timeout occurs, check Amazon CloudWatch Logs for the relevant Lambda function to verify whether the operation completed successfully.

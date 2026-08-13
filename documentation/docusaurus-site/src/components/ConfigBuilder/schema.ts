@@ -962,14 +962,6 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
     },
     {
-        path: "app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified",
-        label: "Potree viewer — run on asset modified (SQS)",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
-    },
-    {
         path: "app.pipelines.useGenAiMetadata3dLabeling.enabled",
         label: "GenAI metadata labeling",
         input: "boolean",
@@ -1013,16 +1005,17 @@ export const FIELDS: FieldMeta[] = [
         help: "Generate Gaussian splat reconstructions from media. Requires VPC + GPU.",
     },
     {
-        path: "app.pipelines.useSplatToolbox.autoRegisterWithVAMS",
-        label: "Gaussian splatting — auto-register",
+        path: "app.pipelines.useSplatToolbox.useCodeBuild",
+        label: "Gaussian splatting — build via CodeBuild",
         input: "boolean",
         section: "pipelines-gpu",
         advanced: true,
+        help: "Build the Splat Toolbox container in the cloud with AWS CodeBuild instead of locally during CDK deploy.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useSplatToolbox.enabled"),
     },
     {
-        path: "app.pipelines.useSplatToolbox.sqsAutoRunOnAssetModified",
-        label: "Gaussian splatting — run on asset modified (SQS)",
+        path: "app.pipelines.useSplatToolbox.autoRegisterWithVAMS",
+        label: "Gaussian splatting — auto-register",
         input: "boolean",
         section: "pipelines-gpu",
         advanced: true,
@@ -1250,6 +1243,15 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-gpu",
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useModelOps.enabled"),
+    },
+    // Deadline Cloud execution type
+    {
+        path: "app.pipelines.deadlineCloudExecutionTypeEnabled",
+        label: "Deadline Cloud execution type",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Not available in GovCloud.",
     },
     // NVIDIA Cosmos shared settings + models
     {
@@ -1546,6 +1548,15 @@ export const FIELDS: FieldMeta[] = [
             { value: "PRIVATE", label: "Private (VPC endpoint)" },
         ],
         help: "PRIVATE requires a VPC with an execute-api endpoint and must be fronted by an ALB (not CloudFront).",
+    },
+    {
+        path: "app.api.apiGatewayRest.apiGatewayTimeoutTime",
+        label: "API integration timeout (seconds)",
+        input: "number",
+        section: "api-webui",
+        advanced: true,
+        min: 29,
+        help: "How long API Gateway waits for a handler before returning 504. Maximum 300. Values above 29 require an approved account-level increase to the API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region first.",
     },
     {
         path: "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId",

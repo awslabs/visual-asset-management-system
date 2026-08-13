@@ -9,7 +9,6 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -30,7 +29,7 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -39,7 +38,7 @@ export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -359,6 +358,8 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -375,60 +376,36 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
         if (props.config.app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register Preview 3D Thumbnail pipeline and workflow
-            new cdk.CustomResource(this, "Preview3dThumbnailPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "preview-3d-thumbnail",
-                    pipelineDescription:
-                        "Generate preview thumbnails (GIF/JPG/PNG) for 3D files - .ply, .stl, .obj, .glb, .gltf, .fbx, .las, .laz, .e57, .ptx, .fls, .fws, .pcd, .drc, .stp, .step, .usd, .usda, .usdc, .usdz",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".gif,.jpg,.png",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "Preview3dThumbnailRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "preview",
+                    "3dThumbnail",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: preview3dThumbnailPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "3600", // 1 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: '{"overwriteExistingPreviewFiles": true}',
-                    workflowId: "preview-3d-thumbnail",
-                    workflowDescription:
-                        "Automated workflow for 3D file preview thumbnail generation (GIF/JPG/PNG)",
-                    autoTriggerOnFileExtensionsUpload:
-                        props.config.app.pipelines.usePreview3dThumbnail
-                            .autoRegisterAutoTriggerOnFileUpload === true
-                            ? ".ply,.stl,.obj,.glb,.gltf,.fbx,.las,.laz,.e57,.ptx,.fls,.fws,.pcd,.drc,.stp,.step,.usd,.usda,.usdc,.usdz"
-                            : "",
                 },
+                idOverrides: {
+                    pipelineId: "preview-3d-thumbnail",
+                    workflowId: "preview-3d-thumbnail",
+                },
+                triggerEnabled:
+                    props.config.app.pipelines.usePreview3dThumbnail
+                        .autoRegisterAutoTriggerOnFileUpload === true,
             });
-
-            //Nag suppression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
         }
 
         //Output VAMS Pipeline Execution Function name

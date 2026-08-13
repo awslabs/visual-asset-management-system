@@ -169,8 +169,8 @@ export class AuthBuilderNestedStack extends NestedStack {
                                 conditions: {
                                     StringEquals: {
                                         "kms:ViaService": [
-                                            Service("DYNAMODB").Endpoint,
-                                            Service("S3").Endpoint,
+                                            Service("DYNAMODB", false).Endpoint,
+                                            Service("S3", false).Endpoint,
                                         ],
                                     },
                                 },

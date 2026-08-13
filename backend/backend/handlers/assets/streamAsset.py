@@ -18,7 +18,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from handlers.assets.assetVersions import (
     resolve_file_version_from_asset_version,
     resolve_asset_version_id_from_alias
@@ -55,6 +55,10 @@ try:
     s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
+    quarantine_blocks_download = os.environ.get(
+        "FMM_QUARANTINE_BLOCKS_DOWNLOAD", "false"
+    ).lower() == "true"
+    compliance_table_name = os.environ.get("FMM_ASSET_COMPLIANCE_STORAGE_TABLE_NAME")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -62,6 +66,22 @@ except Exception as e:
 # Initialize DynamoDB tables
 buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 asset_table = dynamodb.Table(asset_storage_table_name)
+
+def _check_quarantine_block(database_id, asset_id):
+    """Block streaming if asset is quarantined and enforcement is enabled."""
+    if not compliance_table_name:
+        return
+    compliance_table = dynamodb.Table(compliance_table_name)
+    response = compliance_table.get_item(
+        Key={"databaseId": database_id, "assetId": asset_id}
+    )
+    item = response.get("Item")
+    if item and item.get("complianceState") == "quarantined":
+        if not item.get("exceptionGranted"):
+            raise VAMSGeneralErrorResponse(
+                "Asset is quarantined and cannot be streamed"
+            )
+
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
@@ -220,9 +240,12 @@ def handle_head_request(event, claims_and_roles):
         message = "Asset not distributable"
         logger.error(message)
         return authorization_error(body={'message': message})
-    
+
+    if quarantine_blocks_download:
+        _check_quarantine_block(databaseId, assetId)
+
     asset_object.update({"object__type": "asset"})
-    
+
     # Check authorization
     operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
@@ -230,10 +253,10 @@ def handle_head_request(event, claims_and_roles):
         if casbin_enforcer.enforceAPI(event, "GET"):
             if casbin_enforcer.enforce(asset_object, "GET"):
                 operation_allowed_on_asset = True
-    
+
     if not operation_allowed_on_asset:
         return authorization_error()
-    
+
     # Get asset location
     asset_location = asset_object.get('assetLocation')
     if not asset_location:
@@ -455,6 +478,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             error_response['headers'].update(streaming_headers)
             return error_response
 
+        if quarantine_blocks_download:
+            _check_quarantine_block(databaseId, assetId)
+
         asset_object.update({"object__type": "asset"})
 
         logger.info(asset_object)
@@ -665,7 +691,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

@@ -162,16 +162,17 @@ def validateUnallowedFileExtensionAndContentType(keyPath: str, contentType: str)
     return True
 
 def validateS3AssetExtensionsAndContentType(bucket: str, prefixKey: str):
-    #Get list of all objects in a particular S3 key/prefix
-    resp = s3c.list_objects_v2(Bucket=bucket, Prefix=prefixKey)
-    logger.info(resp)
+    #Get list of all objects in a particular S3 key/prefix, paging to exhaustion so every object
+    #under the prefix is inspected (a single page would leave objects past the first 1,000
+    #unvalidated while callers still ingest them).
+    objects = list_all_objects(bucket, prefixKey)
 
     #Check for each returned object if it is a valid asset based on ContentType
-    #Check for all malicious executable MIME types
-    if "Contents" in resp:
-        for obj in resp['Contents']:
-            respHeader = s3c.head_object(Bucket=bucket, Key=obj['Key'])
-            logger.info(respHeader)
-            if not validateUnallowedFileExtensionAndContentType(obj['Key'], respHeader['ContentType']):
-                return False
+    #Check for all malicious executable MIME types. A prefix can hold many thousands of objects, so
+    #the per-object head response is not logged; validateUnallowedFileExtensionAndContentType logs
+    #the offending key when a check fails.
+    for obj in objects:
+        respHeader = s3c.head_object(Bucket=bucket, Key=obj['Key'])
+        if not validateUnallowedFileExtensionAndContentType(obj['Key'], respHeader['ContentType']):
+            return False
     return True

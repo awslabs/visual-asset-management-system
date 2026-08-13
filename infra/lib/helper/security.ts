@@ -213,7 +213,6 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     storageResources: storageResources
 ): void {
     // Grant read permissions to authentication and authorization tables
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.constraintsStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);
@@ -452,7 +451,7 @@ export function generateContentSecurityPolicy(
         "blob:",
         "data:",
         `https://${apiUrl}`,
-        `https://${Service("S3").Endpoint}/`,
+        `https://${Service("S3", false).Endpoint}/`,
     ];
 
     // `'unsafe-inline'` is used intentionally here instead of per-script SHA
@@ -468,9 +467,9 @@ export function generateContentSecurityPolicy(
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
-    let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
+    let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
 
-    let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
+    let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
 
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];
@@ -484,8 +483,8 @@ export function generateContentSecurityPolicy(
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
-        connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
-        connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+        connectSrc.push(`https://${Service("COGNITO_IDP", false).Endpoint}/`);
+        connectSrc.push(`https://${Service("COGNITO_IDENTITY", false).Endpoint}/`);
     }
 
     //If authDomain is non-null and not empty string, add to connectSrc
@@ -500,7 +499,7 @@ export function generateContentSecurityPolicy(
 
     //Add GeoLocation service URL if feature turned on
     if (config.app.useLocationService.enabled) {
-        connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
+        connectSrc.push(`https://maps.${Service("GEO", false).Endpoint}/`);
     }
 
     // When the Physna add-on is enabled the viewer plugin embeds Physna's

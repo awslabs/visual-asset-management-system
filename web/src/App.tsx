@@ -15,6 +15,17 @@ import "@aws-amplify/ui-react/styles.css";
 import { useThemeSettings } from "./hooks/useThemeSettings";
 import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ToastProvider } from "./features/orchestration/components/ToastProvider";
+
+const queryClient = new QueryClient({
+    defaultOptions: {
+        queries: {
+            staleTime: 30000,
+            retry: 1,
+        },
+    },
+});
 
 const HeaderPortal = ({ children }: { children: any }) => {
     const domNode = document.querySelector("#headerWrapper");
@@ -67,64 +78,69 @@ function App() {
     };
 
     return (
-        <>
-            <HeaderPortal>
-                <TopNavigation
-                    identity={{
-                        href: "/",
-                        logo: {
-                            src: logoWhite,
-                            alt: config.APP_NAME,
-                        },
-                    }}
-                    utilities={[
-                        {
-                            type: "menu-dropdown",
-                            text: "Settings",
-                            iconName: "settings",
-                            onItemClick: (e) => {
-                                const id = e?.detail?.id;
-                                if (id === "theme-light") setTheme("light");
-                                if (id === "theme-dark") setTheme("dark");
+        <QueryClientProvider client={queryClient}>
+            {/* Toast notifications for the orchestration module. Mounted here so every page and
+                wizard shares one stack — a toast raised while navigating is not lost with the
+                unmounting page. */}
+            <ToastProvider>
+                <HeaderPortal>
+                    <TopNavigation
+                        identity={{
+                            href: "/",
+                            logo: {
+                                src: logoWhite,
+                                alt: config.APP_NAME,
                             },
-                            items: [
-                                {
-                                    id: "theme-light",
-                                    text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                        }}
+                        utilities={[
+                            {
+                                type: "menu-dropdown",
+                                text: "Settings",
+                                iconName: "settings",
+                                onItemClick: (e) => {
+                                    const id = e?.detail?.id;
+                                    if (id === "theme-light") setTheme("light");
+                                    if (id === "theme-dark") setTheme("dark");
                                 },
-                                {
-                                    id: "theme-dark",
-                                    text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
-                                },
-                            ],
-                        },
-                        {
-                            type: "menu-dropdown",
-                            text: menuText,
-                            description: menuText,
-                            iconName: "user-profile",
-                            onItemClick: (e) => {
-                                if (e?.detail?.id === "signout") signOut();
+                                items: [
+                                    {
+                                        id: "theme-light",
+                                        text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                                    },
+                                    {
+                                        id: "theme-dark",
+                                        text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                                    },
+                                ],
                             },
-                            items: [{ id: "signout", text: "Sign out" }],
-                        },
-                    ]}
-                    i18nStrings={{
-                        searchIconAriaLabel: "Search",
-                        searchDismissIconAriaLabel: "Close search",
-                        overflowMenuTriggerText: "More",
-                    }}
-                />
-            </HeaderPortal>
-            <HashRouter>
-                <AppRoutes
-                    navigationOpen={navigationOpen}
-                    user={user}
-                    setNavigationOpen={setNavigationOpen}
-                />
-            </HashRouter>
-            <PageFooter />
-        </>
+                            {
+                                type: "menu-dropdown",
+                                text: menuText,
+                                description: menuText,
+                                iconName: "user-profile",
+                                onItemClick: (e) => {
+                                    if (e?.detail?.id === "signout") signOut();
+                                },
+                                items: [{ id: "signout", text: "Sign out" }],
+                            },
+                        ]}
+                        i18nStrings={{
+                            searchIconAriaLabel: "Search",
+                            searchDismissIconAriaLabel: "Close search",
+                            overflowMenuTriggerText: "More",
+                        }}
+                    />
+                </HeaderPortal>
+                <HashRouter>
+                    <AppRoutes
+                        navigationOpen={navigationOpen}
+                        user={user}
+                        setNavigationOpen={setNavigationOpen}
+                    />
+                </HashRouter>
+                <PageFooter />
+            </ToastProvider>
+        </QueryClientProvider>
     );
 }
 

@@ -5,6 +5,16 @@
 // Registers DOM matchers (toBeInTheDocument, toHaveClass, ...) on expect
 import "@testing-library/jest-dom";
 
+// jsdom lacks ResizeObserver, which Radix primitives (Tooltip/Popover via react-use-size) touch on
+// mount. Provide a no-op polyfill so components using those primitives render under jest.
+if (typeof (globalThis as any).ResizeObserver === "undefined") {
+    (globalThis as any).ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+    };
+}
+
 jest.mock("maplibre-gl/dist/maplibre-gl", () => ({
     GeolocateControl: jest.fn(),
     Map: jest.fn(() => ({

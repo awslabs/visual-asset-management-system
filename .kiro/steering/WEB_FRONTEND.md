@@ -6,7 +6,7 @@ This is the Kiro front-end steering document for the VAMS (Visual Asset Manageme
 
 ## 1. Architecture Overview
 
-VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application built with Vite. All source files in `src/` have been converted to `.ts`/`.tsx` (the only remaining `.js` files are Jest mocks in `src/__mocks__/`).
+VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application built with Vite. All source files in `src/` have been converted to `.ts`/`.tsx` (the only remaining `.js` files are Jest mocks in `src/__mocks__/`).
 
 **Primary UI library:** AWS Cloudscape Design System (`@cloudscape-design/components ^3.0.196`).
 
@@ -18,7 +18,7 @@ VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application b
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (18 viewer plugins)
+-   Plugin-based 3D viewer architecture (19 viewer plugin directories)
 -   React.lazy + Suspense for route-level code splitting
 
 ---
@@ -29,7 +29,8 @@ VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application b
 
 ```
 web/
-  package.json              # npm, React 17, Vite scripts
+  package.json              # npm, React 18, Vite scripts
+  e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md
   customInstalls/           # Viewer plugin custom install scripts
     babylonjs/
     cesium/
@@ -37,6 +38,7 @@ web/
     online3dviewer/
     playcanvas/
     potree/
+    supersplat/
     thatopenwebifc/           # That Open Engine (web-ifc) IFC/BIM viewer bundle
     threejs/
     utility/
@@ -46,11 +48,33 @@ web/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
     routes.tsx              # Centralized route table, React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
-    config.json             # Build-time config
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
-    index.tsx               # Entry point, ReactDOM.render
+    index.tsx               # Entry point, createRoot
     reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
+
+    features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
+      api/                  # Services + TanStack Query hooks + qk key factory
+                            #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
+                            #   client.ts queries.ts
+      permissions/useAllowedRoutes.ts  # Tier-1 permission gating
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
+                            #   ToastProvider.tsx — notifications for the whole module
+      pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
+                            #   live under executionConfig.sqs / executionConfig.eventBridge),
+                            #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
+                            #   TemplateOverridesEditor.tsx pipelineValidation.ts
+      workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
+                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   WorkflowValidationPanel.tsx workflowValidation.ts
+      executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
+                            #   ExecutionQuickView.tsx ExecutionRowActions.tsx
+                            #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
+      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
+                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
+      types.ts reservedTagKeys.ts
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
@@ -68,27 +92,29 @@ web/
       FileOperationsService.ts
       MetadataService.ts    # Metadata CRUD operations
       MetadataSchemaService.ts  # Schema management
+      apiClient.ts          # Custom fetch-based client, injects auth headers
+      appCache.ts           # Replaces Amplify Cache for runtime config
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
-      WorkflowContext.ts     # NOTE: typo is intentional, do NOT rename
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
         versions/           # Asset version management
           AssetVersionManager.tsx
-          AssetVersionList.tsx
           AssetVersionComparison.tsx
-          components/
-            EditVersionModal.tsx      # Edit version alias/comment
-            ArchiveVersionModal.tsx   # Archive/unarchive version
-      common/               # Shared components
-      containers/
-      createupdate/         # Workflow create/update
+          components/       # Edit and archive/unarchive version modals
+          hooks/
+      common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
       filemanager/          # File tree and file operations
+        components/         # FileDetailsPanel, AutomationActions (lazy-loads the execute modal),
+                            #   tree views, preview thumbnails, splitters
+        utils/              # automationSelection.ts maps a selection to workflow input files
       form/
-      interactive/          # Map/geospatial components
       list/
       loading/              # Loading screens and spinners
       metadata/
@@ -98,99 +124,94 @@ web/
       search/               # ModernSearchContainer.tsx - main search UI
       searchSmall/
       selectors/
-      single/               # Single-entity views (ViewPipeline, ViewFile, AssetIngestion)
+      single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx
       AssetUpload/          # Upload page and modify uploads
-      Assets.tsx
       auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys
         ApiKeys.tsx           # API key list page
         CreateApiKey.tsx      # Create API key modal
         UpdateApiKey.tsx      # Update API key modal
-      CommentListPage.tsx
       Databases.tsx
-      Executions.tsx
       LandingPage.tsx
       ListPage.tsx
       ListPageNoDatabase.tsx
       MetadataSchema.tsx
-      Pipelines.tsx         # Pipeline list; create/edit forms show conditional fields
-                            #   for SQS (sqsQueueUrl) and EventBridge (busArn, source,
-                            #   detailType) based on pipelineExecutionType selection.
-                            #   Non-callback SQS/EventBridge pipelines display a
-                            #   fire-and-forget alert (no files/previews/metadata returned).
       search/               # SearchPage.tsx
       Subscription/
       Tag/
-      Workflows.tsx
+
+      # Orchestration route shells — each reads route params and renders the matching
+      # features/orchestration component; keep the page logic in the feature module.
+      PipelinesPage2.tsx
+      PipelineBuilderPage.tsx
+      TemplateListPage.tsx
+      TemplateBuilderPage.tsx
+      WorkflowsPage2.tsx
+      WorkflowBuilderPage.tsx
+      WorkflowTriggersPage.tsx
+      ExecutionsPage.tsx
+      ExecutionDetail.tsx
 
     visualizerPlugin/       # 3D/media viewer plugin system
       index.ts              # Public API
       README.md             # Plugin development docs
       config/
-        viewerConfig.json   # Plugin configuration (18 viewers)
+        viewerConfig.json   # Plugin configuration
       core/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
         StylesheetManager.ts
         types.ts
       components/           # Shared viewer UI components
       viewers/              # Individual viewer plugins
-        manifest.ts         # Webpack static analysis manifest
+        manifest.ts         # Static analysis manifest
         AudioViewerPlugin/
         BabylonJSGaussianSplatViewerPlugin/
         CesiumViewerPlugin/
         ColumnarViewerPlugin/
-        GameLiftStreamViewerPlugin/
         HTMLViewerPlugin/
         ImageViewerPlugin/
         NeedleUSDViewerPlugin/
         Online3dViewerPlugin/
         PDFViewerPlugin/
+        PhysnaViewerPlugin/
         PlayCanvasGaussianSplatViewerPlugin/
         PotreeViewerPlugin/
+        SuperSplatViewerPlugin/
         TextViewerPlugin/
         ThatOpenWebIfcViewerPlugin/  # IFC/BIM viewer (That Open Engine, web-ifc)
         ThreeJSViewerPlugin/
         VeerumViewerPlugin/
         VideoViewerPlugin/
         VntanaViewerPlugin/
-      test/
 
     common/                 # Shared utilities and helpers
-      apply-mode.ts
-      clipboard.ts
-      columnDefinitionsHelper.ts
-      common-components.tsx
-      constants/
-      createPropertyStorage.ts
-      External.tsx
       GlobalHeader.tsx
-      helpers/
-      i18nStrings.ts
-      localStorage.ts
-      property-filter/
-      typeUtils.ts
-      utils/
+      common-components.tsx
+      constants/            # apiKeys.ts authRoutes.ts featuresEnabled.ts fileFormats.ts
+      helpers/              # labels.ts tableCounterStrings.ts
+      utils/                # utils.ts fileSize.ts
 
     constants/
       uploadLimits.ts
 
-    external/               # External library integrations
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts
 
     layout/
       Navigation.tsx        # Left sidebar navigation
 
     utils/
+      apiEndpoint.ts        # Resolves the API base URL
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
-      abstracts/
-      base/
+      tailwind.css          # Tailwind entry (scoped content glob; preflight disabled)
       base.scss
       components/
       dashboard.scss
@@ -198,14 +219,14 @@ web/
       header.scss
       index.scss
       landing-page.scss
-      layout/
       onboarding.scss
-      pages/
-      utilities/
+      table-date-filter.scss
+      table-select.scss
       wizard.scss
 
     resources/              # Static assets (images, logos)
     @types/                 # Custom TypeScript declarations
+    __mocks__/              # Jest module mocks (the only .js files in src/)
 ```
 
 ---
@@ -225,21 +246,32 @@ Every source file MUST begin with the Apache-2.0 copyright header:
 
 NEVER remove or modify these headers. Use the `2026` year for new files.
 
-### Rule 2: Use Cloudscape Components
+### Rule 2: Use Cloudscape Components (with orchestration exception)
 
-All UI components MUST use AWS Cloudscape Design System. Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library.
+The existing app uses AWS Cloudscape Design System. The orchestration module (`src/features/orchestration/**`) is built with **Tailwind CSS + Radix UI** and is Cloudscape-free. This boundary is intentional:
+
+-   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
+-   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind is scoped to the `src/features/orchestration/**` content glob).
+-   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page, so a Cloudscape page using a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (examples verified in the built CSS; the emitted set depends on what the orchestration module uses). Outside the orchestration module, use a VAMS-defined class or no class at all.
+
+Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
 
 ```typescript
-// CORRECT
+// CORRECT (Cloudscape pages)
 import Button from "@cloudscape-design/components/button";
 import Table from "@cloudscape-design/components/table";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 
 // INCORRECT -- never import from the barrel export
 import { Button, Table } from "@cloudscape-design/components";
+
+// CORRECT (orchestration module)
+import { Button } from "@radix-ui/themes";
+<div className="flex gap-2">...</div>;
 ```
 
-**Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size.
+**Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -258,7 +290,7 @@ const response = await apiClient.get(`database/${databaseId}/assets`);
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -266,8 +298,9 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
 
 ### Rule 4: npm Only
 
@@ -519,7 +552,8 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 | -------------------- | ------------------------------- | -------------------------------- |
 | `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
 | `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
-| `WorkflowContext`    | `context/WorkflowContext.ts`    | Workflow state                   |
+
+The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
 
 ---
 
@@ -529,8 +563,9 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 -   **Pages** (`src/pages/`) -- thin wrappers that compose components, lazy-loaded in routes
 -   **Components** (`src/components/`) -- organized by domain/feature
+-   **Features** (`src/features/orchestration/`) -- the pipelines/workflows/executions module, which owns its own pages, components, and API layer; its `src/pages/` entries are route shells only
 -   **Layout** (`src/layout/`) -- Navigation shell components
--   **Common** (`src/common/`) -- shared utilities, helpers, column definitions
+-   **Common** (`src/common/`) -- shared utilities, helpers, labels, and feature-switch constants
 
 ### 7.2 Component Template (New Feature Component)
 
@@ -684,7 +719,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled                                             |
 | `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep                                                         | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
-| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled                                             |
+| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter.
@@ -830,7 +865,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)

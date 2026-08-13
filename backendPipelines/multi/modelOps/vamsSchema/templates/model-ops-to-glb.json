@@ -1,0 +1,9 @@
+{
+    "templateId": "model-ops-to-glb",
+    "templateName": "Optimize to GLB",
+    "description": "Optimize and convert a 3D model to GLB using the VNTANA Intelligent 3D Optimization Engine.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".glb\"}",
+    "allowCustomEdit": false,
+    "inputInstructions": "Optimizes a 3D model with VNTANA ModelOps and outputs glTF Binary (.glb). Requires a licensed ModelOps deployment. Select the source model as the input file.\n\nThis pipeline reads no asset or file metadata — optimization settings come from this template."
+}

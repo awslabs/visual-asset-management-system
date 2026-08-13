@@ -1,0 +1,50 @@
+{
+    "pipelineName": "3D Preview Thumbnail",
+    "category": "Preview",
+    "description": "Generate preview thumbnails (GIF/JPG/PNG) for 3D files - .ply, .stl, .obj, .glb, .gltf, .fbx, .las, .laz, .e57, .ptx, .fls, .fws, .pcd, .drc, .stp, .step, .usd, .usda, .usdc, .usdz",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "3600",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": false,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [
+                "*.ply",
+                "*.stl",
+                "*.obj",
+                "*.glb",
+                "*.gltf",
+                "*.fbx",
+                "*.las",
+                "*.laz",
+                "*.e57",
+                "*.ptx",
+                "*.fls",
+                "*.fws",
+                "*.pcd",
+                "*.drc",
+                "*.stp",
+                "*.step",
+                "*.usd",
+                "*.usda",
+                "*.usdc",
+                "*.usdz"
+            ],
+            "exclude": []
+        }
+    }
+}

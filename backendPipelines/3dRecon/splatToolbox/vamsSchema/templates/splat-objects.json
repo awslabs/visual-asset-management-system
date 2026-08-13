@@ -1,0 +1,9 @@
+{
+    "templateId": "splat-objects",
+    "templateName": "Objects (standard capture)",
+    "description": "Process standard images / 2D videos (.zip, .mov, .mp4) into 3D Gaussian splat objects.",
+    "configFormat": "json",
+    "configBody": "{}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Use for standard (non-360) captures of individual objects. Leave the configuration empty for defaults."
+}

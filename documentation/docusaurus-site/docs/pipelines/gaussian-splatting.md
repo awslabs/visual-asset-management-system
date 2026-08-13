@@ -73,9 +73,13 @@ Enable this pipeline in `infra/config/config.json`:
 ```json
 {
     "app": {
+        "useGlobalVpc": {
+            "enabled": true
+        },
         "pipelines": {
             "useSplatToolbox": {
                 "enabled": true,
+                "useCodeBuild": true,
                 "autoRegisterWithVAMS": true
             }
         }
@@ -85,10 +89,11 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                 | Default | Description                                                                    |
-| :--------------------- | :------ | :----------------------------------------------------------------------------- |
-| `enabled`              | `false` | Deploy the Gaussian Splatting pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow during CDK deployment.        |
+| Option                 | Default | Description                                                                                               |
+| :--------------------- | :------ | :-------------------------------------------------------------------------------------------------------- |
+| `enabled`              | `false` | Deploy the Gaussian Splatting pipeline infrastructure. Requires the global VPC.                           |
+| `useCodeBuild`         | `false` | Build the container image with AWS CodeBuild instead of locally during `cdk deploy`. See Container Image. |
+| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow during CDK deployment.                                   |
 
 :::note[No Auto-Trigger on Upload]
 Unlike preview pipelines, the Gaussian Splatting pipeline does not support `autoRegisterAutoTriggerOnFileUpload`. Reconstruction jobs are resource-intensive and should be triggered intentionally through the VAMS web interface or API.
@@ -96,15 +101,26 @@ Unlike preview pipelines, the Gaussian Splatting pipeline does not support `auto
 
 ## Pipeline Parameters
 
-When executing the pipeline, the following parameters can be configured through the VAMS workflow input:
+Parameters are supplied through the selected configuration template's `configBody` (or a per-run
+override). Only keys the container recognizes take effect; an unrecognized key is skipped and reported
+on the container's own log line.
 
-| Parameter           | Description                                                 | Default         |
-| :------------------ | :---------------------------------------------------------- | :-------------- |
-| `MODEL`             | Splatting model type (e.g., `splatfacto`, `splatfacto-big`) | `splatfacto`    |
-| `MAX_STEPS`         | Number of training iterations                               | Varies by model |
-| `SFM_SOFTWARE_NAME` | Structure from Motion software (`COLMAP` or `GLOMAP`)       | `COLMAP`        |
-| `REMOVE_BACKGROUND` | Enable background removal from input images                 | `false`         |
-| `GENERATE_SPLAT`    | Enable generation of compressed splat output files          | `true`          |
+| Parameter             | Description                                                          | Default      |
+| :-------------------- | :------------------------------------------------------------------- | :----------- |
+| `MODEL`               | Splatting model type (for example `splatfacto`, `splatfacto-big`)    | `splatfacto` |
+| `MAX_STEPS`           | Number of training iterations                                        | `15000`      |
+| `RECON_SOFTWARE_NAME` | Reconstruction software (`colmap`, `glomap`, `hloc`, `map_anything`) | `glomap`     |
+| `SPHERICAL_CAMERA`    | Treat the input as a 360/spherical capture                           | `False`      |
+| `REMOVE_BACKGROUND`   | Enable background removal from input images                          | `False`      |
+| `ENABLE_SPZ`          | Export the compressed SPZ splat format                               | `True`       |
+| `ENABLE_SOG`          | Export the SOG splat format                                          | `True`       |
+
+:::note
+The pipeline ships two templates — **Objects (standard capture)** for standard object captures, which
+leaves the configuration at its defaults, and **Environments (360 / spherical capture)**, which sets
+`SPHERICAL_CAMERA`. Both allow a per-run configuration edit, so any parameter above can be set on the
+execute form.
+:::
 
 ## Prerequisites
 
@@ -126,7 +142,7 @@ Ensure your AWS account has sufficient GPU instance quotas for the target region
 
 ### VPC with Internet Access
 
-The pipeline runs on AWS Batch with GPU instances in **private subnets** that have internet access via a NAT Gateway. Internet access is required during the container build process to download model weights and dependencies. Enabling this pipeline automatically sets `app.useGlobalVpc.enabled` to `true`.
+The pipeline runs on AWS Batch with GPU instances in **private subnets** that have internet access via a NAT Gateway. Internet access is required during the container build process to download model weights and dependencies. This pipeline requires the global VPC: set `app.useGlobalVpc.enabled` to `true` alongside `useSplatToolbox`, or configuration validation fails with an error naming the pipeline.
 
 ### Container Image
 
@@ -136,19 +152,26 @@ The container image is automatically synced from the upstream open-source reposi
 -   **Pinned commit**: The CDK stack pins to a specific commit hash to ensure reproducible builds.
 -   **Integration**: A VAMS-specific entrypoint script (`pipeline_vams.py`) wraps the upstream pipeline with Amazon S3 I/O and AWS Step Functions callback handling.
 
-The sync process clones the upstream repository, copies the container files into the pipeline directory, and builds the Docker image during `cdk deploy`.
+The sync process clones the upstream repository at the pinned commit and copies the container files into the pipeline directory. The synth verifies that the checked-out commit matches the pinned hash and that the VAMS entry point is staged into the Dockerfile, and fails the deployment if either check does not hold rather than building from stale sources.
+
+Set `useCodeBuild` to `true` to build the image with AWS CodeBuild instead of locally. The deployment then creates an Amazon ECR repository, uploads the container directory as an Amazon S3 source asset, and runs a CodeBuild project (Docker layer caching, privileged mode, in the pipeline VPC) that pushes the image to Amazon ECR; the AWS Batch job definition consumes that image. This avoids building the large CUDA image on the machine running `cdk deploy`. The build is started by a custom resource and continues after the deployment completes, so check its status before running the pipeline:
+
+```bash
+aws codebuild list-builds-for-project --project-name <SplatToolboxCodeBuild project>
+```
+
+Left at `false`, the image is built locally during `cdk deploy`.
 
 ## Infrastructure Components
 
-| Resource                     | Service            | Purpose                                                                                       |
-| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------------------- |
-| GPU Compute Environment      | AWS Batch          | GPU-accelerated container execution                                                           |
-| Job Queue                    | AWS Batch          | Job scheduling with GPU instance selection                                                    |
-| Job Definition               | AWS Batch          | Container configuration with GPU, memory, and storage settings                                |
-| Container Image              | Amazon ECR         | 3D reconstruction toolbox container                                                           |
-| Step Functions State Machine | AWS Step Functions | Workflow orchestration                                                                        |
-| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, constructPipeline, openPipeline, sqsExecute, pipelineEnd) |
-| SQS Queue                    | Amazon SQS         | Event-driven pipeline triggering                                                              |
+| Resource                     | Service            | Purpose                                                                           |
+| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------- |
+| GPU Compute Environment      | AWS Batch          | GPU-accelerated container execution                                               |
+| Job Queue                    | AWS Batch          | Job scheduling with GPU instance selection                                        |
+| Job Definition               | AWS Batch          | Container configuration with GPU, memory, and storage settings                    |
+| Container Image              | Amazon ECR         | 3D reconstruction toolbox container                                               |
+| Step Functions State Machine | AWS Step Functions | Workflow orchestration                                                            |
+| Lambda Functions (4)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, pipelineEnd) |
 
 ## How It Works
 

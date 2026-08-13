@@ -22,6 +22,10 @@ export interface CosmosCodeBuildConstructProps extends cdk.StackProps {
     vpc: ec2.IVpc;
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
+    /** Build the Predict/Reason/Transfer repos (useNvidiaCosmos.useCodeBuild). */
+    buildCosmosRepos: boolean;
+    /** Build the Cosmos3 omni repo (useNvidiaCosmos3.useCodeBuild). */
+    buildCosmos3Repos: boolean;
 }
 
 export interface PipelineEcrRepo {
@@ -36,7 +40,9 @@ export interface PipelineEcrRepo {
  * Builds Cosmos container images via CodeBuild and pushes them to ECR.
  * This avoids local Docker builds of 35GB+ GPU images, which are extremely slow.
  *
- * For each enabled pipeline group (predictV2, reason, transfer), this construct creates:
+ * A group is built only when its own family opted into CodeBuild (`buildCosmosRepos` for
+ * predictV2/reason/transfer, `buildCosmos3Repos` for cosmos3) AND one of its models is enabled.
+ * For each such group this construct creates:
  * - An ECR repository for the container image
  * - An S3 asset upload of the container source directory
  * - A CodeBuild project configured with Docker layer caching
@@ -259,10 +265,11 @@ def handler(event, context):
          * Enabled if any of the v2 predict models are enabled.
          */
         const anyPredictV2Enabled =
-            cosmosConfig.modelsPredict.text2world2B_v2?.enabled ||
-            cosmosConfig.modelsPredict.video2world2B_v2?.enabled ||
-            cosmosConfig.modelsPredict.text2world14B_v2?.enabled ||
-            cosmosConfig.modelsPredict.video2world14B_v2?.enabled;
+            props.buildCosmosRepos &&
+            (cosmosConfig.modelsPredict.text2world2B_v2?.enabled ||
+                cosmosConfig.modelsPredict.video2world2B_v2?.enabled ||
+                cosmosConfig.modelsPredict.text2world14B_v2?.enabled ||
+                cosmosConfig.modelsPredict.video2world14B_v2?.enabled);
 
         if (anyPredictV2Enabled) {
             this.predictV2Repo = createPipelineBuild(
@@ -281,8 +288,9 @@ def handler(event, context):
          * Enabled if reason2B or reason8B is enabled.
          */
         const anyReasonEnabled =
-            cosmosConfig.modelsReason?.reason2B?.enabled ||
-            cosmosConfig.modelsReason?.reason8B?.enabled;
+            props.buildCosmosRepos &&
+            (cosmosConfig.modelsReason?.reason2B?.enabled ||
+                cosmosConfig.modelsReason?.reason8B?.enabled);
 
         if (anyReasonEnabled) {
             this.reasonRepo = createPipelineBuild(
@@ -300,7 +308,8 @@ def handler(event, context):
          * Conditional creation: transfer
          * Enabled if transfer2B is enabled.
          */
-        const anyTransferEnabled = cosmosConfig.modelsTransfer?.transfer2B?.enabled;
+        const anyTransferEnabled =
+            props.buildCosmosRepos && cosmosConfig.modelsTransfer?.transfer2B?.enabled;
 
         if (anyTransferEnabled) {
             this.transferRepo = createPipelineBuild(
@@ -320,6 +329,7 @@ def handler(event, context):
          */
         const cosmos3Config = props.config.app.pipelines.useNvidiaCosmos3;
         const anyCosmos3Enabled =
+            props.buildCosmos3Repos &&
             cosmos3Config?.enabled &&
             (cosmos3Config.modelsOmni?.nano16B?.enabled ||
                 cosmos3Config.modelsOmni?.super64B?.enabled ||

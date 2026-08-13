@@ -9,9 +9,12 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="VamsExecuteCoordinateTransformPipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
@@ -19,8 +22,9 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
                      output_s3_asset_preview_path, output_s3_asset_metadata_path,
                      inputOutput_s3_assetAuxiliary_files_path,
                      asset_id, database_id,
-                     input_metadata, input_parameters, external_task_token,
-                     executing_userName, executing_requestContext):
+                     input_metadata_s3_location, input_configuration_s3_location,
+                     external_task_token, executing_userName, executing_requestContext,
+                     orchestration_event_prefix=""):
 
     messagePayload = {
         "inputS3AssetFilePath": input_s3_asset_file_path,
@@ -30,11 +34,12 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "assetId": asset_id,
         "databaseId": database_id,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
+        "orchestrationEventPrefix": orchestration_event_prefix,
     }
 
     logger.info("Invoking Open Pipeline Lambda")
@@ -50,8 +55,26 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
         raise Exception("Invoke Open Pipeline Lambda Failed. " + message)
 
 
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token so the pipeline task does not wait
+    for the full taskTimeout when this lambda cannot start the pipeline."""
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_failure(
+            taskToken=task_token,
+            error="CoordinateTransformPipelineError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
+
 def lambda_handler(event, context):
     logger.info(event)
+
+    external_task_token = None
 
     try:
         if not event.get('body'):
@@ -70,30 +93,36 @@ def lambda_handler(event, context):
                 "Register this pipeline as needing a task token callback."
             )
 
-        input_parameters = data.get('inputParameters', '')
-        input_metadata = data.get('inputMetadata', '')
         executing_userName = data.get('executingUserName', '')
         executing_requestContext = data.get('executingRequestContext', '')
 
+        # Resolve input/output locations from the workflow manifest, falling back to payload path fields
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
+        logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
+
         execute_pipeline(
-            data['inputS3AssetFilePath'],
-            data['outputS3AssetFilesPath'],
-            data.get('outputS3AssetPreviewPath', ''),
-            data.get('outputS3AssetMetadataPath', ''),
-            data.get('inputOutputS3AssetAuxiliaryFilesPath', ''),
-            data.get('assetId', ''),
-            data.get('databaseId', ''),
-            input_metadata,
-            input_parameters,
+            resolved['inputS3AssetFilePath'],
+            resolved['outputS3AssetFilesPath'],
+            resolved['outputS3AssetPreviewPath'],
+            resolved['outputS3AssetMetadataPath'],
+            resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            resolved['assetId'],
+            resolved['databaseId'],
+            resolved['inputMetadataS3Location'],
+            resolved['inputConfigurationS3Location'],
             external_task_token,
             executing_userName,
             executing_requestContext,
+            resolved['orchestrationEventPrefix'],
         )
 
         return {'statusCode': 200, 'body': 'Success'}
 
     except Exception as e:
         logger.exception(e)
+        abort_external_workflow(e, external_task_token)
         return {
             'statusCode': 500,
             'body': json.dumps({"message": "Internal Server Error"})

@@ -31,10 +31,24 @@ A role is a named collection of constraints that can be assigned to users. Roles
 
 VAMS is deployed with two default roles:
 
-| Role         | Description                                                                                                                                         |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Admin**    | Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management. |
-| **ReadOnly** | Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data.               |
+| Role            | Description                                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `admin`         | Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management. |
+| `basicReadOnly` | Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data.               |
+
+The deployment assigns the administrator account named by `app.adminUserId` to `admin`. The reserved
+`SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
+
+`basicReadOnly` reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
+comments, subscriptions, and metadata schemas, and it may manage its own API keys. It cannot reach the
+administrative routes that `admin` holds: detailed execution logs
+(`GET /workflows/executions/\{executionId\}/logs`) and execution permanent delete
+(`DELETE /workflows/executions/\{executionId\}/permanent`). Because read access is granted through
+broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
+which override a matching `allow`.
+
+In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
+and the tab reports that the logs are not viewable.
 
 ### Creating a custom role
 

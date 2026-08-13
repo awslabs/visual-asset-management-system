@@ -1,0 +1,9 @@
+{
+    "templateId": "coordinate-transform-wgs84-to-osgb36-laz",
+    "templateName": "WGS84 to OSGB36 (LAZ output)",
+    "description": "Reproject point clouds from EPSG:4326 (WGS84) to EPSG:27700 (OSGB36) and write compressed LAZ output.",
+    "configFormat": "json",
+    "configBody": "{\"sourceCrs\":\"EPSG:4326\",\"targetCrs\":\"EPSG:27700\",\"outputFormats\":[\"laz\"]}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Reprojects a point cloud from one coordinate reference system to another. This template is preconfigured for WGS84 to OSGB36 with LAZ output; the settings can be overridden per run or per asset.\n\nAsset metadata this pipeline reads (all optional, matched case-insensitively):\n  sourceCrs             Source coordinate reference system.\n  targetCrs             Target coordinate reference system.\n  outputFormats         Output formats, comma-separated (for example \"laz,las\").\n  sourceScaleFactor     Scale applied to the source coordinates.\n  targetScaleFactor     Scale applied to the target coordinates.\n  applyScaleCorrection  Whether to apply scale correction.\n  combinedScaleFactor   Combined scale factor, when supplied instead of the pair above.\n  chunkSize             Points per processing chunk.\n  enforceSourceCrs      Require the declared source CRS rather than the file's own.\n  onMismatch            What to do when the file's CRS disagrees with sourceCrs.\n  compressLaz           Whether to write compressed LAZ.\n\nHow to supply metadata: set these as metadata on the ASSET (Metadata tab on the asset page, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: asset metadata WINS over this template's parameters — the opposite of most pipelines. A key set on the asset overrides the same setting here, so remove the metadata key if you want the template value to apply."
+}

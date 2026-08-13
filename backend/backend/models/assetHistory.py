@@ -5,11 +5,15 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel
 
+# Maximum length of a pagination token. The token is a base64-encoded DynamoDB
+# LastEvaluatedKey, so a legitimate value is well under this.
+MAX_HISTORY_TOKEN_LENGTH = 4096
+
 
 class GetAssetHistoryRequestModel(BaseModel, extra='ignore'):
     """Query parameters for listing asset lifecycle history records"""
     pageSize: Optional[int] = Field(default=100, ge=1, le=1000)
-    startingToken: Optional[str] = None
+    startingToken: Optional[str] = Field(default=None, max_length=MAX_HISTORY_TOKEN_LENGTH)
 
 
 class AssetHistoryRecordModel(BaseModel, extra='ignore'):

@@ -1,0 +1,19 @@
+{
+    "templateId": "cosmos-predict-text2world-14b",
+    "templateName": "Text-to-World (14B)",
+    "description": "Generate a high-quality video world from a text prompt with the Cosmos Predict 14B model.",
+    "configFormat": "json",
+    "configBody": "{\"DISABLE_GUARDRAILS\": \"true\", \"GENERATE_PREVIEW_GIF\": \"false\", \"OFFLOAD_TEXT_ENCODER\": \"true\", \"OFFLOAD_TOKENIZER\": \"true\", \"OFFLOAD_DIFFUSION_MODEL\": \"true\", \"PROMPT\": \"{{PROMPT}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Generates a video from a text prompt using Cosmos-Predict. No input file is required — the prompt is the input.\n\nAsset metadata this pipeline reads (optional):\n  COSMOS_PREDICT_PROMPT  The generation prompt. Used when the Prompt field is left blank.\n\nHow to supply metadata: set these as metadata on the ASSET (Metadata tab on the asset page, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: a value you type into a field above WINS. Asset metadata is used only where the field is left blank, so a standing value on the asset acts as a per-asset default.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "The generation prompt. Leave blank to fall back to the COSMOS_PREDICT_PROMPT key on the asset's metadata."
+        }
+    ]
+}

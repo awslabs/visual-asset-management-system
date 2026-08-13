@@ -223,7 +223,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     setAmpInit(true);
 }
 
-type AuthProps = {};
+type AuthProps = { children?: React.ReactNode };
 
 //Cognito components
 const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {

@@ -30,6 +30,8 @@ from models.common import (
 )
 from models.fmm import VamsRulesV1Schema
 
+GLOBAL_DATABASE_ID = "GLOBAL"
+
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 logger = safeLogger(service_name="FMMSchemaService")
@@ -128,12 +130,14 @@ claims_and_roles = {}
 try:
     schema_table_name = os.environ["FMM_SCHEMA_STORAGE_TABLE_NAME"]
     compliance_table_name = os.environ["FMM_ASSET_COMPLIANCE_STORAGE_TABLE_NAME"]
+    database_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
 schema_table = dynamodb.Table(schema_table_name)
 compliance_table = dynamodb.Table(compliance_table_name)
+database_table = dynamodb.Table(database_table_name)
 
 
 def lambda_handler(event, context):
@@ -141,13 +145,13 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
 
     try:
-        http_method = event["requestContext"]["http"]["method"]
-        path_params = event.get("pathParameters", {}) or {}
-        schema_name = path_params.get("schemaName")
-
         claims_and_roles = request_to_claims(event)
         if "statusCode" in claims_and_roles:
             return claims_and_roles
+
+        http_method = event["requestContext"]["http"]["method"]
+        path_params = event.get("pathParameters", {}) or {}
+        schema_name = path_params.get("schemaName")
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
@@ -158,10 +162,14 @@ def lambda_handler(event, context):
         if not method_allowed_on_api:
             return authorization_error()
 
+        query_params = event.get("queryStringParameters", {}) or {}
+
         if http_method == "GET" and schema_name:
             response = get_schema(schema_name)
         elif http_method == "GET":
-            response = list_schemas()
+            response = list_schemas(
+                database_id_filter=query_params.get("databaseId")
+            )
         elif http_method == "POST":
             body = json.loads(event.get("body", "{}"))
             response = register_schema(body)
@@ -189,6 +197,7 @@ def normalize_schema_item(item):
             pass
     return {
         "schemaName": item.get("schemaName"),
+        "databaseId": item.get("databaseId", GLOBAL_DATABASE_ID),
         "description": item.get("description", ""),
         "schemaBody": schema_body,
         "version": int(item.get("internalVersion", 1)),
@@ -196,13 +205,23 @@ def normalize_schema_item(item):
     }
 
 
-def list_schemas():
-    """List all schemas (latest version of each)."""
-    try:
-        response = schema_table.scan()
-        items = response.get("Items", [])
+def list_schemas(database_id_filter=None):
+    """List schemas (latest version of each).
 
-        casbin_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
+    If database_id_filter is provided, returns only schemas scoped to that
+    database plus GLOBAL schemas. Otherwise returns all schemas.
+    """
+    try:
+        if database_id_filter and database_id_filter != GLOBAL_DATABASE_ID:
+            items = _query_schemas_for_database(database_id_filter)
+        else:
+            response = schema_table.scan()
+            items = response.get("Items", [])
+
+        casbin_enforcer = (
+            CasbinEnforcer(claims_and_roles)
+            if claims_and_roles.get("tokens") else None
+        )
 
         schemas_by_name = {}
         for item in items:
@@ -225,6 +244,28 @@ def list_schemas():
     except Exception as e:
         logger.exception("Error listing schemas")
         return internal_error(body={"message": str(e)})
+
+
+def _query_schemas_for_database(database_id):
+    """Query schemas visible to a database: GLOBAL + database-specific.
+
+    Uses the DatabaseIdIndex GSI for efficient queries.
+    """
+    items = []
+
+    global_response = schema_table.query(
+        IndexName="DatabaseIdIndex",
+        KeyConditionExpression=Key("databaseId").eq(GLOBAL_DATABASE_ID),
+    )
+    items.extend(global_response.get("Items", []))
+
+    db_response = schema_table.query(
+        IndexName="DatabaseIdIndex",
+        KeyConditionExpression=Key("databaseId").eq(database_id),
+    )
+    items.extend(db_response.get("Items", []))
+
+    return items
 
 
 def get_schema(schema_name):
@@ -264,6 +305,24 @@ def register_schema(body):
     if not schema_name:
         return validation_error(body={"message": "Missing required field: schemaName"})
 
+    database_id = body.get("databaseId", GLOBAL_DATABASE_ID)
+
+    (valid_db, db_msg) = validate({
+        "databaseId": {
+            "value": database_id,
+            "validator": "ID",
+            "allowGlobalKeyword": True,
+        },
+    })
+    if not valid_db:
+        return validation_error(body={"message": db_msg})
+
+    if database_id != GLOBAL_DATABASE_ID:
+        if not _verify_database_exists(database_id):
+            return validation_error(
+                body={"message": "Database not found"}
+            )
+
     obj = {
         "object__type": "complianceSchema",
         "complianceSchemaName": schema_name,
@@ -302,8 +361,12 @@ def register_schema(body):
     item = {
         "schemaName": schema_name,
         "internalVersion": next_version,
+        "databaseId": database_id,
         "description": body.get("description", ""),
-        "schemaBody": json.dumps(schema_body) if isinstance(schema_body, dict) else schema_body,
+        "schemaBody": (
+            json.dumps(schema_body)
+            if isinstance(schema_body, dict) else schema_body
+        ),
         "registeredAt": now,
         "registeredBy": claims_and_roles.get("sub", "system"),
         "isSystem": body.get("isSystem", False),
@@ -315,6 +378,7 @@ def register_schema(body):
     return success(body={
         "message": f"Schema '{schema_name}' registered as v{next_version}",
         "schemaName": schema_name,
+        "databaseId": database_id,
         "internalVersion": next_version,
     })
 
@@ -341,15 +405,32 @@ def update_schema(schema_name, body):
     )
     existing_items = existing.get("Items", [])
     if not existing_items:
-        return validation_error(body={"message": f"Schema '{schema_name}' not found"})
+        return validation_error(
+            body={"message": f"Schema '{schema_name}' not found"}
+        )
 
     current = existing_items[0]
     if current.get("isSystem") and current.get("registeredBy") == "system":
         caller = claims_and_roles.get("sub", "")
         if caller != "system":
             return validation_error(
-                body={"message": f"Schema '{schema_name}' is a system schema and cannot be modified"}
+                body={
+                    "message": (
+                        f"Schema '{schema_name}' is a system schema"
+                        " and cannot be modified"
+                    )
+                }
             )
 
     body["schemaName"] = schema_name
+    if "databaseId" not in body:
+        body["databaseId"] = current.get("databaseId", GLOBAL_DATABASE_ID)
     return register_schema(body)
+
+
+def _verify_database_exists(database_id):
+    """Check if a database exists. Returns True/False."""
+    if database_id == GLOBAL_DATABASE_ID:
+        return True
+    response = database_table.get_item(Key={"databaseId": database_id})
+    return "Item" in response

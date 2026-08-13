@@ -67,10 +67,6 @@ export class CognitoWebNativeConstructStack extends Construct {
             memorySize: Config.LAMBDA_MEMORY_SIZE,
             environment: {},
         });
-        props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-        props.storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-        props.storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-        props.storageResources.dynamo.rolesStorageTable.grantReadData(fun);
         kmsKeyLambdaPermissionAddToResourcePolicy(fun, props.storageResources.encryption.kmsKey);
         setupSecurityAndLoggingEnvironmentAndPermissions(fun, props.storageResources);
         globalLambdaEnvironmentsAndPermissions(fun, props.config);
@@ -83,6 +79,8 @@ export class CognitoWebNativeConstructStack extends Construct {
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: false,
             autoVerify: { email: true },
+            //(Non-GovCloud) Plus feature plan enables threat protection (not currently supported by GovCloud cognito)
+            featurePlan: props.config.app.govCloud.enabled ? undefined : cognito.FeaturePlan.PLUS,
             mfa: cognito.Mfa.OPTIONAL,
             mfaSecondFactor: {
                 otp: true,
@@ -129,12 +127,11 @@ export class CognitoWebNativeConstructStack extends Construct {
         userPool.node.addDependency(fun);
         fun.grantInvoke(Service("COGNITO_IDP").Principal);
 
-        //Only enable advanced security for non-govcloud environments (currently no supported by cognito)
+        //Only enable threat protection for non-govcloud environments (currently no supported by cognito)
         if (!props.config.app.govCloud.enabled) {
-            const userPoolAddOnsProperty: cognito.CfnUserPool.UserPoolAddOnsProperty = {
-                advancedSecurityMode: "ENFORCED",
+            cfnUserPool.userPoolAddOns = {
+                advancedSecurityMode: cognito.StandardThreatProtectionMode.FULL_FUNCTION.valueOf(),
             };
-            cfnUserPool.userPoolAddOns = userPoolAddOnsProperty;
         }
 
         const supportedIdentityProviders = [cognito.UserPoolClientIdentityProvider.COGNITO];
@@ -188,7 +185,9 @@ export class CognitoWebNativeConstructStack extends Construct {
             cognitoIdentityProviders: [
                 {
                     clientId: userPoolWebClient.userPoolClientId,
-                    providerName: `${Service("COGNITO_IDP").Endpoint}/${userPool.userPoolId}`,
+                    providerName: `${Service("COGNITO_IDP", false).Endpoint}/${
+                        userPool.userPoolId
+                    }`,
                 },
             ],
             allowClassicFlow: true,

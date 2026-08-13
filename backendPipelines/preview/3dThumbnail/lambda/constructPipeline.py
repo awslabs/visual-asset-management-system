@@ -24,8 +24,9 @@ def lambda_handler(event, context):
         "jobName": event.get("jobName"),
         "currentStageType": definition["stages"][0]["type"],
         "definition": [json.dumps(definition)],
-        "inputMetadata": "", #Don't pass metadata as not needed here and causes less room for errors due to long metadata for ECS payloads
-        "inputParameters": event.get("inputParameters", ""),
+        # Forward the metadata + input-configuration S3 locations, not their content
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "status": "STARTING"
     }
@@ -81,8 +82,9 @@ def construct_preview_3d_thumbnail_definition(event) -> dict:
     definition = {
         "jobName": event.get("jobName"),
         "stages": [preview_3d_thumbnail_stage],
-        "inputMetadata": "", #Don't pass metadata as not needed here and causes less room for errors due to long metadata for ECS payloads
-        "inputParameters": event.get("inputParameters", ""),
+        # The metadata + input-configuration S3 locations travel with the definition, not their content
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "assetId": event.get("assetId", ""),
     }

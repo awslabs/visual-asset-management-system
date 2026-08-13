@@ -20,7 +20,7 @@ def main():
         testStageNameInput = sys.argv[2]
         testInput = "{\"jobName\": \"XXX\", \"stages\": [{\"type\": \""+testStageNameInput+"\", \"inputFile\": {\"bucketName\": \"XXX\", \"objectKey\": \"XXX\", \"fileExtension\": \"XXX\"}, \
             \"outputFiles\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}, \"outputMetadata\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}, \
-            \"temporaryFiles\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}}], \"inputMetadata\":\"\", \"inputParameters\":\"\", \
+            \"temporaryFiles\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}}], \"inputMetadataS3Location\":\"\", \"inputConfigurationS3Location\":\"\", \
             \"externalSfnTaskToken\":\"\", \"localTest\":\"True\"}"
         
         response = core.run(json.loads(testInput))

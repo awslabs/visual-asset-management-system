@@ -292,6 +292,47 @@ Validates reconstruction quality with multiple tolerance types:
 }
 ```
 
+#### Using an existing pipeline with default metrics
+
+Any existing VAMS workflow can be used for compliance without modifying its containers. When no custom `compliance-output.json` is produced, the pipeline callback automatically provides two default metrics: `execution_success` (1.0 on success, 0.0 on failure) and `processing_duration_seconds` (wall-clock execution time).
+
+This example uses the Coordinate Transform workflow to validate that processing completes successfully within a 60-second time budget:
+
+```json
+{
+    "schemaFormat": "vams-rules-v1",
+    "rules": {
+        "coord-transform-execution": {
+            "ruleType": "pipeline",
+            "enforcement": "quarantine",
+            "pipelineRef": {
+                "databaseId": "GLOBAL",
+                "workflowId": "coordinate-transform",
+                "templateId": "coordinate-transform-wgs84-to-osgb36-laz"
+            },
+            "checks": [
+                {
+                    "name": "must_succeed",
+                    "description": "Coordinate transform must complete successfully",
+                    "outputField": "execution_success",
+                    "tolerance": { "operator": "gte", "value": 1.0 }
+                },
+                {
+                    "name": "time_budget",
+                    "description": "Must complete within 60 seconds",
+                    "outputField": "processing_duration_seconds",
+                    "tolerance": { "operator": "lte", "value": 60.0 }
+                }
+            ]
+        }
+    }
+}
+```
+
+:::tip[Default metrics — no container changes required]
+Default metrics make it possible to enforce compliance on any pipeline without writing a custom compliance output file. Use `execution_success` to ensure a workflow completes without error, and `processing_duration_seconds` to enforce time budgets. For domain-specific measurements (geometric accuracy, noise levels, coverage ratios), implement a custom `compliance-output.json` in the pipeline container — see [Compliance (Concepts)](../concepts/compliance.md#pipeline-compliance-output-contract).
+:::
+
 ---
 
 ## Evaluating assets

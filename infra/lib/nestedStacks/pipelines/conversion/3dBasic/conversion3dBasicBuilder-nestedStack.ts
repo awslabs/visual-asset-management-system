@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /*
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -12,7 +11,6 @@ import { NestedStack } from "aws-cdk-lib";
 import { Conversion3dBasicConstruct } from "./constructs/conversion3dBasic-construct";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../../../config/config";
-import * as kms from "aws-cdk-lib/aws-kms";
 
 export interface Conversion3dBasicNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -21,7 +19,7 @@ export interface Conversion3dBasicNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -47,8 +45,8 @@ export class Conversion3dBasicNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
             }
         );
 

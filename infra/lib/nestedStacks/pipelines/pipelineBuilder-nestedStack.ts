@@ -39,7 +39,9 @@ export interface PipelineBuilderNestedStackProps extends cdk.StackProps {
     vpceSecurityGroup: ec2.ISecurityGroup;
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    // vamsSchema import CR lambda name (ApiBuilder2). Threaded to each pipeline stack that
+    // registers a built-in via a VamsSchemaRegistration construct.
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -78,8 +80,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                 }
             );
 
@@ -101,8 +103,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                 }
             );
             //Add function name to array for stack output
@@ -126,8 +128,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                 }
             );
 
@@ -238,8 +240,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                 }
             );
 
@@ -266,8 +268,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                         lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                        importGlobalPipelineWorkflowFunctionName:
-                            props.importGlobalPipelineWorkflowFunctionName,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
                     }
                 );
 
@@ -299,8 +301,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         vpc: props.vpc,
                         pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        importGlobalPipelineWorkflowFunctionName:
-                            props.importGlobalPipelineWorkflowFunctionName,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
                     });
 
                 //Add function name to array for stack output
@@ -323,8 +325,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                             lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
                             assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
                             kmsKey: props.storageResources.encryption.kmsKey,
-                            importGlobalPipelineWorkflowFunctionName:
-                                props.importGlobalPipelineWorkflowFunctionName,
+                            importGlobalPipelineWorkflowV2FunctionName:
+                                props.importGlobalPipelineWorkflowV2FunctionName,
                         }
                     );
 
@@ -346,8 +348,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                             vpc: props.vpc,
                             pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                             pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                            importGlobalPipelineWorkflowFunctionName:
-                                props.importGlobalPipelineWorkflowFunctionName,
+                            importGlobalPipelineWorkflowV2FunctionName:
+                                props.importGlobalPipelineWorkflowV2FunctionName,
                         }
                     );
 
@@ -369,8 +371,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         vpc: props.vpc,
                         pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        importGlobalPipelineWorkflowFunctionName:
-                            props.importGlobalPipelineWorkflowFunctionName,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
                     }
                 );
 
@@ -390,8 +392,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnetsPrivate: pipelineNetwork.privateSubnets.pipeline,
                     pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                 });
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
@@ -412,8 +414,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         pipelineSubnetsPrivate: pipelineNetwork.privateSubnets.pipeline,
                         pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        importGlobalPipelineWorkflowFunctionName:
-                            props.importGlobalPipelineWorkflowFunctionName,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
                     }
                 );
                 //Add function name to array for stack output
@@ -434,8 +436,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         pipelineSubnetsPrivate: pipelineNetwork.privateSubnets.pipeline,
                         pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        importGlobalPipelineWorkflowFunctionName:
-                            props.importGlobalPipelineWorkflowFunctionName,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
                     }
                 );
                 //Add function name to array for stack output
@@ -460,8 +462,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         // Use isolated subnets for EFS - no internet access needed
                         pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        importGlobalPipelineWorkflowFunctionName:
-                            props.importGlobalPipelineWorkflowFunctionName,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
                     }
                 );
                 //Add function name to array for stack output

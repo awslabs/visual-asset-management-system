@@ -1,0 +1,9 @@
+{
+    "templateId": "metadata-3d-labeling-default",
+    "templateName": "Default labeling (seed from existing metadata)",
+    "description": "Render the asset with Blender, label it with GenAI, and seed generation with any existing asset/file metadata across the asset file hierarchy.",
+    "configFormat": "json",
+    "configBody": "{\"includeAllAssetFileHierarchyFiles\":\"True\",\"seedMetadataGenerationWithInputMetadata\":\"True\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "includeAllAssetFileHierarchyFiles (\"True\"/\"False\") includes sibling files in the asset when rendering. seedMetadataGenerationWithInputMetadata (\"True\"/\"False\") feeds existing asset/file metadata into the GenAI prompt."
+}

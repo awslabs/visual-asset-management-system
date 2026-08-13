@@ -199,7 +199,11 @@ vamscli database list-buckets [OPTIONS]
 | `--auto-paginate`  | Flag    | No       | Automatically fetch all items                                              |
 | `--json-output`    | Flag    | No       | Output raw JSON response                                                   |
 
-Output includes bucket ID, bucket name, and base assets prefix. Use a returned bucket ID with `database create --default-bucket-id` or `database update --default-bucket-id`.
+Output includes bucket ID, bucket name, base assets prefix, and whether the bucket is the VAMS default. Use a returned bucket ID with `database create --default-bucket-id` or `database update --default-bucket-id`.
+
+:::note[The VAMS default bucket]
+Exactly one bucket in a deployment is the VAMS default (`isDefault: true`). It houses all VAMS-managed pipeline data — configuration template offload and execution-time run I/O under the `pipelines/` prefix — independently of which bucket a database stores its assets in.
+:::
 
 ```bash
 vamscli database list-buckets
