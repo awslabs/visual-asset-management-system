@@ -4,24 +4,28 @@
  */
 
 import * as cdk from "aws-cdk-lib";
-import * as cr from "aws-cdk-lib/custom-resources";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Construct } from "constructs";
-import { LayerVersion, Runtime } from "aws-cdk-lib/aws-lambda";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import { Stack } from "aws-cdk-lib";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../config/config";
+import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    generateUniqueNameHash,
+    grantExternalAssetBucketKmsKeys,
+    kmsKeyPolicyStatementGenerator,
+} from "../../../../../helper/security";
 import {
     buildConstructPipelineFunction,
     buildExecuteBatchJobFunction,
@@ -30,6 +34,7 @@ import {
     buildVamsExecuteCoordinateTransformFunction,
 } from "../lambdaBuilder/coordinateTransformFunctions";
 import { CoordinateTransformCodeBuildConstruct } from "./coordinateTransformCodeBuild-construct";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import path = require("path");
 
 export interface CoordinateTransformConstructProps extends cdk.StackProps {
@@ -39,8 +44,9 @@ export interface CoordinateTransformConstructProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
     assetAuxiliaryBucket: s3.IBucket;
+    storageResources: storageResources;
     kmsKey?: kms.IKey;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 export class CoordinateTransformConstruct extends Construct {
@@ -95,6 +101,13 @@ export class CoordinateTransformConstruct extends Construct {
             ],
         });
 
+        //Add KMS key use if provided
+        if (props.kmsKey) {
+            inputBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(props.kmsKey));
+
+            outputBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(props.kmsKey));
+        }
+
         const stateTaskPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
@@ -139,6 +152,11 @@ export class CoordinateTransformConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         // CodeBuild-based container build (when useCodeBuild is true)
         let codeBuildConstruct: CoordinateTransformCodeBuildConstruct | undefined;
@@ -209,6 +227,7 @@ export class CoordinateTransformConstruct extends Construct {
             props.lambdaCommonBaseLayer,
             batchPipeline.batchJobQueue,
             batchPipeline.batchJobDefinition,
+            props.storageResources.eventBridge.orchestrationBus,
             props.config,
             props.vpc,
             props.pipelineSubnets,
@@ -253,6 +272,9 @@ export class CoordinateTransformConstruct extends Construct {
             resultPath: "$",
         }).next(pipelineEndTask);
 
+        // No heartbeatTimeout: the container reports only terminal success/failure on the
+        // internal token (it sends no periodic heartbeats), so a heartbeat window would fail
+        // any transform outlasting it. The 4-hour taskTimeout bounds the wait instead.
         const coordTransformBatchJob = new tasks.LambdaInvoke(this, "CoordTransformBatchJob", {
             lambdaFunction: executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
@@ -260,10 +282,13 @@ export class CoordinateTransformConstruct extends Construct {
                 taskToken: sfn.JsonPath.taskToken,
                 "jobName.$": "$.jobName",
                 "definition.$": "$.definition",
+                // Lets the Lambda register the submitted Batch job as abortable. Stopping this
+                // sub-state-machine does not stop the job, because WAIT_FOR_TASK_TOKEN leaves the
+                // job's lifecycle with nobody.
+                "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(4)),
-            heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.minutes(30)),
         })
             .addCatch(handleBatchError, {
                 resultPath: "$.error",
@@ -272,9 +297,35 @@ export class CoordinateTransformConstruct extends Construct {
 
         const definition = constructPipelineTask.next(coordTransformBatchJob);
 
+        const stateMachineLogGroup = new logs.LogGroup(
+            this,
+            "CoordTransformProcessing-StateMachineLogGroup",
+            {
+                logGroupName:
+                    "/aws/vendedlogs/VAMSStateMachine-CoordTransform" +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "CoordTransformProcessing-StateMachineLogGroup",
+                        10
+                    ),
+                retention: logs.RetentionDays.TEN_YEARS,
+                removalPolicy: cdk.RemovalPolicy.DESTROY,
+            }
+        );
+
         const stateMachine = new sfn.StateMachine(this, "CoordTransformProcessing-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            timeout: cdk.Duration.hours(4),
+            // Envelopes the 4-hour batch-job taskTimeout so an overrunning transform hits that
+            // task's own timeout and reaches pipelineEnd — which releases the external task
+            // token — rather than being cut short by an execution-level States.Timeout.
+            timeout: cdk.Duration.hours(5),
+            logs: {
+                destination: stateMachineLogGroup,
+                includeExecutionData: true,
+                level: sfn.LogLevel.ALL,
+            },
+            tracingEnabled: true,
         });
 
         // Open pipeline Lambda
@@ -288,6 +339,8 @@ export class CoordinateTransformConstruct extends Construct {
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.kmsKey
         );
 
@@ -304,54 +357,36 @@ export class CoordinateTransformConstruct extends Construct {
 
         this.pipelineVamsLambdaFunctionName = vamsExecuteFunction.functionName;
 
-        // Auto-register with VAMS
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
         if (
             props.config.app.pipelines.useConversionCoordinateTransform?.autoRegisterWithVAMS ===
             true
         ) {
-            const currentTimestamp = new Date().toISOString();
-
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-
-            new cdk.CustomResource(this, "CoordinateTransformPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
+            new VamsSchemaRegistration(this, "CoordinateTransformRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "conversion",
+                    "coordinateTransform",
+                    "vamsSchema"
+                ),
+                resourceOverrides: { lambdaName: vamsExecuteFunction.functionName },
+                idOverrides: {
                     pipelineId: "conversion-coordinate-transform",
-                    pipelineDescription:
-                        "Coordinate Transform Pipeline - Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".laz",
-                    waitForCallback: "Enabled",
-                    lambdaName: vamsExecuteFunction.functionName,
-                    taskTimeout: "14400",
-                    taskHeartbeatTimeout: "",
-                    inputParameters: JSON.stringify({
-                        sourceCrs: "EPSG:4326",
-                        targetCrs: "EPSG:27700",
-                        outputFormats: ["laz"],
-                    }),
                     workflowId: "conversion-coordinate-transform",
-                    workflowDescription:
-                        "Coordinate transformation for point cloud data between CRS systems",
-                    autoTriggerOnFileExtensionsUpload:
-                        props.config.app.pipelines.useConversionCoordinateTransform
-                            ?.autoRegisterAutoTriggerOnFileUpload === true
-                            ? ".e57,.las,.laz,.ply"
-                            : "",
                 },
+                triggerEnabled:
+                    props.config.app.pipelines.useConversionCoordinateTransform
+                        ?.autoRegisterAutoTriggerOnFileUpload === true,
             });
         }
 
@@ -419,21 +454,6 @@ export class CoordinateTransformConstruct extends Construct {
                         { regex: "/^Resource::<.*Function.*.Arn>:.*$/g" },
                         { regex: "/^Action::s3:.*$/g" },
                     ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            stateMachine,
-            [
-                {
-                    id: "AwsSolutions-SF1",
-                    reason: "CloudWatch logging for Step Functions state machine will be added in future iteration. Pipeline errors are captured via pipelineEnd Lambda.",
-                },
-                {
-                    id: "AwsSolutions-SF2",
-                    reason: "X-Ray tracing for Step Functions state machine will be added in future iteration.",
                 },
             ],
             true

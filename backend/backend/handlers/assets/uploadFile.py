@@ -41,7 +41,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
@@ -1211,23 +1211,27 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     except Exception as e:
         logger.warning(f"Failed to update upload status: {e}")
 
-    # Get bucket details from asset's bucketId
+    # Get bucket details from asset's bucketId. bucket_name is the DESTINATION (the asset's own
+    # bucket). source_bucket is where the tempKey files are read from: it equals bucket_name for a
+    # normal upload, but a workflow-execution completion stages its outputs in the VAMS default run
+    # bucket (request_model.sourceBucket), which can differ from the output asset's bucket.
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
-    
+    source_bucket = request_model.sourceBucket or bucket_name
+
     # Get database details to check file upload restrictions
     database = get_database_details(databaseId)
     if not database:
         raise VAMSGeneralErrorResponse("Database not found")
-    
+
     allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
-    
+
     # Track file completion results
     file_results = []
     successful_files = []
     has_failures = False
-    
+
     # Process each file in the request
     for file in request_model.files:
         try:
@@ -1271,13 +1275,13 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 filename = os.path.basename(file.relativeKey)
                 final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
             
-            # Verify the file exists in S3
+            # Verify the file exists in S3 (in the SOURCE bucket, which may be the run bucket).
             try:
                 head_response = s3.head_object(
-                    Bucket=bucket_name,
+                    Bucket=source_bucket,
                     Key=file.tempKey
                 )
-                
+
                 # Get file size with error handling
                 file_size = 0
                 try:
@@ -1313,7 +1317,11 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 if process_async:
                     logger.info(f"External file {file.relativeKey} ({file_size} bytes) will be processed asynchronously")
 
-                    # Create file info for SQS message
+                    # Create file info for SQS message. sourceBucketName is where the temp file is
+                    # read from (may differ from the destination bucketName for workflow outputs).
+                    # workflowId/workflowExecutionId carry the same change provenance the
+                    # synchronous move path stamps, so the async copy resolves the identical
+                    # change source.
                     file_info = {
                         "relativeKey": file.relativeKey,
                         "uploadIdS3": "external",
@@ -1321,11 +1329,14 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "tempS3Key": file.tempKey,
                         "finalS3Key": final_s3_key,
                         "bucketName": bucket_name,
+                        "sourceBucketName": source_bucket,
                         "databaseId": databaseId,
                         "assetId": assetId,
                         "uploadId": uploadId,
                         "uploadType": uploadType,
-                        "changeUserId": user_id
+                        "changeUserId": change_user_id or user_id,
+                        "workflowId": workflow_id,
+                        "workflowExecutionId": workflow_execution_id
                     }
                     
                     # Try to queue the file for asynchronous processing with comprehensive error handling
@@ -1360,8 +1371,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 has_failures = True
                 continue
             
-            # Validate file content type
-            if not validateS3AssetExtensionsAndContentType(bucket_name, file.tempKey):
+            # Validate file content type (the temp file is in the source bucket).
+            if not validateS3AssetExtensionsAndContentType(source_bucket, file.tempKey):
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
                     uploadIdS3="external",
@@ -1475,9 +1486,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 # Mark invalid files as failed
                 for file_detail in successful_files[:]:
                     if file_detail['relativeKey'] in invalid_files:
-                        # Delete the uploaded file
-                        delete_s3_object(bucket_name, file_detail['temp_s3_key'])
-                        
+                        # Delete the staged temporary file (it lives in the source bucket)
+                        delete_s3_object(source_bucket, file_detail['temp_s3_key'])
+
                         # Update file result
                         for result in file_results:
                             if result.relativeKey == file_detail['relativeKey'] and result.success:
@@ -1521,7 +1532,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
 
             copy_success = copy_s3_object(
-                bucket_name,
+                source_bucket,
                 file_detail['temp_s3_key'],
                 bucket_name,
                 file_detail['final_s3_key'],
@@ -1534,8 +1545,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
                 return file_detail['relativeKey'], False
 
-            # Delete temporary file after successful copy
-            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
+            # Delete the temporary source file after a successful copy (in the source bucket).
+            delete_s3_object(source_bucket, file_detail['temp_s3_key'])
             return file_detail['relativeKey'], True
         except Exception as e:
             logger.exception(f"Error moving file {file_detail['relativeKey']} to final location: {e}")
@@ -2510,7 +2521,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

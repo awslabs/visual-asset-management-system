@@ -70,8 +70,12 @@ One folder per domain. The current domains:
 -   `tags/` — Tag CRUD
 -   `tagTypes/` — Tag type management
 -   `userRoles/` — User-role assignment
--   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation)
+-   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation: Lambda/SQS/EventBridge/DeadlineCloud task states; `sfn/deadlineCloudJobCallback` resolves Deadline Cloud job task tokens from default-bus events)
 -   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
+
+#### **Workflow Execution Storage**
+
+Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation.
 
 ## 📋 **Development Workflow Checklist**
 
@@ -103,7 +107,7 @@ One folder per domain. The current domains:
 -   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
--   [ ] **Add Logging**: Use `safeLogger` for structured logging
+-   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values
 -   [ ] **Resolve Resource Names**: Use `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in try/except
 -   [ ] **Add AWS Clients**: Configure AWS clients with retry configuration
 -   [ ] **Implement Business Logic**: Separate business logic from request handling
@@ -118,14 +122,14 @@ One folder per domain. The current domains:
 -   [ ] **Configure Permissions**: Grant appropriate DynamoDB/S3/SNS permissions
 -   [ ] **Configure VPC**: Add VPC/subnet configuration based on config flags
 -   [ ] **Add KMS Permissions**: Include KMS key permissions for encryption
--   [ ] **Add API Routes**: Register routes in `apiBuilder-nestedStack.ts`
+-   [ ] **Add API Routes**: Register routes in `apiBuilder2-nestedStack.ts` (preferred; `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit)
 -   [ ] **Follow Naming Conventions**: Use consistent naming patterns
 
 #### **Step 4: API Gateway Integration**
 
 -   [ ] **Add Route Definitions**: Use `attachFunctionToApi` for route registration
 -   [ ] **Configure HTTP Methods**: Set appropriate HTTP methods for each endpoint
--   [ ] **Add Security**: Ensure Cognito authorizer is applied
+-   [ ] **Add Security**: Confirm the route resolves through the custom VAMS Lambda authorizer (never a built-in CDK authorizer); set `allowAnonymous` only for a deliberately unauthenticated path
 -   [ ] **Test Route Paths**: Verify route paths match API documentation
 
 ### **Phase 3: Quality Assurance**
@@ -207,6 +211,51 @@ then offset-slice to the page. Limits that bound response size or protect Lambda
 runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
 constants with a rationale comment — keep them. CLI and web clients that consume a
 paginated GET must follow `NextToken` to retrieve the complete set.
+
+### **Rule 4: Keep handlers portable across AWS partitions**
+
+Handlers run in `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign, region
+`eusc-de-east-1`), and potentially `aws-cn` / `aws-iso*`. A partition defect is
+invisible in commercial tests and surfaces as a runtime 500 or a validation
+rejection that reproduces **only** in the affected partition. There is deliberately
+no central partition helper in the backend — these four rules are the contract.
+
+1. **Never build an ARN from a hardcoded partition.** Either parameterize it
+   (`common/workflows/stepfunctions_builder.py` threads a `partition` argument
+   through every state-machine integration ARN, sourced from the `AWS_PARTITION`
+   Lambda env var read in `common/workflows/workflowAsl.py`), or parse an ARN you
+   already hold (`handlers/workflows/executionService.py` splits a resource ARN,
+   falling back to the execution log-group ARN, to recover
+   partition/region/account). Prefer parsing when an ARN is in hand — no env var,
+   cannot drift. `AWS_PARTITION` is set on the `workflowService` Lambda only, so a
+   handler needing it must have its CDK builder updated or derive it from an ARN.
+
+2. **Never hardcode an endpoint hostname or DNS suffix.** Suffixes differ per
+   partition — `amazonaws.com`, `amazonaws.com.cn`, **`amazonaws.eu`** (EU
+   Sovereign), `c2s.ic.gov`, `sc2s.sgov.gov`, `cloud.adc-e.uk`, `csp.hci.ic.gov`.
+   Construct plain boto3 clients with **no `endpoint_url`** and let the SDK resolve
+   per region; read service endpoints (e.g. the OpenSearch host) from SSM. Region
+   comes from `os.environ["AWS_REGION"]` — avoid a `"us-east-1"` default, which
+   silently points at the wrong partition if the variable is ever missing.
+
+3. **New ARN/URL validators must accept every partition.** Compose them from
+   `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and
+   `aws_dns_suffix_group` in `common/validators.py`; never inline `arn:aws:`. A
+   commercial-only pattern passes every commercial test and rejects legitimate
+   input only in the affected partition — the hardest failure to attribute.
+   `infra/lib/helper/const.ts` (`SERVICE_LOOKUP`) is the authoritative partition +
+   suffix list; keep these groups in step with it.
+
+4. **A service or model may not exist everywhere.** Bedrock model ids differ (both
+   restricted config templates pin an older Sonnet), OpenSearch engine versions
+   differ, and some services are absent. Take such values from configuration the
+   CDK layer supplies per partition rather than hard-coding them.
+
+The `GOVCLOUD` feature switch is present in `featuresEnabled` for **both** GovCloud
+and EU Sovereign (both templates set `app.govCloud.enabled: true`), so treat it as
+"restricted partition" rather than literally GovCloud. The CDK-side rules —
+including the `AWS::Lambda::EventSourceMapping` tag restriction that fails a
+GovCloud deploy outright — are in `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`.
 
 ## 🔐 **Security Guidelines for Exception Handling**
 
@@ -342,9 +391,9 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 ```python
 class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Secure request model with proper validation"""
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
+    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
 
     @root_validator
     def validate_fields(cls, values):
@@ -486,6 +535,14 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     `KeyError`/`TypeError` → 500 on a real REST request — a failure invisible to CDK synth and
     to unit tests that hand-build a v2-shaped event, so cover the REST-shaped event (including
     `null` params) in tests.
+-   **`claims_and_roles["roles"]` comes from the `vams:roles` authorizer context value**, which
+    the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a
+    60-second per-user cache. Resolving it there — rather than in the Cognito
+    pre-token-generation trigger, which only runs for Cognito — is what makes roles available
+    for every auth mode (Cognito, external OAuth IDP, API key) and lets a role change take
+    effect without re-issuing a token. The value is informational for handlers and audit logs:
+    `CasbinEnforcer` re-reads a user's roles from DynamoDB when it builds policy, so
+    authorization does not depend on it. Do not reintroduce a role lookup in `preTokenGen`.
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
 
@@ -498,7 +555,7 @@ from common.validators import validate, id_pattern, object_name_pattern
 
 class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for [operation] [domain]"""
-    requiredField: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    requiredField: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=id_pattern)
     optionalField: Optional[str] = Field(None, min_length=1, max_length=256)
 
     @root_validator
@@ -684,7 +741,9 @@ return {
 };
 ```
 
-### **Rule 6: API Routes MUST Be Registered in apiBuilder-nestedStack.ts**
+### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
+
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints — the primary `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
 
 ```typescript
 // ✅ CORRECT - Register API routes
@@ -698,22 +757,22 @@ const [domain]Service = build[Domain]Service(
 );
 
 // Attach routes following existing patterns
-attachFunctionToApi(scope, [domain]Service, {
+attachFunctionToApi(this, [domain]Service, {
     routePath: "/[domain]",
-    method: apigwv2.HttpMethod.GET,
-    api: api,
+    method: apigateway.HttpMethod.GET,
+    registry: registry,
 });
 
-attachFunctionToApi(scope, [domain]Service, {
+attachFunctionToApi(this, [domain]Service, {
     routePath: "/[domain]/{[domain]Id}",
-    method: apigwv2.HttpMethod.GET,
-    api: api,
+    method: apigateway.HttpMethod.GET,
+    registry: registry,
 });
 
-attachFunctionToApi(scope, [domain]Service, {
+attachFunctionToApi(this, [domain]Service, {
     routePath: "/[domain]",
-    method: apigwv2.HttpMethod.POST,
-    api: api,
+    method: apigateway.HttpMethod.POST,
+    registry: registry,
 });
 ```
 
@@ -940,7 +999,7 @@ When making backend or CDK changes, update the corresponding Docusaurus document
 
 -   **New or changed API endpoint (incl. path renames)** → Update **both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md`) — two separate sources of truth that must stay in sync — plus the CLI command reference if applicable
 -   **New config option** → Update `deployment/configuration-reference.md`
--   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts`, so new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` and kept in sync by review, not by the test.
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts`, so new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` and kept in sync by review, not by the test. A missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, update `overview/features.md`, update `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
 -   **Permission changes** → Update `concepts/permissions-model.md`, `user-guide/permissions.md`
@@ -1461,8 +1520,8 @@ class [Domain]ListRequestModel(BaseModel, extra='ignore'):
 
 class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a [domain]"""
-    [domain]Id: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    [domain]Name: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    [domain]Id: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
+    [domain]Name: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     tags: Optional[List[str]] = []
 
@@ -1485,7 +1544,7 @@ class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
 
 class [Domain]UpdateRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a [domain]"""
-    [domain]Name: Optional[str] = Field(None, min_length=1, max_length=256, pattern=object_name_pattern)
+    [domain]Name: Optional[str] = Field(None, min_length=1, max_length=256, regex=object_name_pattern)
     description: Optional[str] = Field(None, min_length=4, max_length=256)
     tags: Optional[List[str]] = None
 
@@ -1893,7 +1952,7 @@ if __name__ == '__main__':
 -   [ ] Error handling comprehensive with proper exceptions
 -   [ ] CDK lambda builders created with proper permissions
 -   [ ] Storage resources added to interface and builder
--   [ ] API routes registered in apiBuilder-nestedStack.ts
+-   [ ] API routes registered in apiBuilder2-nestedStack.ts (or apiBuilder for a shared function instance)
 -   [ ] Frontend service methods added with proper patterns
 -   [ ] CLI API client methods added with proper exceptions
 
@@ -2289,7 +2348,7 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 
 -   [ ] Follows `assetFunctions.ts` patterns for lambda builders
 -   [ ] Updates `storageBuilder-nestedStack.ts` for new resources
--   [ ] Registers routes in `apiBuilder-nestedStack.ts`
+-   [ ] Registers routes in `apiBuilder2-nestedStack.ts` (or `apiBuilder` for a shared function instance)
 -   [ ] Configures proper IAM permissions
 -   [ ] Includes KMS key permissions
 -   [ ] Configures VPC/subnet based on config flags
@@ -2470,8 +2529,8 @@ required_table = dynamodb.Table(required_table_name)
 #### **Step 5: Register API Routes**
 
 ```typescript
-// infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts
-// Add route registrations using attachFunctionToApi
+// infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts
+// Add route registrations using attachFunctionToApi (pass the cross-stack `registry`)
 ```
 
 #### **Step 6: Add Frontend Integration**
@@ -2556,7 +2615,7 @@ required_table = dynamodb.Table(required_table_name)
 
 1. **Always** follow `assetFunctions.ts` patterns for lambda builders
 2. **Always** update `storageBuilder-nestedStack.ts` for new resources
-3. **Always** register routes in `apiBuilder-nestedStack.ts`
+3. **Always** register routes in `apiBuilder2-nestedStack.ts` (or `apiBuilder` for a shared function instance)
 4. **Always** configure proper IAM permissions
 5. **Always** include KMS key permissions
 6. **Always** configure VPC/subnet based on config flags

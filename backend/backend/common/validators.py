@@ -3,12 +3,23 @@
 
 import re
 import json
+from datetime import datetime
 
 from common.s3PathPatterns import PIPELINES_PREFIX, PIPELINE_OUTPUT_PREFIX
 
 #Define patterns as global constants
 id_pattern = r'^[-_a-zA-Z0-9]{3,63}$'
 uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{12}$'
+# Execution identifiers, in either shape a stored execution id can carry: the undashed 32-hex form
+# produced by common.workflows.executionRecords.new_guid() (uuid.uuid4().hex), and the dashed
+# 8-4-4-4-12 uuid Step Functions generates as the execution name when StartExecution is called
+# without one, which is the id an execution row keeps for its whole life. Covers
+# workflow-execution, pipeline-execution, and execution-group ids. The undashed alternative is
+# lowercase only, because .hex emits lowercase and these values are compared as exact DynamoDB key
+# values, where an uppercase variant would simply match nothing.
+execution_id_pattern = (
+    r'^(?:[0-9a-f]{32}'
+    r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$')
 
 sagemaker_notebook_name_pattern = '^[a-zA-Z0-9](-*[a-zA-Z0-9])*'
 email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
@@ -18,6 +29,9 @@ filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
 
 relative_file_path_pattern = r'^\/.*$'
 bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
+# S3 bucket name: 3-63 chars, lowercase letters/digits/hyphens/dots, must start
+# and end with a letter or digit.
+s3_bucket_name_pattern = r'^[a-z0-9][a-z0-9\.\-]{1,61}[a-z0-9]$'
 asset_path_pattern = r'^.+\/.+$'
 asset_folder_path_pattern = r'^.+\/.+\/$'
 asset_auxiliarypreview_path_pattern = r'^.+\/preview\/.+$'
@@ -26,21 +40,55 @@ asset_path_pipeline_pattern = r'^pipelines\/.+\/.+\/output\/.+\/$'
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
 userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 
-# AWS resource patterns - partition-aware (aws, aws-us-gov, aws-cn, aws-iso, aws-iso-b)
-aws_partition_group = r'aws(?:-us-gov|-cn|-iso(?:-[a-z])?)?'
-# SQS Queue URL: https://sqs[-fips].{region}.amazonaws.com[.cn]/{account}/{queue-name}
-# Also supports VPC endpoint URLs: https://vpce-xxx.sqs.{region}.vpce.amazonaws.com/{account}/{queue-name}
-sqs_queue_url_pattern = r'^https://(vpce-[a-z0-9\-]+\.)?sqs[\-a-z]*\.[a-z0-9\-]+\.(vpce\.)?amazonaws\.com(\.cn)?/[0-9]{12}/[a-zA-Z0-9_\-\.]+$'
+# UTC timestamp in the canonical form VAMS stores execution dates in ('%Y-%m-%dT%H:%M:%SZ').
+# Execution listings compare a caller-supplied bound against these values as a DynamoDB sort key,
+# which is a lexicographic string compare — so a value in any other shape silently widens or empties
+# the window rather than failing. Fractional seconds and a '+00:00' offset in place of 'Z' are
+# accepted for tolerance, but they do NOT sort as equal to the stored form ('.' and '+' both order
+# before 'Z'), so a caller supplying one must normalize before using it as a key bound.
+iso8601_utc_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)$'
+
+# AWS resource patterns - partition-aware. Must accept every partition the CDK layer can deploy into,
+# which is the authoritative list in infra/lib/helper/const.ts (SERVICE_LOOKUP): aws, aws-us-gov,
+# aws-cn, aws-iso, aws-iso-b, aws-iso-e, aws-iso-f, aws-eusc. A partition missing here rejects a
+# well-formed ARN that the deployment itself produced, so a pipeline registering its own sub-process
+# fails validation in that partition only — invisible in a commercial test.
+# `aws-eusc` (EU Sovereign Cloud) is spelled out because it does NOT fit the -iso family shape.
+aws_partition_group = r'aws(?:-us-gov|-cn|-eusc|-iso(?:-[a-z])?)?'
+# The DNS suffixes those partitions serve regional endpoints from, for URL-shaped values. Partitions
+# do not share one suffix: commercial/GovCloud use amazonaws.com, China amazonaws.com.cn, EU Sovereign
+# amazonaws.eu, and the ISO partitions use their own non-amazonaws domains.
+aws_dns_suffix_group = (r'(?:amazonaws\.com(?:\.cn)?|amazonaws\.eu|c2s\.ic\.gov|sc2s\.sgov\.gov'
+                        r'|cloud\.adc-e\.uk|csp\.hci\.ic\.gov)')
+# SQS Queue URL: https://sqs[-fips].{region}.{dns-suffix}/{account}/{queue-name}
+# Also supports VPC endpoint URLs: https://vpce-xxx.sqs.{region}.vpce.{dns-suffix}/{account}/{queue-name}
+sqs_queue_url_pattern = (r'^https://(vpce-[a-z0-9\-]+\.)?sqs[\-a-z]*\.[a-z0-9\-]+\.(vpce\.)?'
+                         + aws_dns_suffix_group + r'/[0-9]{12}/[a-zA-Z0-9_\-\.]+$')
 # EventBridge Bus ARN: arn:{partition}:events:{region}:{account}:event-bus/{bus-name}
 eventbridge_bus_arn_pattern = r'^arn:(' + aws_partition_group + r'):events:[a-z0-9\-]+:[0-9]{12}:event-bus/[a-zA-Z0-9_\-\./]+$'
 # EventBridge source: reverse-DNS style, 1-256 chars, no aws. prefix (reserved)
 eventbridge_source_pattern = r'^(?!aws\.)[a-zA-Z0-9\-\.\_]{1,256}$'
 # EventBridge detail type: free-form string, 1-256 chars
 eventbridge_detail_type_pattern = r'^.{1,256}$'
+# Generic AWS ARN (partition-aware): arn:{partition}:{service}:{region}:{account}:{resource}.
+# region and account may be empty (e.g. IAM/S3 ARNs); resource is required and may contain
+# ':' or '/' separators. Bounded to keep a malformed value from being stored. ~1-2048 chars.
+arn_pattern = (r'^arn:(' + aws_partition_group +
+               r'):[a-z0-9\-]{1,63}:[a-z0-9\-]*:[0-9]{0,12}:[a-zA-Z0-9\-\._:/]{1,1700}$')
+# CloudWatch Logs log-group ARN: arn:{partition}:logs:{region}:{account}:log-group:{name}
+# optionally followed by ':*' or a ':log-stream:{stream}' suffix.
+cloudwatch_log_group_arn_pattern = (r'^arn:(' + aws_partition_group +
+                                     r'):logs:[a-z0-9\-]+:[0-9]{12}:log-group:[a-zA-Z0-9\-\._/#]{1,512}'
+                                     r'(:\*)?(:log-stream:[^:*]{1,512})?$')
+# CloudWatch log group name: 1-512 chars of [.-_/#A-Za-z0-9].
+cloudwatch_log_group_name_pattern = r'^[a-zA-Z0-9\-\._/#]{1,512}$'
+# CloudWatch log stream name / prefix: 1-512 chars; ':' and '*' are not allowed by CloudWatch.
+log_stream_name_pattern = r'^[^:*]{1,512}$'
 
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
 uuid_regex = re.compile(uuid_pattern)
+execution_id_regex = re.compile(execution_id_pattern)
 
 
 sagemaker_notebook_name_regex = re.compile(sagemaker_notebook_name_pattern)
@@ -57,11 +105,16 @@ asset_auxiliarypreview_path_regex = re.compile(asset_auxiliarypreview_path_patte
 asset_path_pipeline_regex = re.compile(asset_path_pipeline_pattern)
 object_name_regex = re.compile(object_name_pattern)
 userid_regex = re.compile(userid_pattern)
+s3_bucket_name_regex = re.compile(s3_bucket_name_pattern)
 
 sqs_queue_url_regex = re.compile(sqs_queue_url_pattern)
 eventbridge_bus_arn_regex = re.compile(eventbridge_bus_arn_pattern)
 eventbridge_source_regex = re.compile(eventbridge_source_pattern)
 eventbridge_detail_type_regex = re.compile(eventbridge_detail_type_pattern, re.DOTALL)
+arn_regex = re.compile(arn_pattern)
+cloudwatch_log_group_arn_regex = re.compile(cloudwatch_log_group_arn_pattern)
+cloudwatch_log_group_name_regex = re.compile(cloudwatch_log_group_name_pattern)
+log_stream_name_regex = re.compile(log_stream_name_pattern)
 
 
 def validate_id(name, value):
@@ -79,6 +132,11 @@ def validate_asset_id(name, value):
 def validate_uuid(name, value):
     if not uuid_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+uuid_pattern)
+    return (True, '')
+
+def validate_guid(name, value):
+    if not execution_id_regex.fullmatch(value):
+        return (False, name + " is invalid. Must follow the regexp "+execution_id_pattern)
     return (True, '')
 
 def validate_relative_file_path(name, value):
@@ -276,12 +334,15 @@ def validate_string_fileType(name, value):
     return (True, '')
 
 def validate_email(name, value):
-    if not bool(re.match(email_regex, value)):
+    # fullmatch, not match: '$' also matches just before a trailing newline, so
+    # re.match would accept "user@example.com\n" and let a newline reach a stored
+    # value or a log line.
+    if not email_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+email_pattern)
     return (True, '')
 
 def validate_userid(name, value):
-    if not bool(re.match(userid_regex, value)):
+    if not userid_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+userid_pattern)
     return (True, '')
 
@@ -309,14 +370,37 @@ def validate_bool(name, value):
     return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")
 
 
+def validate_iso8601_utc(name, value):
+    # Rejects a shape mismatch and a syntactically well-formed but impossible date alike
+    # (e.g. month 13), since both reach a listing's sort-key comparison as an ordinary string.
+    if not isinstance(value, str) or not re.fullmatch(iso8601_utc_pattern, value):
+        return (False, name + " is invalid. Must be a UTC timestamp of the form"
+                              " YYYY-MM-DDTHH:MM:SSZ.")
+    try:
+        datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return (False, name + " is invalid. Must be a UTC timestamp of the form"
+                              " YYYY-MM-DDTHH:MM:SSZ.")
+    return (True, '')
+
+
+def normalize_iso8601_utc(value):
+    """Reduce a validated UTC timestamp to the canonical stored form ('YYYY-MM-DDTHH:MM:SSZ').
+
+    A listing bound is compared against stored dates as a DynamoDB sort key, which is a plain
+    lexicographic compare: '.500Z' and '+00:00' both order BEFORE 'Z', so an un-normalized bound
+    shifts the window by up to a second. Assumes the value already passed validate_iso8601_utc."""
+    return value[:19] + "Z"
+
+
 def validate_sqs_queue_url(name, value):
     if not sqs_queue_url_regex.fullmatch(value):
-        return (False, name + " is invalid. Must be a valid SQS queue URL (e.g., https://sqs.us-east-1.amazonaws.com/123456789012/my-queue). Supports all AWS partitions including GovCloud and China regions.")
+        return (False, name + " is invalid. Must be a valid SQS queue URL (e.g., https://sqs.us-east-1.amazonaws.com/123456789012/my-queue). Supports all AWS partitions including GovCloud, China, EU Sovereign Cloud, and ISO regions.")
     return (True, '')
 
 def validate_eventbridge_bus_arn(name, value):
     if not eventbridge_bus_arn_regex.fullmatch(value):
-        return (False, name + " is invalid. Must be a valid EventBridge bus ARN (e.g., arn:aws:events:us-east-1:123456789012:event-bus/my-bus). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), and ISO partitions.")
+        return (False, name + " is invalid. Must be a valid EventBridge bus ARN (e.g., arn:aws:events:us-east-1:123456789012:event-bus/my-bus). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), EU Sovereign Cloud (arn:aws-eusc), and ISO partitions.")
     return (True, '')
 
 def validate_eventbridge_source(name, value):
@@ -327,6 +411,33 @@ def validate_eventbridge_source(name, value):
 def validate_eventbridge_detail_type(name, value):
     if not eventbridge_detail_type_regex.fullmatch(value):
         return (False, name + " is invalid. Must be 1-256 characters.")
+    return (True, '')
+
+def validate_arn(name, value):
+    if not arn_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid AWS ARN (e.g., arn:aws:states:us-east-1:123456789012:execution:sm:exec). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), EU Sovereign Cloud (arn:aws-eusc), and ISO partitions.")
+    return (True, '')
+
+def validate_cloudwatch_log_group_arn(name, value):
+    if not cloudwatch_log_group_arn_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid CloudWatch Logs log-group ARN (e.g., arn:aws:logs:us-east-1:123456789012:log-group:/aws/my-group). Supports all AWS partitions.")
+    return (True, '')
+
+def validate_cloudwatch_log_group_name(name, value):
+    if not cloudwatch_log_group_name_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid CloudWatch log group name (1-512 characters: letters, digits, and -_./#).")
+    return (True, '')
+
+def validate_log_stream_name(name, value):
+    if not log_stream_name_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be 1-512 characters and may not contain ':' or '*'.")
+    return (True, '')
+
+def validate_s3_bucket_name(name, value):
+    if not s3_bucket_name_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid S3 bucket name (3-63 lowercase letters, digits, hyphens or dots, starting and ending with a letter or digit).")
+    if '..' in value:
+        return (False, name + " is invalid. Cannot contain consecutive dots.")
     return (True, '')
 
 
@@ -367,12 +478,14 @@ def validate(values):
             else:
                 return (False, k + " is a required field.")
             
-        #Check and allow for global keyword (initially case insensitive)
+        #Check and allow for global keyword (initially case insensitive). Accepting the keyword
+        #skips THIS field's type check only (`continue`, not `return` — a `return` here would
+        #report the whole request valid and silently skip every field ordered after it).
         if isinstance(v['value'], str):
             if allowGlobalKeyword and v['value'].lower().strip() == 'global':
                 #additional check to make sure final value is capitalized or not
                 if v['value'] == 'GLOBAL':
-                    return (True, "")
+                    continue
                 else:
                     return (False, k + " is invalid. GLOBAL must be capitalized for this field is used.")
             elif not allowGlobalKeyword and v['value'].lower().strip()  == 'global':
@@ -397,6 +510,10 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'UUID':
             (valid, message) = validate_uuid(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'GUID':
+            (valid, message) = validate_guid(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'SAGEMAKER_NOTEBOOK_ID':
@@ -501,6 +618,10 @@ def validate(values):
             (valid, message) = validate_bool(k, v['value'])
             if not valid:
                 return (valid, message)
+        if v['validator'] == 'ISO8601_UTC':
+            (valid, message) = validate_iso8601_utc(k, v['value'])
+            if not valid:
+                return (valid, message)
         if v['validator'] == 'SQS_QUEUE_URL':
             (valid, message) = validate_sqs_queue_url(k, v['value'])
             if not valid:
@@ -515,6 +636,26 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'EVENTBRIDGE_DETAIL_TYPE':
             (valid, message) = validate_eventbridge_detail_type(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'ARN':
+            (valid, message) = validate_arn(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'CLOUDWATCH_LOG_GROUP_ARN':
+            (valid, message) = validate_cloudwatch_log_group_arn(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'CLOUDWATCH_LOG_GROUP_NAME':
+            (valid, message) = validate_cloudwatch_log_group_name(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'LOG_STREAM_NAME':
+            (valid, message) = validate_log_stream_name(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'S3_BUCKET_NAME':
+            (valid, message) = validate_s3_bucket_name(k, v['value'])
             if not valid:
                 return (valid, message)
 

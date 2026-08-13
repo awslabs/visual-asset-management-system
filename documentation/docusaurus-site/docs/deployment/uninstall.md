@@ -3,7 +3,7 @@
 This page describes how to completely remove VAMS from your AWS account, including the CDK stack destruction and manual cleanup of retained resources.
 
 :::danger[Permanent data loss]
-Uninstalling VAMS permanently deletes all managed resources, including Amazon DynamoDB tables, Amazon Simple Storage Service (Amazon S3) bucket configurations, AWS Lambda functions, and Amazon API Gateway endpoints. This action cannot be undone. Ensure you have backed up all data you intend to keep before proceeding.
+Uninstalling VAMS removes the AWS Lambda functions, Amazon API Gateway endpoints, and other managed resources for the deployment. The Amazon DynamoDB tables and the asset, auxiliary, artefacts, and access logs Amazon Simple Storage Service (Amazon S3) buckets are retained by design and are deleted only by the manual cleanup steps below, which permanently destroy their contents. This action cannot be undone. Ensure you have backed up all data you intend to keep before proceeding.
 :::
 
 ## Pre-uninstall backup
@@ -171,7 +171,7 @@ The retained asset, auxiliary, artefacts, and access logs buckets are **auto-nam
 
 ## Step 3: Delete DynamoDB tables
 
-VAMS DynamoDB tables use a `DESTROY` removal policy and are auto-named by AWS CloudFormation, so they are normally removed during teardown and do not block a redeploy with the same configuration. If any tables were retained after a failed stack deletion, delete them manually.
+VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data.
 
 ```bash
 # List remaining VAMS tables
@@ -439,7 +439,7 @@ The following table describes what stops incurring charges immediately after sta
 | Amazon API Gateway                     |               Yes                |                            --                            |
 | Amazon CloudFront distribution         |               Yes                |                            --                            |
 | Application Load Balancer              |               Yes                |                            --                            |
-| Amazon DynamoDB tables (if deleted)    |               Yes                |                            --                            |
+| Amazon DynamoDB tables (data storage)  |                --                |              Yes, until tables are deleted.              |
 | Amazon S3 buckets (data storage)       |                --                |       Yes, until buckets are emptied and deleted.        |
 | Amazon CloudWatch log groups (storage) |                --                |            Yes, until log groups are deleted.            |
 | AWS KMS keys                           |                --                | Yes, until keys are scheduled for and complete deletion. |

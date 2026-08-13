@@ -16,11 +16,12 @@ jest.mock("../utils/authTokenUtils", () => ({
     getDualAuthorizationHeader: (...a: any[]) => mockHeader(...a),
 }));
 
-function jsonResponse(status: number, body: any): Response {
+function jsonResponse(status: number, body: any, headers: Record<string, string> = {}): Response {
     return {
         ok: status >= 200 && status < 300,
         status,
         statusText: `HTTP ${status}`,
+        headers: { get: (k: string) => headers[k] ?? null },
         json: async () => body,
         text: async () => JSON.stringify(body),
     } as unknown as Response;
@@ -107,5 +108,51 @@ describe("apiClient backstop", () => {
         await expect(apiClient.get("thing")).rejects.toMatchObject({ status: 401 });
         expect(mockLogout).not.toHaveBeenCalled();
         expect(fetchMock).toHaveBeenCalledTimes(1); // surfaced, not retried
+    });
+
+    it("on 429 (WAF/API-GW throttle): retries once after Retry-After, never touches the session", async () => {
+        const fetchMock = jest
+            .fn()
+            .mockResolvedValueOnce(
+                jsonResponse(429, { message: "Rate limit exceeded" }, { "Retry-After": "0" })
+            )
+            .mockResolvedValueOnce(jsonResponse(200, { ok: 3 }));
+        (global.fetch as any) = fetchMock;
+        await expect(apiClient.get("thing")).resolves.toEqual({ ok: 3 });
+        expect(fetchMock).toHaveBeenCalledTimes(2); // throttled once, retried, succeeded
+        expect(mockEnsure).not.toHaveBeenCalled(); // NOT treated as an auth failure
+        expect(mockLogout).not.toHaveBeenCalled();
+    });
+
+    it("on repeated 429: surfaces a 429 ApiError after the single retry, no logout", async () => {
+        const fetchMock = jest
+            .fn()
+            .mockResolvedValue(
+                jsonResponse(429, { message: "Rate limit exceeded" }, { "Retry-After": "0" })
+            );
+        (global.fetch as any) = fetchMock;
+        await expect(apiClient.get("thing")).rejects.toMatchObject({ status: 429 });
+        expect(fetchMock).toHaveBeenCalledTimes(2); // initial + one retry, then surfaced
+        expect(mockLogout).not.toHaveBeenCalled();
+    });
+
+    it("flattens a structured 400 message (triggerTemplateErrors) into readable lines", async () => {
+        const body = {
+            message: {
+                triggerTemplateErrors: [
+                    "template 'X' (pipeline 'Y') is chosen as a trigger default but has required tag(s) with no default value: q.",
+                ],
+            },
+        };
+        (global.fetch as any) = jest.fn().mockResolvedValue(jsonResponse(400, body));
+        mockEnsure.mockResolvedValue(true);
+        await expect(apiClient.post("thing", { body: {} })).rejects.toMatchObject({
+            status: 400,
+            message: expect.stringContaining("required tag"),
+        });
+        // The raw structured body is preserved on the error for callers that want it.
+        await apiClient
+            .post("thing", { body: {} })
+            .catch((e: ApiError) => expect(e.message).not.toContain("[object Object]"));
     });
 });

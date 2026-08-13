@@ -43,7 +43,7 @@ RUN uv sync --locked --extra=cu128 --python 3.10
 
 # Create code directory and copy VAMS container code
 RUN mkdir -p /opt/ml/code
-COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
+COPY __main__.py model_manager.py inference.py manifest_io.py entrypoint.sh /opt/ml/code/
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.

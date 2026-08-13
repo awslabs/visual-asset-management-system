@@ -154,6 +154,40 @@ export function EnhancedFileManager({
         }
     }, [filePathToNavigate, state.loadingPhase, state.fileTree, assetFiles]);
 
+    // Auto-select the root (top) asset node once loading completes when no
+    // filePathToNavigate deep-link is supplied. The filePathToNavigate effect
+    // above owns selection when a path is given; this covers the plain
+    // open-the-asset case (streaming mode never selects a default node on its
+    // own). One-shot per asset load: MERGE_FILES re-derives selectedItem from
+    // selectedItemPath on every streaming page and cannot resolve the synthetic
+    // root path "/", so it cycles selectedItem back to null — without this
+    // latch the effect would re-fire on every page and loop.
+    const hasAutoSelectedRootRef = useRef(false);
+    useEffect(() => {
+        if (
+            !filePathToNavigate &&
+            !hasAutoSelectedRootRef.current &&
+            !state.selectedItem &&
+            !state.multiSelectMode &&
+            state.loadingPhase === "complete"
+        ) {
+            hasAutoSelectedRootRef.current = true;
+            dispatch({ type: "SELECT_ITEM", payload: { item: state.fileTree } });
+        }
+    }, [
+        filePathToNavigate,
+        state.selectedItem,
+        state.multiSelectMode,
+        state.loadingPhase,
+        state.fileTree,
+    ]);
+
+    // Re-arm the one-shot root auto-select whenever the asset or version
+    // changes (both reset loading and reload the tree from scratch).
+    useEffect(() => {
+        hasAutoSelectedRootRef.current = false;
+    }, [assetId, assetVersionId]);
+
     // Reset navigation flag when filePathToNavigate changes. Skip the
     // reset when the new path matches what's already selected — this
     // happens when the parent (ViewAsset) writes `?filePath=` in
@@ -189,7 +223,13 @@ export function EnhancedFileManager({
     const lastNotifiedPathRef = useRef<string | null | undefined>(undefined);
     useEffect(() => {
         if (!onSelectedPathChange) return;
-        const path = state.multiSelectMode ? null : state.selectedItem?.relativePath ?? null;
+        const selectedPath = state.multiSelectMode
+            ? null
+            : state.selectedItem?.relativePath ?? null;
+        // The synthetic root node ("/") is not a file deep-link — report null so
+        // it never lands in the URL as `?filePath=/` (which would feed back in as
+        // a filePathToNavigate and fight the auto-select of the root).
+        const path = selectedPath === "/" ? null : selectedPath;
         if (path === null && lastNotifiedPathRef.current === undefined) return;
         if (lastNotifiedPathRef.current === path) return;
         lastNotifiedPathRef.current = path;

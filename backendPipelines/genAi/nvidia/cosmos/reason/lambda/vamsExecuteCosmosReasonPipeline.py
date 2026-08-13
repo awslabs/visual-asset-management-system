@@ -11,18 +11,21 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 
 logger = safeLogger(service="VamsExecuteCosmosReasonPipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path,
-                      output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path, input_metadata,
-                      input_parameters, external_task_token, executing_userName, executing_requestContext,
-                      asset_id, database_id, cosmos_prompt):
+                      output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path,
+                      input_metadata_s3_location, input_configuration_s3_location, external_task_token,
+                      executing_userName, executing_requestContext, asset_id, database_id, cosmos_prompt,
+                      orchestration_event_prefix=""):
     """
     Execute the Cosmos Reason pipeline by invoking the openPipeline Lambda.
     Reason requires an input file path (video or image file) to analyze.
@@ -36,14 +39,15 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": "",  # Don't forward full metadata - prompt already extracted above
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
         "assetId": asset_id,
         "databaseId": database_id,
-        "cosmosPrompt": cosmos_prompt
+        "cosmosPrompt": cosmos_prompt,
+        "orchestrationEventPrefix": orchestration_event_prefix
     }
 
     # Invoke the pipeline open pipeline lambda
@@ -86,48 +90,38 @@ def lambda_handler(event, context):
         else:
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
-        # Get input parameters if defined
-        input_parameters = data.get('inputParameters', '')
-        logger.info(f"Input parameters received: {input_parameters}")
+        # Resolve input/output locations from the workflow manifest (fallback to payload fields)
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
+        logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
-        # Get input metadata if defined
-        input_metadata = data.get('inputMetadata', '')
-        logger.info(f"Input metadata received: {input_metadata}")
+        # Read metadata + input-configuration content from S3 (inline fallback for transition). The
+        # metadata file is the grouped-by-asset envelope, projected onto the legacy {"VAMS": {...}}
+        # view for this run's subject that the scopes below read (manifestHelper.run_vams_view).
+        input_metadata = manifestHelper.run_vams_view(
+            manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']), resolved) \
+            or data.get('inputMetadata', '')
+        input_parameters = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location']) \
+            or data.get('inputParameters', '')
 
         # Extract COSMOS_REASON_PROMPT from file metadata
         # VAMS metadata format: {"VAMS": {"assetMetadata": {...}, "fileMetadata": {"key": "value", ...}}}
         cosmos_prompt = ""
-        if input_metadata:
-            try:
-                metadata_obj = json.loads(input_metadata) if isinstance(input_metadata, str) else input_metadata
-                vams_metadata = metadata_obj.get("VAMS", {})
-                file_metadata = vams_metadata.get("fileMetadata", {})
-
-                # fileMetadata is a flat dict of {key: value} pairs
-                cosmos_prompt = file_metadata.get("COSMOS_REASON_PROMPT", "")
-                if cosmos_prompt:
-                    logger.info(f"Extracted COSMOS_REASON_PROMPT from file metadata: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract COSMOS_REASON_PROMPT from file metadata: {e}")
-
-        # If not found in metadata, try inputParameters as fallback
-        if not cosmos_prompt and input_parameters:
-            try:
-                params_obj = json.loads(input_parameters) if isinstance(input_parameters, str) else input_parameters
-                cosmos_prompt = params_obj.get("PROMPT") or params_obj.get("prompt") or ""
-                if cosmos_prompt:
-                    logger.info(f"Using COSMOS_REASON_PROMPT from input parameters: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract prompt from input parameters: {e}")
+        # CONFIG-FIRST with a metadata fallback (manifestHelper.resolve_input_setting): the prompt
+        # supplied on the execute screen as a template dynamic tag wins; a blank field falls back to a
+        # standing value saved on the asset. This pipeline reads one file per run, so per-FILE metadata
+        # is honoured first, then the asset's.
+        cosmos_prompt = manifestHelper.resolve_input_setting(
+            input_parameters, input_metadata, ("PROMPT", "prompt"), "COSMOS_REASON_PROMPT",
+            metadata_scopes=("fileMetadata", "assetMetadata"))
+        if cosmos_prompt:
+            logger.info(f"Resolved COSMOS_REASON_PROMPT: {cosmos_prompt}")
 
         # Prompt is OPTIONAL for Reason - use a sensible default if not provided
         if not cosmos_prompt:
             cosmos_prompt = "Caption the video in detail."
             logger.info(f"No COSMOS_REASON_PROMPT found - using default prompt: {cosmos_prompt}")
-
-        # Get asset and database IDs
-        asset_id = data.get('assetId', '')
-        database_id = data.get('databaseId', '')
 
         # Get Executing username
         executing_userName = data.get('executingUserName', '')
@@ -137,19 +131,20 @@ def lambda_handler(event, context):
 
         # Starts execution of pipeline
         execute_pipeline(
-            data['inputS3AssetFilePath'],
-            data.get('outputS3AssetFilesPath', ''),
-            data.get('outputS3AssetPreviewPath', ''),
-            data.get('outputS3AssetMetadataPath', ''),
-            data['inputOutputS3AssetAuxiliaryFilesPath'],
-            input_metadata,
-            input_parameters,
+            resolved['inputS3AssetFilePath'],
+            resolved['outputS3AssetFilesPath'],
+            resolved['outputS3AssetPreviewPath'],
+            resolved['outputS3AssetMetadataPath'],
+            resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            resolved['inputMetadataS3Location'],
+            resolved['inputConfigurationS3Location'],
             external_task_token,
             executing_userName,
             executing_requestContext,
-            asset_id,
-            database_id,
-            cosmos_prompt
+            resolved['assetId'],
+            resolved['databaseId'],
+            cosmos_prompt,
+            resolved['orchestrationEventPrefix']
         )
 
         return {

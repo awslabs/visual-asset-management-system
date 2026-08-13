@@ -685,6 +685,10 @@ Both stream endpoints support two file-delivery modes, selected by the `ALWAYS_R
 Under the API Gateway REST API, inline binary delivery requires the API-wide `binaryMediaTypes` to include `*/*`, which is incompatible with the CORS `OPTIONS` preflight (it breaks the preflight's MOCK integration). Because of this, `ALWAYS_REDIRECT_TO_PRESIGNED` must be `True` so that all files are delivered by presigned redirect. The inline path is retained for potential future use (for example, a different API front-end that does not have this constraint).
 
 The trade-off of always redirecting is an extra request hop (the redirect to S3) on every file fetch. Clients that issue many small requests — such as octree or 3D tile streaming viewers fetching numerous metadata and tile files — incur the redirect cost per request and load more slowly than with inline delivery.
+
+:::note[Distribution control]
+Both stream endpoints require the asset's `isDistributable` flag to be `true`. When it is `false` they return `403` regardless of the caller's role permissions, as do the download endpoints. See [The isDistributable flag](../concepts/assets.md#the-isdistributable-flag).
+:::
 :::
 
 ### Stream Asset File
@@ -713,11 +717,11 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                         |
-| ------ | ----------------------------------- |
-| `403`  | Not authorized to stream this file. |
-| `404`  | File not found.                     |
-| `500`  | Internal server error.              |
+| Status | Description                                                                    |
+| ------ | ------------------------------------------------------------------------------ |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable.  |
+| `404`  | File not found.                                                                |
+| `500`  | Internal server error.                                                         |
 
 ---
 
@@ -745,11 +749,11 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                         |
-| ------ | ----------------------------------- |
-| `403`  | Not authorized to stream this file. |
-| `404`  | File not found.                     |
-| `500`  | Internal server error.              |
+| Status | Description                                                                    |
+| ------ | ------------------------------------------------------------------------------ |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable.  |
+| `404`  | File not found.                                                                |
+| `500`  | Internal server error.                                                         |
 
 ---
 

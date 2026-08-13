@@ -63,12 +63,13 @@ namespace VamsDatabaseExplorer.Services
             if (authType == "Cognito")
             {
                 // Use regular Cognito login
-                var arguments = $"auth login --json-output -u {username}";
+                var arguments = new List<string> { "auth", "login", "--json-output", "-u", username };
                 if (!string.IsNullOrEmpty(passwordOrToken))
                 {
-                    arguments += $" -p {passwordOrToken}";
+                    arguments.Add("-p");
+                    arguments.Add(passwordOrToken);
                 }
-                
+
                 output = await ExecuteCommandAsync("vamscli", arguments);
                 System.Diagnostics.Debug.WriteLine($"LoginAsync: Cognito output: {output}");
                 
@@ -88,8 +89,12 @@ namespace VamsDatabaseExplorer.Services
             else
             {
                 // Use auth login with token override for external auth (JWT token or VAMS API key)
-                var arguments = $"auth login --user-id {username} --token-override \"{passwordOrToken}\" --json-output";
-                
+                var arguments = new List<string>
+                {
+                    "auth", "login", "--user-id", username,
+                    "--token-override", passwordOrToken ?? string.Empty, "--json-output"
+                };
+
                 output = await ExecuteCommandAsync("vamscli", arguments);
                 System.Diagnostics.Debug.WriteLine($"LoginAsync: External auth output: {output}");
                 
@@ -118,7 +123,8 @@ namespace VamsDatabaseExplorer.Services
         {
             try
             {
-                var output = await ExecuteCommandAsync("vamscli", "auth status --json-output");
+                var output = await ExecuteCommandAsync(
+                    "vamscli", new List<string> { "auth", "status", "--json-output" });
                 
                 // Parse JSON response to get auth status and web URL
                 var authStatus = JsonSerializer.Deserialize<AuthStatusResponse>(output, _jsonOptions);
@@ -161,7 +167,8 @@ namespace VamsDatabaseExplorer.Services
             try
             {
                 System.Diagnostics.Debug.WriteLine("VamsCliService: Fetching profile info for auth type");
-                var output = await ExecuteCommandAsync("vamscli", "profile info default --json-output");
+                var output = await ExecuteCommandAsync(
+                    "vamscli", new List<string> { "profile", "info", "default", "--json-output" });
                 
                 var profileInfo = JsonSerializer.Deserialize<ProfileInfoResponse>(output, _jsonOptions);
                 
@@ -253,7 +260,7 @@ namespace VamsDatabaseExplorer.Services
 
         public async Task LogoutAsync()
         {
-            await ExecuteCommandAsync("vamscli", "auth logout");
+            await ExecuteCommandAsync("vamscli", new List<string> { "auth", "logout" });
         }
 
         public async Task<List<Database>> GetAllDatabasesAsync()
@@ -266,7 +273,9 @@ namespace VamsDatabaseExplorer.Services
                 await EnsureAuthenticatedAsync();
                 
                 // Add --json-output flag for structured JSON response
-                var output = await ExecuteCommandAsync("vamscli", "database list --auto-paginate --json-output");
+                var output = await ExecuteCommandAsync(
+                    "vamscli",
+                    new List<string> { "database", "list", "--auto-paginate", "--json-output" });
 
                 System.Diagnostics.Debug.WriteLine($"VamsCliService: CLI output length: {output?.Length ?? 0}");
 
@@ -303,8 +312,10 @@ namespace VamsDatabaseExplorer.Services
             await EnsureAuthenticatedAsync();
             
             // Note: Command changed from 'asset' to 'assets' (plural)
-            var output = await ExecuteCommandAsync("vamscli", 
-                $"assets list --database-id {databaseId} --auto-paginate --json-output");
+            var output = await ExecuteCommandAsync("vamscli", new List<string>
+            {
+                "assets", "list", "--database-id", databaseId, "--auto-paginate", "--json-output"
+            });
 
             System.Diagnostics.Debug.WriteLine($"VamsCliService: Asset CLI output length: {output?.Length ?? 0}");
 
@@ -335,8 +346,11 @@ namespace VamsDatabaseExplorer.Services
             await EnsureAuthenticatedAsync();
             
             // Command changed significantly: file list -d <dbId> -a <assetId>
-            var output = await ExecuteCommandAsync("vamscli", 
-                $"file list -d {databaseId} -a {assetId} --basic --auto-paginate --json-output");
+            var output = await ExecuteCommandAsync("vamscli", new List<string>
+            {
+                "file", "list", "-d", databaseId, "-a", assetId,
+                "--basic", "--auto-paginate", "--json-output"
+            });
 
             System.Diagnostics.Debug.WriteLine($"VamsCliService: File CLI output length: {output?.Length ?? 0}");
 
@@ -367,8 +381,10 @@ namespace VamsDatabaseExplorer.Services
             await EnsureAuthenticatedAsync();
             
             // Command: file info -d <dbId> -a <assetId> -p <filePath>
-            var output = await ExecuteCommandAsync("vamscli", 
-                $"file info -d {databaseId} -a {assetId} -p \"{filePath}\" --json-output");
+            var output = await ExecuteCommandAsync("vamscli", new List<string>
+            {
+                "file", "info", "-d", databaseId, "-a", assetId, "-p", filePath, "--json-output"
+            });
 
             System.Diagnostics.Debug.WriteLine($"VamsCliService: File info output length: {output?.Length ?? 0}");
 
@@ -400,7 +416,11 @@ namespace VamsDatabaseExplorer.Services
 
             // Use the vamscli assets download command with --recursive flag
             // local_path is a positional argument and must come before options
-            var arguments = $"assets download \"{downloadPath}\" -d {databaseId} -a {assetId} --file-key / --recursive --json-output";
+            var arguments = new List<string>
+            {
+                "assets", "download", downloadPath, "-d", databaseId, "-a", assetId,
+                "--file-key", "/", "--recursive", "--json-output"
+            };
 
             var output = await ExecuteCommandAsync("vamscli", arguments);
             System.Diagnostics.Debug.WriteLine($"VamsCliService: Recursive download output: {output}");
@@ -460,7 +480,11 @@ namespace VamsDatabaseExplorer.Services
 
             // Use the download command - CLI handles everything internally
             // Note: local_path is the FIRST positional argument
-            var arguments = $"assets download \"{localPath}\" -d {databaseId} -a {assetId} --file-key \"{fileKey}\" --json-output";
+            var arguments = new List<string>
+            {
+                "assets", "download", localPath, "-d", databaseId, "-a", assetId,
+                "--file-key", fileKey, "--json-output"
+            };
 
             var output = await ExecuteCommandAsync("vamscli", arguments);
             System.Diagnostics.Debug.WriteLine($"VamsCliService: Download output: {output}");
@@ -547,21 +571,33 @@ namespace VamsDatabaseExplorer.Services
             return false;
         }
 
-        private async Task<string> ExecuteCommandAsync(string command, string arguments)
+        /// <summary>
+        /// Run a vamscli command. Arguments are supplied as individual tokens and passed through
+        /// ProcessStartInfo.ArgumentList, which quotes each one, so a value containing a space, a
+        /// double-quote or a leading dash reaches the CLI intact. Only the subcommand path (the
+        /// leading tokens before the first option) is traced; the remaining tokens can carry a
+        /// password or override token, so they are never written to the log or an exception message.
+        /// </summary>
+        private async Task<string> ExecuteCommandAsync(string command, IReadOnlyList<string> arguments)
         {
-            System.Diagnostics.Debug.WriteLine($"VamsCliService: Executing command: {command} {arguments}");
+            var commandLabel = DescribeCommand(command, arguments);
+            System.Diagnostics.Debug.WriteLine($"VamsCliService: Executing command: {commandLabel}");
 
             try
             {
                 var processStartInfo = new ProcessStartInfo
                 {
                     FileName = command,
-                    Arguments = arguments,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+
+                foreach (var argument in arguments)
+                {
+                    processStartInfo.ArgumentList.Add(argument);
+                }
 
                 using var process = new Process { StartInfo = processStartInfo };
                 process.Start();
@@ -598,8 +634,26 @@ namespace VamsDatabaseExplorer.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"VamsCliService: Exception executing command: {ex}");
-                throw new InvalidOperationException($"Error executing command '{command} {arguments}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Error executing command '{commandLabel}': {ex.Message}", ex);
             }
+        }
+
+        /// <summary>
+        /// The executable plus its leading non-option tokens (e.g. "vamscli auth login"), for tracing.
+        /// Stops at the first token starting with '-' so no option value is included.
+        /// </summary>
+        private static string DescribeCommand(string command, IReadOnlyList<string> arguments)
+        {
+            var parts = new List<string> { command };
+            foreach (var argument in arguments)
+            {
+                if (argument.StartsWith("-", StringComparison.Ordinal))
+                {
+                    break;
+                }
+                parts.Add(argument);
+            }
+            return string.Join(" ", parts);
         }
 
         public void Dispose()

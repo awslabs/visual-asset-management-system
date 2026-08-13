@@ -5,7 +5,7 @@ import time
 import click
 from typing import Optional
 
-from .profile import ProfileManager
+from .profile import ProfileManager, read_active_profile_name
 from .api_client import APIClient
 from .exceptions import (
     APIUnavailableError, SetupRequiredError, AuthenticationError,
@@ -15,12 +15,17 @@ from ..constants import DEFAULT_PROFILE_NAME
 
 
 def get_profile_manager_from_context(ctx: Optional[click.Context] = None) -> ProfileManager:
-    """Get ProfileManager instance from Click context or use default."""
-    if ctx and ctx.obj and 'profile_name' in ctx.obj:
+    """Get ProfileManager for the requested profile, else the ACTIVE one, else the default.
+
+    An explicit --profile wins; otherwise the profile `profile switch` selected is used. Falling
+    straight back to the literal default made `profile switch` a no-op, so a command ran against
+    whichever deployment `default` happened to point at while reporting success.
+    """
+    if ctx and ctx.obj and ctx.obj.get('profile_name'):
         profile_name = ctx.obj['profile_name']
     else:
-        profile_name = DEFAULT_PROFILE_NAME
-    
+        profile_name = read_active_profile_name()
+
     return ProfileManager(profile_name)
 
 

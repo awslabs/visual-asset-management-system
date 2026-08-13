@@ -6,6 +6,7 @@ import boto3
 import json
 import datetime
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="OpenGr00tFinetunePipeline")
 
@@ -13,8 +14,17 @@ sfn = boto3.client(
     'stepfunctions',
     region_name=os.environ["AWS_REGION"]
 )
+events_client = boto3.client(
+    'events',
+    region_name=os.environ["AWS_REGION"]
+)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
+# Orchestration bus + state-machine log group for optional sub-process registration
+ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
+STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 
 def abort_external_workflow(error, task_token):
@@ -26,6 +36,42 @@ def abort_external_workflow(error, task_token):
             error='Pipeline Failure: ' + error,
             cause='See AWS cloudwatch logs for error cause.'
         )
+
+
+def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
+                           sub_execution_arn, state_machine_arn):
+    # Best-effort: report this sub-SFN execution to the orchestration bus; failures are swallowed
+    if not orchestration_bus_name or not orchestration_event_prefix:
+        logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
+        return
+    pipeline_execution_id = manifestHelper.pipeline_execution_id_from_event_prefix(
+        orchestration_event_prefix)
+    if not pipeline_execution_id:
+        logger.warning("Could not derive pipelineExecutionId from event prefix; skipping registration")
+        return
+    detail = {
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {
+            "stateMachineArn": state_machine_arn or "",
+            "executionArn": sub_execution_arn or "",
+        },
+    }
+    if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
+        detail["logs"] = [{
+            "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
+            "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
+            "logStreamName": "",
+        }]
+    try:
+        events_client.put_events(Entries=[{
+            "EventBusName": orchestration_bus_name,
+            "Source": orchestration_event_prefix,
+            "DetailType": REGISTER_DETAIL_TYPE,
+            "Detail": json.dumps(detail),
+        }])
+        logger.info(f"Registered sub-execution for pipeline execution {pipeline_execution_id}")
+    except Exception as e:  # nosec B110 - registration is best-effort; never fail the pipeline
+        logger.warning(f"Sub-process registration failed (non-critical): {e}")
 
 
 def lambda_handler(event, context):
@@ -48,9 +94,14 @@ def lambda_handler(event, context):
     groot_config = event.get('gr00tConfig', '{}')
     asset_id = event.get('assetId', '')
     database_id = event.get('databaseId', '')
-    input_metadata = event.get('inputMetadata', '')
-    input_parameters = event.get('inputParameters', '')
+    input_metadata_s3_location = event.get('inputMetadataS3Location', '')
+    input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
+    orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
     external_sfn_task_token = event.get('sfnExternalTaskToken', '')
+    # finetune (default) trains; evaluate scores an existing checkpoint. Forwarded to the state machine
+    # so constructPipeline can name the Batch job and the container can branch. This lambda enumerates
+    # the fields it forwards, so a new one is silently dropped unless it is added here.
+    mode = str(event.get('mode', '') or 'finetune').strip().lower()
 
     # Validate asset path exists
     if not input_s3_asset_path:
@@ -63,7 +114,8 @@ def lambda_handler(event, context):
         }
 
     # Generate unique execution name
-    job_name = f"gr00t-finetune-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    job_name = (f"gr00t-{'eval' if mode == 'evaluate' else 'finetune'}-"
+                f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
     sfn_input = {
         "jobName": job_name,
@@ -74,10 +126,11 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "assetId": asset_id,
         "databaseId": database_id,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "gr00tConfig": groot_config,
-        "externalSfnTaskToken": external_sfn_task_token
+        "externalSfnTaskToken": external_sfn_task_token,
+        "mode": mode
     }
 
     try:
@@ -91,6 +144,12 @@ def lambda_handler(event, context):
         )
 
         logger.info(f"SFN Response: {sfn_response}")
+
+        # Best-effort: register this sub-SFN execution with the VAMS execution
+        register_sub_execution(
+            ORCHESTRATION_BUS_NAME, orchestration_event_prefix,
+            sfn_response.get("executionArn", ""), STATE_MACHINE_ARN)
+
         sfn_response["startDate"] = sfn_response["startDate"].strftime('%m-%d-%Y %H:%M:%S')
 
         responses.append({

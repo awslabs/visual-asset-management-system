@@ -10,7 +10,11 @@
             "required": true,
             "description": "The databaseId to scope permissions to"
         },
-        { "name": "ROLE_NAME", "required": true, "description": "The role name to create" }
+        {
+            "name": "ROLE_NAME",
+            "required": true,
+            "description": "The role name to create"
+        }
     ],
     "constraints": [
         {
@@ -26,10 +30,22 @@
             ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "POST", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
             ]
         },
         {
@@ -38,17 +54,63 @@
             "objectType": "web",
             "criteriaAnd": [],
             "criteriaOr": [
-                { "field": "route__path", "operator": "starts_with", "value": "/assets" },
-                { "field": "route__path", "operator": "starts_with", "value": "/databases" },
-                { "field": "route__path", "operator": "starts_with", "value": "/pipelines" },
-                { "field": "route__path", "operator": "starts_with", "value": "/search" },
-                { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
-                { "field": "route__path", "operator": "starts_with", "value": "/upload" },
-                { "field": "route__path", "operator": "starts_with", "value": "/metadataschema" },
-                { "field": "route__path", "operator": "starts_with", "value": "/assetIngestion" },
-                { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" }
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/assets"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/databases"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/pipelines"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/search"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/workflows"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/executions"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/upload"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/metadataschema"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/assetIngestion"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/api-keys"
+                }
             ],
-            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
         },
         {
             "name": "{{ROLE_NAME}}-api-routes",
@@ -56,34 +118,114 @@
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
-                { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
-                { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
-                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
-                { "field": "route__path", "operator": "starts_with", "value": "/asset-links" },
-                { "field": "route__path", "operator": "starts_with", "value": "/assets" },
-                { "field": "route__path", "operator": "starts_with", "value": "/comments" },
-                { "field": "route__path", "operator": "starts_with", "value": "/database" },
-                { "field": "route__path", "operator": "starts_with", "value": "/metadata" },
-                { "field": "route__path", "operator": "starts_with", "value": "/metadataschema" },
-                { "field": "route__path", "operator": "starts_with", "value": "/pipelines" },
-                { "field": "route__path", "operator": "starts_with", "value": "/search" },
-                { "field": "route__path", "operator": "starts_with", "value": "/subscriptions" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/secure-config"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/amplify-config"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/routes"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/asset-links"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/assets"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/comments"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/database"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/metadata"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/metadataschema"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/pipelines"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/search"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/subscriptions"
+                },
                 {
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/check-subscription"
                 },
-                { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
-                { "field": "route__path", "operator": "starts_with", "value": "/uploads" },
-                { "field": "route__path", "operator": "starts_with", "value": "/ingest-asset" },
-                { "field": "route__path", "operator": "starts_with", "value": "/buckets" },
-                { "field": "route__path", "operator": "starts_with", "value": "/unsubscribe" }
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/workflows"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/uploads"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/ingest-asset"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/buckets"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/unsubscribe"
+                }
             ],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "POST", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
             ]
         },
         {
@@ -92,23 +234,49 @@
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
-                { "field": "route__path", "operator": "starts_with", "value": "/tags" },
-                { "field": "route__path", "operator": "starts_with", "value": "/tag-types" }
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/tags"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/tag-types"
+                }
             ],
-            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
         },
         {
             "name": "{{ROLE_NAME}}-database",
             "description": "Allow read, update, and delete of the {{DATABASE_ID}} database entity (no create)",
             "objectType": "database",
             "criteriaAnd": [
-                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
             ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
             ]
         },
         {
@@ -116,14 +284,30 @@
             "description": "Allow full CRUD on assets in {{DATABASE_ID}} including permanent delete",
             "objectType": "asset",
             "criteriaAnd": [
-                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
             ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "POST", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
             ]
         },
         {
@@ -131,25 +315,49 @@
             "description": "Allow full management of pipelines in {{DATABASE_ID}}",
             "objectType": "pipeline",
             "criteriaAnd": [
-                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
             ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "POST", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
             ]
         },
         {
             "name": "{{ROLE_NAME}}-pipelines-global",
-            "description": "Allow viewing and executing GLOBAL pipelines",
+            "description": "Allow viewing and executing GLOBAL pipelines. GLOBAL pipelines are shared by every database, so managing them is reserved for the admin role.",
             "objectType": "pipeline",
-            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "GLOBAL"
+                }
+            ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "POST", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
             ]
         },
         {
@@ -157,25 +365,49 @@
             "description": "Allow full management of workflows in {{DATABASE_ID}}",
             "objectType": "workflow",
             "criteriaAnd": [
-                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
             ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "POST", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
             ]
         },
         {
             "name": "{{ROLE_NAME}}-workflows-global",
-            "description": "Allow viewing and executing GLOBAL workflows",
+            "description": "Allow viewing and executing GLOBAL workflows. GLOBAL workflows are shared by every database, so managing them is reserved for the global administrator role.",
             "objectType": "workflow",
-            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "GLOBAL"
+                }
+            ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "POST", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
             ]
         },
         {
@@ -183,39 +415,88 @@
             "description": "Allow full management of metadata schemas in {{DATABASE_ID}}",
             "objectType": "metadataSchema",
             "criteriaAnd": [
-                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
             ],
             "criteriaOr": [],
             "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "POST", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
             ]
         },
         {
             "name": "{{ROLE_NAME}}-metadataschemas-global",
             "description": "Allow viewing GLOBAL metadata schemas",
             "objectType": "metadataSchema",
-            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "GLOBAL"
+                }
+            ],
             "criteriaOr": [],
-            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
         },
         {
             "name": "{{ROLE_NAME}}-tags",
             "description": "Allow read-only access to all tags",
             "objectType": "tag",
-            "criteriaAnd": [{ "field": "tagName", "operator": "contains", "value": ".*" }],
+            "criteriaAnd": [
+                {
+                    "field": "tagName",
+                    "operator": "contains",
+                    "value": ".*"
+                }
+            ],
             "criteriaOr": [],
-            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
         },
         {
             "name": "{{ROLE_NAME}}-tagtypes",
             "description": "Allow read access to all tag types",
             "objectType": "tagType",
-            "criteriaAnd": [{ "field": "tagTypeName", "operator": "contains", "value": ".*" }],
+            "criteriaAnd": [
+                {
+                    "field": "tagTypeName",
+                    "operator": "contains",
+                    "value": ".*"
+                }
+            ],
             "criteriaOr": [],
-            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
         }
     ]
 }

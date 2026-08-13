@@ -437,6 +437,20 @@ Switch to a different profile. The profile must exist and be configured.
 vamscli profile switch <PROFILE_NAME>
 ```
 
+Subsequent commands, including `vamscli auth login`, use the profile selected here. Pass
+`--profile <PROFILE_NAME>` before a command group to target a different profile for a single
+invocation without changing the active one:
+
+```bash
+vamscli profile switch production          # every later command targets production
+vamscli --profile staging assets list      # this one command targets staging
+```
+
+:::note
+`--profile` is a global option, so it precedes the command group
+(`vamscli --profile staging assets list`, not `vamscli assets list --profile staging`).
+:::
+
 ---
 
 ## profile delete

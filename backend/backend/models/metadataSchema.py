@@ -8,9 +8,32 @@ from pydantic import BaseModel, Field, validator, root_validator
 from enum import Enum
 import json
 from customLogging.logger import safeLogger
-from models.metadata import MetadataValueType, validate_metadata_value_common
+from models.metadata import (
+    MetadataValueType,
+    validate_metadata_value_common,
+    MAX_METADATA_ITEMS_PER_REQUEST,
+    MAX_METADATA_VALUE_LENGTH,
+    MAX_PAGINATION_TOKEN_LENGTH,
+)
 
 logger = safeLogger(service_name="MetadataSchemaModels")
+
+#######################
+# Request Bounds
+#######################
+
+# A schema defines at most one field per metadata record an entity can hold, so the field
+# ceiling matches the per-entity metadata record ceiling.
+MAX_SCHEMA_FIELDS = MAX_METADATA_ITEMS_PER_REQUEST
+
+# Upper bound on the per-field dependency and controlled-list arrays. A dependency list
+# names at most every other field in the schema; the controlled-list bound is generous
+# for a picker-backed value set.
+MAX_FIELD_DEPENDENCIES = MAX_SCHEMA_FIELDS
+MAX_CONTROLLED_LIST_KEYS = 1000
+
+# Upper bound for the comma-delimited file-extension restriction string.
+MAX_FILE_KEY_TYPE_RESTRICTION_LENGTH = 1024
 
 #######################
 # Metadata Schema Entity Types
@@ -34,10 +57,10 @@ class MetadataSchemaFieldModel(BaseModel, extra='ignore'):
     metadataFieldKeyName: str = Field(..., min_length=1, max_length=256, description="Field key name")
     metadataFieldValueType: MetadataValueType = Field(..., description="Type of metadata value")
     required: bool = Field(default=False, description="Whether this field is required")
-    sequence: Optional[int] = Field(None, ge=0, description="Display order sequence (0-based, lower numbers appear first)")
-    dependsOnFieldKeyName: Optional[List[str]] = Field(None, description="Field keys this field depends on")
-    controlledListKeys: Optional[List[str]] = Field(None, description="Allowed values for INLINE_CONTROLLED_LIST type")
-    defaultMetadataFieldValue: Optional[str] = Field(None, description="Default value for this field")
+    sequence: Optional[int] = Field(None, ge=0, le=MAX_SCHEMA_FIELDS, description="Display order sequence (0-based, lower numbers appear first)")
+    dependsOnFieldKeyName: Optional[List[str]] = Field(None, max_items=MAX_FIELD_DEPENDENCIES, description="Field keys this field depends on")
+    controlledListKeys: Optional[List[str]] = Field(None, max_items=MAX_CONTROLLED_LIST_KEYS, description="Allowed values for INLINE_CONTROLLED_LIST type")
+    defaultMetadataFieldValue: Optional[str] = Field(None, max_length=MAX_METADATA_VALUE_LENGTH, description="Default value for this field")
 
     @validator('metadataFieldValueType', pre=True)
     def normalize_metadata_value_type(cls, v):
@@ -49,7 +72,26 @@ class MetadataSchemaFieldModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_field_definition(cls, values):
         """Validate field definition constraints"""
-        
+        from common.validators import validate
+
+        # Bound the per-element length of both string arrays. Dependency entries name
+        # other field keys; controlled-list entries become selectable metadata values.
+        (valid, message) = validate({
+            'dependsOnFieldKeyName': {
+                'value': values.get('dependsOnFieldKeyName'),
+                'validator': 'STRING_256_ARRAY',
+                'optional': True
+            },
+            'controlledListKeys': {
+                'value': values.get('controlledListKeys'),
+                'validator': 'STRING_256_ARRAY',
+                'optional': True
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         # Validate controlledListKeys only for INLINE_CONTROLLED_LIST type
         if values.get('metadataFieldValueType') == MetadataValueType.INLINE_CONTROLLED_LIST:
             if not values.get('controlledListKeys') or len(values.get('controlledListKeys', [])) == 0:
@@ -57,7 +99,7 @@ class MetadataSchemaFieldModel(BaseModel, extra='ignore'):
         else:
             # For non-controlled list types, controlledListKeys should not be set
             if values.get('controlledListKeys') is not None and len(values.get('controlledListKeys', [])) > 0:
-                raise ValueError(f"controlledListKeys should only be set for INLINE_CONTROLLED_LIST type, not {values.get('metadataFieldValueType')}")
+                raise ValueError("controlledListKeys may only be set when metadataFieldValueType is INLINE_CONTROLLED_LIST")
         
         # Validate defaultMetadataFieldValue if provided
         if values.get('defaultMetadataFieldValue') is not None:
@@ -68,7 +110,7 @@ class MetadataSchemaFieldModel(BaseModel, extra='ignore'):
                 # Additional validation for controlled list
                 if values.get('metadataFieldValueType') == MetadataValueType.INLINE_CONTROLLED_LIST:
                     if values.get('controlledListKeys') and values.get('defaultMetadataFieldValue') not in values.get('controlledListKeys'):
-                        raise ValueError(f"defaultMetadataFieldValue '{values.get('defaultMetadataFieldValue')}' must be one of the controlledListKeys: {values.get('controlledListKeys')}")
+                        raise ValueError("defaultMetadataFieldValue must be one of the declared controlledListKeys")
             except ValueError as e:
                 raise ValueError(f"Invalid defaultMetadataFieldValue: {str(e)}")
         
@@ -77,7 +119,7 @@ class MetadataSchemaFieldModel(BaseModel, extra='ignore'):
 
 class MetadataSchemaFieldsModel(BaseModel, extra='ignore'):
     """Container for metadata schema fields"""
-    fields: List[MetadataSchemaFieldModel] = Field(..., description="Array of field definitions")
+    fields: List[MetadataSchemaFieldModel] = Field(..., min_items=1, max_items=MAX_SCHEMA_FIELDS, description="Array of field definitions")
 
     @root_validator
     def validate_unique_field_names(cls, values):
@@ -89,7 +131,7 @@ class MetadataSchemaFieldsModel(BaseModel, extra='ignore'):
         field_names = [field.metadataFieldKeyName for field in values.get('fields', [])]
         if len(field_names) != len(set(field_names)):
             duplicates = [name for name in field_names if field_names.count(name) > 1]
-            raise ValueError(f"Duplicate field names found: {list(set(duplicates))}")
+            raise ValueError("Field names must be unique within a schema")
         return values
 
 
@@ -104,11 +146,11 @@ class GetMetadataSchemaRequestModel(BaseModel, extra='ignore'):
 
 class GetMetadataSchemasRequestModel(BaseModel, extra='ignore'):
     """Request model for listing metadata schemas with filters"""
-    databaseId: Optional[str] = Field(None, description="Filter by database ID")
+    databaseId: Optional[str] = Field(None, min_length=1, max_length=256, description="Filter by database ID")
     metadataEntityType: Optional[MetadataSchemaEntityType] = Field(None, description="Filter by entity type")
     maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
     @validator('metadataEntityType', pre=True)
     def normalize_entity_type(cls, v):
@@ -155,7 +197,7 @@ class CreateMetadataSchemaRequestModel(BaseModel, extra='ignore'):
     databaseId: str = Field(..., min_length=1, max_length=256, description="Database ID (supports 'GLOBAL')")
     metadataSchemaEntityType: MetadataSchemaEntityType = Field(..., description="Entity type for this schema")
     schemaName: str = Field(..., min_length=1, max_length=256, description="Schema name")
-    fileKeyTypeRestriction: Optional[str] = Field(None, description="Comma-delimited file extensions (only for fileMetadata/fileAttribute)")
+    fileKeyTypeRestriction: Optional[str] = Field(None, max_length=MAX_FILE_KEY_TYPE_RESTRICTION_LENGTH, description="Comma-delimited file extensions (only for fileMetadata/fileAttribute)")
     fields: MetadataSchemaFieldsModel = Field(..., description="Field definitions")
     enabled: bool = Field(default=True, description="Whether schema is enabled")
 
@@ -216,22 +258,22 @@ class CreateMetadataSchemaRequestModel(BaseModel, extra='ignore'):
             extensions = [ext.strip() for ext in values.get('fileKeyTypeRestriction').split(',')]
             for ext in extensions:
                 if not ext or len(ext) > 10:
-                    raise ValueError(f"Invalid file extension: {ext}")
+                    raise ValueError("Each file extension must be non-empty and at most 10 characters")
         
         # For fileAttribute entity type, validate that all fields are STRING type
         if values.get('metadataSchemaEntityType') == MetadataSchemaEntityType.FILE_ATTRIBUTE:
             for field in values.get('fields').fields:
                 if field.metadataFieldValueType != MetadataValueType.STRING:
-                    raise ValueError(f"fileAttribute schemas only support 'string' metadataFieldValueType, found '{field.metadataFieldValueType}' for field '{field.metadataFieldKeyName}'")
+                    raise ValueError("fileAttribute schemas support only the 'string' metadataFieldValueType")
         
         return values
 
 
 class UpdateMetadataSchemaRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a metadata schema"""
-    metadataSchemaId: str = Field(..., description="Metadata schema ID to update")
+    metadataSchemaId: str = Field(..., min_length=3, max_length=63, description="Metadata schema ID to update")
     schemaName: Optional[str] = Field(None, min_length=1, max_length=256, description="Schema name")
-    fileKeyTypeRestriction: Optional[str] = Field(None, description="Comma-delimited file extensions")
+    fileKeyTypeRestriction: Optional[str] = Field(None, max_length=MAX_FILE_KEY_TYPE_RESTRICTION_LENGTH, description="Comma-delimited file extensions")
     fields: Optional[MetadataSchemaFieldsModel] = Field(None, description="Field definitions")
     enabled: Optional[bool] = Field(None, description="Whether schema is enabled")
 

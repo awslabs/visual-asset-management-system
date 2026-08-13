@@ -8,18 +8,120 @@ from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="RoleModels")
 
+# Bounds on constraint collections. Each criterion becomes a clause in the Casbin
+# obj_rule expression evaluated on every authorization check, and each unique
+# group/user permission becomes its own denormalized DynamoDB item, so an unbounded
+# list drives both per-request authz cost and write fan-out. The caps are generous
+# relative to real constraints -- the shipped permission templates use single-digit
+# criteria counts and at most 18 criteria in one constraint.
+MAX_CRITERIA_PER_CONSTRAINT = 100
+MAX_PERMISSIONS_PER_CONSTRAINT = 100
+# Each element of a list-valued criterion is a separate regex alternative.
+MAX_CRITERIA_VALUES = 100
+# One template import writes every constraint in a single request.
+MAX_CONSTRAINTS_PER_TEMPLATE = 200
+MAX_TEMPLATE_VARIABLES = 100
+# Variable names/values are substituted into constraint names, descriptions, and
+# criteria values, all of which are themselves bounded at 256 characters.
+MAX_TEMPLATE_VARIABLE_NAME_LENGTH = 256
+MAX_TEMPLATE_VARIABLE_VALUE_LENGTH = 256
+# Roles assigned to one user in a single request.
+MAX_ROLES_PER_USER_REQUEST = 500
+# Pagination ceilings: a page must fit the 6 MB Lambda response limit.
+MAX_LIST_PAGE_SIZE = 10000
+MAX_LIST_MAX_ITEMS = 30000
+# Opaque base64 pagination tokens; matches the execution/history listing bound.
+MAX_LIST_TOKEN_LENGTH = 4096
+
+# The operators whose obj_rule is a regexMatch(...) call. Casbin evaluates that through Python's `re`,
+# which raises TypeError on a list — and CasbinEnforcer catches the exception and returns False, so ONE
+# such criterion makes a role fail EVERY check on that object type, including entities the criterion was
+# never about. `is_one_of` / `is_not_one_of` compile to a plain `in` test and are the operators that work
+# on a list.
+_REGEX_OPERATORS = ("equals", "contains", "does_not_contain", "starts_with", "ends_with")
+
+
+def _list_valued_constraint_fields():
+    """The constraint fields whose entity value is a list, taken from PERMISSION_CONSTRAINT_FIELDS.
+
+    Derived rather than hard-coded so a newly added list field is covered without a second edit here.
+    """
+    from common.constants import PERMISSION_CONSTRAINT_FIELDS
+    return {name for name, sample in PERMISSION_CONSTRAINT_FIELDS.items() if isinstance(sample, list)}
+
+
+def _reject_regex_operator_on_list_field(field, operator):
+    """Reject a regex operator aimed at a list-valued field.
+
+    Without this the constraint stores cleanly and only misbehaves at authorization time, where it looks
+    like a permissions problem rather than a malformed rule: the regex raises, the enforcer denies, and
+    the role loses access to every entity of that type. Refusing the write is the only point where the
+    author can still be told what to use instead.
+    """
+    if not field or not operator:
+        return
+    if field in _list_valued_constraint_fields() and operator in _REGEX_OPERATORS:
+        # Naming the field is safe under Rule 11 even though `field` arrives from the caller: this line
+        # is reached only after confirming it is a member of PERMISSION_CONSTRAINT_FIELDS, so the value
+        # echoed back is one of a fixed known set rather than caller text. The operator is not
+        # interpolated at all — the message names the two that work instead.
+        raise ValueError(
+            f"the '{field}' field holds a list of values, which the pattern-matching operators cannot "
+            f"compare. Use 'is_one_of' or 'is_not_one_of' instead.")
+
+
 ######################## Constraint API Models ##########################
 
 class ConstraintCriteriaModel(BaseModel, extra='ignore'):
     """Model for constraint criteria (AND/OR)"""
     field: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     operator: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    value: Union[str, List[str]]
+    value: Union[str, List[str]] = Field(max_items=MAX_CRITERIA_VALUES)
+
+    @root_validator
+    def validate_criteria_value(cls, values):
+        """Bound each criteria value and require it to be a usable regex.
+
+        A criteria value is interpolated into the regexMatch(...) pattern of the
+        Casbin obj_rule, so an unbounded or uncompilable value either bloats the
+        stored rule or makes every enforce() call on the object type raise and
+        deny. Validating here covers every request that carries criteria --
+        constraint create/update and template import alike.
+        """
+        _reject_regex_operator_on_list_field(values.get('field'), values.get('operator'))
+
+        value = values.get('value')
+        if value is None:
+            return values
+
+        entries = value if isinstance(value, list) else [value]
+        for entry in entries:
+            (valid, message) = validate({
+                'criteriaValue': {
+                    'value': entry,
+                    'validator': 'STRING_256',
+                    'allowGlobalKeyword': True
+                }
+            })
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+            (valid, message) = validate({
+                'criteriaValue': {
+                    'value': entry,
+                    'validator': 'REGEX',
+                    'allowGlobalKeyword': True
+                }
+            })
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+        return values
 
 
 class GroupPermissionModel(BaseModel, extra='ignore'):
     """Model for group permissions in constraints"""
-    groupId: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    groupId: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     permission: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     permissionType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
 
@@ -33,22 +135,22 @@ class UserPermissionModel(BaseModel, extra='ignore'):
 
 class GetConstraintsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing constraints"""
-    maxItems: Optional[int] = Field(default=30000, ge=1)
-    pageSize: Optional[int] = Field(default=10000, ge=1)
-    startingToken: Optional[str] = None
+    maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=10000, ge=1, le=MAX_LIST_PAGE_SIZE)
+    startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
 class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     """Request model for creating/updating a constraint"""
-    identifier: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
-    name: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    identifier: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
+    name: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     objectType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    criteriaAnd: Optional[List[ConstraintCriteriaModel]] = []
-    criteriaOr: Optional[List[ConstraintCriteriaModel]] = []
-    groupPermissions: Optional[List[GroupPermissionModel]] = []
-    userPermissions: Optional[List[UserPermissionModel]] = []
-    
+    criteriaAnd: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
+    criteriaOr: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
+    groupPermissions: Optional[List[GroupPermissionModel]] = Field(default=[], max_items=MAX_PERMISSIONS_PER_CONSTRAINT)
+    userPermissions: Optional[List[UserPermissionModel]] = Field(default=[], max_items=MAX_PERMISSIONS_PER_CONSTRAINT)
+
     @root_validator
     def validate_fields(cls, values):
         """Validate constraint fields"""
@@ -280,10 +382,10 @@ class GetConstraintPermissionObjectsResponseModel(BaseModel, extra='ignore'):
 
 class TemplateVariableDefinition(BaseModel, extra='ignore'):
     """Variable definition within a permission template"""
-    name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=MAX_TEMPLATE_VARIABLE_NAME_LENGTH, strip_whitespace=True)
     required: Optional[bool] = True
-    description: Optional[str] = Field(None, max_length=512)
-    default: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=1024)
+    default: Optional[str] = Field(None, max_length=MAX_TEMPLATE_VARIABLE_VALUE_LENGTH)
 
 
 class TemplateConstraintPermission(BaseModel, extra='ignore'):
@@ -297,24 +399,26 @@ class TemplateConstraintDefinition(BaseModel, extra='ignore'):
     name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     objectType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    criteriaAnd: Optional[List[ConstraintCriteriaModel]] = []
-    criteriaOr: Optional[List[ConstraintCriteriaModel]] = []
-    groupPermissions: List[TemplateConstraintPermission]
+    criteriaAnd: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
+    criteriaOr: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
+    groupPermissions: List[TemplateConstraintPermission] = Field(max_items=MAX_PERMISSIONS_PER_CONSTRAINT)
 
 
 class TemplateMetadata(BaseModel, extra='ignore'):
     """Metadata about a permission template"""
     name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    description: Optional[str] = Field(None, max_length=512)
+    description: Optional[str] = Field(None, max_length=1024)
     version: Optional[str] = Field(default="1.0", max_length=50)
 
 
 class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
     """Request model for importing constraints from a permission template"""
     template: Optional[TemplateMetadata] = None
-    variables: Optional[List[TemplateVariableDefinition]] = []
-    variableValues: dict  # {"DATABASE_ID": "my-db", "ROLE_NAME": "my-admin"}
-    constraints: List[TemplateConstraintDefinition]
+    variables: Optional[List[TemplateVariableDefinition]] = Field(default=[], max_items=MAX_TEMPLATE_VARIABLES)
+    # {"DATABASE_ID": "my-db", "ROLE_NAME": "my-admin"} -- keys and values are
+    # bounded and type-checked in validate_template_import.
+    variableValues: dict
+    constraints: List[TemplateConstraintDefinition] = Field(max_items=MAX_CONSTRAINTS_PER_TEMPLATE)
 
     @root_validator
     def validate_template_import(cls, values):
@@ -328,6 +432,31 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
         )
 
         variable_values = values.get('variableValues', {})
+
+        # Bound the substitution map. Every value is spliced into a constraint name,
+        # description, or criteria value -- all of which are themselves capped at 256
+        # characters -- so an oversized or non-scalar value would either overflow the
+        # stored constraint or stringify a container into a Casbin rule.
+        if len(variable_values) > MAX_TEMPLATE_VARIABLES:
+            message = f"A maximum of {MAX_TEMPLATE_VARIABLES} template variables can be provided"
+            logger.error(message)
+            raise ValueError(message)
+
+        for var_name, var_value in variable_values.items():
+            if not isinstance(var_name, str) or len(var_name) > MAX_TEMPLATE_VARIABLE_NAME_LENGTH:
+                message = (f"Template variable names must be strings of at most "
+                           f"{MAX_TEMPLATE_VARIABLE_NAME_LENGTH} characters")
+                logger.error(message)
+                raise ValueError(message)
+            if not isinstance(var_value, (str, int, float, bool)):
+                message = "Template variable values must be strings, numbers, or booleans"
+                logger.error(message)
+                raise ValueError(message)
+            if isinstance(var_value, str) and len(var_value) > MAX_TEMPLATE_VARIABLE_VALUE_LENGTH:
+                message = (f"Template variable values must be at most "
+                           f"{MAX_TEMPLATE_VARIABLE_VALUE_LENGTH} characters")
+                logger.error(message)
+                raise ValueError(message)
 
         # Validate ROLE_NAME is provided (required for groupId)
         if 'ROLE_NAME' not in variable_values:
@@ -350,8 +479,8 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
                     variable_values[var_def.name] = var_def.default
                 else:
                     raise ValueError(
-                        f"Required variable '{var_def.name}' not provided in variableValues. "
-                        f"Description: {var_def.description}"
+                        "A required template variable was not provided in variableValues. "
+                        "Check the template's variable definitions for the required names."
                     )
 
         # Validate constraints
@@ -363,8 +492,7 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
             # Validate objectType
             if constraint.objectType not in ALLOWED_CONSTRAINT_OBJECT_TYPES:
                 raise ValueError(
-                    f"Invalid objectType '{constraint.objectType}'. "
-                    f"Allowed: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
+                    f"Invalid objectType. Allowed values: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
                 )
 
             # Validate each criterion's field is valid for the constraint's objectType
@@ -372,35 +500,32 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
             for criteria in (constraint.criteriaAnd or []) + (constraint.criteriaOr or []):
                 if criteria.field not in valid_fields:
                     raise ValueError(
-                        f"Invalid field '{criteria.field}' for objectType "
-                        f"'{constraint.objectType}'. Allowed: {', '.join(valid_fields)}"
+                        f"Invalid criteria field for this objectType. "
+                        f"Allowed values: {', '.join(valid_fields)}"
                     )
 
             # Validate criteria exist
             if not constraint.criteriaAnd and not constraint.criteriaOr:
                 raise ValueError(
-                    f"Constraint '{constraint.name}' must have at least one criteriaAnd or criteriaOr"
+                    "Each constraint must have at least one criteriaAnd or criteriaOr"
                 )
 
             # Validate operators in criteria
             for criteria in (constraint.criteriaAnd or []) + (constraint.criteriaOr or []):
                 if criteria.operator not in ALLOWED_CONSTRAINT_OPERATORS:
                     raise ValueError(
-                        f"Invalid operator '{criteria.operator}'. "
-                        f"Allowed: {', '.join(ALLOWED_CONSTRAINT_OPERATORS)}"
+                        f"Invalid criteria operator. Allowed values: {', '.join(ALLOWED_CONSTRAINT_OPERATORS)}"
                     )
 
             # Validate permissions
             for perm in constraint.groupPermissions:
                 if perm.action not in ALLOWED_CONSTRAINT_PERMISSIONS:
                     raise ValueError(
-                        f"Invalid permission action '{perm.action}'. "
-                        f"Allowed: {', '.join(ALLOWED_CONSTRAINT_PERMISSIONS)}"
+                        f"Invalid permission action. Allowed values: {', '.join(ALLOWED_CONSTRAINT_PERMISSIONS)}"
                     )
                 if perm.type not in ALLOWED_CONSTRAINT_PERMISSION_TYPES:
                     raise ValueError(
-                        f"Invalid permission type '{perm.type}'. "
-                        f"Allowed: {', '.join(ALLOWED_CONSTRAINT_PERMISSION_TYPES)}"
+                        f"Invalid permission type. Allowed values: {', '.join(ALLOWED_CONSTRAINT_PERMISSION_TYPES)}"
                     )
 
         return values
@@ -419,14 +544,14 @@ class ImportConstraintsTemplateResponseModel(BaseModel, extra='ignore'):
 
 class GetRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing roles"""
-    maxItems: Optional[int] = Field(default=30000, ge=1)
-    pageSize: Optional[int] = Field(default=3000, ge=1)
-    startingToken: Optional[str] = None
+    maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=3000, ge=1, le=MAX_LIST_PAGE_SIZE)
+    startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
 class CreateRoleRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a role"""
-    roleName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    roleName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     source: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
     sourceIdentifier: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
@@ -508,7 +633,7 @@ class CreateRoleRequestModel(BaseModel, extra='ignore'):
 
 class UpdateRoleRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a role"""
-    roleName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    roleName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     source: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
     sourceIdentifier: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
@@ -623,15 +748,15 @@ class RoleOperationResponseModel(BaseModel, extra='ignore'):
 
 class GetUserRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing user roles"""
-    maxItems: Optional[int] = Field(default=30000, ge=1)
-    pageSize: Optional[int] = Field(default=3000, ge=1)
-    startingToken: Optional[str] = None
+    maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=3000, ge=1, le=MAX_LIST_PAGE_SIZE)
+    startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
 class CreateUserRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for creating user roles"""
     userId: str = Field(min_length=3, max_length=256, strip_whitespace=True)
-    roleName: list[str] = Field(min_length=1)
+    roleName: list[str] = Field(min_items=1, max_items=MAX_ROLES_PER_USER_REQUEST)
 
     @root_validator
     def validate_fields(cls, values):
@@ -671,7 +796,7 @@ class CreateUserRolesRequestModel(BaseModel, extra='ignore'):
 class UpdateUserRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for updating user roles"""
     userId: str = Field(min_length=3, max_length=256, strip_whitespace=True)
-    roleName: list[str] = Field(min_length=1)
+    roleName: list[str] = Field(min_items=1, max_items=MAX_ROLES_PER_USER_REQUEST)
 
     @root_validator
     def validate_fields(cls, values):

@@ -55,8 +55,10 @@ echo "Logs will be saved to: $LOG_FILE"
 echo ""
 
 $PYTHON_CMD v2.5_to_v2.6_migration.py --config "$CONFIG_FILE" $EXTRA_ARGS 2>&1 | tee -a "$LOG_FILE"
+# The pipeline's own status is tee's, so read the migration's status from PIPESTATUS.
+MIGRATION_STATUS=${PIPESTATUS[0]}
 
-if [ $? -eq 0 ]; then
+if [ "$MIGRATION_STATUS" -eq 0 ]; then
     echo ""
     echo "Reindex migration completed successfully."
     echo ""
@@ -66,7 +68,8 @@ if [ $? -eq 0 ]; then
     echo "  3. Monitor CloudWatch logs for the reindexer function for any per-record failures"
 else
     echo "Migration failed. Check the logs for details."
-    exit 1
+    echo "Log file: $LOG_FILE"
+    exit "$MIGRATION_STATUS"
 fi
 
 echo ""

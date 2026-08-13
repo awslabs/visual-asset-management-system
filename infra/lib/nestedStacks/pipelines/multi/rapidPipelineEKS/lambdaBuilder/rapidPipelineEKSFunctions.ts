@@ -17,6 +17,8 @@ import { Duration } from "aws-cdk-lib";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import * as Config from "../../../../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as events from "aws-cdk-lib/aws-events";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { storageResources } from "../../../../../nestedStacks/storage/storageBuilder-nestedStack";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -99,6 +101,19 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
     // Apply global environment and permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
     // CDK Nag Suppressions
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -128,7 +143,9 @@ export function buildOpenPipelineEKSFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    securityGroups: ec2.ISecurityGroup[]
+    securityGroups: ec2.ISecurityGroup[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup
 ): lambda.Function {
     const name = "OpenPipelineHandler";
 
@@ -159,11 +176,17 @@ export function buildOpenPipelineEKSFunction(
 
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",
+
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     // Grant Step Functions permissions to start state machine execution
     stateMachine.grantStartExecution(fun);
+
+    orchestrationBus.grantPutEventsTo(fun);
 
     // Grant S3 permissions for all asset buckets using new pattern
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();

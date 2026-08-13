@@ -52,11 +52,11 @@ sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
-sys.modules['common.validators'] = MagicMock()
-sys.modules['common.validators'].validate = lambda params: (True, "")
-# Regex pattern constants used in Pydantic Field(regex=...) must be real strings,
-# not auto-generated MagicMock attributes; re.compile() rejects a MagicMock.
-sys.modules['common.validators'].bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
+# common.validators is registered as the REAL module further below (after
+# common.s3PathPatterns, which it imports). A bare MagicMock here would resolve
+# its pattern constants (e.g. bucket_existing_key_pattern) to MagicMocks, which
+# pydantic v1 then passes to re.compile(regex=...) at model-class-definition time,
+# crashing collection of any test that imports models.assetsV3.
 sys.modules['common.dynamodb'] = MagicMock()
 sys.modules['common.dynamodb'].get_asset_object_from_id = lambda asset_id: {"assetId": asset_id}
 sys.modules['common.constants'] = MagicMock()
@@ -91,6 +91,23 @@ _s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
 _s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
 _s3pp_spec.loader.exec_module(_s3pp_module)
 sys.modules['common.s3PathPatterns'] = _s3pp_module
+# validators is pure (re + json + common.s3PathPatterns, registered above; no AWS
+# deps), so load the REAL module by path. Its regex pattern CONSTANTS must be real
+# strings: models (e.g. assetsV3) pass them to pydantic v1 Field(regex=...), which
+# re.compile()s them at class-definition time -- a MagicMock there crashes collection.
+# The validate() dispatcher is the REAL one: handlers bind it at import, so replacing it with a
+# permissive stub made every handler test fail open — a handler that skipped or mis-declared an
+# input check still passed. Tests that need validation bypassed should patch it locally.
+_validators_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.validators',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'validators.py')
+)
+_validators_module = _s3mk_importlib_util.module_from_spec(_validators_spec)
+_validators_spec.loader.exec_module(_validators_module)
+sys.modules['common.validators'] = _validators_module
+# `common` is a MagicMock package, so bind the real submodule as an attribute too so
+# `from common import validators` resolves the real module rather than a mock attribute.
+sys.modules['common'].validators = _validators_module
 # dynamoDbMetadataKeys is pure constants (no AWS deps), so load the REAL module
 # by path rather than a MagicMock (same approach as s3MetadataKeys above).
 _ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -109,6 +126,51 @@ _apir_spec = _s3mk_importlib_util.spec_from_file_location(
 _apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
 _apir_spec.loader.exec_module(_apir_module)
 sys.modules['common.apiRoutes'] = _apir_module
+# The execution/pipeline/workflow helpers live in the common.workflows subpackage.
+# `common` is a MagicMock, so register a REAL package object for `common.workflows`
+# (and bind it as an attribute on the mock `common`) before loading its submodules,
+# so `from common.workflows import X` / `from common.workflows.X import Y` resolve the
+# real code rather than MagicMock attributes.
+_cw_pkg = __import__('types').ModuleType('common.workflows')
+_cw_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'workflows')]
+sys.modules['common.workflows'] = _cw_pkg
+sys.modules['common'].workflows = _cw_pkg
+# executionRecords is pure helpers (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_execrec_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.workflows.executionRecords',
+    os.path.join(_cw_pkg.__path__[0], 'executionRecords.py')
+)
+_execrec_module = _s3mk_importlib_util.module_from_spec(_execrec_spec)
+_execrec_spec.loader.exec_module(_execrec_module)
+sys.modules['common.workflows.executionRecords'] = _execrec_module
+# Bind the real module as an attribute on the package so `from common.workflows import
+# executionRecords` resolves the real submodule.
+_cw_pkg.executionRecords = _execrec_module
+# executionOutputs is pure helpers too (imports only common.workflows.executionRecords;
+# boto3 clients are injected by callers, none constructed at import). Load the REAL module.
+_execout_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.workflows.executionOutputs',
+    os.path.join(_cw_pkg.__path__[0], 'executionOutputs.py')
+)
+_execout_module = _s3mk_importlib_util.module_from_spec(_execout_spec)
+_execout_spec.loader.exec_module(_execout_module)
+sys.modules['common.workflows.executionOutputs'] = _execout_module
+_cw_pkg.executionOutputs = _execout_module
+# stepfunctions_builder is a pure ASL builder (imports only json + typing, no AWS
+# side effects at import), so load the REAL module by path rather than a MagicMock.
+# This makes the per-test stubs in the workflow tests harmless no-ops and removes a
+# test-collection-order dependency.
+_sfb_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.workflows.stepfunctions_builder',
+    os.path.join(_cw_pkg.__path__[0], 'stepfunctions_builder.py')
+)
+_sfb_module = _s3mk_importlib_util.module_from_spec(_sfb_spec)
+_sfb_spec.loader.exec_module(_sfb_module)
+sys.modules['common.workflows.stepfunctions_builder'] = _sfb_module
+# Bind the real submodule as an attribute too so `from common.workflows import
+# stepfunctions_builder` / `from common.workflows.stepfunctions_builder import X` resolve real code.
+_cw_pkg.stepfunctions_builder = _sfb_module
 # s3 is a simple validation module with no AWS side effects at import, but it is not
 # in the root conftest mock layer. Load the mock s3 module by path so tests that import
 # handlers which depend on common.s3 can collect cleanly.

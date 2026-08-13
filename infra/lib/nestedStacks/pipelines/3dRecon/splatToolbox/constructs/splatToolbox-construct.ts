@@ -8,12 +8,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
-import * as sqs from "aws-cdk-lib/aws-sqs";
-import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
-import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -21,10 +16,10 @@ import {
     buildConstructPipelineFunction,
     buildOpenPipelineFunction,
     buildVamsExecuteSplatToolboxPipelineFunction,
-    buildSqsExecuteSplatToolboxPipelineFunction,
     buildPipelineEndFunction,
 } from "../lambdaBuilder/splatToolboxFunctions";
 import { BatchGpuPipelineConstruct } from "../../../constructs/batch-gpu-pipeline";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -35,8 +30,8 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
-import { execSync } from "child_process";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 
@@ -47,7 +42,8 @@ export interface SplatToolboxConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
+    codeBuildRepository?: ecr.IRepository;
 }
 
 /**
@@ -61,6 +57,14 @@ const defaultProps: Partial<SplatToolboxConstructProps> = {
 export class SplatToolboxConstruct extends Construct {
     public pipelineVamsLambdaFunctionName: string;
 
+    /** Upstream container sources, pinned to a commit. */
+    public static readonly GITHUB_REPO_LINK =
+        "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git";
+    public static readonly GITHUB_REPO_COMMIT_HASH = "73133959c04fb0f9f002e95b4d2a722de2d18722";
+
+    /** Marker file recording which upstream commit the local container directory was synced from. */
+    private static readonly SYNCED_COMMIT_FILE = ".synced-commit";
+
     constructor(parent: Construct, name: string, props: SplatToolboxConstructProps) {
         super(parent, name);
 
@@ -69,12 +73,11 @@ export class SplatToolboxConstruct extends Construct {
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
 
-        const splatGitHubRepoLink =
-            "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git";
-        const splatGitHubRepoCommitHash = "e27cc1439890d832e85c8949e3c9f920ac80a391";
-
         // Download and Sync splat toolbox repository container files
-        this.syncSplatToolboxContainer(splatGitHubRepoLink, splatGitHubRepoCommitHash);
+        SplatToolboxConstruct.syncContainerSources(
+            SplatToolboxConstruct.GITHUB_REPO_LINK,
+            SplatToolboxConstruct.GITHUB_REPO_COMMIT_HASH
+        );
 
         /**
          * Batch Resources
@@ -207,6 +210,7 @@ export class SplatToolboxConstruct extends Construct {
                     "container"
                 ),
                 dockerfileName: "Dockerfile",
+                codeBuildRepository: props.codeBuildRepository,
                 containerExecutionCommand: ["python", "__main__.py"],
                 batchJobDefinitionName: `SplatToolboxGpuJob-${
                     props.config.name + "_" + props.config.app.baseStackName
@@ -222,9 +226,7 @@ export class SplatToolboxConstruct extends Construct {
                 memory: 60000,
                 retryAttempts: 1,
                 timeoutSeconds: 259200, // 72 hours
-                // Environment variables that will be available in the container
-                // Note: Runtime variables (EXTERNAL_SFN_TASK_TOKEN, INPUT_PARAMETERS, INPUT_METADATA)
-                // are passed via Step Functions containerOverrides
+                // Runtime variables are passed via Step Functions containerOverrides
                 additionalEnvironmentVariables: [],
             }
         );
@@ -300,8 +302,6 @@ export class SplatToolboxConstruct extends Construct {
                 environment: {
                     EXTERNAL_SFN_TASK_TOKEN: sfn.JsonPath.stringAt("$.externalSfnTaskToken"),
                     AWS_REGION: region,
-                    INPUT_PARAMETERS: sfn.JsonPath.stringAt("$.inputParameters"),
-                    INPUT_METADATA: sfn.JsonPath.stringAt("$.inputMetadata"),
                 },
             },
             integrationPattern: sfn.IntegrationPattern.RUN_JOB,
@@ -346,7 +346,10 @@ export class SplatToolboxConstruct extends Construct {
             "SplatToolboxProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-                timeout: Duration.hours(5),
+                // Envelopes the Batch attempt (timeoutSeconds 259200) so a long-running job reaches
+                // its own failure path — and the container's task-token callback — rather than being
+                // cut short by the state machine.
+                timeout: Duration.hours(73),
                 logs: {
                     destination: stateMachineLogGroup,
                     includeExecutionData: true,
@@ -354,6 +357,18 @@ export class SplatToolboxConstruct extends Construct {
                 },
                 tracingEnabled: true,
             }
+        );
+
+        // Stopping the state machine cancels the .sync Batch task, which requires terminating the
+        // running job; the BatchSubmitJob task grants only batch:SubmitJob. Batch job ids are
+        // generated at submit time and carry no deployment-specific prefix to scope on, so the
+        // resource is a wildcard.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs", "batch:TerminateJob"],
+                resources: ["*"],
+            })
         );
 
         /**
@@ -371,6 +386,8 @@ export class SplatToolboxConstruct extends Construct {
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -387,79 +404,34 @@ export class SplatToolboxConstruct extends Construct {
                 props.storageResources.encryption.kmsKey
             );
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables). The
+        // former Objects and 360-Environments registrations collapse to ONE pipeline + two templates
+        // (splat-objects / splat-environments-360) selected per execution; the pipeline uses the longer
+        // (48h) task timeout so either capture mode fits.
         if (props.config.app.pipelines.useSplatToolbox.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-
-            NagSuppressions.addResourceSuppressionsByPath(
-                Stack.of(this),
-                `/${this.toString()}/ImportProvider/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "Custom resource provider requires wildcard permissions to invoke the import function with version qualifiers",
-                        appliesTo: [
-                            {
-                                regex: "/^Resource::arn:.*:lambda:.*:function:<importGlobalPipelineWorkflow[A-Z0-9]+>:\\*$/g",
-                            },
-                        ],
-                    },
-                ],
-                true
-            );
-            // Register Splat Toolbox pipeline and workflow for Objects
-            new cdk.CustomResource(this, "3dReconSplatToolboxObjectsPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "3dRecon-splat-toolbox-objects",
-                    pipelineDescription:
-                        "3D Gaussian Splat Pipeline - Auto process images and videos into 3D splat objects - .zip (2D video), mov, .mp4 inputs",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".all",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "SplatToolboxRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "3dRecon",
+                    "splatToolbox",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: SplatToolboxPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "28800", // 8 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    workflowId: "3dRecon-splat-toolbox-objects",
-                    workflowDescription:
-                        "3D Gaussian Splat Pipeline - Auto process images and 2D videos into 3D splat objects - .zip (2D video), mov, .mp4 inputs",
-                    autoTriggerOnFileExtensionsUpload: "",
                 },
-            });
-
-            // Register Splat Toolbox pipeline and workflow for Environment Generation
-            new cdk.CustomResource(this, "3dReconSplatToolboxEnvironmentPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "3dRecon-splat-toolbox-environments-360",
-                    pipelineDescription:
-                        "3D Gaussian Splat Pipeline - Auto process 360 videos into 3D splat objects - .zip (360 video), mov, .mp4 inputs",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".all",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: SplatToolboxPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "172800", // 48 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: JSON.stringify({ SPHERICAL_CAMERA: true }),
-                    workflowId: "3dRecon-splat-toolbox-environments-360",
-                    workflowDescription:
-                        "3D Gaussian Splat Pipeline - Auto process 360 videos into 3D splat objects - .zip (360 video), mov, .mp4 inputs",
-                    autoTriggerOnFileExtensionsUpload: "",
+                idOverrides: {
+                    pipelineId: "3dRecon-splat-toolbox",
+                    workflowId: "3dRecon-splat-toolbox",
                 },
             });
         }
@@ -474,17 +446,6 @@ export class SplatToolboxConstruct extends Construct {
         this.pipelineVamsLambdaFunctionName = SplatToolboxPipelineVamsExecuteFunction.functionName;
 
         //Nag Supressions
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
-                },
-            ],
-            true
-        );
-
         const reason =
             "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
 
@@ -734,7 +695,26 @@ export class SplatToolboxConstruct extends Construct {
         );
     }
 
-    private syncSplatToolboxContainer(gitHubLink: string, gitHubCommitHash: string): void {
+    /**
+     * Sync the pinned upstream Splat Toolbox container sources into backendPipelines. Static and
+     * idempotent so the CodeBuild construct can guarantee the sync has run before it uploads the
+     * container directory as an S3 asset, without depending on construct instantiation order.
+     */
+    public static syncContainerSources(gitHubLink: string, gitHubCommitHash: string): void {
+        if (SplatToolboxConstruct.syncedCommit === gitHubCommitHash) {
+            return;
+        }
+        SplatToolboxConstruct.syncSplatToolboxContainerSources(gitHubLink, gitHubCommitHash);
+        SplatToolboxConstruct.syncedCommit = gitHubCommitHash;
+    }
+
+    /** Commit synced during this synth; keyed by hash so a changed pin always re-syncs. */
+    private static syncedCommit: string | undefined;
+
+    private static syncSplatToolboxContainerSources(
+        gitHubLink: string,
+        gitHubCommitHash: string
+    ): void {
         try {
             const targetDir = path.resolve(
                 __dirname,
@@ -761,12 +741,31 @@ export class SplatToolboxConstruct extends Construct {
                 fs.rmSync(tempDir, { recursive: true, force: true });
             }
 
+            // execFileSync with an argument array: no shell, so the repo URL and commit hash are
+            // passed to git verbatim rather than interpolated into a command string.
             // nosemgrep: detect-child-process
-            execSync(`git clone ${gitHubLink} "${tempDir}"`, { stdio: "inherit" });
+            execFileSync("git", ["clone", gitHubLink, tempDir], { stdio: "inherit" });
             // nosemgrep: detect-child-process
-            execSync(`git -C "${tempDir}" checkout ${gitHubCommitHash}`, { stdio: "inherit" });
+            execFileSync("git", ["-C", tempDir, "checkout", gitHubCommitHash], {
+                stdio: "inherit",
+            });
+
+            // Confirm the working tree is actually at the requested commit. A tag or branch name
+            // that moved, or a partial clone, would otherwise sync unexpected sources.
+            // nosemgrep: detect-child-process
+            const checkedOut = execFileSync("git", ["-C", tempDir, "rev-parse", "HEAD"], {
+                encoding: "utf8",
+            }).trim();
+            if (checkedOut !== gitHubCommitHash) {
+                throw new Error(
+                    `checked-out commit ${checkedOut} does not match the requested ${gitHubCommitHash}`
+                );
+            }
 
             const sourceDir = path.join(tempDir, "source", "container");
+            if (!fs.existsSync(sourceDir)) {
+                throw new Error(`upstream source directory not found at ${sourceDir}`);
+            }
             if (fs.existsSync(sourceDir)) {
                 // Overwrite/sync files from downloaded source into target directory.
                 // Existing local files (e.g. __main__.py, .gitignore) are preserved;
@@ -799,23 +798,71 @@ export class SplatToolboxConstruct extends Construct {
                 if (fs.existsSync(dockerfilePath)) {
                     let dockerfileContent = fs.readFileSync(dockerfilePath, "utf8");
 
-                    // Add COPY for __main__.py if not already present
+                    // Stage the VAMS entry point and its support package. The package is named
+                    // vams_utils, not utils: upstream copies its own ./src/pipeline/utils.py into
+                    // CODE_PATH, and the two cannot share the `utils` import name — whichever wins
+                    // breaks the other's imports.
                     if (!dockerfileContent.includes("COPY ./__main__.py")) {
-                        // Find the COPY ./src/main.py line and add __main__.py before it
+                        // Anchor on the COPY that stages ./src/main.py into CODE_PATH. Upstream
+                        // bundles several files onto that one COPY line, so match the line
+                        // containing ./src/main.py rather than a COPY that starts with it.
+                        const mainPyCopyLine = /^.*COPY\b.*\.\/src\/main\.py.*$/m;
+                        if (!mainPyCopyLine.test(dockerfileContent)) {
+                            throw new Error(
+                                "could not locate the 'COPY ... ./src/main.py' line in the upstream " +
+                                    "Dockerfile to anchor the __main__.py COPY. The container entry " +
+                                    "point (python __main__.py) would be missing from the image."
+                            );
+                        }
                         dockerfileContent = dockerfileContent.replace(
-                            /(COPY \.\/src\/main\.py)/,
-                            "COPY ./__main__.py                                                  ${CODE_PATH}\n$1"
+                            mainPyCopyLine,
+                            (line) =>
+                                `COPY ./__main__.py                                                  \${CODE_PATH}\n` +
+                                `${line}\n` +
+                                `COPY ./vams_utils                                                   \${CODE_PATH}/vams_utils`
                         );
                         fs.writeFileSync(dockerfilePath, dockerfileContent);
-                        console.log("Added __main__.py to Dockerfile");
+                        console.log("Added __main__.py and the vams_utils package to Dockerfile");
+                    }
+                }
+
+                // The Batch job runs `python __main__.py`, which imports `from vams_utils import
+                // manifest_io`. Assert on the final file rather than trusting the edits above.
+                const finalDockerfile = fs.readFileSync(dockerfilePath, "utf8");
+                for (const required of ["COPY ./__main__.py", "COPY ./vams_utils"]) {
+                    if (!finalDockerfile.includes(required)) {
+                        throw new Error(
+                            `the synced Dockerfile is missing '${required}'; the container entry ` +
+                                "point would fail to import at runtime"
+                        );
+                    }
+                }
+                for (const required of ["__main__.py", "vams_utils"]) {
+                    if (!fs.existsSync(path.join(targetDir, required))) {
+                        throw new Error(`${required} is missing from ${targetDir}`);
                     }
                 }
             }
 
             fs.rmSync(tempDir, { recursive: true, force: true });
-            console.log("Repository sync completed successfully");
+
+            // Record the commit the local container directory now holds, so a later synth can tell
+            // whether the sources match the pinned hash.
+            fs.writeFileSync(
+                path.join(targetDir, SplatToolboxConstruct.SYNCED_COMMIT_FILE),
+                `${gitHubCommitHash}\n`,
+                "utf8"
+            );
+            console.log(`Repository sync completed successfully (commit: ${gitHubCommitHash})`);
         } catch (error) {
-            console.warn("Repository sync failed, continuing with existing files:", error);
+            // Fail the synth rather than silently building from whatever is on disk. A stale local
+            // container directory would otherwise produce an image that does not match the pinned
+            // commit, with no signal that the sync never ran.
+            throw new Error(
+                `Splat Toolbox container source sync failed for commit ${gitHubCommitHash}. ` +
+                    `The local container directory may be stale or partially written; delete ` +
+                    `backendPipelines/3dRecon/splatToolbox/container and re-run. Cause: ${error}`
+            );
         }
     }
 }

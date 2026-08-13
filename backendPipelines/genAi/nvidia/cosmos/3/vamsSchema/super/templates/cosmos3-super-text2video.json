@@ -1,0 +1,26 @@
+{
+    "templateId": "cosmos3-super-text2video",
+    "templateName": "Text-to-Video (Super)",
+    "description": "Generate high-quality video from a text prompt with the Cosmos 3 Super (64B) omni model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_VARIANT\": \"super\", \"TASK_MODE\": \"text2video\", \"DISABLE_GUARDRAILS\": \"true\", \"PROMPT\": \"{{PROMPT}}\", \"NEGATIVE_PROMPT\": \"{{NEGATIVE_PROMPT}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Generates a video from a text prompt using Cosmos3-Super. No input file is required — the prompt is the input.\n\nAsset metadata this pipeline reads (all optional):\n  COSMOS3_PROMPT           What to generate. Falls back to this when the Prompt field is blank.\n  COSMOS3_NEGATIVE_PROMPT  What to avoid in the output.\n  COSMOS3_SEED             Integer seed; the same seed reproduces the same generation.\n  COSMOS3_GUIDANCE         How strictly to follow the prompt.\n  COSMOS3_NUM_FRAMES       Number of frames to generate (video modes).\n  COSMOS3_TASK_MODE        Generation mode, where the pipeline variant supports more than one.\n  COSMOS3_CONTROL_TYPE     Control-signal type (control-conditioned modes).\n  COSMOS3_CONTROL_PATH     Asset-relative path to the control input.\n  COSMOS3_CONTROL_WEIGHT   How strongly the control signal is applied.\n  COSMOS3_CONTROL_GUIDANCE Guidance applied to the control signal.\n\nHow to supply metadata: set these as metadata on the ASSET (Metadata tab on the asset page, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: a value you type into a field above WINS. Asset metadata is used only where the field is left blank, so a standing value on the asset acts as a per-asset default.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "The generation prompt. Leave blank to fall back to the COSMOS3_PROMPT asset metadata key."
+        },
+        {
+            "tagKey": "NEGATIVE_PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Negative prompt",
+            "description": "What to avoid in the generation. Blank falls back to COSMOS3_NEGATIVE_PROMPT asset metadata."
+        }
+    ]
+}

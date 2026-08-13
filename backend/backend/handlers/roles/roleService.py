@@ -14,6 +14,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_changes
 from common.dynamodb import validate_pagination_info
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2,
     internal_error,
     success,
@@ -322,7 +323,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

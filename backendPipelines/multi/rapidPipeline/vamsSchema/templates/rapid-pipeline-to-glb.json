@@ -1,0 +1,9 @@
+{
+    "templateId": "rapid-pipeline-to-glb",
+    "templateName": "Optimize to GLB",
+    "description": "Optimize and convert a 3D model to GLB using DGG RapidPipeline.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".glb\"}",
+    "allowCustomEdit": false,
+    "inputInstructions": "Optimizes and decimates a 3D model with RapidPipeline (Amazon ECS) and outputs glTF Binary (.glb). Requires a licensed RapidPipeline deployment. Select the source model as the input file.\n\nThis pipeline reads no asset or file metadata — optimization settings come from this template."
+}

@@ -15,7 +15,7 @@ from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetLinks import (
     GetAssetLinksRequestModel,
     GetAssetLinksResponseModel, 
@@ -610,7 +610,7 @@ def handle_get_request(event):
                 request_model = parse(path_parameters, model=GetSingleAssetLinkRequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in path parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Validate asset link ID
             (valid, message) = validate({
@@ -658,7 +658,7 @@ def handle_get_request(event):
                 request_model = parse(combined_params, model=GetAssetLinksRequestModel)
             except ValidationError as v:
                 logger.exception(f"Validation error in parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Get asset links
             response = get_asset_links_for_asset(
@@ -672,6 +672,13 @@ def handle_get_request(event):
         else:
             return validation_error(body={'message': 'Asset ID, Database ID, or Asset Link ID is required'}, event=event)
             
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as v:
+        logger.warning(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.warning(f"Validation error in asset links retrieval: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -698,7 +705,7 @@ def handle_put_request(event):
             path_request_model = parse(path_parameters, model=GetSingleAssetLinkRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Validate asset link ID
         (valid, message) = validate({
@@ -738,6 +745,13 @@ def handle_put_request(event):
         response = update_asset_link(path_request_model.assetLinkId, request_model, claims_and_roles)
         return success(body=response.dict())
         
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as v:
+        logger.warning(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.warning(f"Validation error in asset link update: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -764,7 +778,7 @@ def handle_delete_request(event):
             request_model = parse(path_parameters, model=DeleteAssetLinkRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
 
         # Validate asset link ID
         (valid, message) = validate({
@@ -783,6 +797,13 @@ def handle_delete_request(event):
         response = delete_asset_link(request_model.assetLinkId, claims_and_roles)
         return success(body=response.dict())
         
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as v:
+        logger.warning(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.warning(f"Validation error in asset link deletion: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -831,7 +852,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

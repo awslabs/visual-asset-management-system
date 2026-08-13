@@ -32,7 +32,9 @@ export interface WafPolicyConfig {
         block?: boolean; // true => the group's own block actions apply; false => count-only
         // Per-rule action overrides within the managed group. Use to set a specific rule to
         // "count" while the rest of the group stays in block mode — e.g. SizeRestrictions_BODY,
-        // which would otherwise block VAMS's large multi-part upload initialize/complete bodies.
+        // which would otherwise block VAMS's large multi-part upload initialize/complete bodies,
+        // and SizeRestrictions_QUERYSTRING, which caps a query string at 2048 bytes and would
+        // otherwise block the SuperSplat viewer's presigned-URL "?load=" parameter.
         ruleActionOverrides?: Array<{ name: string; action: "count" | "block" | "allow" }>;
     }>;
     rateBasedRules?: Array<{

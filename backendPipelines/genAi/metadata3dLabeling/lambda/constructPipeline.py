@@ -30,8 +30,9 @@ def lambda_handler(event, context):
         "jobName": event.get("jobName"),
         "currentStageType": definition["stages"][0]["type"],
         "definition": [json.dumps(definition)],
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        # Forward the metadata + input-configuration S3 locations, not their content
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "status": "STARTING"
     }
@@ -97,8 +98,9 @@ def construct_metadataLabeling_definition(event) -> dict:
     definition = {
         "jobName": event.get("jobName"),
         "stages": [blender_stage, metadataGeneration_stage],
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        # Metadata + input-configuration S3 locations travel with the definition, not their content
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
 

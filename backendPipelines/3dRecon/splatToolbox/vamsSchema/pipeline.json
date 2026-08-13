@@ -1,0 +1,29 @@
+{
+    "pipelineName": "3D Gaussian Splat Toolbox",
+    "category": "3D Reconstruction",
+    "description": "3D Gaussian Splat Pipeline - process images and videos into 3D Gaussian splats. Standard (objects) and 360/spherical (environments) capture modes are selected per execution via the template.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "172800",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.zip", "*.mov", "*.mp4"],
+            "exclude": []
+        }
+    }
+}

@@ -151,6 +151,22 @@ describe("EnhancedFileManager multi-selection with URL filePath sync", () => {
         });
     });
 
+    it("auto-selects the root asset node on load when no filePath is provided", async () => {
+        const { container } = renderFileManager();
+
+        await waitFor(() => expect(screen.getByText("a.txt")).toBeInTheDocument());
+        await flushEffects();
+
+        // The root (top) node is selected by default (its name renders with a
+        // folder-count suffix, e.g. "TestAsset(3)").
+        await waitFor(() => {
+            const rootRow = container.querySelector(".tree-item-content.selected");
+            expect(rootRow?.querySelector(".tree-item-name")?.textContent).toContain("TestAsset");
+        });
+        // ...and the synthetic root path never lands in the URL as a deep-link.
+        expect(getFilePathParam()).toBeNull();
+    });
+
     it("keeps multiple files selected on ctrl+click and clears the filePath param", async () => {
         const { container } = renderFileManager();
 

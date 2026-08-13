@@ -1,0 +1,18 @@
+{
+    "workflowName": "Coordinate Transform",
+    "category": "Conversion",
+    "description": "Coordinate transformation for point cloud data between CRS systems",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.e57", "*.las", "*.laz", "*.ply"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:conversion-coordinate-transform": "coordinate-transform-wgs84-to-osgb36-laz"
+            },
+            "enabled": false
+        }
+    ]
+}

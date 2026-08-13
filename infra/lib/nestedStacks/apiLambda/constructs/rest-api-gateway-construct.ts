@@ -179,6 +179,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             endpointType: apiGatewayRest.endpointType,
             vpcEndpointIds: apiGatewayVpcEndpointId ? [apiGatewayVpcEndpointId] : undefined,
             title: `${config.env.coreStackName}Api`,
+            timeoutSeconds: apiGatewayRest.apiGatewayTimeoutTime,
         });
 
         // 4) SpecRestApi with explicit deployment control
@@ -196,6 +197,33 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             cloudWatchRole: true,
             cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.DESTROY,
         });
+
+        // Minimum TLS version + cipher suite on the REST API itself. `securityPolicy` is a
+        // property of AWS::ApiGateway::RestApi — not only of a custom DomainName — so it applies to
+        // the default execute-api endpoint VAMS serves from, which has no custom domain to attach a
+        // policy to. The L2 SpecRestApi does not surface the property, so it is set on the L1.
+        //
+        // A policy is set only outside the GovCloud mode. There, a Regional API otherwise defaults
+        // to TLS_1_0, which accepts TLS 1.0 and TLS 1.1; SecurityPolicy_TLS13_1_2_2021_06 raises the
+        // floor to TLS 1.2 while still accepting TLS 1.3, so it stays compatible with every fronting
+        // mode — notably CloudFront, which negotiates at most TLS 1.2 to a custom origin and so
+        // cannot reach a TLS 1.3-only API. The value is not present in the aws-cdk-lib
+        // SecurityPolicy enum, so it is written as its literal CloudFormation string.
+        //
+        // It is an enhanced policy (the `SecurityPolicy_` prefix) and so requires an endpoint access
+        // mode. BASIC (rather than STRICT) keeps CloudFront `/api/*` origin requests, the
+        // ALB-to-execute-api redirect, and direct execute-api access working — all of which are
+        // cross-host or cross-endpoint-type by design.
+        //
+        // The GovCloud mode (which the EU Sovereign Cloud also enables for its partition guardrails)
+        // is left unset so the API keeps whatever default its partition and Region apply. Those
+        // partitions do not offer TLS_1_0 for Regional APIs and their APIs are FIPS-compliant by
+        // default, so the default floor is already TLS 1.2 without VAMS asserting a specific policy.
+        if (!config.app.govCloud.enabled) {
+            const cfnRestApi = this.restApi.node.defaultChild as apigw.CfnRestApi;
+            cfnRestApi.addPropertyOverride("SecurityPolicy", "SecurityPolicy_TLS13_1_2_2021_06");
+            cfnRestApi.addPropertyOverride("EndpointAccessMode", "BASIC");
+        }
 
         // CORS headers on gateway-level responses (authorizer denials and errors).
         // Responses produced by API Gateway itself — the custom authorizer returning

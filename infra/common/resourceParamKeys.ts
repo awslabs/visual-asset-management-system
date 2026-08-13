@@ -45,6 +45,26 @@ export const RESOURCE_PARAM_KEYS = {
         workflowExecutionsStorage: "dynamoTables/workflowExecutionsStorage",
         apiKeyStorage: "dynamoTables/apiKeyStorage",
         workflowStorage: "dynamoTables/workflowStorage",
+        // Workflow-execution V2 data model tables
+        workflowExecutionsStorageV2: "dynamoTables/workflowExecutionsStorageV2",
+        workflowExecutionInputsStorage: "dynamoTables/workflowExecutionInputsStorage",
+        workflowExecutionConfigurationStorage: "dynamoTables/workflowExecutionConfigurationStorage",
+        pipelineExecutionsStorage: "dynamoTables/pipelineExecutionsStorage",
+        pipelineExecutionInputFilesStorage: "dynamoTables/pipelineExecutionInputFilesStorage",
+        pipelineExecutionInputMetadataStorage: "dynamoTables/pipelineExecutionInputMetadataStorage",
+        pipelineExecutionInputConfigurationStorage:
+            "dynamoTables/pipelineExecutionInputConfigurationStorage",
+        pipelineExecutionOutputFilesStorage: "dynamoTables/pipelineExecutionOutputFilesStorage",
+        pipelineExecutionOutputMetadataStorage:
+            "dynamoTables/pipelineExecutionOutputMetadataStorage",
+        pipelineExecutionOutputResultsStorage: "dynamoTables/pipelineExecutionOutputResultsStorage",
+        pipelineExecutionLogsStorage: "dynamoTables/pipelineExecutionLogsStorage",
+        // Pipeline + workflow V2 data model tables
+        pipelineStorageV2: "dynamoTables/pipelineStorageV2",
+        pipelineTemplatesStorage: "dynamoTables/pipelineTemplatesStorage",
+        pipelineTemplateTagSchemaStorage: "dynamoTables/pipelineTemplateTagSchemaStorage",
+        workflowStorageV2: "dynamoTables/workflowStorageV2",
+        workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
     },
     // Deprecated tables retained for data migration only (no handler reads them)
     dynamoTablesLegacy: {

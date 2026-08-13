@@ -25,8 +25,8 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
-from common.dynamodb import to_update_expr
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from common.dynamodb import to_update_expr, query_all_items
 from common.s3 import is_object_version_archived, list_all_object_versions
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -291,9 +291,27 @@ def does_file_version_exist(bucket: str, key: str, version_id: str) -> bool:
         logger.warning(f"Error checking if file version exists for {key} version {version_id}: {e}")
         return False
     
+def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
+    """Auxiliary-bucket base prefix holding the derived data for one asset file.
+
+    Auxiliary objects live under the database-scoped per-file layout
+    ``{databaseId}/{assetFileKey}/``, written by
+    ``common.workflows.executionRecords.aux_preview_file_prefix``.
+
+    Args:
+        database_id: The database ID owning the asset
+        asset_file_key: Full asset-bucket key of the file, or a folder key
+
+    Returns:
+        The auxiliary-bucket prefix, with a trailing slash
+    """
+    key = (asset_file_key or "").strip('/')
+    base = (database_id or "").strip('/')
+    return f"{base}/{key}/" if key else f"{base}/"
+
 def delete_assetAuxiliary_files(prefix):
     """Delete auxiliary files for an asset
-    
+
     Args:
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
     """
@@ -556,16 +574,17 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
 
-        response = asset_file_versions_table.query(
+        # Page to exhaustion: a version snapshot can hold more files than fit in one
+        # 1 MB query page, and a partial file list would misreport the version.
+        items = query_all_items(
+            asset_file_versions_table,
             KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
         )
 
-        items = response.get('Items', [])
-        
         # If no items found, return None
         if not items:
             return None
-        
+
         # Reconstruct the file versions structure
         files = []
         for item in items:
@@ -1582,7 +1601,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
                 return None, relative_key
 
             # Delete the aux files since they are most likely wrong with the version revert
-            delete_assetAuxiliary_files(full_key)
+            delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
 
             return {
                 'relativeKey': relative_key,
@@ -1809,28 +1828,46 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     if not prefix.endswith('/'):
         prefix = prefix + '/'
     
+    # Resolve every file's existence and archive state from ONE paginated
+    # list_object_versions walk of the asset prefix rather than two head_object calls
+    # per file. The listing carries each version's id plus IsLatest inline, so both
+    # answers are derived in memory:
+    #   - a snapshot version still exists if its versionId appears in the listing
+    #     (as a content version or a delete marker)
+    #   - the key's current state is archived when its IsLatest entry is a delete marker
+    # This turns 2N sequential S3 calls into a single listing, which is what kept this
+    # endpoint inside the API timeout on assets with many files.
+    snapshot_files = file_versions.get('files', [])
+    existing_version_ids = set()
+    archived_keys = set()
+
+    if snapshot_files:
+        versions_data = list_all_object_versions(bucket, prefix, client=s3_client)
+        for version in versions_data.get('Versions', []):
+            existing_version_ids.add(version.get('VersionId'))
+        for marker in versions_data.get('DeleteMarkers', []):
+            # A delete marker is itself a version, so a snapshot entry pointing at one
+            # has not been permanently deleted.
+            existing_version_ids.add(marker.get('VersionId'))
+            if marker.get('IsLatest'):
+                archived_keys.add(marker['Key'])
+
     # Format response
     files = []
-    for file in file_versions.get('files', []):
+    for file in snapshot_files:
         # Construct full S3 key
         full_key = prefix + file['relativeKey'].lstrip('/')
-        
-        # Check if the file version was permanently deleted
-        file_permanently_deleted = not does_file_version_exist(bucket, full_key, file['versionId'])
-        
-        # Check if the latest version of this file is archived
-        latest_version_archived = is_file_archived(bucket, full_key)  # Check current/latest version
-        
+
         files.append(AssetVersionFileModel(
             relativeKey=file['relativeKey'],
             versionId=file['versionId'],
-            isPermanentlyDeleted=file_permanently_deleted,
-            isLatestVersionArchived=latest_version_archived,
+            isPermanentlyDeleted=file['versionId'] not in existing_version_ids,
+            isLatestVersionArchived=full_key in archived_keys,
             size=file.get('size'),
             lastModified=file.get('lastModified'),
             etag=file.get('etag')
         ))
-    
+
     # Get versioned metadata
     versioned_metadata = get_asset_metadata_version(databaseId, assetId, version_id)
     
@@ -1926,7 +1963,7 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2023,7 +2060,7 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2092,7 +2129,7 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2161,7 +2198,7 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2279,7 +2316,7 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2380,7 +2417,7 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2473,7 +2510,7 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

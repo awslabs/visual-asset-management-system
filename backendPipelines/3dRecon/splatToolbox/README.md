@@ -16,7 +16,6 @@ The Splat Toolbox Pipeline enables 3D Gaussian Splatting reconstruction from ima
 -   **`openPipeline.py`** - Initiates pipeline execution from S3 events
 -   **`pipelineEnd.py`** - Handles pipeline completion and cleanup
 -   **`vamsExecuteSplatToolboxPipeline.py`** - VAMS API integration for manual execution
--   **`sqsExecuteSplatToolboxPipeline.py`** - SQS-triggered pipeline execution
 
 ### CDK Infrastructure (`../../infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/`)
 

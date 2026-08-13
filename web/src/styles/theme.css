@@ -17,10 +17,23 @@
 :root {
     /* Backgrounds */
     --vams-bg-primary: #ffffff;
-    --vams-bg-secondary: #f9fafa;
+    --vams-bg-secondary: var(--color-background-cell-shaded-v7o6so, #f6f6f9);
     --vams-bg-hover: #f2f3f3;
-    --vams-bg-input: #ffffff;
     --vams-bg-container: #ffffff;
+    /* Hover INSIDE a shaded overlay (the record "..." action menus). The normal hover (#f2f3f3) sits
+     * only 1.03:1 from the shaded menu background, so it reads as no hover at all; this steps further
+     * from it while staying lighter than the border. */
+    --vams-bg-overlay-hover: #e9ebed;
+
+    /* Input surfaces + the orchestration page surface alias Amazon Cloudscape's OWN runtime custom
+     * properties, so a form control on a Tailwind page paints the exact colour a Cloudscape control
+     * paints beside it and follows Cloudscape's light/dark switch automatically. `applyMode()`
+     * (src/hooks/useThemeSettings.ts) publishes these variables, so they are defined at runtime; the
+     * literal after each comma is the matching Cloudscape value as a build-time fallback. Aliasing
+     * rather than copying is what keeps the two from drifting apart on a Cloudscape upgrade. */
+    --vams-bg-input: var(--color-background-input-default-ifz5bb, #ffffff);
+    --vams-orch-page-bg: var(--color-background-layout-main-5ilwcb, #ffffff);
+    --vams-orch-container-bg: var(--color-background-container-content-6u8rvp, #ffffff);
 
     /* Text */
     --vams-text-primary: #000716;
@@ -29,8 +42,8 @@
     --vams-text-disabled: #9ba7b6;
 
     /* Borders */
-    --vams-border-default: #e9ebed;
-    --vams-border-input: #7d8998;
+    --vams-border-default: var(--color-border-divider-default-nr68jt, #c6c6cd);
+    --vams-border-input: var(--color-border-input-default-317xk5, #8c8c94);
 
     /* Status colors */
     --vams-color-success: #037f0c;
@@ -115,10 +128,20 @@
 :root.awsui-dark-mode {
     /* Backgrounds */
     --vams-bg-primary: #0f1b2a;
-    --vams-bg-secondary: #192534;
+    --vams-bg-secondary: var(--color-background-cell-shaded-v7o6so, #1b232d);
     --vams-bg-hover: #1a2b3c;
-    --vams-bg-input: #192534;
     --vams-bg-container: #192534;
+    /* Dark counterpart: LIGHTER than the shaded menu background, since darkening from #1b232d would
+     * approach black and lose the row edges. */
+    --vams-bg-overlay-hover: #2a3542;
+
+    /* Input + page surfaces alias Amazon Cloudscape's own dark values (see the light block). Only the
+     * dark fallbacks differ, and this is where a hard-coded value was visibly wrong: Cloudscape paints
+     * a dark form control #161d26, whereas the previous literal #192534 was a lighter grey, so a
+     * search box or filter select on these pages did not match the Cloudscape controls elsewhere. */
+    --vams-bg-input: var(--color-background-input-default-ifz5bb, #161d26);
+    --vams-orch-page-bg: var(--color-background-layout-main-5ilwcb, #161d26);
+    --vams-orch-container-bg: var(--color-background-container-content-6u8rvp, #161d26);
 
     /* Text */
     --vams-text-primary: #d1d5db;
@@ -127,8 +150,8 @@
     --vams-text-disabled: #5f6b7a;
 
     /* Borders */
-    --vams-border-default: #354150;
-    --vams-border-input: #5f6b7a;
+    --vams-border-default: var(--color-border-divider-default-nr68jt, #424650);
+    --vams-border-input: var(--color-border-input-default-317xk5, #656871);
 
     /* Status colors */
     --vams-color-success: #29ad32;

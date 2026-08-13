@@ -1,0 +1,40 @@
+{
+    "pipelineName": "VNTANA ModelOps 3D Optimization",
+    "category": "Conversion",
+    "description": "ModelOps 3D Task Handler - optimize and convert 3D models using the VNTANA Intelligent 3D Optimization Engine. Target format is selected per execution via the template.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [
+                "*.glb",
+                "*.gltf",
+                "*.obj",
+                "*.fbx",
+                "*.stl",
+                "*.ply",
+                "*.usd",
+                "*.usdz",
+                "*.dae",
+                "*.abc"
+            ],
+            "exclude": []
+        }
+    }
+}

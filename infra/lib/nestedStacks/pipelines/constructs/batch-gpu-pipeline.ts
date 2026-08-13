@@ -8,6 +8,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as batch from "aws-cdk-lib/aws-batch";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { CfnJobDefinition, CfnComputeEnvironment, CfnJobQueue } from "aws-cdk-lib/aws-batch";
@@ -21,6 +22,7 @@ export interface BatchGpuPipelineConstructProps extends cdk.StackProps {
     executionRole: iam.Role;
     imageAssetPath: string;
     dockerfileName: string;
+    codeBuildRepository?: ecr.IRepository;
     containerExecutionCommand: string[];
     batchJobDefinitionName: string;
     // Optional GPU-specific configurations
@@ -154,7 +156,8 @@ chmod 775 /mnt/workspace
                     instanceTypes: ["g5.4xlarge", "g5.8xlarge", "g6.4xlarge", "g6.8xlarge"],
                     ec2Configuration: [
                         {
-                            imageType: "ECS_AL2",
+                            // NVIDIA-accelerated AMI for the GPU instance families above
+                            imageType: "ECS_AL2023_NVIDIA",
                         },
                     ],
                     subnets: props.subnets.map((subnet) => subnet.subnetId),
@@ -168,14 +171,15 @@ chmod 775 /mnt/workspace
             }
         );
 
-        // Docker container image
-        const containerImage = ecs.AssetImage.fromAsset(
-            path.join(__dirname, props.imageAssetPath),
-            {
-                file: props.dockerfileName,
-                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
-            }
-        );
+        // Container image resolution. A CodeBuild-built ECR repository is used directly, which
+        // avoids a slow local Docker build of the large GPU image; otherwise the image is built
+        // locally from imageAssetPath.
+        const containerImage = props.codeBuildRepository
+            ? ecs.ContainerImage.fromEcrRepository(props.codeBuildRepository, "latest")
+            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+                  file: props.dockerfileName,
+                  platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
+              });
 
         // Create a temporary task definition to bind the image
         const tempTaskDef = new ecs.TaskDefinition(this, "TempTaskDef", {

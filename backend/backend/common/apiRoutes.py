@@ -309,25 +309,59 @@ METADATA_SCHEMA_ROUTES: Tuple[ApiRoute, ...] = (API_METADATA_SCHEMA, API_METADAT
 # ---------------------------------------------------------------------------
 # Pipelines
 # ---------------------------------------------------------------------------
-API_PIPELINES = ApiRoute("/pipelines", (GET, PUT), "pipelines")
-API_DATABASE_PIPELINES = ApiRoute("/database/{databaseId}/pipelines", (GET,), "pipelines")
+# Collection route: GET (list all pipelines, Casbin-filtered). Create is a POST to the
+# database-scoped collection route below, not to the bare /pipelines path.
+API_PIPELINES = ApiRoute("/pipelines", (GET,), "pipelines")
+API_DATABASE_PIPELINES = ApiRoute(
+    "/database/{databaseId}/pipelines", (GET, POST), "pipelines"
+)
+# Single pipeline: GET (details incl. templates) + PUT (update, enable/disable) + DELETE (archive).
 API_DATABASE_PIPELINE = ApiRoute(
-    "/database/{databaseId}/pipelines/{pipelineId}", (GET, DELETE), "pipelines"
+    "/database/{databaseId}/pipelines/{pipelineId}", (GET, PUT, DELETE), "pipelines"
+)
+# Per-pipeline templates (config body + web form). Tag schema is a sub-resource of a template.
+API_PIPELINE_TEMPLATES = ApiRoute(
+    "/database/{databaseId}/pipelines/{pipelineId}/templates", (GET, POST), "pipelines"
+)
+API_PIPELINE_TEMPLATE = ApiRoute(
+    "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}",
+    (GET, PUT, DELETE),
+    "pipelines",
+)
+API_PIPELINE_TEMPLATE_TAG_SCHEMA = ApiRoute(
+    "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSchema",
+    (GET, PUT),
+    "pipelines",
 )
 
 PIPELINE_ROUTES: Tuple[ApiRoute, ...] = (
     API_PIPELINES,
     API_DATABASE_PIPELINES,
     API_DATABASE_PIPELINE,
+    API_PIPELINE_TEMPLATES,
+    API_PIPELINE_TEMPLATE,
+    API_PIPELINE_TEMPLATE_TAG_SCHEMA,
 )
 
 # ---------------------------------------------------------------------------
 # Workflows
 # ---------------------------------------------------------------------------
-API_WORKFLOWS = ApiRoute("/workflows", (GET, PUT), "workflows")
-API_DATABASE_WORKFLOWS = ApiRoute("/database/{databaseId}/workflows", (GET,), "workflows")
+API_WORKFLOWS = ApiRoute("/workflows", (GET,), "workflows")
+# Database-scoped collection: GET (list) + POST (create). Create is a POST to the database-scoped
+# collection, not to the bare /workflows path.
+API_DATABASE_WORKFLOWS = ApiRoute("/database/{databaseId}/workflows", (GET, POST), "workflows")
+# Single workflow: GET (details incl. triggers) + PUT (update, enable/disable) + DELETE (archive).
 API_DATABASE_WORKFLOW = ApiRoute(
-    "/database/{databaseId}/workflows/{workflowId}", (GET, DELETE), "workflows"
+    "/database/{databaseId}/workflows/{workflowId}", (GET, PUT, DELETE), "workflows"
+)
+# Per-workflow triggers (fileUpload today). Trigger type is the sub-resource id.
+API_WORKFLOW_TRIGGERS = ApiRoute(
+    "/database/{databaseId}/workflows/{workflowId}/triggers", (GET,), "workflows"
+)
+API_WORKFLOW_TRIGGER = ApiRoute(
+    "/database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}",
+    (GET, PUT, DELETE),
+    "workflows",
 )
 API_WORKFLOW_EXECUTIONS = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/workflows/executions", (GET,), "workflows"
@@ -337,17 +371,63 @@ API_WORKFLOW_EXECUTIONS_BY_WORKFLOW = ApiRoute(
     (GET,),
     "workflows",
 )
+# Asset-less multi-file execute (Phase 2). The execution takes an input-file object array in the
+# body (not a single path-scoped asset), so it is keyed on the workflow, not on an asset.
 API_EXECUTE_WORKFLOW = ApiRoute(
-    "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}", (POST,), "workflows"
+    "/workflows/{workflowDatabaseId}/{workflowId}/execute", (POST,), "workflows"
+)
+# Global (asset-less) execution list. Permission-filtered by the caller's access to each
+# execution's input and/or output assets; supports rich query filters + NextToken paging.
+API_WORKFLOW_EXECUTIONS_GLOBAL = ApiRoute(
+    "/workflows/executions", (GET,), "workflows"
+)
+# Execution-keyed abort. Executions may span files across multiple assets, so the abort
+# is keyed on the execution id rather than scoped under a single asset path. DELETE is
+# the abort action on the execution resource. An optional ?groupId= aborts every active
+# execution in the group.
+API_WORKFLOW_EXECUTION = ApiRoute(
+    "/workflows/executions/{executionId}", (DELETE,), "workflows"
+)
+# Execution-keyed detail + log reads (same execution-centric keying as abort).
+API_WORKFLOW_EXECUTION_DETAILS = ApiRoute(
+    "/workflows/executions/{executionId}/details", (GET,), "workflows"
+)
+API_WORKFLOW_EXECUTION_LOGS = ApiRoute(
+    "/workflows/executions/{executionId}/logs", (GET,), "workflows"
+)
+# Paged read of ONE of the detail view's metadata collections (input / inputDatabase / output). The
+# details route returns each collection bounded; this route pages the same scrubbed rows so a client
+# can walk a collection the detail view reported truncated. Same Tier-2 rule as details.
+API_WORKFLOW_EXECUTION_DETAILS_METADATA = ApiRoute(
+    "/workflows/executions/{executionId}/details/metadata", (GET,), "workflows"
+)
+# Re-run: reconstruct the execute request from the stored execution records and launch a new
+# execution (new executionId; optionally the same executionGroupId).
+API_WORKFLOW_EXECUTION_RERUN = ApiRoute(
+    "/workflows/executions/{executionId}/rerun", (POST,), "workflows"
+)
+# Permanent delete: remove only the DynamoDB rows across the execution sub-tables (admin;
+# guarded — the execution must not be in progress). Does not touch Step Functions history.
+API_WORKFLOW_EXECUTION_PERMANENT = ApiRoute(
+    "/workflows/executions/{executionId}/permanent", (DELETE,), "workflows"
 )
 
 WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
     API_WORKFLOWS,
     API_DATABASE_WORKFLOWS,
     API_DATABASE_WORKFLOW,
+    API_WORKFLOW_TRIGGERS,
+    API_WORKFLOW_TRIGGER,
     API_WORKFLOW_EXECUTIONS,
     API_WORKFLOW_EXECUTIONS_BY_WORKFLOW,
+    API_WORKFLOW_EXECUTIONS_GLOBAL,
     API_EXECUTE_WORKFLOW,
+    API_WORKFLOW_EXECUTION,
+    API_WORKFLOW_EXECUTION_DETAILS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA,
+    API_WORKFLOW_EXECUTION_LOGS,
+    API_WORKFLOW_EXECUTION_RERUN,
+    API_WORKFLOW_EXECUTION_PERMANENT,
 )
 
 # ---------------------------------------------------------------------------

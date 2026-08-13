@@ -21,7 +21,7 @@ export interface IsaacLabTrainingBuilderNestedStackProps extends cdk.StackProps 
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 export class IsaacLabTrainingBuilderNestedStack extends NestedStack {

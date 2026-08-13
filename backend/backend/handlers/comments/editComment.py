@@ -130,7 +130,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         logger.info("Validating parameters")
         (valid, message) = validate(
             {
-                "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
+                "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
                 "commentId": {"value": split_arr[1], "validator": "ID"},
             }
         )

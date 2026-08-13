@@ -1,9 +1,18 @@
 """API client for VamsCLI."""
 
 import json
+import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
+
+# Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
+# and run API calls on parallel executor threads. Without serialization, a 403/401 on several
+# threads at once triggers a stampede of simultaneous Cognito refresh_token calls, each rotating
+# the refresh token and overwriting the saved auth profile — so all but one fail and the whole
+# batch cascades to Forbidden. This module-level lock serializes refreshes; a thread that finds
+# the access token already changed since its failed request reuses it instead of refreshing again.
+_TOKEN_REFRESH_LOCK = threading.Lock()
 
 from ..constants import (
     API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, MAX_AUTH_RETRIES, MINIMUM_API_VERSION,
@@ -19,7 +28,14 @@ from ..constants import (
     API_ASSET_LINKS_METADATA, API_ASSET_LINKS_METADATA_KEY, API_METADATA, API_METADATA_SCHEMA,
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
     API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
-    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW,
+    API_PIPELINES, API_DATABASE_PIPELINES, API_DATABASE_PIPELINE,
+    API_PIPELINE_TEMPLATES, API_PIPELINE_TEMPLATE, API_PIPELINE_TEMPLATE_TAG_SCHEMA,
+    API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_DATABASE_WORKFLOW,
+    API_WORKFLOW_TRIGGERS, API_WORKFLOW_TRIGGER,
+    API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW, API_WORKFLOW_EXECUTIONS_GLOBAL,
+    API_WORKFLOW_EXECUTION, API_WORKFLOW_EXECUTION_DETAILS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_LOGS,
+    API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
     API_AUTH_API_KEYS, API_AUTH_API_KEY
 )
 from ..version import get_version
@@ -35,9 +51,15 @@ from .exceptions import (
     AssetVersionOperationError, InvalidAssetVersionDataError, AssetVersionRevertError, AssetVersionArchiveError,
     AssetLinkError, AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError,
     CycleDetectionError, AssetLinkAlreadyExistsError, InvalidRelationshipTypeError, AssetLinkOperationError,
-    RateLimitExceededError, RetryExhaustedError
+    RateLimitExceededError, RetryExhaustedError,
+    PipelineNotFoundError, PipelineAlreadyExistsError, InvalidPipelineDataError,
+    PipelineTemplateNotFoundError, PipelineTemplateAlreadyExistsError, InvalidPipelineTemplateDataError,
+    WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
+    InvalidWorkflowDataError,
+    WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
+    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
 )
-from .profile import ProfileManager
+from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
 
 
@@ -46,7 +68,9 @@ class APIClient:
     
     def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
         self.base_url = base_url.rstrip('/')
-        self.profile_manager = profile_manager or ProfileManager()
+        # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
+        # constructed without one would read another deployment's credentials.
+        self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
         self.session.timeout = DEFAULT_TIMEOUT
         
@@ -79,9 +103,15 @@ class APIClient:
                     "'vamscli --token-override <new_token> <command>'"
                 )
     
-    def _make_request(self, method: str, endpoint: str, include_auth: bool = True, 
-                     retry_count: int = 0, throttle_retry_count: int = 0, **kwargs) -> requests.Response:
-        """Make HTTP request with error handling and retries for both auth and throttling."""
+    def _make_request(self, method: str, endpoint: str, include_auth: bool = True,
+                     retry_count: int = 0, throttle_retry_count: int = 0,
+                     raise_http_errors: bool = False, **kwargs) -> requests.Response:
+        """Make HTTP request with error handling and retries for both auth and throttling.
+
+        `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
+        of converting it to an `APIError` here, for callers that map the status code and the handler's
+        response body onto their own domain exception.
+        """
         # Import logging utilities
         from .logging import log_api_request, log_api_response
         import time
@@ -92,6 +122,9 @@ class APIClient:
         url = urljoin(self.base_url + '/', endpoint.lstrip('/'))
         headers = self._get_headers(include_auth)
         retry_config = get_retry_config()
+        # The bearer token this request carries — passed to _try_refresh_token so concurrent 401/403
+        # handlers can detect an already-completed refresh (single-flight) instead of stampeding.
+        request_token = headers.get('Authorization', '').replace('Bearer ', '') or None
         
         # Log API request (always to file, console if verbose)
         try:
@@ -148,8 +181,8 @@ class APIClient:
                     
                     # Retry the request
                     return self._make_request(
-                        method, endpoint, include_auth, retry_count, 
-                        throttle_retry_count + 1, **kwargs
+                        method, endpoint, include_auth, retry_count,
+                        throttle_retry_count + 1, raise_http_errors, **kwargs
                     )
                 else:
                     # All retry attempts exhausted
@@ -170,10 +203,10 @@ class APIClient:
                     )
                 
                 # Try to refresh token or re-authenticate (for Cognito tokens only)
-                if self._try_refresh_token():
+                if self._try_refresh_token(token_before=request_token):
                     return self._make_request(
-                        method, endpoint, include_auth, retry_count + 1, 
-                        throttle_retry_count, **kwargs
+                        method, endpoint, include_auth, retry_count + 1,
+                        throttle_retry_count, raise_http_errors, **kwargs
                     )
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
@@ -196,10 +229,10 @@ class APIClient:
                         )
                 
                 # For Cognito tokens, try to refresh and retry
-                if self._try_refresh_token():
+                if self._try_refresh_token(token_before=request_token):
                     return self._make_request(
-                        method, endpoint, include_auth, retry_count + 1, 
-                        throttle_retry_count, **kwargs
+                        method, endpoint, include_auth, retry_count + 1,
+                        throttle_retry_count, raise_http_errors, **kwargs
                     )
                 else:
                     # Refresh failed - could be expired token or permission issue
@@ -222,9 +255,13 @@ class APIClient:
             # Re-raise specific errors without wrapping
             raise
         except requests.exceptions.HTTPError as e:
+            if raise_http_errors:
+                # The caller maps the status code and the handler's body itself.
+                raise
+
             # Handle other HTTP errors with appropriate messages
             status_code = e.response.status_code
-            
+
             if status_code == 429:
                 # This shouldn't happen due to the check above, but just in case
                 raise RateLimitExceededError(f"Rate limit exceeded: {e}")
@@ -282,10 +319,31 @@ class APIClient:
         except requests.exceptions.RequestException as e:
             raise APIError(f"Request failed: {e}")
             
-    def _try_refresh_token(self) -> bool:
-        """Try to refresh the authentication token or re-authenticate using saved credentials."""
+    def _try_refresh_token(self, token_before: Optional[str] = None) -> bool:
+        """Try to refresh the authentication token or re-authenticate using saved credentials.
+
+        Serialized across threads via _TOKEN_REFRESH_LOCK (single-flight): when concurrent uploads
+        each hit a 403/401, only the first thread through the lock actually refreshes; the others
+        see that the saved access token already changed from the one their request used
+        (token_before) and reuse it instead of triggering another refresh + token rotation."""
         from .logging import log_auth_diagnostic, log_config_diagnostic
-        
+
+        with _TOKEN_REFRESH_LOCK:
+            # Another thread may have already refreshed while we waited for the lock. If the saved
+            # access token differs from the one our failed request carried, treat it as refreshed.
+            if token_before is not None:
+                current = (self.profile_manager.load_auth_profile() or {}).get('access_token')
+                if current and current != token_before:
+                    log_auth_diagnostic(
+                        auth_type="token_refresh", status="reused_concurrent_refresh",
+                        details={'profile_name': self.profile_manager.profile_name})
+                    return True
+            return self._do_refresh_token()
+
+    def _do_refresh_token(self) -> bool:
+        """Perform the actual token refresh / re-auth. Callers hold _TOKEN_REFRESH_LOCK."""
+        from .logging import log_auth_diagnostic, log_config_diagnostic
+
         try:
             auth_profile = self.profile_manager.load_auth_profile()
             if not auth_profile or 'refresh_token' not in auth_profile:
@@ -3450,201 +3508,629 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to export asset: {e}")
 
-    # Workflow API Methods
+    # ------------------------------------------------------------------
+    # Pipeline / Workflow / Execution V2 API Methods
+    # ------------------------------------------------------------------
+    # Shared helpers keep the per-endpoint methods small: _pwe_request issues the call and
+    # returns the body with the {"message": ...} envelope every V2 handler emits left intact,
+    # so callers decide whether to unwrap; _pwe_error_message extracts the handler's message
+    # for the per-method HTTPError mapping.
 
-    def list_workflows(self, database_id: Optional[str] = None, show_deleted: bool = False, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    @staticmethod
+    def _pwe_body(response: "requests.Response") -> Dict[str, Any]:
+        """Return the JSON body of a pipeline/workflow/execution response (raw, envelope intact)."""
+        return response.json()
+
+    def _pwe_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Call a pipeline/workflow/execution route and return its raw body.
+
+        The non-2xx stays a requests HTTPError so each method can map the status code and the
+        handler's own message onto its domain exception.
         """
-        List workflows using GET /workflows or GET /database/{databaseId}/workflows endpoint.
-        
-        Args:
-            database_id: Optional database ID to filter workflows
-            show_deleted: Whether to include deleted workflows
-            params: Optional pagination parameters (maxItems, pageSize, startingToken)
-        
-        Returns:
-            API response data with workflows list
-        
-        Raises:
-            DatabaseNotFoundError: When database doesn't exist
-            AuthenticationError: When authentication fails
-            APIError: When API call fails
-        """
+        verb = {'GET': self.get, 'POST': self.post, 'PUT': self.put, 'DELETE': self.delete}[method]
+        response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)
+        return self._pwe_body(response)
+
+    @staticmethod
+    def _pwe_error_message(e: "requests.exceptions.HTTPError") -> str:
+        """Best-effort extraction of the handler's error message string."""
         try:
-            # Determine endpoint based on database_id
-            if database_id:
-                endpoint = API_DATABASE_WORKFLOWS.format(databaseId=database_id)
-            else:
-                endpoint = API_WORKFLOWS
-            
-            query_params = params or {}
-            if show_deleted:
-                query_params['showDeleted'] = 'true'
-                
-            response = self.get(endpoint, include_auth=True, params=query_params)
-            return response.json()
-            
+            data = e.response.json() if e.response is not None and e.response.content else {}
+        except ValueError:
+            return str(e)
+        msg = data.get('message', str(e))
+        # Some handlers nest structured errors under message (e.g. triggerTemplateErrors,
+        # saveErrors). Flatten string lists into readable lines instead of raw JSON.
+        if isinstance(msg, dict):
+            lines = []
+            for key, val in msg.items():
+                if isinstance(val, list):
+                    lines.extend(str(item) for item in val)
+                else:
+                    lines.append(f"{key}: {val}")
+            if lines:
+                return "\n".join(lines)
+            try:
+                return json.dumps(msg)
+            except (TypeError, ValueError):
+                return str(msg)
+        if isinstance(msg, list):
+            return "\n".join(str(item) for item in msg)
+        return msg
+
+    # ---- Pipeline CRUD ------------------------------------------------
+
+    def list_pipelines(self, database_id: Optional[str] = None, include_archived: bool = False,
+                       params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """List pipelines. GET /pipelines (all) or GET /database/{databaseId}/pipelines."""
+        try:
+            endpoint = (API_DATABASE_PIPELINES.format(databaseId=database_id)
+                        if database_id else API_PIPELINES)
+            query_params = dict(params or {})
+            if include_archived:
+                query_params['includeArchived'] = 'true'
+            return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if database_id and 'database' in error_message.lower():
+                if database_id:
                     raise DatabaseNotFoundError(f"Database '{database_id}' not found")
-                else:
-                    raise APIError(f"Workflows not found: {error_message}")
-                    
-            elif e.response.status_code in [401, 403]:
+                raise APIError("Failed to list pipelines: the /pipelines route returned 404")
+            if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
-            else:
-                raise APIError(f"Failed to list workflows: {e}")
-                
+            raise APIError(f"Failed to list pipelines: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to list pipelines: {e}")
+
+    def get_pipeline(self, database_id: str, pipeline_id: str,
+                     include_archived: bool = False) -> Dict[str, Any]:
+        """Get a pipeline (+ its templates). GET /database/{databaseId}/pipelines/{pipelineId}."""
+        try:
+            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            query_params = {'includeArchived': 'true'} if include_archived else {}
+            return self._pwe_request('GET', endpoint, params=query_params)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get pipeline: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get pipeline: {e}")
+
+    def create_pipeline(self, database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a pipeline. POST /database/{databaseId}/pipelines."""
+        try:
+            endpoint = API_DATABASE_PIPELINES.format(databaseId=database_id)
+            return self._pwe_request('POST', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                msg = self._pwe_error_message(e)
+                if 'already exists' in msg.lower():
+                    raise PipelineAlreadyExistsError(msg)
+                raise InvalidPipelineDataError(msg)
+            if e.response.status_code == 404:
+                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to create pipeline: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to create pipeline: {e}")
+
+    def update_pipeline(self, database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a pipeline. PUT /database/{databaseId}/pipelines/{pipelineId}."""
+        try:
+            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            return self._pwe_request('PUT', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidPipelineDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to update pipeline: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to update pipeline: {e}")
+
+    def delete_pipeline(self, database_id: str, pipeline_id: str) -> Dict[str, Any]:
+        """Archive (soft-delete) a pipeline. DELETE /database/{databaseId}/pipelines/{pipelineId}."""
+        try:
+            endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
+            return self._pwe_request('DELETE', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to archive pipeline: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to archive pipeline: {e}")
+
+    # ---- Pipeline templates -------------------------------------------
+
+    def list_pipeline_templates(self, database_id: str, pipeline_id: str) -> Dict[str, Any]:
+        """List a pipeline's templates. GET .../pipelines/{pipelineId}/templates.
+
+        The handler returns one page plus a NextToken, so the pages are drained here and returned as
+        a single Items list."""
+        try:
+            endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
+            body = self._pwe_request('GET', endpoint)
+            message = body.get('message') if isinstance(body, dict) else None
+            if not isinstance(message, dict):
+                return body
+            items = list(message.get('Items') or [])
+            next_token = message.get('NextToken')
+            while next_token:
+                page = self._pwe_request('GET', endpoint,
+                                         params={'startingToken': next_token})
+                page_message = page.get('message') if isinstance(page, dict) else None
+                if not isinstance(page_message, dict):
+                    break
+                items.extend(page_message.get('Items') or [])
+                next_token = page_message.get('NextToken')
+            return {'message': {'Items': items}}
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to list templates: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to list templates: {e}")
+
+    def get_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
+        """Get a template (config body rehydrated). GET .../templates/{templateId}."""
+        try:
+            endpoint = API_PIPELINE_TEMPLATE.format(
+                databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
+            return self._pwe_request('GET', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get template: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get template: {e}")
+
+    def create_pipeline_template(self, database_id: str, pipeline_id: str,
+                                 body: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a template. POST .../pipelines/{pipelineId}/templates."""
+        try:
+            endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
+            return self._pwe_request('POST', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                msg = self._pwe_error_message(e)
+                if 'already exists' in msg.lower():
+                    raise PipelineTemplateAlreadyExistsError(msg)
+                raise InvalidPipelineTemplateDataError(msg)
+            if e.response.status_code == 404:
+                raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to create template: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to create template: {e}")
+
+    def update_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str,
+                                 body: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a template. PUT .../templates/{templateId}."""
+        try:
+            endpoint = API_PIPELINE_TEMPLATE.format(
+                databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
+            return self._pwe_request('PUT', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidPipelineTemplateDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to update template: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to update template: {e}")
+
+    def delete_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
+        """Delete a template. DELETE .../templates/{templateId}."""
+        try:
+            endpoint = API_PIPELINE_TEMPLATE.format(
+                databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
+            return self._pwe_request('DELETE', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to delete template: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to delete template: {e}")
+
+    # ---- Pipeline template tag schema ---------------------------------
+
+    def get_pipeline_template_tag_schema(self, database_id: str, pipeline_id: str,
+                                         template_id: str) -> Dict[str, Any]:
+        """Get a template's tag schema. GET .../templates/{templateId}/tagSchema."""
+        try:
+            endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
+                databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
+            return self._pwe_request('GET', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get tag schema: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get tag schema: {e}")
+
+    def set_pipeline_template_tag_schema(self, database_id: str, pipeline_id: str, template_id: str,
+                                         fields: list) -> Dict[str, Any]:
+        """Set (replace) a template's tag schema. PUT .../templates/{templateId}/tagSchema."""
+        try:
+            endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
+                databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
+            return self._pwe_request('PUT', endpoint, data={'fields': fields})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidPipelineTemplateDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to set tag schema: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to set tag schema: {e}")
+
+    # ---- Workflow CRUD ------------------------------------------------
+
+    def list_workflows(self, database_id: Optional[str] = None, include_archived: bool = False,
+                       params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """List workflows. GET /workflows (all) or GET /database/{databaseId}/workflows."""
+        try:
+            endpoint = (API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+                        if database_id else API_WORKFLOWS)
+            query_params = dict(params or {})
+            if include_archived:
+                query_params['includeArchived'] = 'true'
+            return self._pwe_request('GET', endpoint, params=query_params)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to list workflows: {self._pwe_error_message(e)}")
         except Exception as e:
             raise APIError(f"Failed to list workflows: {e}")
 
-    def list_workflow_executions(self, database_id: str, asset_id: str, workflow_database_id: Optional[str] = None, 
-                                 workflow_id: Optional[str] = None, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        List workflow executions for an asset using GET /database/{databaseId}/assets/{assetId}/workflows/executions endpoint.
-        
-        Args:
-            database_id: Database ID
-            asset_id: Asset ID
-            workflow_database_id: Optional workflow's database ID (for filtering)
-            workflow_id: Optional workflow ID (for filtering)
-            params: Optional pagination parameters (maxItems, pageSize, startingToken)
-                    Note: pageSize is limited to 50 due to Step Functions API throttling
-        
-        Returns:
-            API response data with workflow executions list
-        
-        Raises:
-            AssetNotFoundError: When asset is not found
-            DatabaseNotFoundError: When database doesn't exist
-            AuthenticationError: When authentication fails
-            APIError: When API call fails
-        """
+    def get_workflow(self, database_id: str, workflow_id: str,
+                     include_archived: bool = False) -> Dict[str, Any]:
+        """Get a workflow (+ its triggers). GET /database/{databaseId}/workflows/{workflowId}."""
         try:
-            # Build endpoint - workflow_id is optional in path
-            if workflow_id:
-                endpoint = API_WORKFLOW_EXECUTIONS + f"/{workflow_id}"
-            else:
-                endpoint = API_WORKFLOW_EXECUTIONS
-            
-            endpoint = endpoint.format(databaseId=database_id, assetId=asset_id)
-            
-            # Prepare query parameters
-            query_params = params or {}
-            
-            # Prepare request body for workflowDatabaseId if provided
-            request_body = {}
-            if workflow_database_id:
-                request_body['workflowDatabaseId'] = workflow_database_id
-            
-            # Make request with body if needed
-            if request_body:
-                response = self.post(endpoint, data=request_body, include_auth=True, params=query_params)
-            else:
-                response = self.get(endpoint, include_auth=True, params=query_params)
-            
-            return response.json()
-            
+            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            query_params = {'includeArchived': 'true'} if include_archived else {}
+            return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if 'database' in error_message.lower():
-                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
-                elif 'asset' in error_message.lower():
-                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
-                else:
-                    raise APIError(f"Workflow executions not found: {error_message}")
-                    
-            elif e.response.status_code in [401, 403]:
+                raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+            if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
-            else:
-                raise APIError(f"Failed to list workflow executions: {e}")
-                
+            raise APIError(f"Failed to get workflow: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get workflow: {e}")
+
+    def create_workflow(self, database_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a workflow. POST /database/{databaseId}/workflows."""
+        try:
+            endpoint = API_DATABASE_WORKFLOWS.format(databaseId=database_id)
+            return self._pwe_request('POST', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                raise InvalidWorkflowDataError(self._pwe_error_message(e))
+            if e.response.status_code == 404:
+                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to create workflow: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to create workflow: {e}")
+
+    def update_workflow(self, database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a workflow. PUT /database/{databaseId}/workflows/{workflowId}."""
+        try:
+            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            return self._pwe_request('PUT', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidWorkflowDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to update workflow: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to update workflow: {e}")
+
+    def delete_workflow(self, database_id: str, workflow_id: str) -> Dict[str, Any]:
+        """Archive (soft-delete) a workflow. DELETE /database/{databaseId}/workflows/{workflowId}."""
+        try:
+            endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
+            return self._pwe_request('DELETE', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to archive workflow: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to archive workflow: {e}")
+
+    # ---- Workflow triggers --------------------------------------------
+
+    def list_workflow_triggers(self, database_id: str, workflow_id: str) -> Dict[str, Any]:
+        """List a workflow's triggers. GET .../workflows/{workflowId}/triggers."""
+        try:
+            endpoint = API_WORKFLOW_TRIGGERS.format(databaseId=database_id, workflowId=workflow_id)
+            return self._pwe_request('GET', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to list triggers: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to list triggers: {e}")
+
+    def get_workflow_trigger(self, database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
+        """Get a workflow trigger. GET .../triggers/{triggerType}.
+
+        `trigger_type` is the trigger's KEY: the bare type for a workflow's first trigger of that type,
+        or 'type#triggerId' for an additional one. It is percent-encoded into the path because a raw '#'
+        is a URL fragment delimiter — the server would receive only the bare type and act on the wrong
+        trigger.
+        """
+        try:
+            endpoint = API_WORKFLOW_TRIGGER.format(
+                databaseId=database_id, workflowId=workflow_id,
+                triggerType=quote(trigger_type, safe=''))
+            return self._pwe_request('GET', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise WorkflowTriggerNotFoundError(f"Trigger '{trigger_type}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get trigger: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get trigger: {e}")
+
+    def set_workflow_trigger(self, database_id: str, workflow_id: str, trigger_type: str,
+                             body: Dict[str, Any]) -> Dict[str, Any]:
+        """Set (create/replace) a workflow trigger. PUT .../triggers/{triggerType}."""
+        try:
+            endpoint = API_WORKFLOW_TRIGGER.format(
+                databaseId=database_id, workflowId=workflow_id,
+                triggerType=quote(trigger_type, safe=''))
+            return self._pwe_request('PUT', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidWorkflowTriggerDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to set trigger: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to set trigger: {e}")
+
+    def delete_workflow_trigger(self, database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
+        """Delete a workflow trigger. DELETE .../triggers/{triggerType}."""
+        try:
+            endpoint = API_WORKFLOW_TRIGGER.format(
+                databaseId=database_id, workflowId=workflow_id,
+                triggerType=quote(trigger_type, safe=''))
+            return self._pwe_request('DELETE', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise WorkflowTriggerNotFoundError(f"Trigger '{trigger_type}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to delete trigger: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to delete trigger: {e}")
+
+    # ---- Execute + execution operations -------------------------------
+
+    def execute_workflow(self, workflow_database_id: str, workflow_id: str,
+                         body: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a workflow (asset-less, multi-file). POST /workflows/{workflowDatabaseId}/{workflowId}/execute."""
+        try:
+            endpoint = API_EXECUTE_WORKFLOW.format(
+                workflowDatabaseId=workflow_database_id, workflowId=workflow_id)
+            return self._pwe_request('POST', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                msg = self._pwe_error_message(e)
+                if 'input file' in msg.lower():
+                    raise WorkflowExecutionError(msg)
+                raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
+            if e.response.status_code == 400:
+                msg = self._pwe_error_message(e)
+                if 'already running' in msg.lower() or 'conflicting execution' in msg.lower():
+                    raise WorkflowAlreadyRunningError(msg)
+                raise WorkflowExecutionError(msg)
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise WorkflowExecutionError(f"Workflow execution failed: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to execute workflow: {e}")
+
+    def list_workflow_executions(self, database_id: str, asset_id: str,
+                                 workflow_database_id: Optional[str] = None,
+                                 workflow_id: Optional[str] = None,
+                                 params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """List an asset's workflow executions. GET .../assets/{assetId}/workflows/executions.
+
+        The workflow filter is sent as QUERY parameters, which the route matches per field. The
+        alternative `.../executions/{workflowId}` path form compares against the joined
+        `workflowDatabaseId:workflowId` key and reads its companion database from a GET request body,
+        so a caller supplying only a workflow id there filters against ':<workflowId>' and receives an
+        empty list — indistinguishable from an asset with no matching history.
+        """
+        try:
+            endpoint = API_WORKFLOW_EXECUTIONS.format(databaseId=database_id, assetId=asset_id)
+            query_params = dict(params or {})
+            if workflow_id:
+                query_params['workflowId'] = workflow_id
+            if workflow_database_id:
+                query_params['workflowDatabaseId'] = workflow_database_id
+            return self._pwe_request('GET', endpoint, params=query_params)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                msg = self._pwe_error_message(e)
+                if 'asset' in msg.lower():
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to list workflow executions: {self._pwe_error_message(e)}")
         except Exception as e:
             raise APIError(f"Failed to list workflow executions: {e}")
 
-    def execute_workflow(self, database_id: str, asset_id: str, workflow_id: str, 
-                        workflow_database_id: str, file_key: Optional[str] = None) -> Dict[str, Any]:
+    def list_executions(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """List executions globally (permission-filtered). GET /workflows/executions.
+
+        params may include the filter query strings: workflowId, workflowDatabaseId, status,
+        triggerType, groupId, triggeredByUserId, plus pageSize/startingToken.
         """
-        Execute a workflow on an asset using POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId} endpoint.
-        
-        Args:
-            database_id: Database ID
-            asset_id: Asset ID
-            workflow_id: Workflow ID to execute
-            workflow_database_id: Workflow's database ID (required)
-            file_key: Optional specific file key to run workflow on
-        
-        Returns:
-            API response data with execution ID
-        
-        Raises:
-            AssetNotFoundError: When asset is not found
-            WorkflowNotFoundError: When workflow is not found
-            WorkflowAlreadyRunningError: When workflow is already running on the file
-            WorkflowExecutionError: When workflow execution fails
-            DatabaseNotFoundError: When database doesn't exist
-            InvalidWorkflowDataError: When workflow data is invalid
-            AuthenticationError: When authentication fails
-            APIError: When API call fails
-        """
-        from .exceptions import WorkflowNotFoundError, WorkflowAlreadyRunningError, WorkflowExecutionError, InvalidWorkflowDataError
-        
         try:
-            endpoint = API_EXECUTE_WORKFLOW.format(
-                databaseId=database_id,
-                assetId=asset_id,
-                workflowId=workflow_id
-            )
-            
-            # Prepare request body
-            request_body = {
-                'workflowDatabaseId': workflow_database_id
-            }
-            
-            if file_key:
-                request_body['fileKey'] = file_key
-            
-            response = self.post(endpoint, data=request_body, include_auth=True)
-            return response.json()
-            
+            return self._pwe_request('GET', API_WORKFLOW_EXECUTIONS_GLOBAL, params=params or {})
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 400:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if 'already running' in error_message.lower() or 'currently running' in error_message.lower():
-                    raise WorkflowAlreadyRunningError(f"Workflow already running: {error_message}")
-                elif 'pipeline' in error_message.lower() and ('disabled' in error_message.lower() or 'not enabled' in error_message.lower()):
-                    raise WorkflowExecutionError(f"Pipeline not enabled: {error_message}")
-                else:
-                    raise InvalidWorkflowDataError(f"Invalid workflow execution request: {error_message}")
-                    
-            elif e.response.status_code == 404:
-                error_data = e.response.json() if e.response.content else {}
-                error_message = error_data.get('message', str(e))
-                
-                if 'database' in error_message.lower():
-                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
-                elif 'workflow' in error_message.lower():
-                    raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
-                elif 'asset' in error_message.lower():
-                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
-                else:
-                    raise APIError(f"Resource not found: {error_message}")
-                    
-            elif e.response.status_code in [401, 403]:
+            if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
-            else:
-                raise WorkflowExecutionError(f"Workflow execution failed: {e}")
-                
+            raise APIError(f"Failed to list executions: {self._pwe_error_message(e)}")
         except Exception as e:
-            raise APIError(f"Failed to execute workflow: {e}")
+            raise APIError(f"Failed to list executions: {e}")
+
+    def get_execution_details(self, execution_id: str) -> Dict[str, Any]:
+        """Get an execution's full detail/traceability. GET /workflows/executions/{executionId}/details.
+
+        Collections are bounded server-side; truncatedCollections names any that came back partial.
+        A pipeline entry carries renderedConfigLocation ({bucket, key}) whenever that object exists
+        — not only on truncation — because it is the FULLY substituted body the step ran with,
+        while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
+        whether the inline copy was shortened."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_DETAILS.format(executionId=execution_id)
+            return self._pwe_request('GET', endpoint)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution details: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get execution details: {e}")
+
+    def get_execution_details_metadata(self, execution_id: str,
+                                       params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's detail metadata.
+        GET /workflows/executions/{executionId}/details/metadata.
+
+        params may include: collection (input | inputDatabase | output), pageSize, startingToken,
+        pipelineId. Rows carry the same scrubbed shape the details view returns plus the producing
+        pipelineId. NextToken is absent on the last page, so its presence is the only signal that
+        more rows exist. A token is only valid alongside the same collection and pipelineId it was
+        issued with."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_DETAILS_METADATA.format(executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution detail metadata: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get execution detail metadata: {e}")
+
+    def get_execution_logs(self, execution_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get an execution's logs. GET /workflows/executions/{executionId}/logs.
+
+        params may include: mode (truncated|full), pipelineExecutionId, and (full mode)
+        filterPattern/limit/startTime/endTime/nextToken.
+        """
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_LOGS.format(executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution logs: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get execution logs: {e}")
+
+    def abort_execution(self, execution_id: str, group_id: Optional[str] = None) -> Dict[str, Any]:
+        """Abort a running execution, or (with group_id) abort every active execution in the group.
+        DELETE /workflows/executions/{executionId}[?groupId=...]."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION.format(executionId=execution_id)
+            params = {'groupId': group_id} if group_id else {}
+            return self._pwe_request('DELETE', endpoint, params=params)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(
+                    f"No executions found for group '{group_id}'" if group_id
+                    else f"Execution '{execution_id}' not found")
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to abort execution: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to abort execution: {e}")
+
+    def rerun_execution(self, execution_id: str, execution_group_id: Optional[str] = None) -> Dict[str, Any]:
+        """Re-run an execution (reconstructed from stored records). POST /workflows/executions/{executionId}/rerun."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_RERUN.format(executionId=execution_id)
+            body = {}
+            if execution_group_id:
+                body['executionGroupId'] = execution_group_id
+            return self._pwe_request('POST', endpoint, data=body)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to re-run execution: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to re-run execution: {e}")
+
+    def permanent_delete_execution(self, execution_id: str) -> Dict[str, Any]:
+        """Permanently delete an execution's DynamoDB records (admin). DELETE .../{executionId}/permanent."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_PERMANENT.format(executionId=execution_id)
+            return self._pwe_request('DELETE', endpoint, json={'confirmDelete': True})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                msg = self._pwe_error_message(e)
+                if 'in progress' in msg.lower():
+                    raise ExecutionInProgressError(msg)
+                raise InvalidExecutionDataError(msg)
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to permanently delete execution: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to permanently delete execution: {e}")
 
     # Search API Methods
 

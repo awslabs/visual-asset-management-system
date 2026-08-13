@@ -290,14 +290,26 @@ The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteIte
 
 ### v2.5 to v2.6
 
+:::info[Custom pipelines need code changes as well]
+The migration steps below move stored pipeline and workflow **definitions** onto the new data model. They
+cannot update the **code** of a pipeline you wrote yourself: v2.6 delivers inputs through a manifest
+rather than on the payload, expects asynchronous pipelines to return a task token, and expects a pipeline
+to register its sub-processes and logs so aborts and log retrieval work. See
+[Migrating custom pipelines from v2.5 to v2.6](../pipelines/migrating-pipelines-v25-to-v26.md) for the
+porting order and checklist. Deployments that run only VAMS built-in pipelines need nothing beyond the
+steps here.
+:::
+
 **Breaking changes:**
 
 -   The backend API moves from API Gateway HTTP API (v2) to REST API (v1), served under a stage path (default `/api`). The API Gateway identifier and invoke URL change on deployment. **Any client registered directly against the old API Gateway endpoint URL must be re-setup against the new endpoint** — re-run `vamscli setup` for the CLI, and update any external integrations or scripts that stored the API base URL. Clients that reach the API through the CloudFront or ALB front (the web application, and CLIs configured with the front's `/api` URL) continue to work without change. See [API Gateway REST API endpoint change](#api-gateway-rest-api-endpoint-change).
+-   **Externally registered pipelines do not run unchanged.** The workflow, pipeline, and execution overhaul changes three things a pipeline depends on: it reads its inputs from a resolved manifest rather than from the invocation payload, an asynchronous pipeline returns a Step Functions task token for the workflow to advance past it, and it registers its sub-processes and log locations so abort and log retrieval reach them. Registration itself also moves — a definition is declared in a file-based `vamsSchema` bundle imported through the schema importer, and a pipeline is referenced by composite `pipelineDatabaseId:pipelineId`. The migration steps below reshape stored **definitions**; they cannot change a pipeline's **code**. Port every externally maintained pipeline with [Migrating custom pipelines from v2.5 to v2.6](../pipelines/migrating-pipelines-v25-to-v26.md). Deployments running only VAMS built-in pipelines need nothing beyond the steps here.
 -   New OpenSearch index names: `vams-assets-v3` and `vams-files-v3`. The new mapping adds a `geo_MD_location` field of type `geo_shape` that powers the new geospatial search filter and map view. The previous v2 indexes are abandoned and remain in OpenSearch until you delete them manually.
 -   Provisioned OpenSearch domains are upgraded from engine version 2.7 to 3.5. Serverless collections are reworked separately (see below).
 -   OpenSearch Serverless collections are reshaped onto a next-generation collection group with new `app.openSearch.useServerless` settings (`nextGen`, `allowPublic`, `enableStandbyReplicas`, and configurable OCU capacity). The collection cannot be updated in place — it must be removed and re-created, then reindexed. See [OpenSearch Serverless next-gen upgrade](#opensearch-serverless-next-gen-upgrade).
 -   The VPC is no longer enabled automatically. If a feature that requires a VPC (ALB, OpenSearch Provisioned, or any container-based pipeline) is enabled while `app.useGlobalVpc.enabled` is `false`, the deployment now fails configuration validation with an error that lists the offending features, rather than silently turning the VPC on. See [VPC is now required for certain features](#vpc-is-now-required-for-certain-features).
 -   Provisioned OpenSearch `availabilityZoneCount` now defaults to `2`, and the VPC is built with exactly that many Availability Zones. Earlier releases always built the VPC across 3 Availability Zones for provisioned OpenSearch even though the domain only used 2, so on upgrade the previously-unused third AZ subnet is removed (a VPC downgrade). See [OpenSearch Provisioned Availability Zone count downgrade](#opensearch-provisioned-availability-zone-count-downgrade).
+-   GPU pipeline AWS Batch compute environments move to the Amazon Linux 2023 NVIDIA-accelerated AMI (`ECS_AL2023_NVIDIA`). AWS Batch blocks creation of new Amazon ECS compute environments that use Batch-provided Amazon Linux 2 AMIs, so earlier image types fail on a new deployment. This affects the Gaussian Splat Toolbox, NVIDIA Cosmos (Predict, Reason, Transfer), Cosmos 3, GR00T, and Isaac Lab pipelines. **Each affected GPU compute environment is replaced on upgrade**, so drain or wait for in-flight GPU pipeline jobs before deploying. All supported GPU instance families (G5, G6, G6E, P4DE, P5, P5E) work with this AMI; the `P3` and `G3` families are not supported by it.
 
 **Required migration steps:**
 
@@ -434,6 +446,18 @@ The change affects any client that was configured directly against the **old** A
 
 The deployment exposes the new endpoint as the CloudFormation output `APIGatewayEndpointOutput`. IP allow-list enforcement continues to work for both fronted and direct callers — the authorizer resolves the true client IP from the front's forwarded headers when present, and from the direct connection otherwise — so existing direct integrations keep working once re-pointed at the new URL.
 
+#### Execution visibility
+
+In v2.6 every execution read path applies one permission rule: `GET` on the execution's workflow, plus the operation's action on **every** asset the run read — each input file's asset and each asset named as a metadata source. Earlier releases accepted access to any one of a run's assets for the listing while requiring all of them elsewhere, so a listing could offer a row whose details then returned `403`. One rule across the list, the details, the logs, the abort, and the re-run removes that inconsistency.
+
+The narrower side of this is worth checking against existing roles before upgrading. A role scoped to a subset of databases loses list visibility of runs that span databases outside its scope, and loses the ability to re-run them, even when it can read some of the assets involved. Runs whose assets all sit inside the role's scope behave as before. To restore the earlier breadth for a role, widen its `asset` and `database` GET constraints to cover the databases those runs span.
+
+An execution has assets only when it read or wrote one. A run with no inputs of either kind is authorized on the asset it wrote to; a results-only run writes no files and has no asset at all, leaving workflow `GET` as its whole gate.
+
+Deleting an asset does not delete the executions that ran against it. An asset that has been **permanently deleted** is authorized on the database it lived in, under the same action — a database is never removed, since deleting one archives the record — so the history of runs against a deleted asset stays reachable by whoever can read that database.
+
+**Archiving** an asset is not a deletion and does not change how its executions are authorized. An archived asset's record is retained, so it is still authorized on its own attributes (name, type, tags) exactly as it was before archiving, and any asset-level constraint that applied to it continues to apply.
+
 #### Switching `endpointType` between `PRIVATE` and `REGIONAL`
 
 Changing `app.api.apiGatewayRest.endpointType` on an existing deployment is supported and requires no manual steps. A `PRIVATE` endpoint carries an API Gateway resource policy that only permits invocation through the execute-api VPC interface endpoint (an `aws:SourceVpce` condition); a `REGIONAL` endpoint uses a public allow-all resource policy. VAMS writes the correct resource policy for the configured endpoint type on every deployment, so a `PRIVATE` → `REGIONAL` switch overwrites the VPC-restricted policy with the public one, and a `REGIONAL` → `PRIVATE` switch re-applies the restriction.
@@ -444,18 +468,20 @@ This explicit-policy behavior exists because Amazon API Gateway does not clear a
 
 Use this checklist to determine if additional actions are needed after updating.
 
-| Change type                            | Versions affected                          | Action required                                                                                                      |
-| -------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| DynamoDB table schema change           | v2.3 to v2.4, v2.4 to v2.5                 | Run version-specific migration scripts.                                                                              |
-| Amazon OpenSearch Service reindex      | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6   | Run reindex script or set `reindexOnCdkDeploy: true`.                                                                |
-| OpenSearch engine version upgrade      | v2.5 to v2.6 (provisioned only, 2.7 → 3.5) | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.                                     |
-| OpenSearch Serverless next-gen reshape | v2.5 to v2.6 (serverless only)             | Disable Serverless, deploy, re-enable with new settings, deploy, then reindex. Keep `nextGen: false` on GovCloud/EU. |
-| VPC no longer auto-enabled             | v2.5 to v2.6                               | Set `app.useGlobalVpc.enabled: true` (or disable VPC-requiring features) if validation fails.                        |
-| OpenSearch AZ count VPC downgrade      | v2.5 to v2.6 (provisioned only)            | Set `availabilityZoneCount: 3` to keep the existing VPC, or follow the drain-and-redeploy teardown to move to 2 AZs. |
-| Permission constraint migration        | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                                                         |
-| API Gateway authorizer change          | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                                                             |
-| Pipeline CDK construct rename          | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                                                      |
-| Website framework change               | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`.                                  |
+| Change type                            | Versions affected                          | Action required                                                                                                                         |
+| -------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| DynamoDB table schema change           | v2.3 to v2.4, v2.4 to v2.5                 | Run version-specific migration scripts.                                                                                                 |
+| Amazon OpenSearch Service reindex      | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6   | Run reindex script or set `reindexOnCdkDeploy: true`.                                                                                   |
+| OpenSearch engine version upgrade      | v2.5 to v2.6 (provisioned only, 2.7 → 3.5) | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.                                                        |
+| OpenSearch Serverless next-gen reshape | v2.5 to v2.6 (serverless only)             | Disable Serverless, deploy, re-enable with new settings, deploy, then reindex. Keep `nextGen: false` on GovCloud/EU.                    |
+| VPC no longer auto-enabled             | v2.5 to v2.6                               | Set `app.useGlobalVpc.enabled: true` (or disable VPC-requiring features) if validation fails.                                           |
+| OpenSearch AZ count VPC downgrade      | v2.5 to v2.6 (provisioned only)            | Set `availabilityZoneCount: 3` to keep the existing VPC, or follow the drain-and-redeploy teardown to move to 2 AZs.                    |
+| Externally registered pipelines        | v2.5 to v2.6                               | Port each pipeline's input reads, task-token return, and sub-process registration, and declare its definition in a `vamsSchema` bundle. |
+| API Gateway REST API endpoint change   | v2.5 to v2.6                               | Re-run `vamscli setup`; update any client or script that stored the API Gateway invoke URL.                                             |
+| Permission constraint migration        | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                                                                            |
+| API Gateway authorizer change          | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                                                                                |
+| Pipeline CDK construct rename          | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                                                                         |
+| Website framework change               | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`.                                                     |
 
 ## Rollback guidance
 

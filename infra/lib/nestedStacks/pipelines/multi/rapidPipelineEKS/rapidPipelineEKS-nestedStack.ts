@@ -26,7 +26,7 @@ export interface RapidPipelineEKSNestedStackProps extends cdk.NestedStackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -77,8 +77,8 @@ export class RapidPipelineEKSNestedStack extends NestedStack {
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
                 kubectlLayer: kubectlLayer, // Multi-runtime kubectl layer for EKS cluster
                 kubernetesLayer: kubernetesLayer, // Kubernetes Python client layer for Lambda functions
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
             }
         );
 

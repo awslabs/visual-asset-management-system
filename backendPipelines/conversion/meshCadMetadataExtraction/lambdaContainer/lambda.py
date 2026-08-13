@@ -109,14 +109,91 @@ def transform_to_attribute_format(metadata_dict):
     }
 
 
-def extract_metadata(input_path_asset_base, input_path, output_path):
+def _fetch_json_from_s3(s3_location):
+    """Fetch + parse a JSON object from an s3:// location. Best-effort: returns {} for a
+    missing/empty location or any S3/parse failure."""
+    if not s3_location or not s3_location.startswith("s3://"):
+        return {}
+    bucket, _, key = s3_location[len("s3://"):].partition("/")
+    if not bucket or not key:
+        return {}
+    try:
+        resp = s3_client.get_object(Bucket=bucket, Key=key)
+        body = resp["Body"].read().decode("utf-8")
+        return json.loads(body) if body else {}
+    except Exception as e:
+        logger.warning(f"Could not read {s3_location}: {e}")
+        return {}
+
+
+def asset_relative_path(relative_path, object_key, asset_root_s3_key=""):
+    """The input file's path within its asset, without a leading slash ('/parts/housing/model.obj'
+    -> 'parts/housing/model.obj').
+
+    The manifest's relativePath is authoritative: a shadowed input (a file a prior pipeline step
+    rewrote) is located in the run's OUTPUT bucket under the pipeline output prefix while keeping
+    the original file's asset identity, so its object key shares no prefix with the asset root and
+    only relativePath states where the file lives on the asset. The object key trimmed by the asset
+    root is the fallback for a direct/local invocation carrying no manifest."""
+    trimmed = (relative_path or "").strip("/")
+    if trimmed:
+        return trimmed
+    key = object_key or ""
+    if asset_root_s3_key and key.startswith(asset_root_s3_key):
+        key = key[len(asset_root_s3_key):]
+    return key.lstrip("/")
+
+
+def resolve_inputs_from_manifest(data):
+    """Resolve the input file path, its asset-relative path, and the output-metadata path from the
+    workflow manifest (inputManifestS3Location), falling back to the legacy top-level body fields
+    when no manifest is present (direct/local invocations). Locations are carried as bucket +
+    relative keys, so s3:// URIs are reconstructed here. Returns (input_s3_asset_file_path,
+    input_asset_relative_path, output_s3_asset_metadata_path).
+
+    Mirrors ``manifestHelper.resolve_inputs`` + ``enforce_single_input_file``, which the pipelines
+    with a ``lambda/`` code asset vendor; this pipeline is a container image, so it reads the same
+    envelope fields directly. Any change to the envelope applies to both."""
+    manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
+    input_files = (manifest or {}).get("inputFiles") or []
+    # The pipeline is registered with inputFileArity 'one' and extracts attributes for a single
+    # file per execution; more than one resolved input would be silently dropped.
+    if len(input_files) > 1:
+        raise ValueError(
+            f"This pipeline processes a single input file per execution, but the workflow "
+            f"manifest supplied {len(input_files)} input files. Multi-file input is not yet "
+            f"supported for this pipeline."
+        )
+    input_path = ""
+    relative_path = ""
+    if input_files:
+        first = input_files[0]
+        if first.get("bucket") and first.get("key"):
+            input_path = f"s3://{first['bucket']}/{first['key']}"
+        relative_path = asset_relative_path(
+            first.get("relativePath"), first.get("key", ""), first.get("assetRootS3Key", ""))
+    input_path = input_path or data.get("inputS3AssetFilePath", "")
+    if not relative_path:
+        _, _, legacy_key = input_path.replace("s3://", "").partition("/")
+        relative_path = asset_relative_path("", legacy_key, data.get("inputAssetLocationKey", ""))
+    # Output-metadata path reconstructed from the outputs bucket + bucket-relative metadata prefix.
+    outputs = (manifest or {}).get("outputs", {})
+    output_path = ""
+    if outputs.get("bucket") and outputs.get("metadata"):
+        output_path = f"s3://{outputs['bucket']}/{outputs['metadata']}"
+    output_path = output_path or data.get("outputS3AssetMetadataPath", "")
+    return input_path, relative_path, output_path
+
+
+def extract_metadata(input_asset_relative_path, input_path, output_path):
     """
     Extract metadata from a CAD or mesh file.
-    
+
     Args:
+        input_asset_relative_path: the input file's path within its asset
         input_path: S3 URI of the input file
         output_path: S3 URI of the output directory
-        
+
     Returns:
         Dictionary with status code and message
     """
@@ -160,14 +237,13 @@ def extract_metadata(input_path_asset_base, input_path, output_path):
         with open(metadata_file, 'w') as f:
             json.dump(attribute_data, f, indent=2)
         
-        # Upload attributes to S3 as file-level attributes
-        # Extract the relative path from input_key and create file-level attribute filename
-        input_filename_full_key_attribute = input_key + '.attribute.json'
-
-        # Trim input_path_asset_base from the beginning of the full key
-        input_filename_key_attribute = input_filename_full_key_attribute.replace(input_path_asset_base, "")
-
-        output_relative_key = os.path.join(output_key, input_filename_key_attribute)
+        # Upload attributes to S3 as file-level attributes. The attribute file is named after the
+        # input file's path WITHIN THE ASSET so the write-back step applies the attributes to that
+        # asset file; the input object key is not usable here because a shadowed input sits in the
+        # run's output bucket rather than under the asset root.
+        if not output_key.endswith("/"):
+            output_key += "/"
+        output_relative_key = f"{output_key}{input_asset_relative_path}.attribute.json"
         upload(output_bucket, output_relative_key, metadata_file)
         
         logger.info("Attribute extraction complete")
@@ -220,34 +296,14 @@ def lambda_handler(event, context):
     # Check external task token if passed (Synchronous Pipeline so no task token should be passed)
     if 'TaskToken' in data:
         raise Exception("VAMS Workflow TaskToken found in pipeline input. Make sure to register this pipeline in VAMS as NOT needing a task token callback.")
-        
-    # Get input parameters if defined
-    if 'inputParameters' in data:
-        input_parameters = data['inputParameters']
-    else:
-        input_parameters = ''
 
-    # Get input metadata if defined
-    if 'inputMetadata' in data:
-        input_metadata = data['inputMetadata']
-    else:
-        input_metadata = ''
-
-    # Get Executing username 
-    if 'executingUserName' in data:
-        executing_userName = data['executingUserName']
-    else:
-        executing_userName = ''
-
-    # Get Executing requestContext
-    if 'executingRequestContext' in data:
-        executing_requestContext = data['executingRequestContext']
-    else:
-        executing_requestContext = ''
+    # Resolve the input file path, its asset-relative path, and the output-metadata path from the
+    # workflow manifest (each input file is self-locating; legacy body fields are the fallback).
+    input_path, asset_relative_input_path, output_path = resolve_inputs_from_manifest(data)
 
     # Extract metadata
-    result = extract_metadata(data['inputAssetLocationKey'], data['inputS3AssetFilePath'], data['outputS3AssetMetadataPath'], )
-    
+    result = extract_metadata(asset_relative_input_path, input_path, output_path)
+
     return result
 
 

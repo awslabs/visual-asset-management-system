@@ -61,13 +61,20 @@ const bundleEngine = async () => {
 
         await fs.mkdir(destinationDir, { recursive: true });
 
-        // Bundle the engine's ESM entry point into a classic-script IIFE that
-        // assigns the module exports to the global `Cesium` (window.Cesium)
+        // Bundle the engine's ESM entry point into a classic-script IIFE that assigns the module
+        // exports to the global `Cesium`. `--global-name=Cesium` emits a top-level `var Cesium=...`,
+        // which only becomes a window property when the classic script executes in the true global
+        // scope — under some load paths (the plugin's dynamically-appended <script>) it does not, so
+        // the viewer's dependency loader then fails with "Cesium not found on window object". A
+        // `--footer` explicitly attaches the bundle's export to globalThis/window so window.Cesium is
+        // guaranteed regardless of how the script is scoped when loaded.
         const entryPoint = path.resolve(enginePackageDir, "index.js");
         const outFile = path.resolve(destinationDir, "Cesium.js");
+        const footer =
+            "try{(typeof globalThis!=='undefined'?globalThis:window).Cesium=Cesium;}catch(e){}";
         await execSync(
             `npx esbuild "${entryPoint}" --bundle --format=iife --global-name=Cesium ` +
-                `--target=es2020 --charset=utf8 --minify --outfile="${outFile}"`,
+                `--target=es2020 --charset=utf8 --minify --footer:js="${footer}" --outfile="${outFile}"`,
             { cwd: npmPackageDir, stdio: "inherit" }
         );
 

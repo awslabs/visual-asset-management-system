@@ -1,0 +1,4 @@
+# Playwright runtime artifacts — never commit (auth state holds live tokens)
+.auth/
+.report/
+test-results/

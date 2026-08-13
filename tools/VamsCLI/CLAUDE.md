@@ -47,7 +47,9 @@ tools/VamsCLI/
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch integration)
       sync.py                # Directory sync (sync file push/pull)
-      workflow.py            # Workflow execution
+      pipeline.py            # Pipeline CRUD + template + tag-schema sub-groups
+      workflow.py            # Workflow CRUD + trigger sub-group + asset-less execute + per-asset execution list
+      execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
       industry/
@@ -79,19 +81,25 @@ tools/VamsCLI/
     test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
 ```
 
-### Command Groups (20 top-level)
+### Command Groups (22 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
-industry, user, role, api-key
+pipeline, execution, industry, user, role, api-key
 ```
 
 Sync has a nested sub-command group:
 
 -   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
+
+Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution APIs:
+
+-   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
+-   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
 
 Industry has nested sub-command groups:
 
@@ -281,11 +289,25 @@ def my_feature_command(ctx, ...):
 -   Active profile tracked in `active_profile.json`
 -   Profile name validation: 3-50 chars, `[a-zA-Z0-9_-]`, reserved names: `help`, `version`, `list`
 
+**Profile resolution order**: an explicit `--profile` wins; otherwise the profile recorded in
+`active_profile.json` by `profile switch` is used; only when no marker exists does the default profile
+apply. `read_active_profile_name()` (module level in `utils/profile.py`) performs that lookup — it is
+module level because a caller has to resolve the name _before_ it can construct a `ProfileManager`,
+and it is best-effort (any read failure degrades to the default) because it runs on every invocation.
+
 **Rules**:
 
 1. Always obtain `ProfileManager` via `get_profile_manager_from_context(ctx)` in commands
 2. Never hardcode profile paths -- use `ProfileManager` methods
-3. The default profile name is `"default"` (constant `DEFAULT_PROFILE_NAME`)
+3. The default profile name is `"default"` (constant `DEFAULT_PROFILE_NAME`), and it is a **last**
+   resort, not the no-flag default. Never fall back to it directly when resolving which profile to
+   use — call `read_active_profile_name()`. Never give the global `--profile` option a Click
+   `default=`, either: a default makes Click pass that name even when the flag is absent, so the
+   callback cannot distinguish "omitted" from "explicitly asked for the default profile", and
+   `profile switch` silently becomes a no-op for every command. Guarded by
+   `tests/test_active_profile_resolution.py`.
+4. A bare `ProfileManager()` / `APIClient(url)` targets the **default** profile. Pass the resolved
+   profile (`ProfileManager(read_active_profile_name())`) when no manager is supplied.
 
 ### 7. Constants and Endpoints
 
@@ -365,6 +387,8 @@ VamsCLI uses Unicode characters (e.g., `✓`, `✗`) in CLI output for status in
 
 | Fixture                    | Scope    | Purpose                                        |
 | -------------------------- | -------- | ---------------------------------------------- |
+| `isolate_logging_globals`  | autouse  | Restores `_verbose_mode` / `_logger` per test  |
+| `CoroutineClosingMock`     | class    | `asyncio.run` mock that closes the coroutine   |
 | `mock_logging`             | autouse  | Prevents file system operations during tests   |
 | `cli_runner`               | function | Pre-configured `CliRunner` instance            |
 | `mock_profile_manager`     | function | ProfileManager mock with `has_config()=True`   |
@@ -408,6 +432,13 @@ The `generic_command_mocks(command_module)` context manager patches:
 3. For nested modules like `roleUserConstraints`, use the actual module name: `'roleUserConstraints'`
 4. Use `no_setup_command_mocks` for testing setup-required error paths
 5. To disable the autouse `mock_logging`, mark the test: `@pytest.mark.no_mock_logging`
+6. Never leave `vamscli.utils.logging._verbose_mode` or `._logger` mutated. `main.py` binds `initialize_logging` at import, so `mock_logging`'s patch does not intercept the CLI group's call — every `cli_runner.invoke` writes those globals for real. In verbose mode each `log_*` call also writes to stderr, `CliRunner` merges stderr into `result.output`, and any later `json.loads(result.output)` fails on text wrapped around its JSON. The autouse `isolate_logging_globals` fixture restores both; `tests/test_logging_isolation.py` guards it in ordered pairs.
+7. Patch a command's `asyncio.run` with `new_callable=CoroutineClosingMock` (from `tests/conftest.py`). Commands call `asyncio.run(some_coro())`; Python evaluates the argument first, so the coroutine object is always built and a plain `MagicMock` then discards it un-awaited. The "coroutine ... was never awaited" `RuntimeWarning` surfaces whenever that object is later garbage collected, attributed to an unrelated test. `CoroutineClosingMock` closes the coroutine and otherwise behaves as a normal `MagicMock`, so `return_value`, `side_effect`, and call assertions are unaffected. Do not use `AsyncMock` here — it returns a coroutine instead of the canned value and leaks two coroutines instead of one.
+8. `tests/conftest.py` removes `--verbose` from `sys.argv` at import, before collection. `_is_verbose_mode()` treats that literal anywhere in `sys.argv` as a request for verbose output — including pytest's own argv — which would turn on stderr logging session-wide and break ~113 tests that parse `result.output` as JSON. No fixture can prevent it, because the helper is consulted per call rather than per test. Keep the strip: `pytest --verbose` is green only because of it. Its one visible cost is that pytest reads the same flag for its own progress display, so `pytest --verbose` renders as dots; use `-v` (a different string, never affected) for per-test output.
+
+9. **A test that runs the CLI as a SUBPROCESS must supply its own config home.** `CliRunner` bypasses `main()`, so behavior that lives there (the `standalone_mode=False` call and its `UsageError`/`ClickException` → JSON handling) can only be tested by spawning `python -m vamscli.main`. That subprocess has no pytest loaded, so `check_setup_required`'s `if 'pytest' in sys.modules` escape hatch does **not** apply and the setup gate is live: on a developer machine with a real profile the gate passes and the test reaches the behavior it meant to exercise, while on a clean checkout or in CI it fires first and every case sees a `SetupRequired` payload (no `error_type` key, no `Usage:` text). Point `HOME`, `USERPROFILE` and `APPDATA` at a `tmp_path` holding one `profiles/default/config.json` — see the `cli_env` fixture in `tests/test_json_output_purity.py`, which also keeps the suite independent of whatever profiles the developer happens to have. Include a control asserting `"Setup Required" not in output`, so a fixture that stops satisfying the gate fails loudly instead of silently testing the wrong error.
+
+    Corollary for reproducing a CI failure locally: blanking `HOME` to simulate a clean runner also hides `~/.aws`, so any test using botocore fails with `ProfileNotFound` for whatever `AWS_PROFILE` your shell exports, and on Windows the temp `APPDATA` has no `vamscli/logs` directory so the rotating file handler raises `FileNotFoundError`. Both are artifacts of the simulation, not defects — preserve `.aws`, `env -u AWS_PROFILE`, and pre-create the log directory, or you will chase 18 phantom failures.
 
 ### Test Class Pattern
 
@@ -542,9 +573,29 @@ Follow this checklist:
 
 8. **Update CHANGELOG.md** with the new command under the appropriate version section
 
-9. **Evaluate external tool integrations** for required updates. When CLI commands, parameters, output formats, or authentication flows change, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI:
-    - `isaacsim_vams_integration/` -- Python subprocess wrapper (`vams_cli_service.py`)
-    - `arcgispro-connector-for-vams/` -- C# subprocess wrapper (`Services/VamsCliService.cs`)
+9. **Propagate to the VAMS MCP server** (`tools/VamsMCP/`). The MCP server imports this package's `APIClient` and `ProfileManager` directly, so it is downstream of every change here. A renamed method, a new required parameter, or a changed response shape breaks its tools silently — the failure only appears at agent runtime.
+
+    - Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed, and update the call site
+    - Add an `@mcp.tool()` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`)
+    - Confirm the pagination `items_key` still matches the endpoint's list field (`Items`, `items`, `versions`); `VamsClient.paginate()` also unwraps the legacy `message` envelope
+    - Verify the new `def` is unique and correctly positioned. The tools are module-level functions, so a duplicate name silently shadows the earlier one and a `def` placed after the `if __name__` entrypoint or outside its gate block never executes — the tool goes missing with no import error. `tests/test_server_tools.py` asserts the source layout for this
+    - Add the tool to the `tools/VamsMCP/README.md` tool list (and the `autoApprove` sample if it is a safe read)
+    - Run `cd tools/VamsMCP && pytest` in that server's own virtual environment — tests mock the client, so no live deployment is needed, but the `mcp` SDK needs Pydantic v2 and installing it into a shared environment breaks the Pydantic-v1 backend suite
+    - Review `tools/VamsAgentSkill/SKILL.md` only if a **structural** rule changed (entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating command category); the skill self-discovers commands via `vamscli --help`, so ordinary additions need no edit
+
+    See root `CLAUDE.md` Pattern 7 for the full propagation chain. If MCP work reveals a missing or wrong `APIClient` method, fix it here rather than hand-rolling raw requests in the MCP server.
+
+10. **Validate the external tool integrations.** Whenever a command name, subcommand, option/flag, or `--json-output` response shape changes, the external connectors at `tools/ExternalIntegrations/` must be checked in the same change. Unlike the MCP server, they do not import `APIClient` — they build CLI argument strings and parse JSON keys, so **nothing catches drift at build or import time**. A renamed flag fails at connector runtime with a non-zero CLI exit; a renamed or removed JSON key silently produces a blank field, which is worse.
+
+    - `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py` -- Python subprocess wrapper. Check the argument lists passed to `subprocess.run` and each `@dataclass` field's `item.get("jsonKey", ...)` mapping.
+    - `arcgispro-connector-for-vams/Services/VamsCliService.cs` -- C# subprocess wrapper. Check the interpolated argument strings plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
+
+    Two failure modes to watch for:
+
+    - **Map each key to the command that actually returns it.** `file list` items and the `file info` response are different shapes: a listing item carries `dateCreatedCurrentVersion` and no `contentType`/`lastModified`, while `file info` carries `contentType`/`lastModified` and no `dateCreatedCurrentVersion`. A key mapped onto the wrong command is permanently empty with no error.
+    - **ArcGIS computed properties need `[JsonIgnore]`** when their name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`). Deserialization uses `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata and fails the whole response.
+
+    To validate the command surface, walk `cli.commands[group].commands[cmd].params` for every group/subcommand/flag the connectors pass, then spot-check a live `--json-output` response for the keys each connector parses.
 
 ### Adding a New Exception Class
 
@@ -733,7 +784,7 @@ class InvalidMyDomainDataError(MyDomainError): ...
 Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 1. Use `print()` / bare `click.echo()` in commands with `--json-output` — pollutes JSON output. Use `output_status/result/error` (Rule 4).
-2. Construct `ProfileManager()` directly in commands — ignores `--profile`. Use `get_profile_manager_from_context(ctx)` (Rule 6).
+2. Construct `ProfileManager()` directly in commands — ignores `--profile` **and** the active profile, so the command silently runs against the default profile's deployment. Use `get_profile_manager_from_context(ctx)` (Rule 6).
 3. Catch `GlobalInfrastructureError` in commands — must propagate to the global handler (Rule 1).
 4. Hardcode API endpoints in commands or `api_client` — define a format-string constant in `constants.py` (Rule 7).
 5. Make raw `requests` calls — always route through `APIClient` (Rule 3).
@@ -742,6 +793,7 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 8. Use magic numbers for size/count limits — import the named constant from `constants.py` (Rule 7, Key Constants).
 9. Ship a command that produces output without `--json-output` support — every output-producing command accepts `json_output: bool` (Rule 4).
 10. Forget the `output_error(...); raise click.ClickException(str(e))` pair — `output_error` exits in JSON mode; the raise handles CLI mode (Rule 4).
+11. Spawn the CLI as a subprocess in a test without giving it its own config home — the setup gate is live there (no pytest in `sys.modules`), so the test passes only on a machine that happens to have a configured profile and fails in CI (Testing rule 9).
 
 ---
 

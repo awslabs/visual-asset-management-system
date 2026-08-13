@@ -2,3 +2,4 @@
 Dockerfile
 /src/*
 LOCAL_DEBUG_README.md
+.synced-commit

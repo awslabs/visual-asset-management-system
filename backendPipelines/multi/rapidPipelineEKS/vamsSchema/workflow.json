@@ -1,0 +1,5 @@
+{
+    "workflowName": "RapidPipeline (EKS)",
+    "category": "Conversion",
+    "description": "Automated workflow for GLB optimization using RapidPipeline 3D Processor on EKS."
+}

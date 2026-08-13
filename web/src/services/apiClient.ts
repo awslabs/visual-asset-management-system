@@ -26,6 +26,33 @@ interface ApiClientOptions {
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
 /**
+ * Render a structured error `message` into a readable string. Handlers usually return a plain
+ * string, but validation failures may return an object of string lists (e.g.
+ * {"triggerTemplateErrors": ["...", "..."]}) or a bare list. Flatten those into newline-joined
+ * lines so the UI shows the actual errors instead of "[object Object]".
+ */
+function flattenErrorMessage(message: any): string {
+    if (typeof message === "string") return message;
+    if (Array.isArray(message)) return message.map((item) => String(item)).join("\n");
+    if (message && typeof message === "object") {
+        const lines: string[] = [];
+        for (const [key, value] of Object.entries(message)) {
+            if (Array.isArray(value)) {
+                value.forEach((item) => lines.push(String(item)));
+            } else {
+                lines.push(`${key}: ${String(value)}`);
+            }
+        }
+        if (lines.length) return lines.join("\n");
+    }
+    try {
+        return JSON.stringify(message);
+    } catch {
+        return String(message);
+    }
+}
+
+/**
  * Parse error response body and extract the most useful error message.
  * API errors typically return {"message": "..."} in the response body.
  */
@@ -36,7 +63,7 @@ async function parseErrorResponse(response: Response): Promise<ApiError> {
     try {
         body = await response.json();
         if (body?.message) {
-            errorMessage = body.message;
+            errorMessage = flattenErrorMessage(body.message);
         } else if (typeof body === "string") {
             errorMessage = body;
         }
@@ -52,6 +79,27 @@ async function parseErrorResponse(response: Response): Promise<ApiError> {
     }
 
     return new ApiError(errorMessage, response.status, body);
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Parse a Retry-After header (delta-seconds or HTTP-date) into milliseconds, clamped to a
+ * sane range. Defaults to 2s when absent/unparseable so a single 429 retries promptly.
+ */
+function parseRetryAfterMs(headerValue: string | null): number {
+    const DEFAULT_MS = 2000;
+    const MAX_MS = 30000;
+    if (!headerValue) return DEFAULT_MS;
+    const seconds = Number(headerValue);
+    if (Number.isFinite(seconds)) {
+        return Math.min(Math.max(seconds * 1000, 0), MAX_MS);
+    }
+    const dateMs = Date.parse(headerValue);
+    if (Number.isFinite(dateMs)) {
+        return Math.min(Math.max(dateMs - Date.now(), 0), MAX_MS);
+    }
+    return DEFAULT_MS;
 }
 
 class ApiClient {
@@ -118,6 +166,17 @@ class ApiClient {
 
         const response = await fetch(url, init);
         if (!response.ok) {
+            // 429 = WAF/API-Gateway rate limiting. This is NOT an auth failure — never touch
+            // the session. Retry once after the server's Retry-After (or a short default),
+            // then surface a clear, retryable error so the UI can tell the user to slow down.
+            if (response.status === 429) {
+                if (!retried) {
+                    const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+                    await delay(retryAfterMs);
+                    return this.request(method, path, options, true);
+                }
+                throw await parseErrorResponse(response);
+            }
             if (response.status === 401 || response.status === 403) {
                 const alive = await ensureValidSession();
                 if (!alive) {

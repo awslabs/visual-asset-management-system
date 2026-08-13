@@ -12,6 +12,7 @@ from vamscli.utils.exceptions import (
     FileNotFoundError, FileOperationError, InvalidPathError, FilePermissionError,
     FileAlreadyExistsError, FileArchivedError, InvalidVersionError
 )
+from tests.conftest import CoroutineClosingMock  # noqa: E402
 
 
 # File-level fixtures for file-specific testing patterns
@@ -73,7 +74,7 @@ class TestFileUploadCommand:
                      patch('vamscli.commands.file.validate_preview_files_have_base_files') as mock_validate_preview, \
                      patch('vamscli.commands.file.create_upload_sequences') as mock_sequences, \
                      patch('vamscli.commands.file.get_upload_summary') as mock_summary, \
-                     patch('vamscli.commands.file.asyncio.run') as mock_asyncio:
+                     patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_asyncio:
                     
                     # Setup mocks
                     mock_file_info = Mock()
@@ -182,7 +183,7 @@ class TestFileUploadCommand:
                      patch('vamscli.commands.file.validate_preview_files_have_base_files') as mock_validate_preview, \
                      patch('vamscli.commands.file.create_upload_sequences') as mock_sequences, \
                      patch('vamscli.commands.file.get_upload_summary') as mock_summary, \
-                     patch('vamscli.commands.file.asyncio.run') as mock_asyncio:
+                     patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_asyncio:
                     
                     # Setup mocks
                     mock_file_info = Mock()

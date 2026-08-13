@@ -30,8 +30,11 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
             };
         });
     if (state.databaseId) {
+        // Exact match via the `.keyword` subfield: str_databaseid is analyzed, so a phrase on the
+        // analyzed field matches the tokens [smoke, db], which "smoke-db-2" also contains — leaking
+        // another database's assets into a scoped search.
         filters.push({
-            query_string: { query: `(str_databaseid:("${state?.databaseId}"))` },
+            query_string: { query: `str_databaseid.keyword:"${state.databaseId}"` },
         });
     }
 
