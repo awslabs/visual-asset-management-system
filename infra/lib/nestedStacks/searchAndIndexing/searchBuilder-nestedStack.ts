@@ -440,10 +440,14 @@ export class SearchBuilderNestedStack extends NestedStack {
         }
 
         //Setup final index output
-        const openSearchIndexAssetSOutput = new cdk.CfnOutput(scope, "OpenSearchIndexAssetsOutput", {
-            value: config.openSearchAssetIndexName,
-            description: "The OpenSearch index name for assets",
-        });
+        const openSearchIndexAssetSOutput = new cdk.CfnOutput(
+            scope,
+            "OpenSearchIndexAssetsOutput",
+            {
+                value: config.openSearchAssetIndexName,
+                description: "The OpenSearch index name for assets",
+            }
+        );
 
         const openSearchIndexFilesOutput = new cdk.CfnOutput(scope, "OpenSearchIndexFilesOutput", {
             value: config.openSearchFileIndexName,
@@ -534,5 +538,4 @@ export class SearchBuilderNestedStack extends NestedStack {
 
         return searchFun;
     }
-
 }

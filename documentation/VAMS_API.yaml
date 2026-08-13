@@ -17,6 +17,61 @@ paths:
             responses:
                 "200":
                     description: OK.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    region:
+                                        type: string
+                                        description: "Deployment Region"
+                                        example: "us-east-1"
+                                    api:
+                                        type: string
+                                        description: "API base URL, including the stage path"
+                                    cognitoUserPoolId:
+                                        type: string
+                                        description: "Amazon Cognito user pool identifier; 'undefined' when Cognito is not the authentication provider"
+                                    cognitoAppClientId:
+                                        type: string
+                                        description: "Amazon Cognito app client identifier; 'undefined' when Cognito is not the authentication provider"
+                                    cognitoIdentityPoolId:
+                                        type: string
+                                        description: "Amazon Cognito identity pool identifier; 'undefined' when Cognito is not the authentication provider"
+                                    cognitoUserPoolEndpoint:
+                                        type: string
+                                        description: "Partition-aware Amazon Cognito user pool (IDP) endpoint URL; 'undefined' when Cognito is not the authentication provider. Supplied because the AWS Amplify JavaScript library resolves only the aws and aws-cn partitions and would otherwise build a .amazonaws.com host in the AWS European Sovereign Cloud, where the suffix is .amazonaws.eu"
+                                        example: "https://cognito-idp.us-east-1.amazonaws.com"
+                                    contentSecurityPolicy:
+                                        type: string
+                                        description: "Content Security Policy header value applied by the web application"
+                                    bannerHtmlMessage:
+                                        type: string
+                                        description: "Optional banner HTML rendered by the web application; empty when not configured"
+                                    externalOAuthIdpURL:
+                                        type: string
+                                        description: "External OAuth identity provider URL; present when an external OAuth IDP is the authentication provider"
+                                    externalOAuthIdpClientId:
+                                        type: string
+                                        description: "External OAuth identity provider client identifier"
+                                    externalOAuthIdpScope:
+                                        type: string
+                                        description: "External OAuth identity provider scope"
+                                    externalOAuthIdpScopeMfa:
+                                        type: string
+                                        description: "External OAuth identity provider MFA scope"
+                                    externalOAuthIdpTokenEndpoint:
+                                        type: string
+                                        description: "External OAuth identity provider token endpoint"
+                                    externalOAuthIdpAuthorizationEndpoint:
+                                        type: string
+                                        description: "External OAuth identity provider authorization endpoint"
+                                    externalOAuthIdpDiscoveryEndpoint:
+                                        type: string
+                                        description: "External OAuth identity provider discovery endpoint"
+                                required:
+                                    - region
+                                    - api
                 "500":
                     description: Internal server error.
                     content:

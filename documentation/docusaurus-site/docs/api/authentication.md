@@ -71,32 +71,35 @@ None.
 
 ```json
 {
-    "Auth": {
-        "Cognito": {
-            "userPoolId": "us-east-1_AbCdEfGhI",
-            "userPoolClientId": "1a2b3c4d5e6f7g8h9i0j",
-            "identityPoolId": "us-east-1:12345678-abcd-efgh-ijkl-123456789012",
-            "loginWith": {
-                "email": true
-            }
-        }
-    },
-    "API": {
-        "REST": {
-            "vams": {
-                "endpoint": "https://abc123.execute-api.us-east-1.amazonaws.com",
-                "region": "us-east-1"
-            }
-        }
-    },
-    "Storage": {
-        "S3": {
-            "bucket": "vams-asset-bucket",
-            "region": "us-east-1"
-        }
-    }
+    "region": "us-east-1",
+    "api": "https://abc123.execute-api.us-east-1.amazonaws.com/api",
+    "cognitoUserPoolId": "us-east-1_AbCdEfGhI",
+    "cognitoAppClientId": "1a2b3c4d5e6f7g8h9i0j",
+    "cognitoIdentityPoolId": "us-east-1:12345678-abcd-efgh-ijkl-123456789012",
+    "cognitoUserPoolEndpoint": "https://cognito-idp.us-east-1.amazonaws.com",
+    "contentSecurityPolicy": "default-src 'self' ...",
+    "bannerHtmlMessage": ""
 }
 ```
+
+**Response Fields:**
+
+| Field                     | Type   | Description                                                                                                                                                                   |
+| ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `region`                  | string | Deployment Region.                                                                                                                                                            |
+| `api`                     | string | API base URL, including the stage path.                                                                                                                                       |
+| `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                            |
+| `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                                                           |
+| `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                        |
+| `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below.                                |
+| `contentSecurityPolicy`   | string | Content Security Policy header value applied by the web application.                                                                                                           |
+| `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                                               |
+
+When an external OAuth identity provider is the authentication provider, the response instead carries `externalOAuthIdpURL`, `externalOAuthIdpClientId`, `externalOAuthIdpScope`, `externalOAuthIdpScopeMfa`, `externalOAuthIdpTokenEndpoint`, `externalOAuthIdpAuthorizationEndpoint`, and `externalOAuthIdpDiscoveryEndpoint`.
+
+:::note[Partition-aware Cognito endpoint]
+`cognitoUserPoolEndpoint` is supplied because the AWS Amplify JavaScript library resolves only the `aws` and `aws-cn` partitions and would otherwise build a `.amazonaws.com` host in every Region. In the AWS European Sovereign Cloud the correct DNS suffix is `.amazonaws.eu`, so the web application uses this value rather than deriving the host itself. In the commercial and AWS GovCloud partitions it resolves to the usual `.amazonaws.com` host, so behavior there is unchanged.
+:::
 
 **Error Responses:**
 
