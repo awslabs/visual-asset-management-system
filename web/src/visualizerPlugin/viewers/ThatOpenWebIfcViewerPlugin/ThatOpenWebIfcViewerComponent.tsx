@@ -38,6 +38,9 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
     const viewerInstanceRef = useRef<IfcViewerInstance | null>(null);
     const initializationRef = useRef(false);
     const loadingCancelledRef = useRef(false);
+    // Aborted on unmount so closing the viewer mid-download stops the transfer instead of letting it
+    // run to completion for a file nobody is looking at.
+    const downloadAbortRef = useRef<AbortController | null>(null);
 
     // Model tree + selection state surfaced to the panel.
     const [spatialTree, setSpatialTree] = useState<SpatialNode | null>(null);
@@ -159,8 +162,10 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                 } else if (versionId) {
                     assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
                 }
+                downloadAbortRef.current = new AbortController();
                 const response = await fetch(assetUrl, {
                     headers: { Authorization: authHeader },
+                    signal: downloadAbortRef.current.signal,
                 });
                 if (!response.ok) {
                     throw new Error(
@@ -282,6 +287,8 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
         return () => {
             console.log("ThatOpenWebIfc Viewer: Cleanup initiated");
             loadingCancelledRef.current = true;
+            downloadAbortRef.current?.abort();
+            downloadAbortRef.current = null;
             window.removeEventListener("resize", handleResize);
             try {
                 viewerInstanceRef.current?.components?.dispose();

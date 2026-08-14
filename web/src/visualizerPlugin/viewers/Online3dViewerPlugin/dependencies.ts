@@ -4,6 +4,7 @@
  */
 
 import { StylesheetManager } from "../../core/StylesheetManager";
+import { loadExternalScript } from "../../core/loadExternalScript";
 
 // Declare the global OV object that will be loaded from the script
 declare const OV: any;
@@ -30,22 +31,10 @@ export class Online3dViewerDependencyManager {
         }
     }
 
+    // Resolving on the mere presence of a tag returned before an in-flight download had executed,
+    // leaving waitForOV to poll for a global that was not there yet.
     private static loadScript(src: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            // Check if script is already loaded
-            const existingScript = document.querySelector(`script[src="${src}"]`);
-            if (existingScript) {
-                resolve();
-                return;
-            }
-
-            const script = document.createElement("script");
-            script.src = src;
-            script.async = true;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+        return loadExternalScript(src, { isReady: () => !!(window as any).OV });
     }
 
     private static waitForOV(): Promise<void> {

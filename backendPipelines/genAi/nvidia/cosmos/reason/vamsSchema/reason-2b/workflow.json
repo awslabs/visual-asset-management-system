@@ -1,6 +1,6 @@
 {
     "workflowName": "NVIDIA Cosmos Reason 2B",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos Reason 2B - Vision Language Model for video/image analysis and captioning",
     "triggers": [
         {

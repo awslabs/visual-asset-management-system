@@ -23,6 +23,8 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerControllerRef = useRef<any>(null);
+    // Aborted on unmount so a reachability check in flight does not outlive the viewer.
+    const abortControllerRef = useRef<AbortController | null>(null);
     const initializationRef = useRef(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
@@ -237,6 +239,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                 const response = await fetch(assetUrl, {
                                     method: "HEAD", // Use HEAD to avoid downloading the full file
                                     headers: headers,
+                                    signal: abortControllerRef.current?.signal,
                                 });
 
                                 // Check for successful response (2xx) or redirect (3xx)
@@ -361,11 +364,15 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             }
         };
 
+        abortControllerRef.current = new AbortController();
         initViewer();
 
         // Cleanup function
         return () => {
             console.log("VEERUM Viewer: Cleaning up");
+            // Stop any reachability check still in flight before disposing the controller.
+            abortControllerRef.current?.abort();
+            abortControllerRef.current = null;
             if (viewerControllerRef.current) {
                 try {
                     viewerControllerRef.current.dispose?.();

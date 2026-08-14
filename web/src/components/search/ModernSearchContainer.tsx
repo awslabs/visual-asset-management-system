@@ -519,6 +519,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <SearchPageListView
                         state={{
                             ...searchState,
+                            // The visible column list below is chosen by recordType, so the view has
+                            // to judge file mode by the same value rather than by the _rectype
+                            // filter, which trails it by a render (see isFileMode there).
+                            recordType,
                             tablePreferences: {
                                 pageSize: preferences.pageSize,
                                 visibleContent:
@@ -643,6 +647,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <SearchPageListView
                         state={{
                             ...searchState,
+                            // The visible column list below is chosen by recordType, so the view has
+                            // to judge file mode by the same value rather than by the _rectype
+                            // filter, which trails it by a render (see isFileMode there).
+                            recordType,
                             tablePreferences: {
                                 pageSize: preferences.pageSize,
                                 visibleContent:

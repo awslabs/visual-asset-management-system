@@ -4,6 +4,7 @@
  */
 
 import { StylesheetManager } from "../../core/StylesheetManager";
+import { loadExternalScript } from "../../core/loadExternalScript";
 
 export class PotreeDependencyManager {
     private static potreeInstance: any = null;
@@ -62,28 +63,13 @@ export class PotreeDependencyManager {
         }
     }
 
-    private static loadScript(src: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            if (this.loadedDependencies.has(src)) {
-                resolve(); // Already loaded
-                return;
-            }
-
-            if (document.querySelector(`script[src="${src}"]`)) {
-                this.loadedDependencies.add(src);
-                resolve(); // Already in DOM
-                return;
-            }
-
-            const script = document.createElement("script");
-            script.src = src;
-            script.onload = () => {
-                this.loadedDependencies.add(src);
-                resolve();
-            };
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+    // Potree loads twelve libraries in order, each awaiting the previous, and later ones depend on
+    // globals the earlier ones define. Resolving merely because a tag was in the DOM meant a second
+    // caller raced ahead of a download still in progress and read an undefined global, so the load is
+    // deduplicated by src and awaits the real load event.
+    private static async loadScript(src: string): Promise<void> {
+        await loadExternalScript(src);
+        this.loadedDependencies.add(src);
     }
 
     static cleanup(): void {

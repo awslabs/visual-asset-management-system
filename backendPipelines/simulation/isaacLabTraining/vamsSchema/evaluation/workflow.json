@@ -1,6 +1,6 @@
 {
     "workflowName": "Isaac Lab RL Evaluation",
-    "category": "Simulation",
+    "category": "VLA Training",
     "description": "Automated workflow for evaluating trained RL policies using Isaac Lab simulation.",
     "triggers": [
         {

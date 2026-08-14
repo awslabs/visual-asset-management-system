@@ -18,12 +18,17 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
     onDeletePreview,
     isPreviewFile = false,
 }) => {
-    const init = "placeholder.jpg";
-    const [url, setUrl] = useState(init);
+    // No placeholder source: an <img> rendered before the presigned URL resolves would issue a real
+    // request for it, and the file does not exist in the web bundle — the browser reported a failed
+    // load for every image opened, and that failure also tripped the error state below. The image
+    // element is not rendered until there is a URL to give it.
+    const [url, setUrl] = useState<string>("");
+    const [loading, setLoading] = useState(true);
     const [err, setErr] = useState<any>(null);
 
     useEffect(() => {
-        setUrl(init);
+        setUrl("");
+        setLoading(true);
         setErr(null);
 
         const loadImage = async () => {
@@ -62,11 +67,17 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error in image download:", error);
                 setErr(error);
+            } finally {
+                // Also covers the success path's early return, so the loading state always clears.
+                setLoading(false);
             }
         };
 
         if (assetKey) {
             loadImage();
+        } else {
+            // Nothing to fetch — do not sit on the loading state forever.
+            setLoading(false);
         }
     }, [assetId, assetKey, databaseId, versionId, assetVersionId, isPreviewFile]);
 
@@ -76,6 +87,30 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
             setErr(error);
         }
     };
+
+    const centered: React.CSSProperties = {
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        height: "100%",
+        fontSize: "16px",
+    };
+
+    if (loading) {
+        return (
+            <div style={{ ...centered, color: "var(--vams-text-secondary)" }}>Loading image...</div>
+        );
+    }
+
+    // The error state was previously set but never rendered, so a failed download showed a broken
+    // image icon with no explanation.
+    if (err || !url) {
+        return (
+            <div style={{ ...centered, color: "var(--vams-color-error)" }}>
+                {`Unable to load this image ${Synonyms.asset} file.`}
+            </div>
+        );
+    }
 
     return (
         <div

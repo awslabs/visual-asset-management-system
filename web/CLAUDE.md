@@ -865,6 +865,27 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 }
 ```
 
+### 10.5 A Resizable Table Column's Width Is Seeded Once
+
+With `resizableColumns`, Cloudscape stores column widths in state and seeds each column **once** — on
+the render in which that column id first becomes visible. Its follow-up effect only seeds ids missing
+from both the stored widths and the previous visible list, so once an id has been rendered with one
+declared `width`, later changes to that declaration are **silently ignored**. The header keeps the
+first-seeded width, and the first resize drag makes it jump to the value you expected.
+
+Raising `width` in `columnDefinitions` therefore appears to do nothing. The symptom looks like CSS
+compressing the column toward its `minWidth`, so the tempting fix is to raise `minWidth` — but that is
+not the lever. Cloudscape applies `table-layout: fixed` with `width: 100%` and `overflow-x: auto` on
+the wrapper, and the browser honors an over-budget column sum by widening the table and scrolling: a
+declared 700px column measures 700px even when the declared widths total more than the viewport.
+
+The practical rule: **the value that selects the visible column set and the value that selects a
+column's declared width must come from one source, resolved in the same render.** A set chosen from
+component state while the width branch reads a value written from a `useEffect` leaves one render in
+which the column is visible under the wrong declaration, and that is the one that sticks. This is why
+`SearchPageListView` derives `isFileMode` from the container's `recordType` rather than from the
+`_rectype` filter.
+
 ---
 
 ## 11. Testing

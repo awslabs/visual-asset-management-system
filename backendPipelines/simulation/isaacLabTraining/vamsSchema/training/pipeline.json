@@ -1,6 +1,6 @@
 {
     "pipelineName": "Isaac Lab RL Training",
-    "category": "Simulation",
+    "category": "VLA Training",
     "description": "Isaac Lab RL Training Pipeline - Train reinforcement learning policies using NVIDIA Isaac Lab on AWS Batch with GPU acceleration.",
     "executionConfig": {
         "executionType": "Lambda",

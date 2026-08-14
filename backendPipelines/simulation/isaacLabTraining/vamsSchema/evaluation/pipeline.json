@@ -1,6 +1,6 @@
 {
     "pipelineName": "Isaac Lab RL Evaluation",
-    "category": "Simulation",
+    "category": "VLA Training",
     "description": "Isaac Lab RL Evaluation Pipeline - Evaluate trained RL policies using NVIDIA Isaac Lab simulation.",
     "executionConfig": {
         "executionType": "Lambda",

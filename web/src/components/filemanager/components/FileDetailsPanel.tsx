@@ -40,6 +40,13 @@ import "./FileDetailsPanel.css";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import Synonyms from "../../../synonyms";
+import { EYE_ICON_SVG } from "../../../visualizerPlugin/components/EyeIconSvg";
+import {
+    isViewableExtension,
+    areFilenamesViewableTogether,
+    extensionOfFilename,
+} from "../../../visualizerPlugin/core/viewableExtensions";
+import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 import AutomationActions from "./AutomationActions";
 import { deriveAutomationInputFiles, automationDisabledReason } from "../utils/automationSelection";
 
@@ -63,6 +70,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // fail. Compared against false so the pre-fetch null asset and a record predating the field both
     // keep the distributable behavior.
     const isNotDistributable = asset?.isDistributable === false;
+    // The viewer registry is initialized lazily. Without this the eye icons below would never
+    // appear on this page: nothing else initializes the registry before they render, so every
+    // viewability check reported "no viewer" (only the search page's container initializes it).
+    const viewerRegistryReady = useViewerRegistryReady();
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -674,15 +685,27 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     </div>
 
                     <div className="multi-select-info">
-                        {/* Show File Viewer: Popup link for multi-file selection */}
-                        {!hasSelectedFolders && !isNotDistributable && (
-                            <div className="file-info-item">
-                                <div className="file-info-label">File Viewer:</div>
-                                <div className="file-info-value">
-                                    <Link onFollow={handleFileViewerModal}>Popup</Link>
+                        {/* Eye icon for the multi-file selection, hidden unless ONE viewer can render
+                            every selected file — a viewer covering only part of a mixed selection
+                            would open and then fail on the files it cannot read. */}
+                        {!hasSelectedFolders &&
+                            !isNotDistributable &&
+                            viewerRegistryReady &&
+                            areFilenamesViewableTogether(selectedItems.map((i: any) => i.name)) && (
+                                <div className="file-info-item">
+                                    <div className="file-info-label">File Viewer:</div>
+                                    <div className="file-info-value">
+                                        <span title="Visualize Selected Files">
+                                            <Button
+                                                variant="icon"
+                                                iconSvg={EYE_ICON_SVG}
+                                                ariaLabel="Visualize Selected Files"
+                                                onClick={handleFileViewerModal}
+                                            />
+                                        </span>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
+                            )}
 
                         <div className="selected-files-list">
                             {selectedItems.map((item) => (
@@ -1301,17 +1324,26 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             <div className="file-info-label">Name:</div>
                             <div className="file-info-value">
                                 {selectedItem.name}
+                                {/* Eye icon rather than a "(Viewer Popup)" text link, matching the
+                                    file-search table, and hidden when no enabled viewer can render
+                                    this extension — the control previously appeared for every file
+                                    and opened a viewer that had nothing to show. */}
                                 {!isFolder &&
                                     selectedItem.level > 0 &&
                                     !selectedItem.isPermanentlyDeleted &&
-                                    !isNotDistributable && (
-                                        <span style={{ marginLeft: "8px" }}>
-                                            <Link
-                                                onFollow={handleFileViewerModal}
-                                                fontSize="body-s"
-                                            >
-                                                (Viewer Popup)
-                                            </Link>
+                                    !isNotDistributable &&
+                                    viewerRegistryReady &&
+                                    isViewableExtension(extensionOfFilename(selectedItem.name)) && (
+                                        <span
+                                            style={{ marginLeft: "8px" }}
+                                            title={`Visualize File ${selectedItem.name}`}
+                                        >
+                                            <Button
+                                                variant="icon"
+                                                iconSvg={EYE_ICON_SVG}
+                                                ariaLabel={`Visualize File ${selectedItem.name}`}
+                                                onClick={handleFileViewerModal}
+                                            />
                                         </span>
                                     )}
                             </div>

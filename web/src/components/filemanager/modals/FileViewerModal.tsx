@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
 import { Modal, Box, SpaceBetween, Button } from "@cloudscape-design/components";
 import { DynamicViewer } from "../../../visualizerPlugin/components/DynamicViewer";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
@@ -52,17 +53,17 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     };
 
     // Generate a unique key for DynamicViewer to force re-mounting when files change
+    // Identity is database + asset + key, not the key alone. The same asset-relative path exists in
+    // many assets, so keying on the path let a different set of files produce the same viewer key —
+    // swapping assetA/model.glb for assetB/model.glb left the previous file on screen because React
+    // saw no reason to remount.
     const getViewerKey = () => {
         if (files.length === 0) return "empty";
         if (files.length === 1) {
-            return `single-${files[0].key}-${files[0].versionId || "no-version"}`;
+            return `single-${fileIdentity(files[0])}-${files[0].versionId || "no-version"}`;
         }
-        // For multi-file, create a stable key based on file keys
-        const sortedKeys = files
-            .map((f) => f.key)
-            .sort()
-            .join("|");
-        return `multi-${sortedKeys}`;
+        const sortedIdentities = files.map(fileIdentity).sort().join("|");
+        return `multi-${sortedIdentities}`;
     };
 
     return (

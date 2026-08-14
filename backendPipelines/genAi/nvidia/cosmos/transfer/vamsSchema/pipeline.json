@@ -1,6 +1,6 @@
 {
     "pipelineName": "NVIDIA Cosmos Transfer 2B",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos Transfer 2B - Style/content transfer with control signals (edge, depth, segmentation, blur)",
     "executionConfig": {
         "executionType": "Lambda",

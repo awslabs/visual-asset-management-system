@@ -4,7 +4,8 @@
  */
 
 import { FileInfo } from "../../../visualizerPlugin/core/types";
-import { PluginRegistry } from "../../../visualizerPlugin/core/PluginRegistry";
+import { isViewableExtension } from "../../../visualizerPlugin/core/viewableExtensions";
+import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
 
 /**
  * Maps a flattened file-mode search row to a FileInfo.
@@ -28,13 +29,49 @@ export function searchRowToFileInfo(row: Record<string, any>): FileInfo {
     };
 }
 
-/** True if ANY enabled plugin can render this extension. Source of truth: PluginRegistry. */
-export function isViewableExtension(ext?: string): boolean {
-    if (!ext) return false;
-    // Search rows carry the extension without a leading dot (e.g. "ply"), but the
-    // registry's supportedExtensions are stored with one (e.g. ".ply"). Normalize so
-    // canHandle's includes() check matches.
-    const normalized = ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
-    const registry = PluginRegistry.getInstance();
-    return registry.getCompatibleViewers([normalized], false, false).length > 0;
+/**
+ * Rebuild the viewer selection after a checkbox change so it spans searches.
+ *
+ * The checkboxes are authoritative for the result set on screen, but a file picked from an EARLIER
+ * search is not represented by any checkbox once new results replace the table — a new search clears
+ * the checkboxes while the selection itself is deliberately preserved. Mirroring the checkboxes alone
+ * would therefore discard every earlier pick the moment the first row of a new search is checked.
+ *
+ * The reconciled set is "everything selected previously that this result set does not contain" plus
+ * "the viewable rows checked right now", so unchecking a visible row still removes it while
+ * off-screen picks from previous searches survive.
+ *
+ * @param previous       the running selection
+ * @param currentRows    every row in the result set now on screen (checked or not)
+ * @param checkedRows    the rows currently checked
+ */
+export function reconcileViewerSelection(
+    previous: FileInfo[],
+    currentRows: Record<string, any>[],
+    checkedRows: Record<string, any>[]
+): FileInfo[] {
+    const viewable = (rows: Record<string, any>[]) =>
+        rows.filter((r) => isViewableExtension(r?.str_fileext)).map((r) => searchRowToFileInfo(r));
+
+    // Identity is database + asset + key, never the key alone: the same path exists in many assets,
+    // and treating those as one file made a second selection appear to do nothing.
+    const onScreen = new Set(viewable(currentRows).map(fileIdentity));
+    const checkedNow = viewable(checkedRows);
+    const checkedIdentities = new Set(checkedNow.map(fileIdentity));
+
+    const carriedOver = (previous || []).filter((f) => {
+        const identity = fileIdentity(f);
+        return !onScreen.has(identity) && !checkedIdentities.has(identity);
+    });
+    return [...carriedOver, ...checkedNow];
 }
+
+/**
+ * Viewer-availability lookups now live beside the registry so the asset file manager can use the
+ * same memoized answers without importing from the search feature. Re-exported here because the
+ * search table and its tests already import them from this module.
+ */
+export {
+    isViewableExtension,
+    clearViewableExtensionCache,
+} from "../../../visualizerPlugin/core/viewableExtensions";

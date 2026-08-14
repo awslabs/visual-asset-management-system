@@ -7,6 +7,7 @@ import { useState, useCallback, useReducer, useEffect } from "react";
 import { SearchFilters, SearchQuery, SearchResponse, SearchResult, MetadataFilter } from "../types";
 import Synonyms from "../../../synonyms";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
+import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
 
 interface SearchState {
     query: string;
@@ -187,18 +188,20 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
             return { ...state, viewerSelectMode: false, viewerSelection: [] };
 
         case "ADD_TO_VIEWER_SELECTION": {
-            const existingKeys = new Set(state.viewerSelection.map((f) => f.key));
-            const additions = action.payload.filter((f) => !existingKeys.has(f.key));
+            const existing = new Set(state.viewerSelection.map(fileIdentity));
+            const additions = action.payload.filter((f) => !existing.has(fileIdentity(f)));
             return { ...state, viewerSelection: [...state.viewerSelection, ...additions] };
         }
 
         // Replace the running selection so it mirrors exactly the currently checked rows
-        // (check = in, uncheck = out). Dedup by key in case the same file appears twice.
+        // (check = in, uncheck = out). Dedup by identity — database + asset + key — in case the same
+        // file appears twice; the key alone would discard a same-named file from another asset.
         case "SET_VIEWER_SELECTION": {
             const seen = new Set<string>();
             const deduped = action.payload.filter((f) => {
-                if (seen.has(f.key)) return false;
-                seen.add(f.key);
+                const identity = fileIdentity(f);
+                if (seen.has(identity)) return false;
+                seen.add(identity);
                 return true;
             });
             return { ...state, viewerSelection: deduped };
@@ -207,7 +210,9 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
         case "REMOVE_FROM_VIEWER_SELECTION":
             return {
                 ...state,
-                viewerSelection: state.viewerSelection.filter((f) => f.key !== action.payload),
+                viewerSelection: state.viewerSelection.filter(
+                    (f) => fileIdentity(f) !== action.payload
+                ),
             };
 
         case "CLEAR_VIEWER_SELECTION":
@@ -340,8 +345,10 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         dispatch({ type: "SET_VIEWER_SELECTION", payload: files });
     }, []);
 
-    const removeFromViewerSelection = useCallback((key: string) => {
-        dispatch({ type: "REMOVE_FROM_VIEWER_SELECTION", payload: key });
+    // Takes a fileIdentity(), not a bare key, so a same-named file in another asset is not removed
+    // along with the intended one.
+    const removeFromViewerSelection = useCallback((identity: string) => {
+        dispatch({ type: "REMOVE_FROM_VIEWER_SELECTION", payload: identity });
     }, []);
 
     const clearViewerSelection = useCallback(() => {

@@ -233,8 +233,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     // Per-file asset context (Decision #3). For a single file, prefer its own context.
     // For multi-file, use the first file's context as the shared pair (same-asset case);
     // top-level props remain the fallback for legacy callers that don't set per-file context.
-    const effectiveAssetId =
-        (files.length === 1 ? files[0].assetId : files[0]?.assetId) ?? assetId;
+    const effectiveAssetId = (files.length === 1 ? files[0].assetId : files[0]?.assetId) ?? assetId;
     const effectiveDatabaseId =
         (files.length === 1 ? files[0].databaseId : files[0]?.databaseId) ?? databaseId;
 
@@ -404,9 +403,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                         ? files.map((f) => f.key)
                                                         : undefined
                                                 }
-                                                multiFiles={
-                                                    files.length > 1 ? files : undefined
-                                                }
+                                                multiFiles={files.length > 1 ? files : undefined}
                                                 versionId={
                                                     files.length === 1
                                                         ? files[0].versionId

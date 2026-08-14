@@ -88,6 +88,9 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
 
     // Load file content
     useEffect(() => {
+        const abortController = new AbortController();
+        let cancelled = false;
+
         const loadFile = async () => {
             if (!assetKey) return;
 
@@ -116,12 +119,15 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                         throw new Error("Failed to download file");
                     } else {
                         // Fetch the actual file content from the URL
-                        const fileResponse = await fetch(response[1]);
+                        const fileResponse = await fetch(response[1], {
+                            signal: abortController.signal,
+                        });
                         if (!fileResponse.ok) {
                             throw new Error(`HTTP error! status: ${fileResponse.status}`);
                         }
 
                         const textContent = await fileResponse.text();
+                        if (cancelled) return;
                         const detectedLanguage = getLanguageFromExtension(assetKey);
 
                         setState((prev) => ({
@@ -135,6 +141,9 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     throw new Error("Invalid response format");
                 }
             } catch (error) {
+                // A load the user walked away from is not a failure to report, and the component is
+                // gone, so there is no state left to update.
+                if (cancelled || abortController.signal.aborted) return;
                 console.error("Error loading file:", error);
                 setState((prev) => ({
                     ...prev,
@@ -147,6 +156,13 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
         if (assetKey) {
             loadFile();
         }
+
+        return () => {
+            // Closing the viewer mid-download stops the transfer rather than letting it finish for a
+            // component that is no longer mounted.
+            cancelled = true;
+            abortController.abort();
+        };
     }, [assetId, assetKey, databaseId, versionId, assetVersionId]);
 
     // Copy content to clipboard

@@ -1,6 +1,6 @@
 {
     "pipelineName": "NVIDIA Cosmos Reason 8B",
-    "category": "GenAI",
+    "category": "WFM",
     "description": "NVIDIA Cosmos Reason 8B - Vision Language Model for video/image analysis and reasoning",
     "executionConfig": {
         "executionType": "Lambda",

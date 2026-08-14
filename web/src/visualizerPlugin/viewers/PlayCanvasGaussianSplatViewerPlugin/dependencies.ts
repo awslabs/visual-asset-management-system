@@ -5,6 +5,8 @@
  * Follows VAMS plugin dependency management patterns with script tag loading.
  */
 
+import { loadExternalScript } from "../../core/loadExternalScript";
+
 export class PlayCanvasGaussianSplatDependencyManager {
     private static readonly PLUGIN_ID = "playcanvas-gaussian-splat-viewer";
     private static loaded = false;
@@ -89,22 +91,10 @@ export class PlayCanvasGaussianSplatDependencyManager {
      * Load a script dynamically
      * @param src - Script source URL
      */
+    // Resolving on the mere presence of a tag returned before an in-flight download had executed,
+    // handing the caller a library whose global was still undefined.
     private static loadScript(src: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            // Check if script is already loaded
-            const existingScript = document.querySelector(`script[src="${src}"]`);
-            if (existingScript) {
-                resolve();
-                return;
-            }
-
-            const script = document.createElement("script");
-            script.src = src;
-            script.async = true;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+        return loadExternalScript(src);
     }
 
     /**

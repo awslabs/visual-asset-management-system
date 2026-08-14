@@ -18,6 +18,10 @@ interface ControlsProps {
     // Control props
     enable3DSelection: boolean;
     onToggle3DSelection: (enabled: boolean) => void;
+    // Multi-file layout props
+    canSpreadModels?: boolean;
+    spreadModels?: boolean;
+    onToggleSpreadModels?: (spread: boolean) => void;
     // Animation props
     animations?: any[];
     animationPaused?: boolean;
@@ -36,6 +40,9 @@ const Controls: React.FC<ControlsProps> = ({
     onResetAllMaterials,
     enable3DSelection,
     onToggle3DSelection,
+    canSpreadModels,
+    spreadModels,
+    onToggleSpreadModels,
     animations,
     animationPaused,
     onToggleAnimation,
@@ -393,12 +400,30 @@ const Controls: React.FC<ControlsProps> = ({
                         />
                         <span>Enable 3D Selection</span>
                     </label>
+                    {canSpreadModels && onToggleSpreadModels && (
+                        <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
+                            <input
+                                type="checkbox"
+                                checked={!!spreadModels}
+                                onChange={(e) => onToggleSpreadModels(e.target.checked)}
+                                style={{ marginRight: "8px" }}
+                            />
+                            <span>Spread Models</span>
+                        </label>
+                    )}
                 </div>
                 <div style={{ fontSize: "0.7em", color: "#999", marginTop: "4px" }}>
                     {enable3DSelection
                         ? "Click objects in 3D view to select"
                         : "3D selection disabled"}
                 </div>
+                {canSpreadModels && (
+                    <div style={{ fontSize: "0.7em", color: "#999", marginTop: "4px" }}>
+                        {spreadModels
+                            ? "Files laid out side by side for viewing"
+                            : "Files shown at their authored coordinates, so they may overlap"}
+                    </div>
+                )}
             </div>
 
             {/* Animation Controls */}

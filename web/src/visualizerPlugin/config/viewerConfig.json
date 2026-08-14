@@ -368,7 +368,7 @@
                 ".iges",
                 ".brep"
             ],
-            "supportsMultiFile": true,
+            "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 1,
             "dependencies": ["three"],
