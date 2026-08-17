@@ -272,7 +272,7 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc, i
                         onClick={onLogin}
                         data-testid="federated-login-button"
                     >
-                        Login with {idpDisplayName || "SSO"}
+                        Login with {idpDisplayName && idpDisplayName !== "undefined" ? idpDisplayName : "SSO"}
                     </button>
                 </div>
             </div>
@@ -986,7 +986,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                                         variant="primary"
                                         onClick={() => handleExternalOauthSignIn()}
                                     >
-                                        Log in with {config.externalOAuthIdpDisplayName && config.externalOAuthIdpDisplayName !== "undefined" ? config.externalOAuthIdpDisplayName : "SSO"}
+                                        Log in with {config.externalOAuthIdpDisplayName && config.externalOAuthIdpDisplayName !== "undefined" && config.externalOAuthIdpDisplayName.trim() !== "" ? config.externalOAuthIdpDisplayName : "SSO"}
                                     </Button>
                                     {config.externalOAuthIdpScopeMfa &&
                                     config.externalOAuthIdpScopeMfa !== "undefined" &&

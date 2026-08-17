@@ -22,7 +22,7 @@ import { generateUniqueNameHash } from "../../../helper/security";
 import { AmplifyConfigLambdaConstruct } from "./amplify-config-lambda-construct";
 import { VamsVersionLambdaConstruct } from "./vams-version-lambda-construct";
 import { samlSettings } from "../../../../config/saml-config";
-import { oidcSettings, useOidcFederation } from "../../../../config/oidc-config";
+import { oidcSettings } from "../../../../config/oidc-config";
 import { HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 
 /**
@@ -136,7 +136,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         // partition-specific (GovCloud uses auth-fips; EU Sovereign uses its own TLD).
         const cognitoHostedUiDomain = config.app.authProvider.useCognito.useSaml
             ? `${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
-            : useOidcFederation
+            : config.app.authProvider.useCognito.useOidc
             ? `${oidcSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
             : "";
 
@@ -153,7 +153,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
                 customFederatedIdentityProviderName: samlSettings.name,
                 idpDisplayName: samlSettings.displayName,
             };
-        } else if (useOidcFederation) {
+        } else if (config.app.authProvider.useCognito.useOidc) {
             amplifyConfigProps.cognitoFederatedConfig = {
                 customCognitoAuthDomain: cognitoHostedUiDomain,
                 customFederatedIdentityProviderName: oidcSettings.name,

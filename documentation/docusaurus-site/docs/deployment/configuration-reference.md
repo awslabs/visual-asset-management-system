@@ -439,17 +439,18 @@ This feature is primarily used with external identity providers (OIDC federation
 | Field                                                 | Type    | Default | Description                                                                                                                                                      |
 | ----------------------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.authProvider.useCognito.enabled`                 | boolean | `true`  | Enables Amazon Cognito user pools for authentication. At least one authentication provider must be enabled.                                                      |
-| `app.authProvider.useCognito.useSaml`                 | boolean | `false` | Enables SAML federation with an external IdP through Amazon Cognito.                                                                                             |
+| `app.authProvider.useCognito.useSaml`                 | boolean | `false` | Enables SAML federation with an external IdP through Amazon Cognito. Cannot be used together with `useOidc`.                                                     |
+| `app.authProvider.useCognito.useOidc`                 | boolean | `false` | Enables OIDC federation with an external IdP through Amazon Cognito. Cannot be used together with `useSaml`. Configure provider details in `infra/config/oidc-config.ts`. |
 | `app.authProvider.useCognito.useUserPasswordAuthFlow` | boolean | `false` | Enables `USER_PASSWORD_AUTH` flow for non-SRP authentication. Generates a security warning. Use only when SRP libraries are unavailable for system integrations. |
 | `app.authProvider.useCognito.credTokenTimeoutSeconds` | number  | `3600`  | Authentication token timeout in seconds for Amazon Cognito issued tokens (default: 1 hour). Refresh token is fixed at 24 hours.                                  |
 
 :::info[Advanced: OIDC and SAML federation through Amazon Cognito]
-Amazon Cognito supports federating with external identity providers using SAML 2.0 or OpenID Connect (OIDC). These advanced configurations are managed through separate TypeScript files rather than `config.json`:
+Amazon Cognito supports federating with external identity providers using SAML 2.0 or OpenID Connect (OIDC). Provider details are managed through separate TypeScript files, while the enable flag is in `config.json`:
 
-- **SAML federation**: Configure `infra/config/saml-config.ts` and set `useCognito.useSaml` to `true`. See [Security Architecture](../architecture/security.md#saml-federation) for details.
-- **OIDC federation**: Configure `infra/config/oidc-config.ts` to connect any OIDC-compliant provider (Okta, Auth0, Azure AD, etc.). Set `useOidcFederation = true` in that file and provide your provider's client credentials, issuer URL, and attribute mappings. The client secret must be stored in AWS Secrets Manager.
+- **SAML federation**: Set `useCognito.useSaml` to `true` in `config.json` and configure provider details in `infra/config/saml-config.ts`. The `displayName` field in `saml-config.ts` controls the login button label. See [Security Architecture](../architecture/security.md#saml-federation) for details.
+- **OIDC federation**: Set `useCognito.useOidc` to `true` in `config.json` and configure provider details in `infra/config/oidc-config.ts` (client ID, issuer URL, scopes, attribute mappings). The `displayName` field in `oidc-config.ts` controls the login button label. The client secret must be stored in AWS Secrets Manager.
 
-Both federation modes allow users to authenticate via SSO while Amazon Cognito manages the session tokens. Native username/password login remains available alongside federated login.
+Only one federation method can be active at a time (`useSaml` and `useOidc` cannot both be `true`). Both federation modes allow users to authenticate via SSO while Amazon Cognito manages the session tokens. Native username/password login remains available alongside federated login.
 :::
 
 ### External OAuth IdP (`app.authProvider.useExternalOAuthIdp`)
@@ -457,6 +458,7 @@ Both federation modes allow users to authenticate via SSO while Amazon Cognito m
 | Field                                                                       | Type    | Default | Description                                                                                                          |
 | --------------------------------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
 | `app.authProvider.useExternalOAuthIdp.enabled`                              | boolean | `false` | Enables an external OAuth 2.0 / OpenID Connect identity provider. Cannot be used simultaneously with Amazon Cognito. |
+| `app.authProvider.useExternalOAuthIdp.idpDisplayName`                       | string  | `""`    | Display name shown on the login button (for example, `"Corporate SSO"`). Falls back to "SSO" in the UI when empty.   |
 | `app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl`                   | string  | `null`  | Base URL of the external OAuth IdP (for example, `https://ping-federate.example.com`).                               |
 | `app.authProvider.useExternalOAuthIdp.idpAuthClientId`                      | string  | `null`  | Client ID registered with the external IdP for this VAMS deployment.                                                 |
 | `app.authProvider.useExternalOAuthIdp.idpAuthProviderScope`                 | string  | `null`  | OAuth scope requested by VAMS.                                                                                       |
@@ -1014,7 +1016,7 @@ Beyond `config.json`, VAMS supports several supplementary configuration files:
 | `infra/config/policy/iamRoleConfig.json`                     | Pre-created IAM role mappings for restricted environments. Read only when `app.iamRoleConfig.useCustomBootstrapRoles` or `app.iamRoleConfig.useCustomVamsStackRoles` is `true`.                     |
 | `infra/config/csp/cspAdditionalConfig.json`                  | Additional Content Security Policy (CSP) sources for external APIs, scripts, images, media, fonts, and styles.                                                                                      |
 | `infra/config/saml-config.ts`                                | SAML identity provider settings for Amazon Cognito federation. Required when `authProvider.useCognito.useSaml` is `true`. See [Security Architecture](../architecture/security.md#saml-federation). |
-| `infra/config/oidc-config.ts`                                | OIDC identity provider settings for Amazon Cognito federation. Set `useOidcFederation = true` and configure provider details (client ID, issuer URL, attribute mapping). Client secret stored in AWS Secrets Manager. |
+| `infra/config/oidc-config.ts`                                | OIDC identity provider settings for Amazon Cognito federation. Enable with `useCognito.useOidc: true` in `config.json` and configure provider details (client ID, issuer URL, attribute mapping, `displayName`). Client secret stored in AWS Secrets Manager. |
 | `infra/config/docker/Dockerfile-customDependencyBuildConfig` | Custom Docker build configuration for Lambda layer packaging. Useful for adding custom SSL certificates for HTTPS proxy environments.                                                               |
 | `infra/cdk.json` (`environments.common`)                     | Key-value pairs applied as tags on all stack resources.                                                                                                                                             |
 | `infra/cdk.json` (`environments.aws`)                        | `PermissionBoundaryArn` and `IamRoleNamePrefix` for IAM role customization.                                                                                                                         |

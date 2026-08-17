@@ -484,6 +484,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.addons.usePhysnaSync.credentialsSecretArn = "";
     }
 
+    if (config.app.authProvider.useCognito.useOidc == undefined) {
+        config.app.authProvider.useCognito.useOidc = false;
+    }
+
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
@@ -1652,6 +1656,26 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //OIDC federation requires the Cognito hosted UI (same as SAML) and cannot be
+    //enabled simultaneously with SAML federation.
+    if (config.app.authProvider.useCognito.useOidc) {
+        if (!config.app.authProvider.useCognito.enabled) {
+            throw new Error(
+                "Configuration Error: useCognito.useOidc requires useCognito.enabled to be true!"
+            );
+        }
+        if (config.app.authProvider.useCognito.useSaml) {
+            throw new Error(
+                "Configuration Error: useCognito.useSaml and useCognito.useOidc cannot both be enabled. Choose one federation method."
+            );
+        }
+        if (config.env.partition !== "aws") {
+            throw new Error(
+                `Configuration Error: useCognito.useOidc is not supported in the '${config.env.partition}' partition. The Amazon Cognito hosted UI used for OIDC federation is unavailable there.`
+            );
+        }
+    }
+
     //AWS Deadline Cloud is offered only in the commercial partition, so the execution type (and its
     //VPC interface endpoint) cannot be enabled anywhere else. This partition check is authoritative
     //regardless of the app.govCloud.enabled flag — a deployment into a GovCloud/EU-Sovereign
@@ -2511,6 +2535,7 @@ export interface ConfigPublic {
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;
+                useOidc: boolean;
                 useUserPasswordAuthFlow: boolean;
                 credTokenTimeoutSeconds: number;
             };

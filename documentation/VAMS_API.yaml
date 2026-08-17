@@ -17,6 +17,69 @@ paths:
             responses:
                 "200":
                     description: OK.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    api:
+                                        type: string
+                                        description: "API base URL derived from the request context"
+                                    region:
+                                        type: string
+                                        description: "AWS region of the deployment"
+                                    cognitoUserPoolId:
+                                        type: string
+                                        description: "Amazon Cognito user pool ID (\"undefined\" when Cognito is disabled)"
+                                    cognitoAppClientId:
+                                        type: string
+                                        description: "Amazon Cognito app client ID (\"undefined\" when Cognito is disabled)"
+                                    cognitoIdentityPoolId:
+                                        type: string
+                                        description: "Amazon Cognito identity pool ID (\"undefined\" when Cognito is disabled)"
+                                    cognitoFederatedConfig:
+                                        type: object
+                                        description: "Cognito federation configuration (present when SAML or OIDC federation is enabled)"
+                                        properties:
+                                            customFederatedIdentityProviderName:
+                                                type: string
+                                                description: "Name of the federated identity provider registered in Cognito"
+                                            idpDisplayName:
+                                                type: string
+                                                description: "Display name shown on the login button (e.g., \"Login with Okta\")"
+                                            customCognitoAuthDomain:
+                                                type: string
+                                                description: "Cognito hosted UI domain"
+                                    externalOAuthIdpURL:
+                                        type: string
+                                        description: "External OAuth IDP base URL (\"undefined\" when not configured)"
+                                    externalOAuthIdpClientId:
+                                        type: string
+                                        description: "External OAuth IDP client ID (\"undefined\" when not configured)"
+                                    externalOAuthIdpScope:
+                                        type: string
+                                        description: "External OAuth IDP scope (\"undefined\" when not configured)"
+                                    externalOAuthIdpScopeMfa:
+                                        type: string
+                                        description: "External OAuth IDP MFA scope (\"undefined\" when not configured)"
+                                    externalOAuthIdpTokenEndpoint:
+                                        type: string
+                                        description: "External OAuth IDP token endpoint (\"undefined\" when not configured)"
+                                    externalOAuthIdpAuthorizationEndpoint:
+                                        type: string
+                                        description: "External OAuth IDP authorization endpoint (\"undefined\" when not configured)"
+                                    externalOAuthIdpDiscoveryEndpoint:
+                                        type: string
+                                        description: "External OAuth IDP discovery endpoint (\"undefined\" when not configured)"
+                                    externalOAuthIdpDisplayName:
+                                        type: string
+                                        description: "Display name for the external OAuth login button (\"undefined\" when not configured). Falls back to \"SSO\" in the UI."
+                                    stackName:
+                                        type: string
+                                        description: "Name of the deployed VAMS stack"
+                                    bannerHtmlMessage:
+                                        type: string
+                                        description: "Optional HTML banner message displayed at the top of the web UI"
                 "500":
                     description: Internal server error.
                     content:

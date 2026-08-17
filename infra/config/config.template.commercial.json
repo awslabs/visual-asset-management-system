@@ -300,6 +300,7 @@
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,
+                "useOidc": false,
                 "useUserPasswordAuthFlow": false,
                 "credTokenTimeoutSeconds": 3600
             },

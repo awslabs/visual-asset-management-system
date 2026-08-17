@@ -43,10 +43,10 @@ export interface OidcSettings {
 }
 
 /**
- * Toggle Cognito <-> OIDC federation.
- * Set to false to fall back to Cognito-only (native username/password) login.
+ * OIDC federation is toggled via the main config: app.authProvider.useCognito.useOidc.
+ * When enabled, the Cognito construct uses the oidcSettings below to add an OIDC
+ * identity provider to the user pool.
  */
-export const useOidcFederation = true;
 
 export const oidcSettings: OidcSettings = {
     name: "ExternalOIDC",

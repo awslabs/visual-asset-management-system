@@ -9,7 +9,7 @@ import { NestedStack } from "aws-cdk-lib";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../config/config";
 import { samlSettings } from "../../../config/saml-config";
-import { oidcSettings, useOidcFederation } from "../../../config/oidc-config";
+import { oidcSettings } from "../../../config/oidc-config";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { CloudFrontS3WebSiteConstruct } from "./constructs/cloudfront-s3-website-construct";
@@ -156,14 +156,14 @@ export class StaticWebBuilderNestedStack extends NestedStack {
         //validation rejects SAML in partitions without hosted UI support)
         const cognitoHostedUiUrl = props.config.app.authProvider.useCognito.useSaml
             ? `https://${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
-            : useOidcFederation
+            : props.config.app.authProvider.useCognito.useOidc
             ? `https://${oidcSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
             : "";
         let authDomain = "";
 
         if (props.config.app.authProvider.useCognito.useSaml) {
             authDomain = cognitoHostedUiUrl;
-        } else if (useOidcFederation) {
+        } else if (props.config.app.authProvider.useCognito.useOidc) {
             authDomain = cognitoHostedUiUrl;
         } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
             authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
@@ -246,7 +246,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
              * when Cognito federation (SAML or OIDC) is enabled.
              */
-            if (props.config.app.authProvider.useCognito.useSaml || useOidcFederation) {
+            if (props.config.app.authProvider.useCognito.useSaml || props.config.app.authProvider.useCognito.useOidc) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
                     this,
                     "CustomCognitoWebClientConfig",
@@ -258,7 +258,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                         logoutUrls: callbackUrls,
                         identityProviders: [
                             "COGNITO",
-                            useOidcFederation ? oidcSettings.name : samlSettings.name,
+                            props.config.app.authProvider.useCognito.useOidc ? oidcSettings.name : samlSettings.name,
                         ],
                     }
                 );
@@ -346,7 +346,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
              * when Cognito federation (SAML or OIDC) is enabled.
              */
-            if (props.config.app.authProvider.useCognito.useSaml || useOidcFederation) {
+            if (props.config.app.authProvider.useCognito.useSaml || props.config.app.authProvider.useCognito.useOidc) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
                     this,
                     "CustomCognitoWebClientConfig",
@@ -358,7 +358,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                         logoutUrls: callbackUrls,
                         identityProviders: [
                             "COGNITO",
-                            useOidcFederation ? oidcSettings.name : samlSettings.name,
+                            props.config.app.authProvider.useCognito.useOidc ? oidcSettings.name : samlSettings.name,
                         ],
                     }
                 );

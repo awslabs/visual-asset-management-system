@@ -22,7 +22,7 @@ import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { samlSettings } from "../../../config/saml-config";
-import { oidcSettings, useOidcFederation } from "../../../config/oidc-config";
+import { oidcSettings } from "../../../config/oidc-config";
 import { Service } from "../../../lib/helper/service-helper";
 import {
     AwsCustomResource,
@@ -77,7 +77,7 @@ export class AuthBuilderNestedStack extends NestedStack {
             }
 
             // Cognito <-> OIDC federation
-            if (useOidcFederation) {
+            if (props.config.app.authProvider.useCognito.useOidc) {
                 cognitoProps.oidcSettings = oidcSettings;
             }
 

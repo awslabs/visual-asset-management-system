@@ -2,7 +2,7 @@
     "name": "vams",
     "env": {
         "account": null,
-        "region": "us-east-1",
+        "region": null,
         "loadContextIgnoreVPCStacks": false
     },
     "app": {
@@ -17,7 +17,7 @@
             "externalAssetBuckets": null
         },
         "adminUserId": "administrator",
-        "adminEmailAddress": "javvajib@amazon.com",
+        "adminEmailAddress": null,
         "iamRoleConfig": {
             "useCustomBootstrapRoles": false,
             "useCustomVamsStackRoles": false
@@ -295,11 +295,12 @@
             "presignedUrlTimeoutSeconds": 86400,
             "authorizerOptions": {
                 "allowedIpRanges": [],
-                "defaultUserRoleName": "basicReadOnly"
+                "defaultUserRoleName": ""
             },
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,
+                "useOidc": false,
                 "useUserPasswordAuthFlow": false,
                 "credTokenTimeoutSeconds": 3600
             },
