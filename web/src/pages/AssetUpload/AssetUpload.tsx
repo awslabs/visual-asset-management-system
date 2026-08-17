@@ -45,7 +45,11 @@ import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants
 import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import { Metadata } from "../../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { validateNonZeroLengthTextAsYouType, validateRequiredTagTypeSelected } from "./validations";
+import {
+    validateNonZeroLengthTextAsYouType,
+    validateRequiredTagTypeSelected,
+    enforceableRequiredTagTypes,
+} from "./validations";
 import { DisplayKV, FileUpload } from "./components";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { MetadataContainer } from "../../components/metadataV2";
@@ -54,7 +58,8 @@ import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import localforage from "localforage";
-import { fetchTags, fetchtagTypes } from "../../services/APIService";
+import { fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
+import { buildTagOptionGroups } from "../../common/utils/tagOptions";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
@@ -452,7 +457,11 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         // Get Tag Types to enforce when they are required
         tagTypes = [];
 
-        fetchtagTypes().then((res) => {
+        // Scope to global + the selected database, matching the tag picker and the backend's
+        // required-tag validation; the unscoped list demanded tags this form cannot offer.
+        fetchTagTypesForAsset(
+            assetDetailState?.databaseId ? { databaseId: assetDetailState.databaseId } : undefined
+        ).then((res) => {
             // The service returns an array on success, or an error message string / false
             // on failure. Surface failures instead of silently leaving the form blank.
             if (!Array.isArray(res)) {
@@ -467,7 +476,9 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
             tagTypes = res;
 
             if (tagTypes.length) {
-                const requiredTagTypes = tagTypes.filter((tagType) => tagType.required === "True");
+                // A required tag type with no tags cannot be satisfied, so it is not announced as a
+                // constraint either — the same set the validator enforces.
+                const requiredTagTypes = enforceableRequiredTagTypes(tagTypes);
 
                 if (requiredTagTypes.length) {
                     // Set constraint text if there are required tag types
@@ -1392,7 +1403,10 @@ const UploadForm = () => {
     useEffect(() => {
         tags = [];
 
-        fetchTags().then((res) => {
+        // Scope to global + the asset's database so tags from other databases are hidden.
+        fetchTagsForAsset(
+            assetDetailState?.databaseId ? { databaseId: assetDetailState.databaseId } : undefined
+        ).then((res) => {
             tags.length = 0; // Clear existing array without losing reference
             if (!Array.isArray(res)) {
                 // Surface load failures (e.g. a 403) instead of leaving the tag list blank.
@@ -1403,41 +1417,10 @@ const UploadForm = () => {
                 );
             }
             if (res && Array.isArray(res)) {
-                // Group tags by tag type, sorted alphabetically
-                const grouped: Record<
-                    string,
-                    { tagTypeName: string; required: string; tagItems: any[] }
-                > = {};
+                // Grouped, scope-labelled and ordered by the shared helper so this picker and the
+                // asset edit form present tags identically.
                 const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
-                for (const x of res) {
-                    const typeName = x.tagTypeName || "Uncategorized";
-                    if (!grouped[typeName]) {
-                        const typeInfo = storedTypes.find((t: any) => t.tagTypeName === typeName);
-                        grouped[typeName] = {
-                            tagTypeName: typeName,
-                            required: typeInfo?.required || "False",
-                            tagItems: [],
-                        };
-                    }
-                    grouped[typeName].tagItems.push(x);
-                }
-                // Sort groups alphabetically, filter out empty groups, build grouped options
-                Object.values(grouped)
-                    .filter((group) => group.tagItems.length > 0)
-                    .sort((a, b) => a.tagTypeName.localeCompare(b.tagTypeName))
-                    .forEach((group) => {
-                        tags.push({
-                            label:
-                                group.required === "True"
-                                    ? `${group.tagTypeName} [required]`
-                                    : group.tagTypeName,
-                            options: group.tagItems
-                                .sort((a: any, b: any) =>
-                                    (a.tagName || "").localeCompare(b.tagName || "")
-                                )
-                                .map((t: any) => ({ label: t.tagName, value: t.tagName })),
-                        });
-                    });
+                buildTagOptionGroups(res, storedTypes).forEach((group) => tags.push(group));
             }
         });
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {

@@ -15,6 +15,10 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from common.tagScope import GLOBAL_SCOPE, normalize_scope
+
+# GSI on the tag-type table's name attribute, used for cross-scope name lookups.
+TAG_TYPE_NAME_INDEX = "tagTypeNameIndex"
 from common.constants import STANDARD_JSON_RESPONSE
 from models.common import (
     validation_error_message,
@@ -61,6 +65,25 @@ tag_type_table = dynamodb.Table(tag_type_table_name) if tag_type_table_name else
 # Business Logic Functions
 #######################
 
+
+def _query_all_in_partition(table, scope):
+    """Every item in one partition of a composite tag/tag-type table.
+
+    A single query returns at most 1MB, so a scoped listing has to follow LastEvaluatedKey or it
+    silently truncates and reports the short list as complete. The asset-side lookup in
+    createAsset.py pages the same way.
+    """
+    items = []
+    query_kwargs = {'KeyConditionExpression': Key('databaseId').eq(scope)}
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get('Items', []))
+        last_key = response.get('LastEvaluatedKey')
+        if not last_key:
+            return items
+        query_kwargs['ExclusiveStartKey'] = last_key
+
+
 def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
     """Get all tag types with their associated tags
     
@@ -75,19 +98,37 @@ def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
         VAMSGeneralErrorResponse: If retrieval fails
     """
     try:
+        requested_database_id = query_params.get('databaseId')
+        scope = query_params.get('scope')  # 'global' | 'all' | None
+
         deserializer = TypeDeserializer()
         paginator = dynamodb_client.get_paginator('scan')
-        
-        # Get tag types with pagination
-        page_iterator_tag_types = paginator.paginate(
-            TableName=tag_type_table_name,
-            PaginationConfig={
-                'MaxItems': int(query_params['maxItems']),
-                'PageSize': int(query_params['pageSize']),
-                'StartingToken': query_params.get('startingToken')
-            }
-        ).build_full_result()
-        
+
+        # Select tag types by scope:
+        #   ?databaseId=X -> single-partition query on that database
+        #   ?scope=global -> single-partition query on the GLOBAL partition
+        #   ?scope=all / none -> full scan (bounded vocabulary)
+        tag_type_next_token = None
+        if requested_database_id:
+            raw_tag_type_items = _query_all_in_partition(tag_type_table, requested_database_id)
+        elif scope == 'global':
+            raw_tag_type_items = _query_all_in_partition(tag_type_table, GLOBAL_SCOPE)
+        else:
+            page_iterator_tag_types = paginator.paginate(
+                TableName=tag_type_table_name,
+                PaginationConfig={
+                    'MaxItems': int(query_params['maxItems']),
+                    'PageSize': int(query_params['pageSize']),
+                    'StartingToken': query_params.get('startingToken')
+                }
+            ).build_full_result()
+            raw_tag_type_items = [
+                {k: deserializer.deserialize(v) for k, v in tt.items()}
+                for tt in page_iterator_tag_types.get("Items", [])
+            ]
+            if 'NextToken' in page_iterator_tag_types:
+                tag_type_next_token = page_iterator_tag_types['NextToken']
+
         # Get all tags (no pagination needed for tags lookup)
         raw_tag_items = []
         page_iterator_tags = paginator.paginate(
@@ -122,21 +163,25 @@ def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
             tag_type_name = deserialized_tag.get("tagTypeName")
             
             if tag_type_name and tag_name:
-                if tag_type_name not in formatted_tag_results:
-                    formatted_tag_results[tag_type_name] = [tag_name]
-                else:
-                    formatted_tag_results[tag_type_name].append(tag_name)
+                # Keyed by SCOPE + name. The same name may exist as a GLOBAL entry and as a
+                # database-specific one; keying by name alone would list one scope's tags
+                # under the other scope's tag type.
+                key = (normalize_scope(deserialized_tag.get("databaseId")), tag_type_name)
+                formatted_tag_results.setdefault(key, []).append(tag_name)
         
         # Process tag types and check authorization
         formatted_tag_type_results = []
-        for tag_type_item in page_iterator_tag_types.get("Items", []):
-            deserialized_tag_type = {k: deserializer.deserialize(v) for k, v in tag_type_item.items()}
-            
+        for deserialized_tag_type in raw_tag_type_items:
             tag_type = {
                 "tagTypeName": deserialized_tag_type.get("tagTypeName"),
                 "description": deserialized_tag_type.get("description"),
                 "required": deserialized_tag_type.get("required", "False"),
-                "tags": formatted_tag_results.get(deserialized_tag_type.get("tagTypeName"), [])
+                "databaseId": normalize_scope(deserialized_tag_type.get("databaseId")),
+                "tags": formatted_tag_results.get(
+                    (normalize_scope(deserialized_tag_type.get("databaseId")),
+                     deserialized_tag_type.get("tagTypeName")),
+                    [],
+                )
             }
             
             # Check authorization
@@ -154,57 +199,103 @@ def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
         
         # Build response
         result = {"Items": formatted_tag_type_results}
-        if 'NextToken' in page_iterator_tag_types:
-            result['NextToken'] = page_iterator_tag_types['NextToken']
-        
+        if tag_type_next_token:
+            result['NextToken'] = tag_type_next_token
+
         return result
         
     except Exception as e:
         logger.exception(f"Error getting tag types: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving tag types: {str(e)}")
 
-def delete_tag_type(tag_type_name: str, claims_and_roles: dict) -> TagTypeOperationResponseModel:
+def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str = None) -> TagTypeOperationResponseModel:
     """Delete a tag type
-    
+
     Args:
         tag_type_name: Name of the tag type to delete
         claims_and_roles: User claims and roles for authorization
-        
+        database_id: The scope (databaseId) the tag type lives in; defaults to GLOBAL
+
     Returns:
         TagTypeOperationResponseModel with operation result
-        
+
     Raises:
         VAMSGeneralErrorResponse: If tag type not found, in use, or deletion fails
     """
     try:
-        # Get the tag type
-        tag_type_response = tag_type_table.get_item(Key={'tagTypeName': tag_type_name})
+        scope = normalize_scope(database_id)
+
+        # Get the tag type (composite key)
+        tag_type_response = tag_type_table.get_item(Key={'databaseId': scope, 'tagTypeName': tag_type_name})
         tag_type = tag_type_response.get("Item")
-        
+
         if not tag_type:
             raise VAMSGeneralErrorResponse("Tag type not found", status_code=404)
-        
-        # Check if tag type is in use by any tags
-        tag_results = tag_table.scan().get('Items', [])
-        for tag in tag_results:
-            if tag.get("tagTypeName") == tag_type_name:
-                raise VAMSGeneralErrorResponse(
-                    "Cannot delete tag type that is currently in use by a tag",
-                    status_code=400
-                )
-        
-        # Check authorization
-        tag_type.update({"object__type": "tagType"})
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(tag_type, "DELETE"):
-                raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
-        
+
+        stored_scope = normalize_scope(tag_type.get("databaseId"))
+
+        # Check if tag type is in use by any referencing tag. A GLOBAL tag type can be
+        # A tag resolves its tag type within its OWN scope, so a reference blocks the delete only
+        # when the tag resolves to THIS type:
+        #   database-scoped type -> only same-database tags can reference it.
+        #   GLOBAL type          -> GLOBAL tags, plus a tag in a database that has no tag type of
+        #                           this name of its own (such a tag can only mean the shared one).
+        # The second clause matters because the same name may exist as a GLOBAL type and as a
+        # database-specific type: that database's tags belong to ITS type and must not block the
+        # shared one from being deleted.
+        scopes_with_own_type = set()
+        if stored_scope == GLOBAL_SCOPE:
+            own_type_rows = tag_type_table.query(
+                IndexName=TAG_TYPE_NAME_INDEX,
+                KeyConditionExpression=Key('tagTypeName').eq(tag_type_name),
+            )
+            for row in own_type_rows.get('Items', []):
+                row_scope = normalize_scope(row.get("databaseId"))
+                if row_scope != GLOBAL_SCOPE:
+                    scopes_with_own_type.add(row_scope)
+
+        # Page the scan to exhaustion so references beyond the first 1MB page are seen.
+        last_evaluated_key = None
+        while True:
+            scan_kwargs = {}
+            if last_evaluated_key:
+                scan_kwargs['ExclusiveStartKey'] = last_evaluated_key
+            scan_response = tag_table.scan(**scan_kwargs)
+            for tag in scan_response.get('Items', []):
+                if tag.get("tagTypeName") != tag_type_name:
+                    continue
+                tag_scope = normalize_scope(tag.get("databaseId"))
+                if stored_scope == GLOBAL_SCOPE:
+                    references_this_type = (
+                        tag_scope == GLOBAL_SCOPE or tag_scope not in scopes_with_own_type
+                    )
+                else:
+                    references_this_type = tag_scope == stored_scope
+                if references_this_type:
+                    raise VAMSGeneralErrorResponse(
+                        "Cannot delete tag type that is currently in use by a tag",
+                        status_code=400
+                    )
+            last_evaluated_key = scan_response.get('LastEvaluatedKey')
+            if not last_evaluated_key:
+                break
+
+        # Check authorization (scope-aware: auth against the type's stored scope)
+        tag_type.update({
+            "object__type": "tagType",
+            "databaseId": stored_scope,
+        })
+        if len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(tag_type, "DELETE"):
+            raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
+
         # Delete the tag type
         logger.info(f"Deleting tag type: {tag_type_name}")
         tag_type_table.delete_item(
-            Key={'tagTypeName': tag_type_name},
-            ConditionExpression='attribute_exists(tagTypeName)'
+            Key={'databaseId': stored_scope, 'tagTypeName': tag_type_name},
+            ConditionExpression='attribute_exists(databaseId) AND attribute_exists(tagTypeName)'
         )
         
         # Return success response
@@ -248,7 +339,9 @@ def handle_get_request(event):
             query_params = {
                 'maxItems': request_model.maxItems,
                 'pageSize': request_model.pageSize,
-                'startingToken': request_model.startingToken
+                'startingToken': request_model.startingToken,
+                'databaseId': query_parameters.get('databaseId'),
+                'scope': query_parameters.get('scope')
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -292,15 +385,16 @@ def handle_delete_request(event):
     Returns:
         APIGatewayProxyResponseV2 response
     """
-    path_parameters = event.get('pathParameters', {})
-    
+    path_parameters = event.get('pathParameters', {}) or {}
+    query_parameters = event.get('queryStringParameters', {}) or {}
+
     try:
         # Validate path parameters
         tag_type_name = path_parameters.get("tagTypeId")
-        
+
         if not tag_type_name or len(tag_type_name) == 0:
             return validation_error(body={'message': "TagTypeName is a required path parameter"}, event=event)
-        
+
         # Validate tag type name format
         from common.validators import validate
         (valid, message) = validate({
@@ -309,13 +403,16 @@ def handle_delete_request(event):
                 'validator': 'OBJECT_NAME'
             }
         })
-        
+
         if not valid:
             logger.error(message)
             return validation_error(body={'message': message}, event=event)
-        
+
+        # Optional scope: defaults to GLOBAL when the databaseId query param is absent
+        database_id = query_parameters.get("databaseId")
+
         # Delete tag type
-        result = delete_tag_type(tag_type_name, claims_and_roles)
+        result = delete_tag_type(tag_type_name, claims_and_roles, database_id)
         
         return success(body=result.dict())
         

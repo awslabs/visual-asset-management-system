@@ -128,8 +128,8 @@ Each object type supports specific constraint fields that can be used in criteri
 | `pipeline`       | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
 | `workflow`       | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                    |
 | `metadataSchema` | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                      |
-| `tag`            | `tagName`                                                               | Tag CRUD operations.                                                             |
-| `tagType`        | `tagTypeName`                                                           | Tag type CRUD operations.                                                        |
+| `tag`            | `tagName`, `databaseId`                                                 | Tag CRUD operations.                                                             |
+| `tagType`        | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                        |
 | `role`           | `roleName`                                                              | Role management.                                                                 |
 | `userRole`       | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
 
@@ -172,6 +172,24 @@ When granting access to GLOBAL resources, always use the `equals` operator with 
 ```
 
 For roles scoped to a specific database, you typically need two constraints per entity type (pipeline, workflow, metadataSchema) -- one for the specific database and one for `GLOBAL` -- to ensure users can access both database-specific and shared resources.
+
+### Scoping tag management to a database
+
+Tags and tag types can be global (available in every database) or scoped to a single database, and the `tag` and `tagType` object types support a `databaseId` constraint field. A role granted `tag`/`tagType` write actions (`PUT`, `POST`, `DELETE`) constrained to a `databaseId` can create, update, and delete tags and tag types scoped to that database, while read access can stay unconstrained so the role sees every tag.
+
+```json
+{
+    "objectType": "tag",
+    "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "my-project-db" }],
+    "groupPermissions": [
+        { "action": "PUT", "type": "allow" },
+        { "action": "POST", "type": "allow" },
+        { "action": "DELETE", "type": "allow" }
+    ]
+}
+```
+
+Global tags and tag types (those with no database scope, or `databaseId` equal to `GLOBAL`) require an unconstrained tag or tag type write permission to manage. The `database-tag-admin` permission template combines unconstrained read access with database-scoped write access for this pattern.
 
 ## Allow and deny effects
 

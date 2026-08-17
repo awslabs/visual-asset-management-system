@@ -85,6 +85,7 @@ export function buildCreateTagTypeFunction(
     });
 
     storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

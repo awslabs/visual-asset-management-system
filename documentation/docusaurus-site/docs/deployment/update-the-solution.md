@@ -361,6 +361,14 @@ steps here.
 The v3 indexes are empty after the v2.6 CDK deploy, so the first migration run never needs to clear them. Pass `--clear-indexes` only if a previous run partially populated v3 and you want to start clean.
 :::
 
+:::note[Tag namespacing migration]
+v2.6 adds per-database tag namespacing, backed by the new composite-key `TagStorageTableV2` and `TagTypeStorageTableV2` DynamoDB tables (the former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources). The default migration run above includes the `tagsNamespacing` step, which copies every existing tag and tag type into the new tables under the `GLOBAL` partition, so all previously existing tags become GLOBAL tags. Asset tag lists are unchanged. The step is idempotent (already-copied rows are skipped on re-run) and can be run on its own:
+
+```bash
+python v2.5_to_v2.6_migration.py --config my_migration_config.json --steps tagsNamespacing
+```
+:::
+
 :::warning[Provisioned OpenSearch 3.5 upgrade]
 The v2.6 CDK switches `OPENSEARCH_VERSION` to `OPENSEARCH_3_5`. This applies only to provisioned deployments (`app.openSearch.useProvisioned.enabled = true`); serverless collections are unaffected. Amazon OpenSearch Service supports in-place version upgrades, but a major-version jump on a long-running domain can occasionally fail or exceed the CloudFormation custom-resource timeout.
 

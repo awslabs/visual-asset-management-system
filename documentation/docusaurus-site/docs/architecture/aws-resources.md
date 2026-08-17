@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 51 Amazon DynamoDB tables for persistent data storage — 46 read by Lambda handlers and 5 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 53 Amazon DynamoDB tables for persistent data storage — 46 read by Lambda handlers and 7 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 All tables use a `RETAIN` removal policy, so they and their data survive `cdk destroy` and require manual deletion. Because every table is auto-named by AWS CloudFormation (no explicit `tableName`), a retained orphan never collides with the freshly named table a redeploy creates. See [Uninstall the solution — Step 3: Delete DynamoDB tables](../deployment/uninstall.md#step-3-delete-dynamodb-tables) for cleanup steps.
 
@@ -101,14 +101,18 @@ These tables are read only by the data-migration tooling, never by a Lambda hand
 | AssetVersionsStorageTable     | `assetId`                | `assetVersionId` | --        | --                                                                 | Asset version migration source        |
 | AssetFileVersionsStorageTable | `assetId:assetVersionId` | `fileKey`        | --        | --                                                                 | File version migration source         |
 | AssetLinksStorageTable        | `assetIdFrom`            | `assetIdTo`      | --        | `AssetIdFromGSI` (PK: assetIdFrom), `AssetIdToGSI` (PK: assetIdTo) | Asset relationship migration source   |
+| TagStorageTable               | `tagName`                | --               | --        | --                                                                 | Tag definitions migration source      |
+| TagTypeStorageTable           | `tagTypeName`            | --               | --        | --                                                                 | Tag type definitions migration source |
 
 ### Classification and Configuration Tables
 
-| Table                         | Partition Key (PK) | Sort Key (SK)                 | Purpose                                                |
-| ----------------------------- | ------------------ | ----------------------------- | ------------------------------------------------------ |
-| TagStorageTable               | `tagName`          | --                            | Tag definitions                                        |
-| TagTypeStorageTable           | `tagTypeName`      | --                            | Tag type (category) definitions                        |
-| SubscriptionsStorageTable     | `eventName`        | `entityName_entityId`         | Event notification subscriptions                       |
+Tags and tag types are database-namespaced: the partition key is the `databaseId` (the literal `GLOBAL` for global entries) and the sort key is the name, so `(databaseId, name)` is unique and the same name can exist in different databases. Each table has a name GSI for cross-database name lookups (for example, to detect that a name a new GLOBAL entry is taking is already used by a database, which is allowed but reported as a warning). The former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources (see [Migration Source Tables](#migration-source-tables)).
+
+| Table                         | Partition Key (PK) | Sort Key (SK)                 | Purpose                                                                             |
+| ----------------------------- | ------------------ | ----------------------------- | ----------------------------------------------------------------------------------- |
+| TagStorageTableV2             | `databaseId`       | `tagName`                     | Tag definitions (GSI `tagNameIndex`, PK: tagName)                                   |
+| TagTypeStorageTableV2         | `databaseId`       | `tagTypeName`                 | Tag type (category) definitions (GSI `tagTypeNameIndex`, PK: tagTypeName)           |
+| SubscriptionsStorageTable     | `eventName`        | `entityName_entityId`         | Event notification subscriptions                                                    |
 | AppFeatureEnabledStorageTable | `featureName`      | --                            | Enabled feature flags                                  |
 | S3AssetBucketsStorageTable    | `bucketId`         | `bucketName:baseAssetsPrefix` | Registered asset bucket records (GSI: `bucketNameGSI`) |
 

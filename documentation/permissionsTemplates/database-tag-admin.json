@@ -1,0 +1,93 @@
+{
+    "metadata": {
+        "name": "Database Tag Admin",
+        "description": "Manage tags and tag types scoped to a specific database, and read all tags and tag types. Write access (create, update, delete) is limited to tags and tag types scoped to the given database; global tags and tag types (databaseId GLOBAL) remain read-only for this role.",
+        "version": "1.0"
+    },
+    "variables": [
+        {
+            "name": "DATABASE_ID",
+            "required": true,
+            "description": "The databaseId to scope tag and tag type management to"
+        },
+        { "name": "ROLE_NAME", "required": true, "description": "The role name to create" }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-web-routes",
+            "description": "Allow navigation to the tag management pages for {{ROLE_NAME}}",
+            "objectType": "web",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/tags" },
+                { "field": "route__path", "operator": "starts_with", "value": "/tag-types" }
+            ],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes",
+            "description": "Allow API access to tag and tag type routes for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                { "field": "route__path", "operator": "starts_with", "value": "/tags" },
+                { "field": "route__path", "operator": "starts_with", "value": "/tag-types" }
+            ],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-tags-read",
+            "description": "Allow read-only access to all tags",
+            "objectType": "tag",
+            "criteriaAnd": [{ "field": "tagName", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-tagtypes-read",
+            "description": "Allow read-only access to all tag types",
+            "objectType": "tagType",
+            "criteriaAnd": [{ "field": "tagTypeName", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-tags-scoped",
+            "description": "Allow create, update, and delete of tags scoped to {{DATABASE_ID}}",
+            "objectType": "tag",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-tagtypes-scoped",
+            "description": "Allow create, update, and delete of tag types scoped to {{DATABASE_ID}}",
+            "objectType": "tagType",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        }
+    ]
+}

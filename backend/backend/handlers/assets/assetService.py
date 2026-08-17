@@ -1105,8 +1105,37 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         asset['isDistributable'] = update_data['isDistributable']
     
     if 'tags' in update_data:
-        asset['tags'] = update_data['tags']
-    
+        new_tags = update_data['tags']
+        # Tags must resolve within this asset's own database partition plus the shared GLOBAL
+        # partition, so an edit cannot adopt another database's tags. Imported lazily to avoid a
+        # module-load dependency.
+        from handlers.assets.createAsset import (
+            validate_tags_exist,
+            verify_all_required_tags_satisfied,
+        )
+
+        # Only tags the edit ADDS are validated. A tag that was deleted after being applied stays on
+        # the asset, and re-submitting it — which every edit does, even one that only changes the
+        # description — must not fail. The asset keeps such a tag and the user can remove it; they
+        # simply cannot add it again, because it no longer resolves in scope.
+        existing_tags = asset.get('tags') or []
+        added_tags = [tag for tag in new_tags if tag not in existing_tags]
+        # The shared validators raise ValueError, which this handler does not translate — it
+        # would surface as a 500. Re-raised as VAMSGeneralErrorResponse so a rejected tag is a
+        # 400 with its reason, matching the create path.
+        try:
+            validate_tags_exist(added_tags, databaseId)
+
+            # Required tag types are enforced only when the tag set actually changes, so an asset whose
+            # tags predate a newly-required type is still editable in every other respect.
+            if sorted(new_tags) != sorted(existing_tags):
+                verify_all_required_tags_satisfied(new_tags, databaseId)
+
+        except ValueError as tag_error:
+            logger.warning(f"Asset tag update rejected: {tag_error}")
+            raise VAMSGeneralErrorResponse(str(tag_error))
+        asset['tags'] = new_tags
+
     # Save the updated asset
     try:
         asset_table.put_item(Item=asset)
@@ -1991,6 +2020,9 @@ def handle_put_request(event):
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except ValueError as v:
+        logger.exception(f"Value error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

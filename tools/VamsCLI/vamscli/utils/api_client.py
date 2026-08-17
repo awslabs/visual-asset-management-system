@@ -1653,21 +1653,28 @@ class APIClient:
 
     # Tag Management API Methods
 
-    def get_tags(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def get_tags(self, params: Dict[str, Any] = None, database_id: str = None,
+                 scope: str = None) -> Dict[str, Any]:
         """
         List all tags using the /tags GET endpoint.
-        
+
         Args:
             params: Optional pagination parameters (maxItems, pageSize, startingToken)
-        
+            database_id: Optional database to scope results to (returns only tags scoped to this database; global tags are not included -- use scope='global'/'all' for those)
+            scope: Optional scope filter ('global' = global tags only; 'all' = every tag)
+
         Returns:
             API response data with tags list
-        
+
         Raises:
             APIError: When API call fails
         """
         try:
-            query_params = params or {}
+            query_params = dict(params) if params else {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            if scope:
+                query_params['scope'] = scope
             response = self.get(API_TAGS, include_auth=True, params=query_params)
             return response.json()
             
@@ -1761,23 +1768,27 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to update tags: {e}")
 
-    def delete_tag(self, tag_id: str) -> Dict[str, Any]:
+    def delete_tag(self, tag_id: str, database_id: str = None) -> Dict[str, Any]:
         """
         Delete a tag using the /tags/{tagId} DELETE endpoint.
-        
+
         Args:
             tag_id: Tag ID (tag name)
-        
+            database_id: Optional database the tag is scoped to (omit for a global tag)
+
         Returns:
             API response data with deletion result
-        
+
         Raises:
             TagNotFoundError: When tag is not found
             APIError: When API call fails
         """
         try:
             endpoint = API_TAG_DELETE.format(tagId=tag_id)
-            response = self.delete(endpoint, include_auth=True)
+            query_params = {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            response = self.delete(endpoint, include_auth=True, params=query_params)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -1796,21 +1807,28 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to delete tag: {e}")
 
-    def get_tag_types(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def get_tag_types(self, params: Dict[str, Any] = None, database_id: str = None,
+                      scope: str = None) -> Dict[str, Any]:
         """
         List all tag types using the /tag-types GET endpoint.
-        
+
         Args:
             params: Optional pagination parameters (maxItems, pageSize, startingToken)
-        
+            database_id: Optional database to scope results to (returns only tag types scoped to this database; global tag types are not included -- use scope='global'/'all' for those)
+            scope: Optional scope filter ('global' = global tag types only; 'all' = every tag type)
+
         Returns:
             API response data with tag types list
-        
+
         Raises:
             APIError: When API call fails
         """
         try:
-            query_params = params or {}
+            query_params = dict(params) if params else {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            if scope:
+                query_params['scope'] = scope
             response = self.get(API_TAG_TYPES, include_auth=True, params=query_params)
             return response.json()
             
@@ -1895,16 +1913,17 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to update tag types: {e}")
 
-    def delete_tag_type(self, tag_type_id: str) -> Dict[str, Any]:
+    def delete_tag_type(self, tag_type_id: str, database_id: str = None) -> Dict[str, Any]:
         """
         Delete a tag type using the /tag-types/{tagTypeId} DELETE endpoint.
-        
+
         Args:
             tag_type_id: Tag type ID (tag type name)
-        
+            database_id: Optional database the tag type is scoped to (omit for a global tag type)
+
         Returns:
             API response data with deletion result
-        
+
         Raises:
             TagTypeNotFoundError: When tag type is not found
             TagTypeInUseError: When tag type is currently in use by tags
@@ -1912,7 +1931,10 @@ class APIClient:
         """
         try:
             endpoint = API_TAG_TYPE_DELETE.format(tagTypeId=tag_type_id)
-            response = self.delete(endpoint, include_auth=True)
+            query_params = {}
+            if database_id:
+                query_params['databaseId'] = database_id
+            response = self.delete(endpoint, include_auth=True, params=query_params)
             return response.json()
             
         except requests.exceptions.HTTPError as e:

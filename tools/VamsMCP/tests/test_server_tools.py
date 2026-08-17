@@ -145,6 +145,51 @@ def test_list_workflow_executions_omits_absent_filters(mock_client):
     assert kwargs["workflow_database_id"] is None
 
 
+# --- list_tags / list_tag_types database + scope --------------------------
+
+
+def test_list_tags_forwards_database_and_scope(mock_client):
+    """database/scope must reach get_tags by KEYWORD as database_id/scope, or the tag namespacing
+    filter silently does nothing."""
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tags(database="db1", scope="all")
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tags.call_args.kwargs
+    assert kwargs["database_id"] == "db1"
+    assert kwargs["scope"] == "all"
+
+
+def test_list_tags_omits_absent_database_and_scope(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tags()
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tags.call_args.kwargs
+    assert kwargs["database_id"] is None
+    assert kwargs["scope"] is None
+
+
+def test_list_tag_types_forwards_database_and_scope(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tag_types(database="db1", scope="global")
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tag_types.call_args.kwargs
+    assert kwargs["database_id"] == "db1"
+    assert kwargs["scope"] == "global"
+
+
+def test_list_tag_types_omits_absent_database_and_scope(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_tag_types()
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    kwargs = mock_client.api.get_tag_types.call_args.kwargs
+    assert kwargs["database_id"] is None
+    assert kwargs["scope"] is None
+
+
 @pytest.mark.asyncio
 async def test_read_tools_registered():
     tools = await server.mcp.list_tools()

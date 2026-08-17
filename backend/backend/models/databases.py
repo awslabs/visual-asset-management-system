@@ -79,6 +79,12 @@ class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
         if isinstance(database_id, str) and database_id.strip().lower() in RESERVED_S3_PREFIX_FOLDERS:
             raise ValueError("databaseId is invalid. It matches a reserved keyword and cannot be used.")
 
+        # "GLOBAL" is the reserved scope sentinel for database-specific tags/tag types
+        # (a global tag has databaseId == "GLOBAL"). A database literally named GLOBAL
+        # would collide with that sentinel, so it is not allowed as a databaseId.
+        if isinstance(database_id, str) and database_id.strip().upper() == "GLOBAL":
+            raise ValueError("databaseId is invalid. 'GLOBAL' is a reserved keyword and cannot be used.")
+
         return values
 
 class CreateDatabaseResponseModel(BaseModel, extra='ignore'):

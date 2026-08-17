@@ -416,16 +416,38 @@ def list_workflow_executions(
 
 @mcp.tool()
 @tool_result
-def list_tags(max_items: Optional[int] = None) -> Dict[str, Any]:
-    """List all tags."""
-    return CLIENT.paginate(lambda params: CLIENT.api.get_tags(params=params), max_items=max_items)
+def list_tags(
+    database: Optional[str] = None,
+    scope: Optional[str] = None,
+    max_items: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List all tags.
+
+    database: restrict to only that database's tags (global tags are not included; use scope='global'/'all' for those).
+    scope: 'global' for global tags only, 'all' for every tag.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.get_tags(params=params, database_id=database, scope=scope),
+        max_items=max_items,
+    )
 
 
 @mcp.tool()
 @tool_result
-def list_tag_types(max_items: Optional[int] = None) -> Dict[str, Any]:
-    """List all tag types."""
-    return CLIENT.paginate(lambda params: CLIENT.api.get_tag_types(params=params), max_items=max_items)
+def list_tag_types(
+    database: Optional[str] = None,
+    scope: Optional[str] = None,
+    max_items: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List all tag types.
+
+    database: restrict to only that database's tag types (global tag types are not included; use scope='global'/'all' for those).
+    scope: 'global' for global tag types only, 'all' for every tag type.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.get_tag_types(params=params, database_id=database, scope=scope),
+        max_items=max_items,
+    )
 
 
 @mcp.tool()

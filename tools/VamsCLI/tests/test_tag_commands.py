@@ -482,7 +482,7 @@ class TestTagDeleteCommand:
             assert 'urgent' in result.output
             
             # Verify API call
-            mocks['api_client'].delete_tag.assert_called_once_with('urgent')
+            mocks['api_client'].delete_tag.assert_called_once_with('urgent', database_id=None)
     
     def test_delete_json_output(self, cli_runner, tag_command_mocks):
         """Test tag deletion with JSON output."""

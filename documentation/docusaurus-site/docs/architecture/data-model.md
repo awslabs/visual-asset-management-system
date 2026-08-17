@@ -481,10 +481,12 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 
 | Table                     | Partition Key | Sort Key                   |
 | ------------------------- | ------------- | -------------------------- |
-| TagStorageTable           | `tagName`     | --                         |
-| TagTypeStorageTable       | `tagTypeName` | --                         |
+| TagStorageTableV2         | `databaseId`  | `tagName`                  |
+| TagTypeStorageTableV2     | `databaseId`  | `tagTypeName`              |
 | SubscriptionsStorageTable | `eventName`   | `entityName_entityId`      |
 | CommentStorageTable       | `assetId`     | `assetVersionId:commentId` |
+
+Tags and tag types are database-namespaced. The partition key is the `databaseId` — the literal `GLOBAL` for global entries — and the sort key is the name, so `(databaseId, name)` is the uniqueness boundary and the same name can exist in different databases. Each table carries a name GSI (`tagNameIndex` on `TagStorageTableV2`, `tagTypeNameIndex` on `TagTypeStorageTableV2`) for cross-database name lookups. The former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources.
 
 ### Configuration Tables
 

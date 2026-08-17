@@ -106,9 +106,11 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
     "web": {"label": "Web", "fields": [
         {"label": "Route Path", "value": "route__path"}]},
     "tag": {"label": "Tag", "fields": [
-        {"label": "Tag Name", "value": "tagName"}]},
+        {"label": "Tag Name", "value": "tagName"},
+        {"label": "Database ID", "value": "databaseId"}]},
     "tagType": {"label": "Tag Type", "fields": [
-        {"label": "Tag Type Name", "value": "tagTypeName"}]},
+        {"label": "Tag Type Name", "value": "tagTypeName"},
+        {"label": "Database ID", "value": "databaseId"}]},
     "role": {"label": "Role", "fields": [
         {"label": "Role Name", "value": "roleName"}]},
     "userRole": {"label": "User Role", "fields": [
@@ -285,9 +287,11 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
     "web": {"label": "Web", "fields": [
         {"label": "Route Path", "value": "route__path"}]},
     "tag": {"label": "Tag", "fields": [
-        {"label": "Tag Name", "value": "tagName"}]},
+        {"label": "Tag Name", "value": "tagName"},
+        {"label": "Database ID", "value": "databaseId"}]},
     "tagType": {"label": "Tag Type", "fields": [
-        {"label": "Tag Type Name", "value": "tagTypeName"}]},
+        {"label": "Tag Type Name", "value": "tagTypeName"},
+        {"label": "Database ID", "value": "databaseId"}]},
     "role": {"label": "Role", "fields": [
         {"label": "Role Name", "value": "roleName"}]},
     "userRole": {"label": "User Role", "fields": [

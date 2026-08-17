@@ -108,6 +108,11 @@ To use a non-default profile, add `"env": { "VAMS_PROFILE": "myprofile" }`.
 `list_tag_types`, `list_metadata_schemas`, `generate_download_url`,
 `find_and_summarize`.
 
+`list_tags` and `list_tag_types` accept an optional `database` (return ONLY that
+database's tags/tag types — global ones are not included) and `scope` (`global`
+for global-only, `all` for every tag/tag type across databases). To see a
+database's tags together with the global ones, call once per scope and merge.
+
 Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 `list_pipeline_templates`, `get_pipeline_template`,
 `get_pipeline_template_tag_schema`, `get_workflow`, `list_workflow_triggers`,

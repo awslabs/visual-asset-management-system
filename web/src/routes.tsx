@@ -160,6 +160,13 @@ export const routeTable: RouteOption[] = [
         active: "#/auth/tags/",
     },
     {
+        // Tag administration is scoped to one database (or GLOBAL), carried in the path the same way
+        // the metadata-schema page carries it.
+        path: "/auth/tags/:databaseId",
+        Page: Tags,
+        active: "#/auth/tags/",
+    },
+    {
         path: "/auth/subscriptions",
         Page: Subscriptions,
         active: "#/auth/subscriptions/",

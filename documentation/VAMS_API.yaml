@@ -7075,11 +7075,28 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: databaseId
+                in: query
+                required: false
+                schema:
+                    type: string
+                description: >-
+                    Return ONLY the tags scoped to this database; global tags are not included.
+                    Use scope=global for global tags, or scope=all for every tag visible to the caller.
+              - name: scope
+                in: query
+                required: false
+                schema:
+                    type: string
+                    enum: [global, all]
+                description: >-
+                    'global' returns only global tags; 'all' returns every tag the caller
+                    is permitted to see. Omit for the caller's default visible set.
             security:
               - DefaultCognitoAuthorizer: []
         post:
             summary: "Create a new tag."
-            description: "Create a new tag with the specified name, description, and tag type. Tag names must be unique across all tag types."
+            description: "Create a new tag with the specified name, description, and tag type. Tag names are unique per database: the same name may exist in different databases. Creating a GLOBAL tag for a name a database already uses succeeds and returns a warnings array; creating a database-specific tag for a name a GLOBAL tag already uses is rejected."
             requestBody:
                 required: true
                 content:
@@ -7237,11 +7254,29 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: databaseId
+                in: query
+                required: false
+                schema:
+                    type: string
+                description: >-
+                    Return ONLY the tag types scoped to this database; global tag types are not
+                    included. Use scope=global for global tag types, or scope=all for all of them.
+              - name: scope
+                in: query
+                required: false
+                schema:
+                    type: string
+                    enum: [global, all]
+                description: >-
+                    'global' returns only global tag types; 'all' returns every tag type
+                    the caller is permitted to see. Omit for the caller's default visible
+                    set.
             security:
               - DefaultCognitoAuthorizer: []
         post:
             summary: "Create a new tag type."
-            description: "Create a new tag type with the specified name, description, and required flag. Tag type names must be unique."
+            description: "Create a new tag type with the specified name, description, and required flag. Tag type names are unique per database: the same name may exist in different databases. Creating a GLOBAL tag type for a name a database already uses succeeds and returns a warnings array; creating a database-specific tag type for a name a GLOBAL tag type already uses is rejected."
             requestBody:
                 required: true
                 content:
@@ -10968,11 +11003,26 @@ components:
                 tagTypeName:
                     $ref: "#/components/schemas/object_name_pattern_regex"
                     description: "Tag type name that this tag belongs to"
+                databaseId:
+                    type: string
+                    nullable: true
+                    description: >-
+                        Scope of the tag. Omit or set to 'GLOBAL' for a global tag; set a
+                        database ID to scope the tag to that database. Tag names are unique
+                        per database, so the same name may exist in different databases.
+                        A GLOBAL tag may be created for a name a database already uses
+                        (the response then carries a warnings array); a database-specific
+                        tag may not take a name a GLOBAL tag already uses.
+                        The referenced database must exist, and a scoped tag may reference
+                        a tag type in the tag's own scope: a GLOBAL tag requires a
+                        GLOBAL tag type, and a database-scoped tag requires a tag type in
+                        that same database.
+                        Immutable after creation.
             required:
                 - tagName
                 - description
                 - tagTypeName
-        
+
         updateTagRequest:
             type: object
             properties:
@@ -10985,11 +11035,17 @@ components:
                 tagTypeName:
                     $ref: "#/components/schemas/object_name_pattern_regex"
                     description: "Updated tag type name"
+                databaseId:
+                    type: string
+                    nullable: true
+                    description: >-
+                        Scope of the tag (omit or 'GLOBAL' for a global tag). A tag's scope
+                        is fixed at creation and cannot be changed by an update.
             required:
                 - tagName
                 - description
                 - tagTypeName
-        
+
         tagResponse:
             type: object
             properties:
@@ -11007,11 +11063,17 @@ components:
                     enum: ["True", "False"]
                     description: "Whether this tag is required (inherited from tag type)"
                     default: "False"
+                databaseId:
+                    type: string
+                    nullable: true
+                    description: >-
+                        Scope of the tag. 'GLOBAL' (or null) indicates a global tag;
+                        otherwise the ID of the database the tag is scoped to.
             required:
                 - tagName
                 - description
                 - tagTypeName
-        
+
         tagOperationResponse:
             type: object
             properties:
@@ -11032,6 +11094,16 @@ components:
                     type: string
                     format: date-time
                     description: "Timestamp of the operation"
+                warnings:
+                    type: array
+                    nullable: true
+                    items:
+                        type: string
+                    description: >-
+                        Advisories about an operation that succeeded. Returned when a GLOBAL
+                        entry is created for a name a database already uses: both entries then
+                        appear on asset forms until the database-specific one is removed.
+                        Absent when there is nothing to report.
             required:
                 - success
                 - message
@@ -11062,12 +11134,27 @@ components:
                 required:
                     type: string
                     enum: ["True", "False"]
-                    description: "Whether tags of this type are required"
+                    description: >-
+                        Whether an asset must carry a tag of this type. Enforced only while the
+                        tag type has tags: a required tag type with no tags cannot be satisfied,
+                        so asset creation and asset updates skip it.
                     default: "False"
+                databaseId:
+                    type: string
+                    nullable: true
+                    description: >-
+                        Scope of the tag type. Omit or set to 'GLOBAL' for a global tag
+                        type; set a database ID to scope it to that database. Tag type
+                        names are unique per database, so the same name may exist in
+                        different databases. A GLOBAL tag type may be created for a name
+                        a database already uses (the response then carries a warnings
+                        array); a database-specific tag type may not take a name a GLOBAL
+                        tag type already uses. The referenced database must exist.
+                        Immutable after creation.
             required:
                 - tagTypeName
                 - description
-        
+
         updateTagTypeRequest:
             type: object
             properties:
@@ -11082,10 +11169,17 @@ components:
                     enum: ["True", "False"]
                     description: "Updated required flag"
                     default: "False"
+                databaseId:
+                    type: string
+                    nullable: true
+                    description: >-
+                        Scope of the tag type (omit or 'GLOBAL' for a global tag type). A
+                        tag type's scope is fixed at creation and cannot be changed by an
+                        update.
             required:
                 - tagTypeName
                 - description
-        
+
         tagTypeResponse:
             type: object
             properties:
@@ -11098,7 +11192,10 @@ components:
                 required:
                     type: string
                     enum: ["True", "False"]
-                    description: "Whether tags of this type are required"
+                    description: >-
+                        Whether an asset must carry a tag of this type. Enforced only while the
+                        tag type has tags: a required tag type with no tags cannot be satisfied,
+                        so asset creation and asset updates skip it.
                     default: "False"
                 tags:
                     type: array
@@ -11106,6 +11203,12 @@ components:
                         type: string
                     description: "List of tag names associated with this tag type"
                     default: []
+                databaseId:
+                    type: string
+                    nullable: true
+                    description: >-
+                        Scope of the tag type. 'GLOBAL' (or null) indicates a global tag
+                        type; otherwise the ID of the database the tag type is scoped to.
             required:
                 - tagTypeName
                 - description
@@ -11131,6 +11234,16 @@ components:
                     type: string
                     format: date-time
                     description: "Timestamp of the operation"
+                warnings:
+                    type: array
+                    nullable: true
+                    items:
+                        type: string
+                    description: >-
+                        Advisories about an operation that succeeded. Returned when a GLOBAL
+                        entry is created for a name a database already uses: both entries then
+                        appear on asset forms until the database-specific one is removed.
+                        Absent when there is nothing to report.
             required:
                 - success
                 - message

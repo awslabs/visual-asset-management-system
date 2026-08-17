@@ -22,6 +22,9 @@ import {
     FlashbarProps,
 } from "@cloudscape-design/components";
 import DatabaseSelectorWithModal from "../components/selectors/DatabaseSelectorWithModal";
+import DatabaseSelectionRequired from "../components/selectors/DatabaseSelectionRequired";
+import Synonyms from "../synonyms";
+import { scopeDisplayLabel } from "../common/utils/databaseScope";
 import { CreateEditSchemaModal } from "../components/metadataSchema/CreateEditSchemaModal";
 import { DeleteSchemaModal } from "../components/metadataSchema/DeleteSchemaModal";
 import {
@@ -233,17 +236,17 @@ export default function MetadataSchemaPage() {
         return tabs;
     };
 
-    // Show database selector if no database selected
+    // No database chosen yet: the choice is rendered inline, not as a modal. A modal can always be
+    // dismissed (Cloudscape renders the close control unconditionally), and dismissing this one left
+    // the page completely empty with no way back.
     if (!databaseId) {
         return (
-            <DatabaseSelectorWithModal
-                open={databaseSelectModalOpen}
-                setOpen={setDatabaseSelectModalOpen}
-                showGlobal={true}
-                onSelectorChange={(event: any) => {
+            <DatabaseSelectionRequired
+                title="Metadata Schemas"
+                description={`Schemas are defined per ${Synonyms.database}.`}
+                onSelect={(event: any) => {
                     const id = event?.detail?.selectedOption?.value;
                     if (id) {
-                        setDatabaseSelectModalOpen(false);
                         navigate(`/metadataschema/${id}`);
                     }
                 }}
@@ -272,7 +275,11 @@ export default function MetadataSchemaPage() {
                                 </Button>
                             </SpaceBetween>
                         }
-                        description={databaseId ? `Database: ${databaseId}` : undefined}
+                        description={
+                            databaseId
+                                ? `${Synonyms.Database}: ${scopeDisplayLabel(databaseId)}`
+                                : undefined
+                        }
                     >
                         Metadata Schemas
                     </Header>

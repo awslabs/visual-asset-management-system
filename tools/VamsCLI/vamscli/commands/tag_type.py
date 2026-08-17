@@ -115,22 +115,25 @@ def tag_type():
 @click.option('--tag-type-name', help='Tag type name (required unless using --json-input)')
 @click.option('--description', help='Tag type description (required unless using --json-input)')
 @click.option('--required', is_flag=True, help='Mark this tag type as required')
+@click.option('--database', 'database_id', help='Scope the tag type to this database (omit for a global tag type)')
 @click.option('--json-input', help='JSON input file path or JSON string with tag type data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def create(ctx: click.Context, tag_type_name: Optional[str], description: Optional[str],
-          required: bool, json_input: Optional[str], json_output: bool):
+          required: bool, database_id: Optional[str], json_input: Optional[str], json_output: bool):
     """
     Create a new tag type in VAMS.
 
     This command creates a new tag type with the specified name and description.
     You can provide tag type details via individual options or use --json-input for
-    complex data structures.
+    complex data structures. Use --database to scope the tag type to a database; omit
+    it for a global tag type.
 
     Examples:
         vamscli tag-type create --tag-type-name "priority" --description "Priority levels"
         vamscli tag-type create --tag-type-name "status" --description "Processing status" --required
+        vamscli tag-type create --tag-type-name "equipment" --description "Equipment types" --database factory-db
         vamscli tag-type create --json-input '{"tagTypeName":"priority","description":"Priority levels","required":"True"}'
         vamscli tag-type create --json-input tag-types.json --json-output
     """
@@ -156,6 +159,8 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
                 'description': description,
                 'required': 'True' if required else 'False'
             }
+            if database_id:
+                tag_types_data['databaseId'] = database_id
 
         output_status("Creating tag type(s)...", json_output)
         
@@ -164,7 +169,12 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
         
         def format_create_result(data):
             """Format create result for CLI display."""
-            return f"  Message: {data.get('message', 'Tag types created')}"
+            lines = [f"  Message: {data.get('message', 'Tag types created')}"]
+            # A create can succeed WITH advisories — most notably a global entry created
+            # over a name a database already uses. Silence would hide it.
+            for warning in data.get('warnings') or []:
+                lines.append(f"  Warning: {warning}")
+            return '\n'.join(lines)
         
         output_result(
             result,
@@ -195,20 +205,23 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
 @click.option('--tag-type-name', help='Tag type name to update (required unless using --json-input)')
 @click.option('--description', help='New tag type description')
 @click.option('--required/--not-required', default=None, help='Update required flag')
+@click.option('--database', 'database_id', help='Scope the tag type to this database (omit for a global tag type)')
 @click.option('--json-input', help='JSON input file path or JSON string with tag type data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def update(ctx: click.Context, tag_type_name: Optional[str], description: Optional[str],
-          required: Optional[bool], json_input: Optional[str], json_output: bool):
+          required: Optional[bool], database_id: Optional[str], json_input: Optional[str], json_output: bool):
     """
     Update an existing tag type in VAMS.
 
     This command updates an existing tag type's description and/or required flag.
     You can update individual fields or use --json-input for complex updates.
+    Use --database to target a tag type scoped to a database; omit it for a global tag type.
 
     Examples:
         vamscli tag-type update --tag-type-name "priority" --description "Updated description"
+        vamscli tag-type update --tag-type-name "equipment" --description "Updated" --database factory-db
         vamscli tag-type update --tag-type-name "priority" --required
         vamscli tag-type update --json-input '{"tagTypeName":"priority","description":"Updated","required":"True"}'
     """
@@ -257,6 +270,9 @@ def update(ctx: click.Context, tag_type_name: Optional[str], description: Option
                 'required': 'True' if required else ('False' if required is False else current_tag_type.get('required', 'False'))
             }
 
+        if database_id:
+            tag_types_data['databaseId'] = database_id
+
         output_status(f"Updating tag type '{tag_type_name or tag_types_data.get('tagTypeName', 'unknown')}'...", json_output)
         
         # Update the tag type(s)
@@ -294,19 +310,22 @@ def update(ctx: click.Context, tag_type_name: Optional[str], description: Option
 @tag_type.command()
 @click.argument('tag_type_name')
 @click.option('--confirm', is_flag=True, help='Confirm tag type deletion')
+@click.option('--database', 'database_id', help='Scope the tag type to this database (omit for a global tag type)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: bool):
+def delete(ctx: click.Context, tag_type_name: str, confirm: bool, database_id: Optional[str], json_output: bool):
     """
     Delete a tag type from VAMS.
-    
+
     This command permanently deletes a tag type. The --confirm flag is required
     to prevent accidental deletions. Tag types that are currently in use by tags
-    cannot be deleted.
-    
+    cannot be deleted. Use --database to target a tag type scoped to a database;
+    omit it for a global tag type.
+
     Examples:
         vamscli tag-type delete priority --confirm
+        vamscli tag-type delete equipment --confirm --database factory-db
         vamscli tag-type delete priority --confirm --json-output
     """
     # Setup/auth already validated by decorator
@@ -336,7 +355,7 @@ def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: b
         output_status(f"Deleting tag type '{tag_type_name}'...", json_output)
         
         # Delete the tag type
-        result = api_client.delete_tag_type(tag_type_name)
+        result = api_client.delete_tag_type(tag_type_name, database_id=database_id)
         
         def format_delete_result(data):
             """Format delete result for CLI display."""
@@ -374,30 +393,37 @@ def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: b
 
 @tag_type.command()
 @click.option('--show-tags', is_flag=True, help='Include associated tags in output')
+@click.option('--database', 'database_id', help='Show only tag types scoped to this database (use --scope global/all for global tag types)')
+@click.option('--scope', type=click.Choice(['global', 'all']), help='global = global tag types only; all = every tag type (admin)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, show_tags: bool, json_output: bool):
+def list(ctx: click.Context, show_tags: bool, database_id: Optional[str],
+         scope: Optional[str], json_output: bool):
     """
     List all tag types in VAMS.
-    
+
     This command lists all available tag types, optionally including
-    the tags associated with each type.
-    
+    the tags associated with each type. Use --database to list only the tag
+    types scoped to that database (global tag types are not included), or
+    --scope to list only global tag types (global) or every tag type (all).
+
     Examples:
         vamscli tag-type list
         vamscli tag-type list --show-tags
+        vamscli tag-type list --database factory-db
+        vamscli tag-type list --scope global
         vamscli tag-type list --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     output_status("Retrieving tag types...", json_output)
-    
+
     # Get the tag types
-    result = api_client.get_tag_types()
+    result = api_client.get_tag_types(database_id=database_id, scope=scope)
     
     def format_tag_types_result(data):
         """Format tag types result for CLI display."""

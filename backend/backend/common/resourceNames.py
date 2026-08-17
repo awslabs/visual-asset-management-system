@@ -50,6 +50,9 @@ class ResourceKeys:
     SUBSCRIPTIONS_STORAGE_TABLE = ResourceParamKey("dynamoTables/subscriptionsStorage", ("SUBSCRIPTIONS_STORAGE_TABLE_NAME",))
     TAG_STORAGE_TABLE = ResourceParamKey("dynamoTables/tagStorage", ("TAG_STORAGE_TABLE_NAME", "TAGS_STORAGE_TABLE_NAME"))
     TAG_TYPE_STORAGE_TABLE = ResourceParamKey("dynamoTables/tagTypeStorage", ("TAG_TYPES_STORAGE_TABLE_NAME",))
+    # Legacy single-key tag tables retained for per-database namespacing migration
+    TAG_STORAGE_TABLE_LEGACY = ResourceParamKey("dynamoTables/legacy/tagStorage", ("TAG_STORAGE_TABLE_LEGACY_NAME",))
+    TAG_TYPE_STORAGE_TABLE_LEGACY = ResourceParamKey("dynamoTables/legacy/tagTypeStorage", ("TAG_TYPES_STORAGE_TABLE_LEGACY_NAME",))
     USER_ROLES_STORAGE_TABLE = ResourceParamKey("dynamoTables/userRolesStorage", ("USER_ROLES_TABLE_NAME", "USER_ROLES_STORAGE_TABLE_NAME"))
     USER_STORAGE_TABLE = ResourceParamKey("dynamoTables/userStorage", ("USER_STORAGE_TABLE_NAME",))
     WORKFLOW_EXECUTIONS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowExecutionsStorage", ("WORKFLOW_EXECUTION_STORAGE_TABLE_NAME",))

@@ -102,6 +102,7 @@ class TestConstantsCompleteness:
     def test_all_keys_have_param_key_and_env_names(self, rn):
         keys = [v for k, v in vars(rn.ResourceKeys).items() if isinstance(v, rn.ResourceParamKey)]
         # 41 base resources + 10 workflow-execution V2 tables + 6 pipeline/workflow V2 tables
-        assert len(keys) == 57
+        # + 2 legacy tag tables (tag/tagType migration sources for per-database namespacing)
+        assert len(keys) == 59
         assert all(k.param_key and k.env_var_names for k in keys)
-        assert len({k.param_key for k in keys}) == 57
+        assert len({k.param_key for k in keys}) == 59

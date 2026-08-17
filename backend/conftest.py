@@ -122,6 +122,13 @@ common_log_redaction_early = import_module_from_path_early(
 )
 sys.modules['common.logRedaction'] = common_log_redaction_early
 
+# tagScope is imported at module level by the tag/tagType handlers.
+common_tag_scope_early = import_module_from_path_early(
+    'common.tagScope',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
+)
+sys.modules['common.tagScope'] = common_tag_scope_early
+
 # Set up mock imports
 import pytest
 from unittest.mock import MagicMock
@@ -225,6 +232,13 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
     )
     sys.modules['common.syncTracking'] = sync_tracking_module
+
+    # tagScope is a real module (tag/tag-type scope helpers); load it
+    tag_scope_module = import_module_from_path(
+        'common.tagScope',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
+    )
+    sys.modules['common.tagScope'] = tag_scope_module
 
     # common.auth modules are pure logic with no AWS state dependencies - load real modules
     auth_pkg_module = import_module_from_path(

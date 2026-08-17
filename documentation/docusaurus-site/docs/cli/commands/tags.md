@@ -7,6 +7,16 @@ title: Tag Commands
 
 Manage tags and tag types for organizing and categorizing assets in VAMS. Tags belong to tag types, which define classification categories. Tag types must exist before tags can reference them.
 
+:::note[Tag scope]
+Tags and tag types are either **GLOBAL** (available in every database) or scoped to one database.
+Omit `--database` to work with GLOBAL entries; pass `--database <id>` to scope to that database.
+Names are unique per database, so the same name may exist in several databases — but a name cannot
+be both GLOBAL and database-specific.
+
+On the `list` commands, `--database` returns **only** that database's entries; GLOBAL entries are
+not included. Use `--scope global` for GLOBAL only, or `--scope all` for everything. An asset
+resolves its tag names within its own database plus GLOBAL.
+:::
 :::note
 Both `tag` and `tag-type` create and update commands accept `--json-input` for batch operations. The value is either a JSON string or a path to a `.json` file (no `@` prefix). Batch operations are processed in a single request.
 :::
@@ -27,6 +37,7 @@ vamscli tag create [OPTIONS]
 | `--description`   | TEXT | Conditional | Tag description (required unless using `--json-input`)   |
 | `--tag-type-name` | TEXT | Conditional | Tag type name (required unless using `--json-input`)     |
 | `--json-input`    | TEXT | No          | JSON string or path to a JSON file with tag data (batch) |
+| `--database`      | TEXT | No          | Scope the tag to this database (omit for a GLOBAL tag)    |
 | `--json-output`   | Flag | No          | Output raw JSON response                                 |
 
 When `--json-input` is not used, `--tag-name`, `--description`, and `--tag-type-name` are all required. The referenced tag type must already exist.
@@ -63,6 +74,7 @@ vamscli tag update [OPTIONS]
 | `--description`   | TEXT | No          | New tag description                                       |
 | `--tag-type-name` | TEXT | No          | New tag type name                                         |
 | `--json-input`    | TEXT | No          | JSON string or path to a JSON file with tag data (batch)  |
+| `--database`      | TEXT | No          | Scope the tag to this database (omit for a GLOBAL tag)    |
 | `--json-output`   | Flag | No          | Output raw JSON response                                  |
 
 When not using `--json-input`, `--tag-name` is required and at least one of `--description` or `--tag-type-name` must be provided. The command retrieves the current tag first and preserves any field not supplied.
@@ -87,6 +99,7 @@ vamscli tag delete <TAG_NAME> [OPTIONS]
 | --------------- | ---- | -------- | ------------------------------- |
 | `TAG_NAME`      | TEXT | Yes      | Tag name to delete (positional) |
 | `--confirm`     | Flag | Yes      | Confirm deletion                |
+| `--database`   | TEXT | No       | The database the tag is scoped to (omit for a GLOBAL tag) |
 | `--json-output` | Flag | No       | Output raw JSON response        |
 
 :::warning[Confirmation required]
@@ -111,6 +124,8 @@ vamscli tag list [OPTIONS]
 | Option          | Type | Required | Description                                     |
 | --------------- | ---- | -------- | ----------------------------------------------- |
 | `--tag-type`    | TEXT | No       | Filter tags by tag type name (case-insensitive) |
+| `--database`    | TEXT | No       | Show only tags scoped to this database (GLOBAL tags excluded) |
+| `--scope`       | TEXT | No       | `global` for GLOBAL tags only, `all` for every tag        |
 | `--json-output` | Flag | No       | Output raw JSON response                        |
 
 The default output is a table of tag name, tag type, and description. Tags belonging to a required tag type are shown with an `[R]` indicator on the tag type. When more results are available, the output notes that additional tags can be retrieved through pagination.
@@ -137,9 +152,12 @@ vamscli tag-type create [OPTIONS]
 | `--description`   | TEXT | Conditional | Tag type description (required unless using `--json-input`) |
 | `--required`      | Flag | No          | Mark this tag type as required for asset classification     |
 | `--json-input`    | TEXT | No          | JSON string or path to a JSON file with tag type data       |
+| `--database`      | TEXT | No          | Scope the tag type to this database (omit for GLOBAL)     |
 | `--json-output`   | Flag | No          | Output raw JSON response                                    |
 
 When `--json-input` is not used, `--tag-type-name` and `--description` are both required. When `--json-input` is supplied, it provides the tag type data directly and the individual options are not required.
+
+A tag type created with `--required` takes effect once it has tags. Until then it does not constrain asset creation or updates, so a required tag type can be defined before its tags are added.
 
 The JSON input is a single flat tag type object, where the `required` field is the string `"True"` or `"False"`:
 
@@ -174,6 +192,7 @@ vamscli tag-type update [OPTIONS]
 | `--description`                 | TEXT | No          | New tag type description                                       |
 | `--required` / `--not-required` | Flag | No          | Update the required flag                                       |
 | `--json-input`                  | TEXT | No          | JSON string or path to a JSON file with tag type data          |
+| `--database`      | TEXT | No          | Scope the tag type to this database (omit for GLOBAL)     |
 | `--json-output`                 | Flag | No          | Output raw JSON response                                       |
 
 When not using `--json-input`, `--tag-type-name` is required and at least one of `--description` or `--required` / `--not-required` must be provided. The command retrieves the current tag type first and preserves any field not supplied.
@@ -199,6 +218,7 @@ vamscli tag-type delete <TAG_TYPE_NAME> [OPTIONS]
 | --------------- | ---- | -------- | ------------------------------------ |
 | `TAG_TYPE_NAME` | TEXT | Yes      | Tag type name to delete (positional) |
 | `--confirm`     | Flag | Yes      | Confirm deletion                     |
+| `--database`   | TEXT | No       | The database the tag is scoped to (omit for a GLOBAL tag) |
 | `--json-output` | Flag | No       | Output raw JSON response             |
 
 :::warning[Confirmation required]
@@ -223,6 +243,8 @@ vamscli tag-type list [OPTIONS]
 | Option          | Type | Required | Description                                |
 | --------------- | ---- | -------- | ------------------------------------------ |
 | `--show-tags`   | Flag | No       | Include associated tags in a detailed view |
+| `--database`    | TEXT | No       | Show only tag types scoped to this database (GLOBAL excluded) |
+| `--scope`       | TEXT | No       | `global` for GLOBAL tag types only, `all` for every tag type        |
 | `--json-output` | Flag | No       | Output raw JSON response                   |
 
 The default output is a table of name, description, required status, and tag count. Adding `--show-tags` switches to a detailed view that lists the tags associated with each tag type. When more results are available, the output notes that additional tag types can be retrieved through pagination.

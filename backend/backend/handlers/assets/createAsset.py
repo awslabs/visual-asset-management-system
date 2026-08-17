@@ -9,7 +9,6 @@ from datetime import datetime
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
-from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
@@ -24,6 +23,7 @@ from handlers.assets.assetCount import update_asset_count
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from common.tagScope import GLOBAL_SCOPE
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel
 
@@ -37,7 +37,6 @@ retry_config = Config(
 
 region = os.environ['AWS_REGION']
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-dynamodb_client = boto3.client('dynamodb', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
 logger = safeLogger(service_name="CreateAsset")
@@ -59,8 +58,8 @@ except Exception as e:
 asset_table = dynamodb.Table(asset_storage_table_name)
 database_table = dynamodb.Table(db_database)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
-deserializer = TypeDeserializer()
-paginator = dynamodb_client.get_paginator('scan')
+tag_table = dynamodb.Table(tag_table_name)
+tag_type_table = dynamodb.Table(tag_type_table_name)
 
 #######################
 # Utility Functions
@@ -171,101 +170,55 @@ def create_sns_topic_for_asset(database_id, asset_id):
         raise VAMSGeneralErrorResponse(f"Error creating SNS topic.")
 
 
-def get_set_tag_types(tags):
-    """Get unique tag types for a list of tags"""
+def _scopes_for_database(database_id):
+    """Return the tag/tag-type resolution scopes for an asset's database.
+
+    An asset's tags resolve within its own database partition plus the shared
+    GLOBAL partition; another database's partition is never in scope.
+    """
+    scopes = [GLOBAL_SCOPE]
+    if database_id and database_id != GLOBAL_SCOPE:
+        scopes.append(database_id)
+    return scopes
+
+def _query_scoped_items(table, database_id):
+    """Collect all items from the GLOBAL and database_id partitions of a composite table."""
+    items = []
+    for scope in _scopes_for_database(database_id):
+        query_kwargs = {'KeyConditionExpression': Key('databaseId').eq(scope)}
+        while True:
+            response = table.query(**query_kwargs)
+            items.extend(response.get('Items', []))
+            if 'LastEvaluatedKey' in response:
+                query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            else:
+                break
+    return items
+
+def get_set_tag_types(tags, database_id):
+    """Get unique tag types for a list of tags within the asset's DB + GLOBAL scope"""
     uniqueSetTagTypes = []
 
     # If no tags provided, return no tag types
     if tags is None or len(tags) == 0:
         return uniqueSetTagTypes
 
-    # Loop to get all tag results (to know their tag types)
-    rawTagItems = []
-    page_iteratorTags = paginator.paginate(
-        TableName=tag_table_name,
-        PaginationConfig={
-            'MaxItems': 1000,
-            'PageSize': 1000,
-        }
-    ).build_full_result()
-    if(len(page_iteratorTags["Items"]) > 0):
-        rawTagItems.extend(page_iteratorTags["Items"])
-        while("NextToken" in page_iteratorTags):
-            page_iteratorTags = paginator.paginate(
-                TableName=tag_table_name,
-                PaginationConfig={
-                    'MaxItems': 1000,
-                    'PageSize': 1000,
-                    'StartingToken': page_iteratorTags["NextToken"]
-                }
-            ).build_full_result()
-            if(len(page_iteratorTags["Items"]) > 0):
-                rawTagItems.extend(page_iteratorTags["Items"])
-
-    # Loop through every tag in the database
-    for tag in rawTagItems:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
-
+    # Loop through every in-scope tag (asset's database partition + GLOBAL)
+    for tag in _query_scoped_items(tag_table, database_id):
         # If the tags provided matches the tag looked up, add to uniqueSetTagTypes if it's not already part of the array
-        if deserialized_document["tagName"] in tags:
-            if deserialized_document["tagTypeName"] not in uniqueSetTagTypes:
-                uniqueSetTagTypes.append(deserialized_document["tagTypeName"])
+        if tag["tagName"] in tags:
+            if tag["tagTypeName"] not in uniqueSetTagTypes:
+                uniqueSetTagTypes.append(tag["tagTypeName"])
 
     return uniqueSetTagTypes
 
-def get_required_tag_types():
-    """Get tag types that are required for assets"""
-    # Loop to get all tag results for tag type
-    rawTagTypeItems = []
-    page_iteratorTags = paginator.paginate(
-        TableName=tag_type_table_name,
-        PaginationConfig={
-            'MaxItems': 1000,
-            'PageSize': 1000,
-        }
-    ).build_full_result()
-    if(len(page_iteratorTags["Items"]) > 0):
-        rawTagTypeItems.extend(page_iteratorTags["Items"])
-        while("NextToken" in page_iteratorTags):
-            page_iteratorTags = paginator.paginate(
-                TableName=tag_type_table_name,
-                PaginationConfig={
-                    'MaxItems': 1000,
-                    'PageSize': 1000,
-                    'StartingToken': page_iteratorTags["NextToken"]
-                }
-            ).build_full_result()
-            if(len(page_iteratorTags["Items"]) > 0):
-                rawTagTypeItems.extend(page_iteratorTags["Items"])
+def get_required_tag_types(database_id):
+    """Get tag types that are required for assets within the asset's DB + GLOBAL scope"""
+    # In-scope tag types (asset's database partition + GLOBAL)
+    rawTagTypeItems = _query_scoped_items(tag_type_table, database_id)
 
     # Get tags associated and then exclude tag types from required if no tags associated
-    # Loop to get all tag results for tag type
-    rawTagItems = []
-    page_iteratorTags = paginator.paginate(
-        TableName=tag_table_name,
-        PaginationConfig={
-            'MaxItems': 1000,
-            'PageSize': 1000,
-        }
-    ).build_full_result()
-    if(len(page_iteratorTags["Items"]) > 0):
-        rawTagItems.extend(page_iteratorTags["Items"])
-        while("NextToken" in page_iteratorTags):
-            page_iteratorTags = paginator.paginate(
-                TableName=tag_table_name,
-                PaginationConfig={
-                    'MaxItems': 1000,
-                    'PageSize': 1000,
-                    'StartingToken': page_iteratorTags["NextToken"]
-                }
-            ).build_full_result()
-            if(len(page_iteratorTags["Items"]) > 0):
-                rawTagItems.extend(page_iteratorTags["Items"])
-
-    tags = []
-    for tag in rawTagItems:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
-        tags.append(deserialized_document)
+    tags = _query_scoped_items(tag_table, database_id)
 
     formatted_tag_results = {}
     for tagResult in tags:
@@ -280,19 +233,17 @@ def get_required_tag_types():
     # Final tag required loops
     tagTypesRequired = []
     for tagType in rawTagTypeItems:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in tagType.items()}
-
         # if tagtype has "required" set to true and there are tags in formatted_tag_results for the type, add to list
-        if deserialized_document.get("required", "False") == "True":
-            if deserialized_document["tagTypeName"] in formatted_tag_results:
-                tagTypesRequired.append(deserialized_document["tagTypeName"])
+        if tagType.get("required", "False") == "True":
+            if tagType["tagTypeName"] in formatted_tag_results:
+                tagTypesRequired.append(tagType["tagTypeName"])
 
     return tagTypesRequired
 
-def verify_all_required_tags_satisfied(assetTags):
+def verify_all_required_tags_satisfied(assetTags, database_id):
     """Verify that all required tag types are satisfied by the asset tags"""
-    assetTagTypes = get_set_tag_types(assetTags)
-    requiredTagTypes = get_required_tag_types()
+    assetTagTypes = get_set_tag_types(assetTags, database_id)
+    requiredTagTypes = get_required_tag_types(database_id)
     missingTagTypesForError = []
 
     if requiredTagTypes is None or len(requiredTagTypes) == 0:
@@ -485,41 +436,26 @@ def create_initial_version_record(database_id, asset_id, version_id, description
 # API Implementation
 #######################
 
-def validate_tags_exist(tags):
-    """Validate that all provided tags exist in the database"""
+def validate_tags_exist(tags, database_id):
+    """Validate that all provided tags exist within the asset's DB + GLOBAL scope.
+
+    Tag names are resolved from only the GLOBAL partition and the asset's own
+    database partition, so an asset cannot reference another database's tags.
+    """
     if not tags:
         return True
-    
-    # Get all existing tags from database
-    rawTagItems = []
-    page_iterator = paginator.paginate(
-        TableName=tag_table_name,
-        PaginationConfig={'MaxItems': 1000, 'PageSize': 1000}
-    ).build_full_result()
-    
-    if len(page_iterator["Items"]) > 0:
-        rawTagItems.extend(page_iterator["Items"])
-        while "NextToken" in page_iterator:
-            page_iterator = paginator.paginate(
-                TableName=tag_table_name,
-                PaginationConfig={
-                    'MaxItems': 1000, 'PageSize': 1000,
-                    'StartingToken': page_iterator["NextToken"]
-                }
-            ).build_full_result()
-            if len(page_iterator["Items"]) > 0:
-                rawTagItems.extend(page_iterator["Items"])
-    
-    existing_tags = []
-    for tag in rawTagItems:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
-        existing_tags.append(deserialized_document["tagName"])
-    
-    # Check for invalid tags
+
+    # Gather valid tag names from the GLOBAL and asset-database partitions only
+    existing_tags = set()
+    for tag in _query_scoped_items(tag_table, database_id):
+        existing_tags.add(tag["tagName"])
+
+    # Check for invalid tags (present in neither GLOBAL nor the asset's database)
     invalid_tags = [tag for tag in tags if tag not in existing_tags]
     if invalid_tags:
-        raise ValueError(f"Invalid tags provided. Tags must exist in the system.")
-    
+        logger.error(f"Asset tags not found in database {database_id} or GLOBAL scope")
+        raise ValueError("Invalid tags provided. Tags must exist in the system.")
+
     return True
 
 def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3ExternalGenerated = False):
@@ -551,8 +487,8 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     
     # Validate tags exist in the system (only if we aren't generating from S3 external where we don't know tags)
     if not s3ExternalGenerated:
-        validate_tags_exist(request_model.tags)
-        verify_all_required_tags_satisfied(request_model.tags)
+        validate_tags_exist(request_model.tags, databaseId)
+        verify_all_required_tags_satisfied(request_model.tags, databaseId)
     
     # Create asset record
     now = datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')

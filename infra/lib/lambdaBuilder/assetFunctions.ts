@@ -124,6 +124,8 @@ export function buildAssetService(
     storageResources.dynamo.assetHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.tagStorageTable.grantReadData(fun);
+    storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);

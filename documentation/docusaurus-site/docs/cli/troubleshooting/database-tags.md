@@ -294,6 +294,97 @@ vamscli tag create --tag-name "urgent" --description "Urgent priority" --tag-typ
 
 Confirm the available tag types with `vamscli tag-type list`.
 
+### Tag or Tag Type Scope Conflict
+
+A tag or tag type name is rejected even though listing does not show it.
+
+**Symptoms:**
+
+-   `A global tag already uses this name.`
+-   `Tag already exists in this scope.`
+
+**Cause:**
+
+Names are unique **per database**, so the same name may exist in several databases. Across scopes the
+rule is asymmetric: a database-scoped create is rejected when a GLOBAL entry of that name exists,
+while a GLOBAL create over a name a database already uses succeeds and reports a warning.
+`vamscli tag list` without `--scope all` does not show every scope, so a conflicting entry can be
+invisible in the default listing.
+
+**Resolution:**
+
+-   Run `vamscli tag list --scope all` (or `vamscli tag-type list --scope all`) to see every scope
+    and find the conflicting entry.
+-   Choose a different name, or delete the conflicting entry with the matching `--database` value
+    (omit `--database` to target the GLOBAL entry).
+
+### Warning: This Name Is Also Used by a Database-Specific Entry
+
+A `tag create` or `tag-type create` without `--database` succeeds and prints a warning line.
+
+**Symptoms:**
+
+```
+✓ Tag(s) created successfully!
+  Message: Tag Status created successfully
+  Warning: This name is also used by a database-specific tag. Asset forms will list both entries
+  until the database-specific tag is removed.
+```
+
+**Cause:**
+
+The global entry was created for a name a database already uses. Both entries exist, so an asset in
+that database lists both in its tag picker.
+
+**Resolution:**
+
+-   Run `vamscli tag list --scope all` to find the database-specific entry.
+-   Delete it with `vamscli tag delete --tag-name <name> --database <databaseId> --confirm` once the
+    global entry covers the same meaning. Assets already carrying the name keep it.
+
+---
+
+### GLOBAL Must Be Capitalized
+
+A tag or tag type operation using the global sentinel is rejected as invalid.
+
+**Symptoms:**
+
+-   `databaseId is invalid. GLOBAL must be capitalized for this field is used.`
+
+**Cause:**
+
+`GLOBAL` is the reserved scope sentinel and is matched exactly. A lower-case or mixed-case value
+such as `global` is rejected rather than silently normalized, which would otherwise create a second
+partition that no listing resolves.
+
+**Resolution:**
+
+-   Pass `--database GLOBAL` in upper case, or omit `--database` entirely — a tag with no
+    `--database` is created as GLOBAL.
+-   A database itself can never be named `GLOBAL`; the name is reserved.
+
+---
+
+### Referenced Database Does Not Exist
+
+Creating a database-scoped tag or tag type fails on the database reference.
+
+**Symptoms:**
+
+-   `Referenced database does not exist.`
+
+**Cause:**
+
+A tag or tag type may only be scoped to a database that exists. The value passed to `--database`
+did not match any database.
+
+**Resolution:**
+
+-   List databases with `vamscli database list` and pass an exact `databaseId`.
+-   Create the database first, then scope the tag or tag type to it.
+
+---
 ### Tag or Tag Type Already Exists
 
 Creating a tag or tag type fails with a conflict.

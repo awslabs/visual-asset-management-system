@@ -48,11 +48,12 @@ class CreateTagRequestModel(BaseModel, extra='ignore'):
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     tagTypeName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     
+    databaseId: Optional[str] = None  # None/absent = global scope
     @root_validator
     def validate_fields(cls, values):
         """Validate tag fields using common validators"""
         logger.info("Validating tag creation parameters")
-        
+
         (valid, message) = validate({
             'tagName': {
                 'value': values.get('tagName'),
@@ -65,6 +66,12 @@ class CreateTagRequestModel(BaseModel, extra='ignore'):
             'tagTypeName': {
                 'value': values.get('tagTypeName'),
                 'validator': 'OBJECT_NAME'
+            },
+            'databaseId': {
+                'value': values.get('databaseId'),
+                'validator': 'ID',
+                'optional': True,
+                'allowGlobalKeyword': True
             }
         })
         
@@ -80,11 +87,12 @@ class UpdateTagRequestModel(BaseModel, extra='ignore'):
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     tagTypeName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     
+    databaseId: Optional[str] = None  # None/absent = global scope
     @root_validator
     def validate_fields(cls, values):
         """Validate tag update fields using common validators"""
         logger.info("Validating tag update parameters")
-        
+
         (valid, message) = validate({
             'tagName': {
                 'value': values.get('tagName'),
@@ -97,6 +105,12 @@ class UpdateTagRequestModel(BaseModel, extra='ignore'):
             'tagTypeName': {
                 'value': values.get('tagTypeName'),
                 'validator': 'OBJECT_NAME'
+            },
+            'databaseId': {
+                'value': values.get('databaseId'),
+                'validator': 'ID',
+                'optional': True,
+                'allowGlobalKeyword': True
             }
         })
         
@@ -116,6 +130,7 @@ class TagResponseModel(BaseModel, extra='ignore'):
     description: str
     tagTypeName: str
     required: Optional[str] = "False"  # From tag type, indicates if tag is required
+    databaseId: Optional[str] = None
 
 class TagOperationResponseModel(BaseModel, extra='ignore'):
     """Response model for tag operations (create, update, delete)"""
@@ -124,6 +139,9 @@ class TagOperationResponseModel(BaseModel, extra='ignore'):
     tagName: str
     operation: Literal["create", "update", "delete"]
     timestamp: str
+    # Non-fatal advisories about the operation that succeeded, e.g. a name that now
+    # exists both globally and in a database. Absent when there is nothing to report.
+    warnings: Optional[List[str]] = None
 
 ######################## Tag Type API Models ##########################
 
@@ -140,12 +158,13 @@ class CreateTagTypeRequestModel(BaseModel, extra='ignore'):
     required: Optional[str] = Field(default="False", regex="^(True|False)$")
 
     _normalize_required = validator('required', pre=True, allow_reuse=True)(_normalize_required_flag)
+    databaseId: Optional[str] = None  # None/absent = global scope
 
     @root_validator
     def validate_fields(cls, values):
         """Validate tag type fields using common validators"""
         logger.info("Validating tag type creation parameters")
-        
+
         (valid, message) = validate({
             'tagTypeName': {
                 'value': values.get('tagTypeName'),
@@ -159,6 +178,12 @@ class CreateTagTypeRequestModel(BaseModel, extra='ignore'):
                 'value': values.get('required', 'False'),
                 'validator': 'BOOL',
                 'optional': True
+            },
+            'databaseId': {
+                'value': values.get('databaseId'),
+                'validator': 'ID',
+                'optional': True,
+                'allowGlobalKeyword': True
             }
         })
         
@@ -175,12 +200,13 @@ class UpdateTagTypeRequestModel(BaseModel, extra='ignore'):
     required: Optional[str] = Field(default="False", regex="^(True|False)$")
 
     _normalize_required = validator('required', pre=True, allow_reuse=True)(_normalize_required_flag)
+    databaseId: Optional[str] = None  # None/absent = global scope
 
     @root_validator
     def validate_fields(cls, values):
         """Validate tag type update fields using common validators"""
         logger.info("Validating tag type update parameters")
-        
+
         (valid, message) = validate({
             'tagTypeName': {
                 'value': values.get('tagTypeName'),
@@ -194,6 +220,12 @@ class UpdateTagTypeRequestModel(BaseModel, extra='ignore'):
                 'value': values.get('required', 'False'),
                 'validator': 'BOOL',
                 'optional': True
+            },
+            'databaseId': {
+                'value': values.get('databaseId'),
+                'validator': 'ID',
+                'optional': True,
+                'allowGlobalKeyword': True
             }
         })
         
@@ -213,6 +245,7 @@ class TagTypeResponseModel(BaseModel, extra='ignore'):
     description: str
     required: str = "False"
     tags: Optional[List[str]] = []  # Associated tags
+    databaseId: Optional[str] = None
 
 class TagTypeOperationResponseModel(BaseModel, extra='ignore'):
     """Response model for tag type operations (create, update, delete)"""
@@ -221,3 +254,6 @@ class TagTypeOperationResponseModel(BaseModel, extra='ignore'):
     tagTypeName: str
     operation: Literal["create", "update", "delete"]
     timestamp: str
+    # Non-fatal advisories about the operation that succeeded, e.g. a name that now
+    # exists both globally and in a database. Absent when there is nothing to report.
+    warnings: Optional[List[str]] = None

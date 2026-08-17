@@ -2133,6 +2133,62 @@ def backfill_global_list_partition(dynamodb_client, cfg, dry_run: bool, limit: i
     return counts
 
 
+# Global-scope sentinel partition value for the composite-key tag / tag-type tables. Mirrors
+# common.tagScope.GLOBAL_SCOPE: a tag/tag-type with an absent or "GLOBAL" databaseId is global,
+# so assets keep referencing tags by bare name.
+_TAGS_GLOBAL_SCOPE = "GLOBAL"
+
+# (legacy single-key table cfg key, V2 composite-key table cfg key, name/sort-key attribute)
+_TAGS_NAMESPACING_TABLES = [
+    ("tag_legacy_table_name", "tag_table_name_v2", "tagName"),
+    ("tag_type_legacy_table_name", "tag_type_table_name_v2", "tagTypeName"),
+]
+
+
+def copy_tags_to_global_partition(dynamodb_client, cfg, dry_run: bool, limit: int):
+    """Copy every legacy tag / tag-type row into its V2 composite table, placing each under the
+    databaseId it already carries (if any) or the GLOBAL sentinel partition otherwise. Idempotent:
+    the put ConditionExpression skips rows already present in the V2 table, so re-runs copy nothing.
+    Legacy rows are never modified or deleted."""
+    counts = {"copied": 0, "skipped": 0, "errors": 0}
+    for legacy_key, v2_key, name_attr in _TAGS_NAMESPACING_TABLES:
+        legacy_table = cfg.get(legacy_key)
+        v2_table = cfg.get(v2_key)
+        if not legacy_table or not v2_table:
+            continue
+        rows = scan_all_items(dynamodb_client, legacy_table, limit)
+        for row in rows:
+            name_value = row.get(name_attr, {}).get("S")
+            if not name_value:
+                logger.error(f"Legacy {legacy_table} row missing {name_attr}; skipping: {row}")
+                counts["errors"] += 1
+                continue
+            # Honor an existing databaseId on the legacy row, else fall back to the GLOBAL sentinel.
+            scope = row.get("databaseId", {}).get("S") or _TAGS_GLOBAL_SCOPE
+            new_item = {**row, "databaseId": s(scope)}
+            if dry_run:
+                logger.info(
+                    f"[dry-run] Would copy {name_attr}={name_value} into {v2_table} "
+                    f"under databaseId={scope}")
+                counts["copied"] += 1
+                continue
+            try:
+                dynamodb_client.put_item(
+                    TableName=v2_table,
+                    Item=new_item,
+                    ConditionExpression="attribute_not_exists(databaseId) AND attribute_not_exists(#n)",
+                    ExpressionAttributeNames={"#n": name_attr},
+                )
+                counts["copied"] += 1
+            except ClientError as e:
+                if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                    counts["skipped"] += 1
+                else:
+                    logger.error(f"Error copying {name_attr}={name_value} into {v2_table}: {e}")
+                    counts["errors"] += 1
+    return counts
+
+
 def run_global_list_backfill_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
     """Backfill allListPartition on existing V2 pipeline/workflow/execution rows. Returns 0 on success."""
     session_kwargs = {}
@@ -2280,6 +2336,70 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
     return 0 if counts['errors'] == 0 else 1
 
 
+def run_tags_namespacing_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
+    """Copy legacy tag / tag-type rows into the V2 composite tables under GLOBAL. Returns 0 on success."""
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    dynamodb_client = boto3.Session(**session_kwargs).client('dynamodb')
+
+    # Resolve the legacy + V2 table names for both tags and tag types: explicit config overrides
+    # win, else resolve from the SSM prefix.
+    try:
+        lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region) if base_param_prefix else None
+
+        def resolve(cfg_key, param_key):
+            override = config.get(cfg_key)
+            if override and not str(override).startswith('<') and not str(override).startswith('YOUR-'):
+                return override
+            if not lookup:
+                raise ValueError(
+                    f"Config '{cfg_key}' is unset and no resource_names_ssm_param_prefix is configured "
+                    "to resolve it from SSM.")
+            return lookup.resolve(param_key)
+
+        cfg = {
+            'tag_legacy_table_name': resolve(
+                'tag_legacy_table_name', ResourceParamKeys.LEGACY_TAG_STORAGE_TABLE),
+            'tag_table_name_v2': resolve(
+                'tag_table_name_v2', ResourceParamKeys.TAG_STORAGE_TABLE),
+            'tag_type_legacy_table_name': resolve(
+                'tag_type_legacy_table_name', ResourceParamKeys.LEGACY_TAG_TYPE_STORAGE_TABLE),
+            'tag_type_table_name_v2': resolve(
+                'tag_type_table_name_v2', ResourceParamKeys.TAG_TYPE_STORAGE_TABLE),
+        }
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the tagsNamespacing step: {e}")
+        return 1
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.5 -> v2.6 TAGS NAMESPACING (legacy tags/tag-types -> V2 GLOBAL partition)")
+    logger.info(f"Dry Run: {dry_run}")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts = copy_tags_to_global_partition(dynamodb_client, cfg, dry_run, limit)
+    except Exception as e:
+        logger.error(f"tagsNamespacing step failed: {e}")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("TAGS NAMESPACING SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  Rows copied:                     {counts['copied']}")
+    logger.info(f"  Rows skipped (already present):  {counts['skipped']}")
+    logger.info(f"  Errors:                          {counts['errors']}")
+    logger.info("=" * 80)
+
+    return 0 if counts['errors'] == 0 else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3).',
@@ -2310,7 +2430,7 @@ Notes:
                         help='Path to the migration JSON configuration file')
     parser.add_argument('--steps',
                         choices=['reindex', 'assetHistory', 'workflowExecutions', 'auxPreviewRelocation',
-                                 'pipelineWorkflowDefinitions', 'globalListBackfill', 'all'],
+                                 'pipelineWorkflowDefinitions', 'globalListBackfill', 'tagsNamespacing', 'all'],
                         default='all',
                         help="Which release migration step(s) to run (default: all)")
     parser.add_argument('--operation', choices=['assets', 'files', 'both'],
@@ -2343,6 +2463,7 @@ Notes:
     run_aux_preview_relocation = args.steps in ('auxPreviewRelocation', 'all')
     run_pipeline_workflow_definitions = args.steps in ('pipelineWorkflowDefinitions', 'all')
     run_global_list_backfill = args.steps in ('globalListBackfill', 'all')
+    run_tags_namespacing = args.steps in ('tagsNamespacing', 'all')
 
     operation = args.operation or config.get('operation', 'both')
     dry_run = args.dry_run or bool(config.get('dry_run', False))
@@ -2482,6 +2603,13 @@ Notes:
         logger.info("")
         logger.info("##### STEP: Global-list partition backfill (allListPartition) #####")
         rc = run_global_list_backfill_step(config, args, base_param_prefix, profile, region, dry_run)
+        if rc != 0:
+            exit_code = rc
+
+    if run_tags_namespacing:
+        logger.info("")
+        logger.info("##### STEP: Tags namespacing (legacy tags/tag-types -> V2 GLOBAL partition) #####")
+        rc = run_tags_namespacing_step(config, args, base_param_prefix, profile, region, dry_run)
         if rc != 0:
             exit_code = rc
 

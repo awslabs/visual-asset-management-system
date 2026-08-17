@@ -145,7 +145,7 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 | `description`       | string        | Yes      | Asset description (4-256 characters).                                                                    |
 | `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                     |
 | `assetId`           | string        | No       | Explicit asset identifier (1-256 characters). Cannot contain forward slashes. Auto-generated if omitted. |
-| `tags`              | array[string] | No       | Tags for categorization.                                                                                 |
+| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
 | `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                   |
 
 **Response:**
@@ -254,7 +254,7 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 | `assetName`       | string        | No       | Updated asset name.                    |
 | `description`     | string        | No       | Updated description.                   |
 | `isDistributable` | boolean       | No       | Updated distributable flag.            |
-| `tags`            | array[string] | No       | Updated tags (replaces existing tags). |
+| `tags`            | array[string] | No       | Updated tags (replaces existing tags). Only newly added names are checked for existence, so an asset keeps a tag that was deleted; required tag types that have tags must still be represented. |
 
 **Response:**
 

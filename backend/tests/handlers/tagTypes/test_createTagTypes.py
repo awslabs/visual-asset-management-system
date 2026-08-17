@@ -20,22 +20,32 @@ def tag_type_table(ddb_resource):
         TableName=table_name,
         BillingMode="PAY_PER_REQUEST",
         KeySchema=[
-            {"AttributeName": "tagTypeName", "KeyType": "HASH"},
+            {"AttributeName": "databaseId", "KeyType": "HASH"},
+            {"AttributeName": "tagTypeName", "KeyType": "RANGE"},
         ],
         AttributeDefinitions=[
+            {"AttributeName": "databaseId", "AttributeType": "S"},
             {"AttributeName": "tagTypeName", "AttributeType": "S"},
         ],
+        GlobalSecondaryIndexes=[
+            {
+                "IndexName": "tagTypeNameIndex",
+                "KeySchema": [{"AttributeName": "tagTypeName", "KeyType": "HASH"}],
+                "Projection": {"ProjectionType": "ALL"},
+            }
+        ],
     )
-    
+
     # Add a test tag type
     table.put_item(
         Item={
+            "databaseId": "GLOBAL",
             "tagTypeName": "existing-tag-type",
             "description": "Existing tag type description",
             "required": "False"
         }
     )
-    
+
     return table
 
 @pytest.fixture(scope="function")

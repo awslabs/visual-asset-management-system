@@ -495,12 +495,18 @@ export const fetchDatabase = async ({ databaseId }: any) => {
  * Returns array of all constraints from the auth/constraints api
  * @returns {Promise<boolean|{tags}|any>}
  */
-export const fetchTags = async () => {
+export const fetchTags = async (params?: { databaseId?: string; scope?: "global" | "all" }) => {
     try {
-        let response = await apiClient.get("tags", {});
+        const scopeParams: Record<string, any> = {};
+        if (params?.databaseId) scopeParams.databaseId = params.databaseId;
+        if (params?.scope) scopeParams.scope = params.scope;
+
+        let response = await apiClient.get("tags", {
+            queryStringParameters: { ...scopeParams },
+        });
         let items: any[] = [];
         const init: { queryStringParameters: Record<string, any> } = {
-            queryStringParameters: { startingToken: null },
+            queryStringParameters: { startingToken: null, ...scopeParams },
         };
         if (response.message) {
             if (response.message.Items) {
@@ -523,15 +529,52 @@ export const fetchTags = async () => {
     }
 };
 /**
+ * Returns the tags selectable for an asset in a given database: the GLOBAL tags
+ * plus that database's own tags, and nothing from other databases. The backend
+ * serves each scope from a separate partition (a databaseId query does not
+ * include GLOBAL), so this merges a global-scoped fetch with a database-scoped
+ * fetch. With no databaseId it falls back to the full tag list.
+ * @param {Object} params
+ * @param {string} params.databaseId - The asset's database.
+ * @returns {Promise<any[]|any>} Merged tag array, or a non-array error value.
+ */
+export const fetchTagsForAsset = async (params?: { databaseId?: string }) => {
+    if (!params?.databaseId) {
+        return fetchTags();
+    }
+    const [globalTags, databaseTags] = await Promise.all([
+        fetchTags({ scope: "global" }),
+        fetchTags({ databaseId: params.databaseId }),
+    ]);
+    // Surface a load failure (fetchTags returns a non-array on error) instead of
+    // silently dropping either scope.
+    if (!Array.isArray(globalTags)) return globalTags;
+    if (!Array.isArray(databaseTags)) return databaseTags;
+    // A tag name cannot exist as both GLOBAL and database-specific, but de-dupe by
+    // name defensively so the picker never shows a duplicate label.
+    const seen = new Set<string>();
+    return [...globalTags, ...databaseTags].filter((tag: any) => {
+        if (seen.has(tag.tagName)) return false;
+        seen.add(tag.tagName);
+        return true;
+    });
+};
+/**
  * Returns array of all constraints from the auth/constraints api
  * @returns {Promise<boolean|{tagtypes}|any>}
  */
-export const fetchtagTypes = async () => {
+export const fetchtagTypes = async (params?: { databaseId?: string; scope?: "global" | "all" }) => {
     try {
-        let response = await apiClient.get("tag-types", {});
+        const scopeParams: Record<string, any> = {};
+        if (params?.databaseId) scopeParams.databaseId = params.databaseId;
+        if (params?.scope) scopeParams.scope = params.scope;
+
+        let response = await apiClient.get("tag-types", {
+            queryStringParameters: { ...scopeParams },
+        });
         let items: any[] = [];
         const init: { queryStringParameters: Record<string, any> } = {
-            queryStringParameters: { startingToken: null },
+            queryStringParameters: { startingToken: null, ...scopeParams },
         };
         if (response.message) {
             if (response.message.Items) {
@@ -552,6 +595,39 @@ export const fetchtagTypes = async () => {
         console.log(error);
         return error?.message;
     }
+};
+
+/**
+ * Returns the tag types that apply to an asset in a given database: the GLOBAL tag types
+ * plus that database's own, and nothing from other databases.
+ *
+ * The asset forms use this to decide which tag types are REQUIRED. Using the unscoped list
+ * demanded a selection for a tag type belonging to another database, which the scoped tag
+ * picker can never satisfy — the form could not be completed. The backend applies the same
+ * scope when it validates required tags on create/update.
+ * @param {Object} params
+ * @param {string} params.databaseId - The asset's database.
+ * @returns {Promise<any[]|any>} Merged tag-type array, or a non-array error value.
+ */
+export const fetchTagTypesForAsset = async (params?: { databaseId?: string }) => {
+    if (!params?.databaseId) {
+        return fetchtagTypes();
+    }
+    const [globalTagTypes, databaseTagTypes] = await Promise.all([
+        fetchtagTypes({ scope: "global" }),
+        fetchtagTypes({ databaseId: params.databaseId }),
+    ]);
+    // Surface a load failure instead of silently dropping either scope.
+    if (!Array.isArray(globalTagTypes)) return globalTagTypes;
+    if (!Array.isArray(databaseTagTypes)) return databaseTagTypes;
+    // A tag-type name cannot exist as both GLOBAL and database-specific, but de-dupe by name
+    // defensively so a required type is never listed twice.
+    const seen = new Set<string>();
+    return [...globalTagTypes, ...databaseTagTypes].filter((tagType: any) => {
+        if (seen.has(tagType.tagTypeName)) return false;
+        seen.add(tagType.tagTypeName);
+        return true;
+    });
 };
 
 export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }: any) => {
@@ -2937,9 +3013,18 @@ export const updateUserRole = async (body: any) => {
 
 // ===== Tags =====
 
-export const deleteTag = async ({ tagName }: any) => {
+/**
+ * Deletes a tag from a specific scope.
+ *
+ * A tag is identified by scope AND name — the scope is the storage partition key — so `databaseId`
+ * must be sent for a database-scoped tag. Omitting it targets the GLOBAL partition, which reports
+ * "Tag not found" for a scoped tag rather than deleting it.
+ */
+export const deleteTag = async ({ tagName, databaseId }: any) => {
     try {
-        const response = await apiClient.del(`tags/${tagName}`, {});
+        const response = await apiClient.del(`tags/${tagName}`, {
+            queryStringParameters: databaseId ? { databaseId } : {},
+        });
         if (
             response.message?.indexOf("error") !== -1 ||
             response.message?.indexOf("Error") !== -1
@@ -2953,9 +3038,12 @@ export const deleteTag = async ({ tagName }: any) => {
     }
 };
 
-export const deleteTagType = async ({ tagTypeName }: any) => {
+/** Deletes a tag type from a specific scope; see deleteTag on why databaseId is required. */
+export const deleteTagType = async ({ tagTypeName, databaseId }: any) => {
     try {
-        const response = await apiClient.del(`tag-types/${tagTypeName}`, {});
+        const response = await apiClient.del(`tag-types/${tagTypeName}`, {
+            queryStringParameters: databaseId ? { databaseId } : {},
+        });
         if (
             response.message?.indexOf("error") !== -1 ||
             response.message?.indexOf("Error") !== -1

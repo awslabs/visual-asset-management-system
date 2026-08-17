@@ -12,12 +12,22 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
+from common.tagScope import GLOBAL_SCOPE, normalize_scope, verify_database_exists, name_used_by_any_database
+
+TAG_NAME_INDEX = "tagNameIndex"
 from handlers.authz import CasbinEnforcer
-from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.tag import (
     CreateTagRequestModel, UpdateTagRequestModel, TagOperationResponseModel
+)
+from handlers.auth import request_to_claims
+
+# Advisory returned when a GLOBAL entry is created over a name a database already uses. Kept
+# generic on purpose: Rule 11 forbids naming another database in a client-facing message.
+DUPLICATE_SCOPE_WARNING_TAG = (
+    "This name is also used by a database-specific tag."
+    " Asset forms will list both entries until the database-specific tag is removed."
 )
 
 # Configure AWS clients with retry configuration
@@ -46,8 +56,15 @@ except Exception as e:
     logger.exception("Failed resolving tag types table name")
     tag_type_db_table_name = None
 
+try:
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving database table name")
+    database_table_name = None
+
 tag_table = dynamodb.Table(tag_db_table_name) if tag_db_table_name else None
 tag_type_table = dynamodb.Table(tag_type_db_table_name) if tag_type_db_table_name else None
+database_table = dynamodb.Table(database_table_name) if database_table_name else None
 
 #######################
 # Business Logic Functions
@@ -65,51 +82,92 @@ def create_tag(tag_data, claims_and_roles):
     """
     try:
         tag_name = tag_data['tagName']
-        
-        # Check authorization
+        database_id = normalize_scope(tag_data.get('databaseId'))
+
+        # Check authorization (scope-aware)
         tag_obj = {
             "object__type": "tag",
-            "tagName": tag_name
+            "tagName": tag_name,
+            "databaseId": database_id,
         }
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(tag_obj, "POST"):
-                return authorization_error()
-        
-        # Check if tag already exists
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(tag_obj, "POST"):
+            return authorization_error()
+
+        # Scope-conflict rule, asymmetric by design:
+        #   GLOBAL  over a database-specific name -> ALLOWED, with a warning. Promoting a name to the
+        #           shared vocabulary is the normal direction of travel, and blocking it would force an
+        #           admin to delete every database copy before the shared entry could exist at all.
+        #   database-specific over a GLOBAL name  -> REJECTED. A database cannot shadow the shared
+        #           vocabulary, because an asset stores a bare name and could no longer be read.
+        warnings = []
         try:
-            existing_tag = tag_table.get_item(Key={'tagName': tag_name})
+            if database_id == GLOBAL_SCOPE:
+                if name_used_by_any_database(tag_table, TAG_NAME_INDEX, 'tagName', tag_name):
+                    logger.warning(
+                        f"Global tag {tag_name} created while a database-specific tag of that name exists"
+                    )
+                    warnings.append(DUPLICATE_SCOPE_WARNING_TAG)
+            else:
+                # Creating a database tag: reject if a GLOBAL tag of this name exists.
+                global_tag = tag_table.get_item(
+                    Key={'databaseId': GLOBAL_SCOPE, 'tagName': tag_name}
+                )
+                if 'Item' in global_tag:
+                    raise VAMSGeneralErrorResponse(
+                        "A global tag already uses this name."
+                    )
+        except Exception as e:
+            if not isinstance(e, VAMSGeneralErrorResponse):
+                logger.exception(f"Error checking tag name conflicts: {e}")
+                raise VAMSGeneralErrorResponse("Error checking tag existence")
+            raise
+
+        # Check if tag already exists within this scope
+        try:
+            existing_tag = tag_table.get_item(Key={'databaseId': database_id, 'tagName': tag_name})
             if 'Item' in existing_tag:
-                raise VAMSGeneralErrorResponse("Tag already exists. Tags are unique across tag types.")
+                raise VAMSGeneralErrorResponse("Tag already exists in this scope.")
         except Exception as e:
             if not isinstance(e, VAMSGeneralErrorResponse):
                 logger.exception(f"Error checking existing tag: {e}")
                 raise VAMSGeneralErrorResponse("Error checking tag existence")
             raise
-        
-        # Check if tag type exists
+
+        # Referenced database must exist (skipped for GLOBAL)
+        verify_database_exists(database_id, database_table)
+
+        # TagType <-> Tag scope coupling: a tag's type must live in the tag's OWN scope.
+        #   global tag  -> tag type must exist as GLOBAL
+        #   scoped tag  -> tag type must exist in that same database; a GLOBAL type is NOT accepted,
+        #                  so a database's tags are described only by that database's categories.
         try:
-            tag_type_response = tag_type_table.get_item(
-                Key={'tagTypeName': tag_data['tagTypeName']}
+            tag_type_name = tag_data['tagTypeName']
+            type_in_scope = tag_type_table.get_item(
+                Key={'databaseId': database_id, 'tagTypeName': tag_type_name}
             )
-            
-            if 'Item' not in tag_type_response:
-                raise VAMSGeneralErrorResponse("Invalid tag type specified.")
+            if 'Item' not in type_in_scope:
+                raise VAMSGeneralErrorResponse(
+                    "Invalid tag type specified. A tag type in the same scope as the tag is required."
+                )
         except Exception as e:
             if not isinstance(e, VAMSGeneralErrorResponse):
                 logger.exception(f"Error checking tag type: {e}")
                 raise VAMSGeneralErrorResponse("Error validating tag type")
             raise
-        
+
         # Create the tag
         logger.info(f"Creating tag {tag_name}")
         tag_table.put_item(
             Item={
+                'databaseId': database_id,
                 'tagName': tag_name,
                 'description': tag_data['description'],
                 'tagTypeName': tag_data['tagTypeName']
             },
-            ConditionExpression='attribute_not_exists(tagName)'
+            ConditionExpression='attribute_not_exists(databaseId) AND attribute_not_exists(tagName)'
         )
         
         # Return success response
@@ -119,7 +177,8 @@ def create_tag(tag_data, claims_and_roles):
             message=f"Tag {tag_name} created successfully",
             tagName=tag_name,
             operation="create",
-            timestamp=now
+            timestamp=now,
+            warnings=warnings or None
         )
         
     except VAMSGeneralErrorResponse:
@@ -140,56 +199,57 @@ def update_tag(tag_data, claims_and_roles):
     """
     try:
         tag_name = tag_data['tagName']
-        
-        # Check authorization
-        tag_obj = {
-            "object__type": "tag",
-            "tagName": tag_name
-        }
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(tag_obj, "PUT"):
-                return authorization_error()
-        
-        # Check if tag exists
-        try:
-            tag_response = tag_table.query(
-                KeyConditionExpression='tagName = :tag',
-                ExpressionAttributeValues={':tag': tag_name}
+        requested_scope = normalize_scope(tag_data.get('databaseId'))
+
+        # Load existing tag first (needed for stored-scope auth + immutability check).
+        # Scope is immutable, so the tag lives under its request-supplied scope partition.
+        tag_response = tag_table.get_item(Key={'databaseId': requested_scope, 'tagName': tag_name})
+        if 'Item' not in tag_response:
+            raise VAMSGeneralErrorResponse("Tag not found")
+        existing_tag = tag_response['Item']
+        stored_scope = normalize_scope(existing_tag.get('databaseId'))
+
+        # Authorization uses the STORED scope (a DB-X admin cannot edit a global/DB-Y tag)
+        tag_obj = {"object__type": "tag", "tagName": tag_name, "databaseId": stored_scope}
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(tag_obj, "PUT"):
+            return authorization_error()
+
+        # Scope is immutable: reject any attempt to change databaseId
+        if tag_data.get('databaseId') is not None and normalize_scope(tag_data['databaseId']) != stored_scope:
+            raise VAMSGeneralErrorResponse(
+                "Tag scope cannot be changed. Delete and recreate the tag to change its scope."
             )
-            
-            if 'Items' not in tag_response or len(tag_response['Items']) == 0:
-                raise VAMSGeneralErrorResponse("Tag not found")
-        except Exception as e:
-            if not isinstance(e, VAMSGeneralErrorResponse):
-                logger.exception(f"Error checking tag existence: {e}")
-                raise VAMSGeneralErrorResponse("Error validating tag")
-            raise
-        
-        # Check if tag type exists
+
+        # Same coupling on update, against the stored (immutable) scope: the new tag type must live in
+        # the tag's own scope, so an edit cannot move a scoped tag onto a GLOBAL category.
         try:
-            tag_type_response = tag_type_table.get_item(
-                Key={'tagTypeName': tag_data['tagTypeName']}
+            tag_type_name = tag_data['tagTypeName']
+            type_in_scope = tag_type_table.get_item(
+                Key={'databaseId': stored_scope, 'tagTypeName': tag_type_name}
             )
-            
-            if 'Item' not in tag_type_response:
-                raise VAMSGeneralErrorResponse("Invalid tag type specified.")
+            if 'Item' not in type_in_scope:
+                raise VAMSGeneralErrorResponse(
+                    "Invalid tag type specified. A tag type in the same scope as the tag is required."
+                )
         except Exception as e:
             if not isinstance(e, VAMSGeneralErrorResponse):
                 logger.exception(f"Error checking tag type: {e}")
                 raise VAMSGeneralErrorResponse("Error validating tag type")
             raise
-        
+
         # Update the tag
         logger.info(f"Updating tag {tag_name}")
         tag_table.update_item(
-            Key={'tagName': tag_name},
+            Key={'databaseId': stored_scope, 'tagName': tag_name},
             UpdateExpression='SET tagTypeName = :tag_type, description = :desc',
             ExpressionAttributeValues={
                 ':tag_type': tag_data['tagTypeName'],
                 ':desc': tag_data['description']
             },
-            ConditionExpression='attribute_exists(tagName)'
+            ConditionExpression='attribute_exists(databaseId) AND attribute_exists(tagName)'
         )
         
         # Return success response

@@ -62,7 +62,9 @@ const DatabaseSelector = (props: any) => {
             {...restProps}
             onChange={handleChange}
             options={[
-                ...(showGlobal ? [{ label: "GLOBAL", value: "GLOBAL" }] : []),
+                // The globe marks the shared scope so it reads distinctly from a real database,
+                // matching ScopeBadge, which labels a global tag/tag type the same way.
+                ...(showGlobal ? [{ label: "🌐 GLOBAL", value: "GLOBAL" }] : []),
                 ...allItems.map((item) => {
                     return {
                         label: item.databaseId,

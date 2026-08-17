@@ -101,6 +101,8 @@ export interface storageResources {
         subscriptionsStorageTable: dynamodb.Table;
         tagStorageTable: dynamodb.Table;
         tagTypeStorageTable: dynamodb.Table;
+        tagStorageTableLegacy: dynamodb.Table;
+        tagTypeStorageTableLegacy: dynamodb.Table;
         userRolesStorageTable: dynamodb.Table;
         userStorageTable: dynamodb.Table;
         workflowExecutionsStorageTable: dynamodb.Table;
@@ -1727,6 +1729,51 @@ export function storageResourcesBuilder(
         },
     });
 
+    // Per-database namespaced tag tables (PK=databaseId, "GLOBAL" for global tags).
+    const tagStorageTableV2 = new dynamodb.Table(scope, "TagStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "tagName",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // GSI for cross-database lookups by tag name
+    tagStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "tagNameIndex",
+        partitionKey: {
+            name: "tagName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const tagTypeStorageTableV2 = new dynamodb.Table(scope, "TagTypeStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "tagTypeName",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // GSI for cross-database lookups by tag type name
+    tagTypeStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "tagTypeNameIndex",
+        partitionKey: {
+            name: "tagTypeName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const subscriptionsStorageTable = new dynamodb.Table(scope, "SubscriptionsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -2143,8 +2190,10 @@ export function storageResourcesBuilder(
             syncTrackingOutboundStorageTable: syncTrackingOutboundStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
-            tagStorageTable: tagStorageTable,
-            tagTypeStorageTable: tagTypeStorageTable,
+            tagStorageTable: tagStorageTableV2,
+            tagTypeStorageTable: tagTypeStorageTableV2,
+            tagStorageTableLegacy: tagStorageTable,
+            tagTypeStorageTableLegacy: tagTypeStorageTable,
             s3AssetBucketsStorageTable: s3AssetBucketsStorageTable,
             subscriptionsStorageTable: subscriptionsStorageTable,
             rolesStorageTable: rolesStorageTable,
@@ -2704,6 +2753,10 @@ export function storageResourcesBuilder(
             metadataStorageTableLegacy.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.metadataSchemaStorage]:
             metadataSchemaStorageTableLegacy.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.tagStorage]:
+            storageResources.dynamo.tagStorageTableLegacy.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.tagTypeStorage]:
+            storageResources.dynamo.tagTypeStorageTableLegacy.tableName,
     };
     Object.entries(resourceNameParamValues).forEach(([paramKey, value]) => {
         resourceNameRegistry.register({ paramKey, value });
