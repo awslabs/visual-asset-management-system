@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Security Architecture | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/security"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Security Architecture | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="Security Architecture"><meta data-rh="true" property="og:description" content="Security Architecture"><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/security"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/security" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/security" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Security Architecture","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/security"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.663ad815.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.310ef603.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
 </head>
 <body>
@@ -41,7 +41,11 @@
 
 
 
-<table><thead><tr><th>Configuration</th><th>Description</th></tr></thead><tbody><tr><td><code>authProvider.useCognito.enabled</code></td><td>Enable Amazon Cognito as the auth provider</td></tr><tr><td><code>authProvider.useCognito.useSaml</code></td><td>Enable SAML federation for enterprise SSO</td></tr><tr><td><code>authProvider.useCognito.useUserPasswordAuthFlow</code></td><td>Enable username/password authentication flow</td></tr></tbody></table>
+
+
+
+
+<table><thead><tr><th>Configuration</th><th>Description</th></tr></thead><tbody><tr><td><code>authProvider.useCognito.enabled</code></td><td>Enable Amazon Cognito as the auth provider</td></tr><tr><td><code>authProvider.useCognito.useSaml</code></td><td>Enable SAML federation for enterprise SSO</td></tr><tr><td><code>authProvider.useCognito.useOidc</code></td><td>Enable OIDC federation for enterprise SSO</td></tr><tr><td><code>authProvider.useCognito.useUserPasswordAuthFlow</code></td><td>Enable username/password authentication flow</td></tr></tbody></table>
 <h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="saml-federation">SAML Federation<a href="#saml-federation" class="hash-link" aria-label="Direct link to SAML Federation" title="Direct link to SAML Federation" translate="no">​</a></h4>
 <p>SAML authentication enables federated access to VAMS through your organization&#x27;s identity provider (such as Auth0, Active Directory, or Google Workspace). When enabled, Amazon Cognito acts as a SAML service provider.</p>
 <div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Commercial partition only</div><div class="admonitionContent_BuS1"><p>SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS GovCloud (US) or the AWS European Sovereign Cloud. Configuration validation rejects <code>useSaml</code> in those partitions. Use the external OAuth identity provider option for federated sign-in there.</p></div></div>
@@ -79,6 +83,72 @@
 <ol start="3">
 <li class="">Deploy or redeploy the CDK stack with <code>cdk deploy --all</code>.</li>
 </ol>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="oidc-federation">OIDC Federation<a href="#oidc-federation" class="hash-link" aria-label="Direct link to OIDC Federation" title="Direct link to OIDC Federation" translate="no">​</a></h4>
+<p>OIDC federation enables the same federated access through an OpenID Connect provider instead of SAML. Amazon Cognito acts as the relying party, discovering the provider&#x27;s endpoints from <code>\{issuerUrl\}/.well-known/openid-configuration</code>.</p>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Commercial partition only</div><div class="admonitionContent_BuS1"><p>OIDC federation uses the Amazon Cognito hosted UI, which is not available in AWS GovCloud (US) or the AWS European Sovereign Cloud. Configuration validation rejects <code>useOidc</code> in those partitions. Use the external OAuth identity provider option for federated sign-in there.</p></div></div>
+<p>SAML and OIDC federation are mutually exclusive: configuration validation rejects a deployment that enables both. Leaving both disabled is the default and gives native Amazon Cognito sign-in.</p>
+<p><strong>Configuration steps:</strong></p>
+<ol>
+<li class="">
+<p>Store the OIDC client secret in AWS Secrets Manager and note its ARN:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">aws secretsmanager create-secret </span><span class="token parameter variable" style="color:#36acaa">--name</span><span class="token plain"> vams/oidc/client-secret --secret-string </span><span class="token string" style="color:#e3116c">&quot;YOUR_CLIENT_SECRET&quot;</span><span class="token plain"> </span><span class="token parameter variable" style="color:#36acaa">--region</span><span class="token plain"> YOUR_REGION</span><br></div></code></pre></div></div>
+</li>
+<li class="">
+<p>Set <code>authProvider.useCognito.useOidc</code> to <code>true</code> in <code>infra/config/config.json</code>.</p>
+</li>
+<li class="">
+<p>Edit <code>infra/config/oidc-config.ts</code> with the following required fields:</p>
+</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Description</th></tr></thead><tbody><tr><td><code>name</code></td><td>Identifies the OIDC identity provider in the Amazon Cognito User Pool and in the web application</td></tr><tr><td><code>displayName</code></td><td>Label rendered on the federated login button (&quot;Login with {displayName}&quot;)</td></tr><tr><td><code>cognitoDomainPrefix</code></td><td>DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL</td></tr><tr><td><code>clientId</code></td><td>Client identifier issued by the identity provider for this application</td></tr><tr><td><code>clientSecretArn</code></td><td>ARN (or name) of the AWS Secrets Manager secret holding the client secret. The plaintext secret is never placed in configuration</td></tr><tr><td><code>issuerUrl</code></td><td>HTTPS issuer base URL. Amazon Cognito discovers the authorization, token, and JWKS endpoints from it</td></tr><tr><td><code>scopes</code></td><td>Scopes requested at authorization time. Must include <code>openid</code></td></tr><tr><td><code>attributeMapping</code></td><td>Maps incoming OIDC claims to Amazon Cognito user attributes (for example, <code>email</code>)</td></tr><tr><td><code>manageDomain</code></td><td>Whether the CDK creates the hosted UI domain. Leave <code>true</code> unless the domain already exists on the user pool, which CloudFormation cannot adopt</td></tr></tbody></table>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">Configuration validation rejects the placeholder values the file ships with, so a deployment cannot silently register an identity provider that cannot complete a login.</span><br></div></code></pre></div></div>
+<p>4. Deploy or redeploy the CDK stack with <code>cdk deploy --all</code>.</p>
+<p>Programmatic access for a federated user goes through a token override rather than username/password, because a federated identity has no password in the user pool. See <a class="" href="/visual-asset-management-system/release-2.6.0/cli/commands/setup-and-auth#auth-login">Setup and authentication</a>.</p>
 <p><strong>After deployment</strong>, provide these stack outputs to your identity provider to establish trust:</p>
 <ul>
 <li class=""><strong>SAML IdP Response URL</strong> -- the Amazon Cognito SAML endpoint</li>
