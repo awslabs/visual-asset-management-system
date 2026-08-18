@@ -65,7 +65,7 @@ After setup, authenticate with your VAMS instance. VamsCLI supports two authenti
 
 ### Amazon Cognito Authentication
 
-If your VAMS deployment uses Amazon Cognito for identity management:
+If your VAMS deployment uses Amazon Cognito for identity management and your user exists natively in the user pool:
 
 ```bash
 vamscli auth login -u your.email@example.com

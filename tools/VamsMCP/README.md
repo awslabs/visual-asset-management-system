@@ -41,6 +41,11 @@ vamscli auth login -u you@example.com
 
 > Use the **API Gateway** URL, not the CloudFront web URL.
 
+> If the deployment authenticates through an external identity provider, or through an Amazon
+> Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
+> token instead — `vamscli auth login --user-id you@example.com --token-override "<token>"` — and
+> the MCP server picks it up from the profile like any other login.
+
 **2. Install the MCP server:**
 
 ```bash

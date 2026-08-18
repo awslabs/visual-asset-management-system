@@ -38,7 +38,7 @@ def auth():
 @click.option('--new-password', help='New password to set when a forced password change is required (Cognito only)')
 @click.option('--save-credentials', is_flag=True, help='Save credentials for automatic re-authentication')
 @click.option('--user-id', help='User ID for token override authentication')
-@click.option('--token-override', help='Pre-generated token to use directly, mostly for external IDP auth (requires --user-id)')
+@click.option('--token-override', help='Pre-generated token to use directly, for external IDP or SAML/OIDC-federated logins (requires --user-id)')
 @click.option('--expires-at', help='Token expiration time (Unix timestamp, ISO 8601, or +seconds)')
 @click.option('--skip-version-check', is_flag=True, help='Skip version mismatch confirmation prompts')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -54,10 +54,13 @@ def login(ctx: click.Context, username: str, password: str, new_password: str, s
     requirements automatically for Cognito authentication.
 
     Token override is for supplying a pre-generated token directly instead of
-    having the CLI sign you in. It is used mostly for external identity provider
-    authentication, but any valid pre-generated token works (including an AWS
-    Cognito token obtained outside VAMS). To use it, provide --user-id and
-    --token-override; the token is saved and validated against the VAMS API.
+    having the CLI sign you in. Use it for any identity that has no password in
+    the Cognito user pool: an external OAuth identity provider, or a user pool
+    federated to SAML or to OIDC. Any other valid pre-generated token works too
+    (including a Cognito token obtained outside VAMS). To use it, provide
+    --user-id and --token-override; the token is saved and validated against the
+    VAMS API, not against a particular issuer. A federated user pool still accepts
+    username/password for its native users, such as the initial administrator.
 
     If Cognito requires a password change on login (for example, on a new
     account's first sign-in), provide the new password with --new-password.

@@ -1,0 +1,76 @@
+# gitleaks configuration for VAMS.
+#
+# Purpose: allowlist the fake credentials VAMS deliberately contains — redaction-test fixtures and
+# truncated API-documentation samples — without weakening secret detection anywhere else.
+#
+# `.gitleaksignore` (repo root) does the same job with per-finding fingerprints, but a fingerprint is
+# `commit:path:rule:line`, so the same fixture returns as a new finding under every commit that touches
+# the file and after any line-number shift — which is why that file already carries the same finding
+# under several SHAs. The entries here are keyed on the VALUE, so they hold across commits, line moves,
+# and file renames. Both mechanisms are honored; keep both.
+#
+# ---------------------------------------------------------------------------------------------------
+# EDITING RULES
+#
+# 1. `[extend] useDefault = true` is load-bearing. Without it gitleaks REPLACES its built-in ruleset
+#    with this file, and a config holding only an allowlist detects nothing at all — a total loss of
+#    secret scanning that reports as a clean scan. Never remove it.
+#
+# 2. Allowlist on the VALUE (`regexes`), never on the path. A `paths` entry disables every rule for
+#    those files, so a real credential later committed into a test fixture would go unreported. Each
+#    regex below names one specific literal, which cannot over-match.
+#
+# 3. Only add a value that cannot possibly be live: a vendor's published example, a hand-built stub, or
+#    a sample truncated with an ellipsis. "It should not be a real one" does not qualify — rotate it
+#    and move it to AWS Secrets Manager instead.
+#
+# 4. The singular `[allowlist]` table is deliberate. `[[allowlists]]` (plural) requires gitleaks 8.19+,
+#    and the scanner that reports these findings runs an older build; the singular form is accepted by
+#    both (verified against v8.30.1, which still honors it).
+# ---------------------------------------------------------------------------------------------------
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+Fake credentials VAMS contains on purpose: redaction-test fixtures and documentation placeholders.
+The redaction tests are the notable case — they assert that a credential-shaped string is scrubbed
+from log output, so the literal must be present for `assert secret not in output` to prove anything.
+"""
+# `regexTarget = "match"` tests each regex against the rule's whole match rather than the captured
+# secret alone. That is needed by the entries which include an adjacent character to stay narrow (the
+# quote after the 12-character session-token fixture, and the "Bearer " prefix). Verified not to leak:
+# a fixture value placed on the SAME LINE as a live-looking Slack token still leaves that token
+# reported, because a rule's match is the token itself and not the surrounding line.
+regexTarget = "match"
+regexes = [
+    # AWS's own published example access key id. Used by backend/tests/common/test_logMasking.py and
+    # test_logRedaction.py to prove key ids are redacted from logs.
+    '''AKIAIOSFODNN7EXAMPLE''',
+
+    # JWT-shaped stubs from the same redaction tests. The third segment is not an HMAC of the first
+    # two, so neither string was ever a valid token.
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NSJ9\.s5H5ZoQ5abc-DEF_123''',
+    '''Bearer abc\.def\.ghi''',
+
+    # Base64 pagination cursor in web/src/features/orchestration/api/executions.test.ts. Decodes to
+    # {"stepIndex": 1}; matched only because base64-encoded JSON opens like a JWT header.
+    '''eyJzdGVwSW5kZXgiOiAxfQ==''',
+
+    # AWS's published example SECRET access key, plus the session-token stubs, from the same tests.
+    # Found by running gitleaks against these files rather than from the scan report — a different
+    # gitleaks build flags them under generic-api-key, so covering them now avoids the next round.
+    # Each session-token entry carries the fake tail that identifies it: a bare 'FQoGZXIvYXdz' prefix
+    # would also match REAL AWS session tokens, most of which begin with those bytes. The 12-character
+    # fixture is anchored on its closing quote so it cannot match a longer, live value.
+    '''wJalrXUtnFEMI/K7MDENG''',
+    '''FQoGZXIvYXdzEED////''',
+    '''FQoGZXIvYXdzEEDsecret''',
+    '''FQoGZXIvYXdz"''',
+
+    # API-reference placeholders, cut short with a literal ellipsis and so structurally incapable of
+    # being working credentials.
+    '''eyJraWQiOiJ\.\.\.''',
+    '''vams_ak_abc123\.\.\.''',
+]

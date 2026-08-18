@@ -42,6 +42,19 @@ paths:
                                         type: string
                                         description: "Partition-aware Amazon Cognito user pool (IDP) endpoint URL; 'undefined' when Cognito is not the authentication provider. Supplied because the AWS Amplify JavaScript library resolves only the aws and aws-cn partitions and would otherwise build a .amazonaws.com host in the AWS European Sovereign Cloud, where the suffix is .amazonaws.eu"
                                         example: "https://cognito-idp.us-east-1.amazonaws.com"
+                                    cognitoFederatedConfig:
+                                        type: object
+                                        description: "Amazon Cognito federation settings; present when SAML or OIDC federation is enabled, absent otherwise"
+                                        properties:
+                                            customFederatedIdentityProviderName:
+                                                type: string
+                                                description: "Identity provider name registered in the Amazon Cognito user pool; the web application federates against this exact name"
+                                            idpDisplayName:
+                                                type: string
+                                                description: "Label rendered on the federated login button (for example 'Login with SSO')"
+                                            customCognitoAuthDomain:
+                                                type: string
+                                                description: "Amazon Cognito hosted UI domain used for the federated redirect"
                                     contentSecurityPolicy:
                                         type: string
                                         description: "Content Security Policy header value applied by the web application"
@@ -69,6 +82,13 @@ paths:
                                     externalOAuthIdpDiscoveryEndpoint:
                                         type: string
                                         description: "External OAuth identity provider discovery endpoint"
+                                    externalOAuthIdpDisplayName:
+                                        type: string
+                                        description: "Label rendered on the external OAuth login button; 'undefined' when not configured, in which case the web application falls back to 'SSO'"
+                                    stackName:
+                                        type: string
+                                        nullable: true
+                                        description: "Name of the deployed VAMS stack. Null unless the API layer supplies it; the web application does not depend on it."
                                 required:
                                     - region
                                     - api

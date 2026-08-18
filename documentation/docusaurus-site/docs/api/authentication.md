@@ -18,6 +18,14 @@ When Cognito is enabled (`app.authProvider.useCognito.enabled`), users authentic
 Authorization: Bearer eyJraWQiOiJ...
 ```
 
+**Cognito supports multiple authentication modes:**
+
+1. **Native authentication**: Username and password validated directly by Amazon Cognito
+2. **Federated authentication (OIDC)**: Users authenticate via an external OpenID Connect identity provider (for example, Okta, Auth0, Azure AD). Amazon Cognito exchanges the external tokens for Cognito session tokens. Enable with `app.authProvider.useCognito.useOidc: true` and configure provider details in `infra/config/oidc-config.ts`.
+3. **Federated authentication (SAML)**: Users authenticate via a SAML 2.0 identity provider. Enable with `app.authProvider.useCognito.useSaml: true` and configure provider details in `infra/config/saml-config.ts`.
+
+Only one Cognito federation method (OIDC or SAML) can be active at a time. Both native and federated Cognito users receive the same JWT token format and follow the same authorization model.
+
 ### External OAuth JWT
 
 When an external OAuth identity provider is configured (`app.authProvider.useExternalOAuthIdp`), users authenticate through the external provider. The ID token format follows the same pattern:
@@ -25,6 +33,16 @@ When an external OAuth identity provider is configured (`app.authProvider.useExt
 ```
 Authorization: Bearer eyJraWQiOiJ...
 ```
+
+:::note[Cognito federation vs External OAuth]
+VAMS supports three approaches to external identity providers:
+
+- **Cognito OIDC federation** (`app.authProvider.useCognito.useOidc`, configured in `infra/config/oidc-config.ts`): External OIDC provider authenticates users, Amazon Cognito issues session tokens. Users appear in the Cognito user pool. Both native and federated users can coexist.
+- **Cognito SAML federation** (`app.authProvider.useCognito.useSaml`, configured in `infra/config/saml-config.ts`): External SAML 2.0 provider authenticates users, Amazon Cognito issues session tokens. Same coexistence model as OIDC federation.
+- **External OAuth** (`app.authProvider.useExternalOAuthIdp`): Bypasses Amazon Cognito entirely. All users authenticate via the external provider. Cannot be combined with Cognito.
+
+Choose Cognito federation (OIDC or SAML) when you need to support both corporate SSO and native username/password accounts. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
+:::
 
 ### API Key
 

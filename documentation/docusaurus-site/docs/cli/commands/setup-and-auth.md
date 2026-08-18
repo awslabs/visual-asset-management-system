@@ -82,7 +82,7 @@ If a profile was configured against a VAMS deployment whose backend used the pre
 
 ## auth login
 
-Authenticate with VAMS using Amazon Cognito or a token override. Token override supplies a pre-generated token directly instead of having the CLI sign you in. It is used mostly for external identity provider authentication, but any valid pre-generated token works (including an Amazon Cognito token obtained outside VAMS).
+Authenticate with VAMS using Amazon Cognito or a token override. Token override supplies a pre-generated token directly instead of having the CLI sign you in. Use it for any identity that does not have a password in the Amazon Cognito user pool — an external OAuth identity provider, or a user pool federated to SAML or OIDC — and for any other valid pre-generated token (including an Amazon Cognito token obtained outside VAMS).
 
 ```bash
 vamscli auth login [OPTIONS]
@@ -135,13 +135,18 @@ vamscli auth login --user-id john.doe@example.com --token-override "token123" --
 VamsCLI automatically detects the authentication type based on the Amplify configuration. If `cognitoUserPoolId` is configured, Amazon Cognito authentication is available. If it is not configured, only token override authentication is available.
 :::
 
-:::warning[External Authentication]
-If your VAMS deployment uses external authentication (no Amazon Cognito), you must use token override:
+:::warning[Federated and external authentication]
+Username/password sign-in works only for users that exist natively in the Amazon Cognito user pool. Use token override in all of these cases:
+
+-   **No Amazon Cognito** (`useExternalOAuthIdp`) — the deployment has no user pool to sign in to.
+-   **Amazon Cognito federated to SAML** (`useCognito.useSaml`) — a federated user has no password in the pool.
+-   **Amazon Cognito federated to OIDC** (`useCognito.useOidc`) — same as SAML; the identity lives in the external provider.
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "your-external-token"
+vamscli auth login --user-id user@example.com --token-override "your-token"
 ```
 
+Obtain the token from the identity provider or from the VAMS web application after signing in through the federated login button. Token override validates the token against the VAMS API rather than against a specific issuer, so a token from any of these providers works. A user pool with federation enabled still accepts username/password for its **native** users (for example the initial administrator), so an administrator can keep using `--username`.
 :::
 
 ---
@@ -352,7 +357,8 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
 | `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                        |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito SAML authentication provider                                   |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
 
 ---

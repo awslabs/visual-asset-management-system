@@ -400,13 +400,14 @@ Nested stack: `infra/lib/nestedStacks/auth/authBuilder-nestedStack.ts` (`AuthBui
 | --------------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------ |
 | `app.authProvider.presignedUrlTimeoutSeconds` | number | `86400` | Timeout in seconds for Amazon S3 presigned URLs used for upload and download operations (default: 24 hours). |
 
-### IP range restrictions (`app.authProvider.authorizerOptions`)
+### Authorizer options (`app.authProvider.authorizerOptions`)
 
-| Field                                                | Type  | Default | Description                                                                                                                                |
-| ---------------------------------------------------- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app.authProvider.authorizerOptions.allowedIpRanges` | array | `[]`    | Array of IP range pairs for restricting API access. Each range is a 2-element array: `["min_ip", "max_ip"]`. Leave empty to allow all IPs. |
+| Field                                                   | Type   | Default | Description                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.authProvider.authorizerOptions.allowedIpRanges`    | array  | `[]`    | Array of IP range pairs for restricting API access. Each range is a 2-element array: `["min_ip", "max_ip"]`. Leave empty to allow all IPs.                                                                                                                           |
+| `app.authProvider.authorizerOptions.defaultUserRoleName` | string | `""`    | Optional role name automatically granted to authenticated users who have no explicitly assigned roles. Enables baseline access for external identity provider logins without manual per-user provisioning. The role must exist in the Roles table. Empty string (default) disables this feature. |
 
-**Example:**
+**IP range example:**
 
 ```json
 "allowedIpRanges": [
@@ -415,20 +416,51 @@ Nested stack: `infra/lib/nestedStacks/auth/authBuilder-nestedStack.ts` (`AuthBui
 ]
 ```
 
+**Default role example:**
+
+```json
+"authorizerOptions": {
+    "allowedIpRanges": [],
+    "defaultUserRoleName": "basicReadOnly"
+}
+```
+
+:::info[Default role behavior]
+The default role is applied only when all of the following hold:
+
+-   The user authenticates successfully (passes custom Lambda authorizer validation).
+-   The user has **no** role assignments in the user roles table at all. A user who holds roles keeps exactly those roles — including a user whose roles are all filtered out of a non-MFA session because they require MFA, who receives no access rather than baseline access.
+-   The named role exists in the roles table. If it does not, the role is dropped and an error is logged, leaving the user with no access; the deployment is misconfigured rather than silently permissive.
+-   For a non-MFA session, the named role does not itself require MFA.
+
+This is intended for federated identity providers (Amazon Cognito OIDC or SAML federation, or external OAuth) where users authenticate successfully but are not provisioned in VAMS user management. Grant it the narrowest useful permissions — every authenticated identity that reaches the API without an assignment receives it. Leaving the value empty (the default) disables it, so an unprovisioned user has no access.
+:::
+
 ### Amazon Cognito (`app.authProvider.useCognito`)
 
 | Field                                                 | Type    | Default | Description                                                                                                                                                      |
 | ----------------------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.authProvider.useCognito.enabled`                 | boolean | `true`  | Enables Amazon Cognito user pools for authentication. At least one authentication provider must be enabled.                                                      |
-| `app.authProvider.useCognito.useSaml`                 | boolean | `false` | Enables SAML federation with an external IdP through Amazon Cognito.                                                                                             |
+| `app.authProvider.useCognito.useSaml`                 | boolean | `false` | Enables SAML federation with an external IdP through Amazon Cognito. Cannot be used together with `useOidc`.                                                     |
+| `app.authProvider.useCognito.useOidc`                 | boolean | `false` | Enables OIDC federation with an external IdP through Amazon Cognito. Cannot be used together with `useSaml`. Configure provider details in `infra/config/oidc-config.ts`. |
 | `app.authProvider.useCognito.useUserPasswordAuthFlow` | boolean | `false` | Enables `USER_PASSWORD_AUTH` flow for non-SRP authentication. Generates a security warning. Use only when SRP libraries are unavailable for system integrations. |
 | `app.authProvider.useCognito.credTokenTimeoutSeconds` | number  | `3600`  | Authentication token timeout in seconds for Amazon Cognito issued tokens (default: 1 hour). Refresh token is fixed at 24 hours.                                  |
+
+:::info[Advanced: OIDC and SAML federation through Amazon Cognito]
+Amazon Cognito supports federating with external identity providers using SAML 2.0 or OpenID Connect (OIDC). Provider details are managed through separate TypeScript files, while the enable flag is in `config.json`:
+
+- **SAML federation**: Set `useCognito.useSaml` to `true` in `config.json` and configure provider details in `infra/config/saml-config.ts`. The `displayName` field in `saml-config.ts` controls the login button label. See [Security Architecture](../architecture/security.md#saml-federation) for details.
+- **OIDC federation**: Set `useCognito.useOidc` to `true` in `config.json` and configure provider details in `infra/config/oidc-config.ts` (client ID, issuer URL, scopes, attribute mappings). The `displayName` field in `oidc-config.ts` controls the login button label. The client secret must be stored in AWS Secrets Manager.
+
+Only one federation method can be active at a time (`useSaml` and `useOidc` cannot both be `true`), and both require the Amazon Cognito hosted UI, which restricts them to the commercial partition — configuration validation rejects either one in AWS GovCloud (US), the AWS European Sovereign Cloud, and the ISO partitions. Both federation modes let users authenticate through SSO while Amazon Cognito manages the session tokens, and native username/password login remains available for users that exist in the pool. Programmatic access for a federated user uses a VamsCLI token override, since a federated identity has no password in the pool.
+:::
 
 ### External OAuth IdP (`app.authProvider.useExternalOAuthIdp`)
 
 | Field                                                                       | Type    | Default | Description                                                                                                          |
 | --------------------------------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
 | `app.authProvider.useExternalOAuthIdp.enabled`                              | boolean | `false` | Enables an external OAuth 2.0 / OpenID Connect identity provider. Cannot be used simultaneously with Amazon Cognito. |
+| `app.authProvider.useExternalOAuthIdp.idpDisplayName`                       | string  | `""`    | Display name shown on the login button (for example, `"Corporate SSO"`). Falls back to "SSO" in the UI when empty.   |
 | `app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl`                   | string  | `null`  | Base URL of the external OAuth IdP (for example, `https://ping-federate.example.com`).                               |
 | `app.authProvider.useExternalOAuthIdp.idpAuthClientId`                      | string  | `null`  | Client ID registered with the external IdP for this VAMS deployment.                                                 |
 | `app.authProvider.useExternalOAuthIdp.idpAuthProviderScope`                 | string  | `null`  | OAuth scope requested by VAMS.                                                                                       |
@@ -986,6 +1018,7 @@ Beyond `config.json`, VAMS supports several supplementary configuration files:
 | `infra/config/policy/iamRoleConfig.json`                     | Pre-created IAM role mappings for restricted environments. Read only when `app.iamRoleConfig.useCustomBootstrapRoles` or `app.iamRoleConfig.useCustomVamsStackRoles` is `true`.                     |
 | `infra/config/csp/cspAdditionalConfig.json`                  | Additional Content Security Policy (CSP) sources for external APIs, scripts, images, media, fonts, and styles.                                                                                      |
 | `infra/config/saml-config.ts`                                | SAML identity provider settings for Amazon Cognito federation. Required when `authProvider.useCognito.useSaml` is `true`. See [Security Architecture](../architecture/security.md#saml-federation). |
+| `infra/config/oidc-config.ts`                                | OIDC identity provider settings for Amazon Cognito federation. Enable with `useCognito.useOidc: true` in `config.json` and configure provider details (client ID, issuer URL, attribute mapping, `displayName`). Client secret stored in AWS Secrets Manager. |
 | `infra/config/docker/Dockerfile-customDependencyBuildConfig` | Custom Docker build configuration for Lambda layer packaging. Useful for adding custom SSL certificates for HTTPS proxy environments.                                                               |
 | `infra/cdk.json` (`environments.common`)                     | Key-value pairs applied as tags on all stack resources.                                                                                                                                             |
 | `infra/cdk.json` (`environments.aws`)                        | `PermissionBoundaryArn` and `IamRoleNamePrefix` for IAM role customization.                                                                                                                         |

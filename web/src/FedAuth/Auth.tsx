@@ -59,6 +59,7 @@ import { useThemeSettings } from "../hooks/useThemeSettings";
 import { TopNavigation } from "@cloudscape-design/components";
 import logoWhite from "../../logo_white.png";
 import { ensureApiStage } from "../utils/apiEndpoint";
+import { idpButtonLabel } from "./idpLabel";
 
 /**
  * Additional configuration needed to use federated identities
@@ -68,6 +69,10 @@ export interface AmplifyConfigFederatedIdentityProps {
      * The name of the federated identity provider.
      */
     customFederatedIdentityProviderName: string;
+    /**
+     * Display name for the identity provider (shown on login button)
+     */
+    idpDisplayName?: string;
     /**
      * The cognito auth domain
      */
@@ -263,9 +268,14 @@ const cognitoAuthenticatorComponents = {
 interface CognitoFederatedLoginProps {
     onLogin: () => void;
     logoSrc?: string;
+    idpDisplayName?: string;
 }
 
-const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc }) => {
+const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({
+    onLogin,
+    logoSrc,
+    idpDisplayName,
+}) => {
     const { tokens } = useTheme();
 
     return (
@@ -284,7 +294,7 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc })
                         onClick={onLogin}
                         data-testid="federated-login-button"
                     >
-                        Login with Federated Identity Provider
+                        Login with {idpButtonLabel(idpDisplayName)}
                     </button>
                 </div>
             </div>
@@ -998,7 +1008,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                                         variant="primary"
                                         onClick={() => handleExternalOauthSignIn()}
                                     >
-                                        Log in with SSO
+                                        Log in with{" "}
+                                        {idpButtonLabel(config.externalOAuthIdpDisplayName)}
                                     </Button>
                                     {config.externalOAuthIdpScopeMfa &&
                                     config.externalOAuthIdpScopeMfa !== "undefined" &&
@@ -1119,6 +1130,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         ) : null}
                         <FedLoginBox
                             logoSrc={loginLogoSrc}
+                            idpDisplayName={config.cognitoFederatedConfig?.idpDisplayName}
                             onLogin={() =>
                                 signInWithRedirect({
                                     provider: {

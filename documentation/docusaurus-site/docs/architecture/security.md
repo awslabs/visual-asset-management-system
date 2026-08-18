@@ -20,6 +20,7 @@ The default authentication provider. VAMS deploys an Amazon Cognito User Pool wi
 | ------------------------------------------------- | -------------------------------------------- |
 | `authProvider.useCognito.enabled`                 | Enable Amazon Cognito as the auth provider   |
 | `authProvider.useCognito.useSaml`                 | Enable SAML federation for enterprise SSO    |
+| `authProvider.useCognito.useOidc`                 | Enable OIDC federation for enterprise SSO    |
 | `authProvider.useCognito.useUserPasswordAuthFlow` | Enable username/password authentication flow |
 
 #### SAML Federation
@@ -43,6 +44,45 @@ SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS
 | `attributeMapping`    | Maps SAML attributes back to VAMS (email, fullname)                                                                                                                                  |
 
 3. Deploy or redeploy the CDK stack with `cdk deploy --all`.
+
+#### OIDC Federation
+
+OIDC federation enables the same federated access through an OpenID Connect provider instead of SAML. Amazon Cognito acts as the relying party, discovering the provider's endpoints from `\{issuerUrl\}/.well-known/openid-configuration`.
+
+:::warning[Commercial partition only]
+OIDC federation uses the Amazon Cognito hosted UI, which is not available in AWS GovCloud (US) or the AWS European Sovereign Cloud. Configuration validation rejects `useOidc` in those partitions. Use the external OAuth identity provider option for federated sign-in there.
+:::
+
+SAML and OIDC federation are mutually exclusive: configuration validation rejects a deployment that enables both. Leaving both disabled is the default and gives native Amazon Cognito sign-in.
+
+**Configuration steps:**
+
+1. Store the OIDC client secret in AWS Secrets Manager and note its ARN:
+
+    ```bash
+    aws secretsmanager create-secret --name vams/oidc/client-secret --secret-string "YOUR_CLIENT_SECRET" --region YOUR_REGION
+    ```
+
+2. Set `authProvider.useCognito.useOidc` to `true` in `infra/config/config.json`.
+3. Edit `infra/config/oidc-config.ts` with the following required fields:
+
+| Field                 | Description                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | Identifies the OIDC identity provider in the Amazon Cognito User Pool and in the web application                                                   |
+| `displayName`         | Label rendered on the federated login button ("Login with \{displayName\}")                                                                       |
+| `cognitoDomainPrefix` | DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL                                                       |
+| `clientId`            | Client identifier issued by the identity provider for this application                                                                            |
+| `clientSecretArn`     | ARN (or name) of the AWS Secrets Manager secret holding the client secret. The plaintext secret is never placed in configuration                   |
+| `issuerUrl`           | HTTPS issuer base URL. Amazon Cognito discovers the authorization, token, and JWKS endpoints from it                                               |
+| `scopes`              | Scopes requested at authorization time. Must include `openid`                                                                                      |
+| `attributeMapping`    | Maps incoming OIDC claims to Amazon Cognito user attributes (for example, `email`)                                                                 |
+| `manageDomain`        | Whether the CDK creates the hosted UI domain. Leave `true` unless the domain already exists on the user pool, which CloudFormation cannot adopt    |
+
+    Configuration validation rejects the placeholder values the file ships with, so a deployment cannot silently register an identity provider that cannot complete a login.
+
+4. Deploy or redeploy the CDK stack with `cdk deploy --all`.
+
+Programmatic access for a federated user goes through a token override rather than username/password, because a federated identity has no password in the user pool. See [Setup and authentication](../cli/commands/setup-and-auth.md#auth-login).
 
 **After deployment**, provide these stack outputs to your identity provider to establish trust:
 

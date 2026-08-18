@@ -37,7 +37,7 @@ import re
 from datetime import datetime, timezone
 # Output escaping only — no XML is parsed here, so there is no XXE/entity-expansion surface for
 # defusedxml to harden. saxutils.escape encodes values INTO a document; defusedxml has no equivalent.
-# nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
+# nosemgrep: use-defused-xml, python.lang.security.use-defused-xml.use-defused-xml
 from xml.sax.saxutils import escape as _xml_escape
 
 from common.workflows import templateTags as tags

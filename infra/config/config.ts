@@ -12,6 +12,7 @@ import * as dotenv from "dotenv";
 import * as cdk from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
+import { oidcSettings } from "./oidc-config";
 
 dotenv.config();
 
@@ -484,6 +485,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.addons.usePhysnaSync.credentialsSecretArn = "";
     }
 
+    if (config.app.authProvider.useCognito.useOidc == undefined) {
+        config.app.authProvider.useCognito.useOidc = false;
+    }
+
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
@@ -635,6 +640,20 @@ export function getConfig(app: cdk.App): Config {
     // Initialize allowedIpRanges if undefined
     if (config.app.authProvider.authorizerOptions.allowedIpRanges == undefined) {
         config.app.authProvider.authorizerOptions.allowedIpRanges = [];
+    }
+
+    // Initialize default user role name (baseline access for authenticated users).
+    // Can be overridden with the DEFAULT_USER_ROLE_NAME environment variable or CDK context.
+    config.app.authProvider.authorizerOptions.defaultUserRoleName = <string>(
+        (app.node.tryGetContext("defaultUserRoleName") ||
+            process.env.DEFAULT_USER_ROLE_NAME ||
+            config.app.authProvider.authorizerOptions.defaultUserRoleName ||
+            "")
+    );
+
+    // Initialize IdP display name for external OAuth (backward compatibility)
+    if (config.app.authProvider.useExternalOAuthIdp.idpDisplayName == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.idpDisplayName = "SSO";
     }
 
     if (config.app.api == undefined) {
@@ -1623,18 +1642,88 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    //SAML federation requires the Cognito hosted UI, which is only available in the
-    //commercial partition (not GovCloud, EU Sovereign Cloud, or ISO).
-    if (config.app.authProvider.useCognito.useSaml) {
-        if (!config.app.authProvider.useCognito.enabled) {
-            throw new Error(
-                "Configuration Error: useCognito.useSaml requires useCognito.enabled to be true!"
+    //Cognito federation. useSaml and useOidc describe how the Cognito USER POOL federates, so they
+    //are meaningful only when the pool exists.
+    if (!config.app.authProvider.useCognito.enabled) {
+        //Ignored fields. They are normalized to false rather than merely left unvalidated, because
+        //several stacks read them directly WITHOUT re-checking useCognito.enabled: the static web
+        //builder would configure a user pool client that was never created, and the API layer would
+        //publish a cognitoFederatedConfig that makes the web app render a federated login screen with
+        //no user pool behind it. Leaving a stale true therefore yields a deployment that synthesizes
+        //and then cannot sign anyone in.
+        if (
+            config.app.authProvider.useCognito.useSaml ||
+            config.app.authProvider.useCognito.useOidc
+        ) {
+            console.warn(
+                "Configuration Warning: useCognito.useSaml and useCognito.useOidc are ignored because useCognito.enabled is false. Cognito federation needs the Cognito user pool; the deployment will use the configured non-Cognito authentication provider."
             );
         }
-        if (config.env.partition !== "aws") {
+        config.app.authProvider.useCognito.useSaml = false;
+        config.app.authProvider.useCognito.useOidc = false;
+    } else {
+        //At most one federation method. Both drive the same hosted UI domain and the same web client
+        //identity-provider list, so enabling both is ambiguous rather than additive.
+        if (
+            config.app.authProvider.useCognito.useSaml &&
+            config.app.authProvider.useCognito.useOidc
+        ) {
+            throw new Error(
+                "Configuration Error: useCognito.useSaml and useCognito.useOidc cannot both be enabled. Choose one federation method, or neither for native Amazon Cognito sign-in."
+            );
+        }
+
+        //Either method needs the Amazon Cognito hosted UI, which the restricted partitions do not
+        //offer (GovCloud, EU Sovereign Cloud, ISO).
+        if (config.app.authProvider.useCognito.useSaml && config.env.partition !== "aws") {
             throw new Error(
                 `Configuration Error: useCognito.useSaml is not supported in the '${config.env.partition}' partition. The Amazon Cognito hosted UI used for SAML federation is unavailable there.`
             );
+        }
+
+        if (config.app.authProvider.useCognito.useOidc) {
+            if (config.env.partition !== "aws") {
+                throw new Error(
+                    `Configuration Error: useCognito.useOidc is not supported in the '${config.env.partition}' partition. The Amazon Cognito hosted UI used for OIDC federation is unavailable there.`
+                );
+            }
+
+            //oidc-config.ts ships with placeholders. Deploying them registers an identity provider
+            //that cannot complete a login, and the failure surfaces at the IdP rather than here, so
+            //the placeholders are rejected up front.
+            const oidcRequiredFields: [string, string][] = [
+                ["name", oidcSettings.name],
+                ["cognitoDomainPrefix", oidcSettings.cognitoDomainPrefix],
+                ["clientId", oidcSettings.clientId],
+                ["clientSecretArn", oidcSettings.clientSecretArn],
+                ["issuerUrl", oidcSettings.issuerUrl],
+            ];
+            for (const [field, value] of oidcRequiredFields) {
+                if (!value || value.trim() === "") {
+                    throw new Error(
+                        `Configuration Error: useCognito.useOidc requires oidcSettings.${field} to be set in infra/config/oidc-config.ts!`
+                    );
+                }
+            }
+            if (
+                oidcSettings.issuerUrl.includes("your-idp.example.com") ||
+                oidcSettings.clientSecretArn.includes("ACCOUNT_ID") ||
+                oidcSettings.clientSecretArn.includes("REGION")
+            ) {
+                throw new Error(
+                    "Configuration Error: useCognito.useOidc is enabled but infra/config/oidc-config.ts still holds placeholder values. Set issuerUrl and clientSecretArn for your identity provider before deploying."
+                );
+            }
+            if (!oidcSettings.issuerUrl.startsWith("https://")) {
+                throw new Error(
+                    "Configuration Error: oidcSettings.issuerUrl must be an https URL (Amazon Cognito discovers the provider metadata over TLS)."
+                );
+            }
+            if (!oidcSettings.scopes || !oidcSettings.scopes.includes("openid")) {
+                throw new Error(
+                    `Configuration Error: oidcSettings.scopes must include the "openid" scope for OIDC federation.`
+                );
+            }
         }
     }
 
@@ -2488,15 +2577,22 @@ export interface ConfigPublic {
             presignedUrlTimeoutSeconds: number;
             authorizerOptions: {
                 allowedIpRanges: string[][];
+                // Optional role name automatically granted to every authenticated user
+                // who has no explicitly-assigned role. Primarily used with external IdP
+                // logins so users get baseline access (e.g. "basicReadOnly")
+                // without manual per-user role assignment. Empty string disables it.
+                defaultUserRoleName?: string;
             };
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;
+                useOidc: boolean;
                 useUserPasswordAuthFlow: boolean;
                 credTokenTimeoutSeconds: number;
             };
             useExternalOAuthIdp: {
                 enabled: boolean;
+                idpDisplayName: string;
                 idpAuthProviderUrl: string;
                 idpAuthClientId: string;
                 idpAuthProviderScope: string;

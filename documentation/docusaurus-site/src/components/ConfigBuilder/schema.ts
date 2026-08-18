@@ -706,6 +706,16 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "auth",
         advanced: true,
+        help: "Federate the user pool to a SAML provider. Commercial partition only, and mutually exclusive with OIDC federation.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
+        path: "app.authProvider.useCognito.useOidc",
+        label: "Cognito OIDC federation",
+        input: "boolean",
+        section: "auth",
+        advanced: true,
+        help: "Federate the user pool to an OIDC provider. Commercial partition only, mutually exclusive with SAML, and requires provider settings in infra/config/oidc-config.ts.",
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
@@ -732,6 +742,15 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "auth",
         help: "External OAuth 2.0 / OIDC provider. All fields below are required when enabled.",
+    },
+    {
+        path: "app.authProvider.useExternalOAuthIdp.idpDisplayName",
+        label: "External IdP display name",
+        input: "text",
+        section: "auth",
+        advanced: true,
+        help: 'Label on the login button ("Log in with <name>"). Defaults to SSO when empty.',
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useExternalOAuthIdp.enabled"),
     },
     {
         path: "app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl",
@@ -834,6 +853,14 @@ export const FIELDS: FieldMeta[] = [
         section: "auth",
         advanced: true,
         help: "Restrict API access to IP ranges. Each is a [min, max] IPv4 pair. Empty allows all.",
+    },
+    {
+        path: "app.authProvider.authorizerOptions.defaultUserRoleName",
+        label: "Default user role",
+        input: "text",
+        section: "auth",
+        advanced: true,
+        help: "Role granted to an authenticated user with no role assignments, for federated logins that are not provisioned. The role must exist. Empty disables it.",
     },
 
     // ===== Pipelines — standard =====

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import boto3
+import os
 import time
 import json
 from boto3.dynamodb.types import TypeDeserializer
@@ -39,6 +40,17 @@ CASBIN_GET_POLICY_RETRY_DELAY_SECONDS = 1
 # no concerns about reads/writes to the global dictionaries (below) conflicting.
 #
 CASBIN_NO_DICTIONARY_LOCKING = False
+
+# Optional role granted to an authenticated user who has NO role assignments at all.
+# Gives baseline access (e.g. read-only) to identities that are not provisioned into the
+# user-roles table, such as federated IdP logins. Empty string (the default) disables the
+# behavior entirely, which is the pre-existing deny-by-default posture.
+#
+# Set from the CDK config value app.authProvider.authorizerOptions.defaultUserRoleName, which
+# every Lambda receives as the DEFAULT_ROLE_NAME environment variable
+# (infra/lib/helper/security.ts). The named role must exist in the roles table; if it does not,
+# it is dropped with a logged error rather than passed to Casbin as a role with no policy.
+DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
 
 # Defines a boilerplate Deny-all policy for casbin enforcer - for cases where policy_text can't be determined
 # (allowing existing enforcement call sites to continue to work without any additional changes)
@@ -551,17 +563,85 @@ class CasbinEnforcerService:
             casbin_user_policy_map[self._user_id] = policy_text
             self._dateTime_Cached = datetime.now()
         return policy_text
+    def _read_role_from_table(self, role_name):
+        """One role record by name, or None when no such role exists."""
+        try:
+            response = _dynamodb_client.get_item(
+                TableName=self._roles_table_name,
+                Key={"roleName": {"S": role_name}},
+            )
+        except Exception as e:
+            logger.exception(f"Error reading role record for the default-role check: {e}")
+            return None
+
+        item = response.get("Item")
+        if not item:
+            return None
+        return {k: deserializer.deserialize(v) for k, v in item.items()}
+
+    def _resolve_default_role(self, assigned_role_count):
+        """The baseline role to grant this session, or None.
+
+        Returns None — leaving the caller with a deny-by-default policy — in every case except a
+        configured, existing, session-appropriate role held by a user with no assignments:
+
+        * DEFAULT_ROLE_NAME unset: the feature is off.
+        * The user already has role assignments: their own roles decide, filtered as usual. A
+          default is never added alongside them, so this can only ever widen access for an
+          unprovisioned identity.
+        * The named role does not exist: dropped with a logged ERROR. Passing it through would put
+          a `g, user::X, 'role::Y'` grouping into the Casbin policy with no matching policy lines,
+          which is a silently misconfigured deployment rather than a working default.
+        * The named role requires MFA and this session has none: dropped, mirroring the filter
+          applied to assigned roles.
+        """
+        if not DEFAULT_ROLE_NAME:
+            return None
+        if assigned_role_count > 0:
+            return None
+
+        role = self._read_role_from_table(DEFAULT_ROLE_NAME)
+        if role is None:
+            logger.error(
+                f"Configured default user role '{DEFAULT_ROLE_NAME}' does not exist in the roles "
+                "table; no default role applied. Create the role (with constraints) or clear "
+                "app.authProvider.authorizerOptions.defaultUserRoleName."
+            )
+            return None
+
+        # Absent or False means the role does not require MFA, matching the roles-table filter.
+        if not self._mfaEnabled and role.get("mfaRequired") not in (None, False):
+            logger.warning(
+                f"Default user role '{DEFAULT_ROLE_NAME}' requires MFA and this session has none; "
+                "no default role applied."
+            )
+            return None
+
+        logger.info(
+            f"User has no assigned roles; applying default role '{DEFAULT_ROLE_NAME}'"
+        )
+        return {"userId": self._user_id, "roleName": DEFAULT_ROLE_NAME}
+
     def _create_policy_text_helper(self):
         # If the user is signed in with MFA, read all roles with actions and generate policy text
         # If not, get all related user roles with MFA attribute set to False and generate policy text
         #
         if self._mfaEnabled:
-            user_roles_from_table = self._read_current_user_roles_from_table()
+            all_user_roles_from_table = self._read_current_user_roles_from_table()
+            user_roles_from_table = all_user_roles_from_table
         else:
             relevant_NonMFA_roles = self._read_mfaNotRequired_roles_from_table()
             relevant_NonMFA_role_names = [role["roleName"] for role in relevant_NonMFA_roles]
             all_user_roles_from_table = self._read_current_user_roles_from_table()
             user_roles_from_table = [user_role for user_role in all_user_roles_from_table if user_role["roleName"] in relevant_NonMFA_role_names]
+
+        # The optional baseline role applies only to a user with NO role assignments at all.
+        # This is decided from the UNFILTERED assignment list on purpose: a user whose roles were
+        # all removed by the MFA filter above IS provisioned, and handing them baseline access in a
+        # non-MFA session would defeat the mfaRequired flag on the roles they actually hold.
+        default_role = self._resolve_default_role(len(all_user_roles_from_table))
+        if default_role is not None:
+            user_roles_from_table = user_roles_from_table + [default_role]
 
         policies_from_table_by_roles = []
 

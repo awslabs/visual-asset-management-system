@@ -734,25 +734,73 @@ export const RULES: Rule[] = [
             "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
     },
 
-    // ----- Cognito SAML federation (config.ts:1584-1596) -----
+    // ----- Cognito federation: SAML or OIDC, or neither (config.ts:1645 onward) -----
     {
-        id: "saml-requires-cognito",
-        severity: "error",
-        fieldPaths: ["app.authProvider.useCognito.useSaml", "app.authProvider.useCognito.enabled"],
+        id: "cognito-federation-flags-ignored-without-cognito",
+        severity: "warning",
+        fieldPaths: [
+            "app.authProvider.useCognito.enabled",
+            "app.authProvider.useCognito.useSaml",
+            "app.authProvider.useCognito.useOidc",
+        ],
         appliesWhen: (c) =>
-            g(c, "app.authProvider.useCognito.useSaml") &&
-            !g(c, "app.authProvider.useCognito.enabled"),
-        message: "useCognito.useSaml requires useCognito.enabled to be true.",
+            !g(c, "app.authProvider.useCognito.enabled") &&
+            (g(c, "app.authProvider.useCognito.useSaml") ||
+                g(c, "app.authProvider.useCognito.useOidc")),
+        message:
+            "useCognito.useSaml and useCognito.useOidc are ignored when useCognito.enabled is false, " +
+            "and getConfig() resolves both to false. Cognito federation federates the Cognito user " +
+            "pool, so it needs that pool.",
     },
     {
         id: "saml-commercial-partition-only",
         severity: "error",
         fieldPaths: ["app.authProvider.useCognito.useSaml", "env.region"],
         appliesWhen: (c) =>
-            g(c, "app.authProvider.useCognito.useSaml") && !isCommercialPartition(c),
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.useSaml") &&
+            !isCommercialPartition(c),
         message:
             "useCognito.useSaml is supported only in the commercial partition. The Amazon Cognito hosted UI " +
             "used for SAML federation is unavailable in GovCloud, the EU Sovereign Cloud, and the ISO partitions.",
+    },
+
+    {
+        id: "saml-and-oidc-mutually-exclusive",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useCognito.useSaml", "app.authProvider.useCognito.useOidc"],
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.useOidc") &&
+            g(c, "app.authProvider.useCognito.useSaml"),
+        message:
+            "useCognito.useSaml and useCognito.useOidc cannot both be enabled. Choose one federation " +
+            "method, or neither for native Amazon Cognito sign-in.",
+    },
+    {
+        id: "oidc-commercial-partition-only",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useCognito.useOidc", "env.region"],
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.useOidc") &&
+            !isCommercialPartition(c),
+        message:
+            "useCognito.useOidc is supported only in the commercial partition. The Amazon Cognito hosted " +
+            "UI used for OIDC federation is unavailable in GovCloud, the EU Sovereign Cloud, and the ISO " +
+            "partitions.",
+    },
+    {
+        id: "oidc-requires-provider-settings",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.useCognito.useOidc"],
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.useOidc"),
+        message:
+            "OIDC federation also needs provider settings in infra/config/oidc-config.ts (issuer URL, " +
+            "client ID, and a Secrets Manager ARN for the client secret). getConfig() rejects the shipped " +
+            "placeholder values, and those settings are not part of config.json so they cannot be set here.",
     },
 
     // ----- AWS Deadline Cloud partition availability (config.ts:1602-1607) -----

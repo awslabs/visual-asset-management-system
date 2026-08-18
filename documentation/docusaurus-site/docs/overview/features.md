@@ -285,6 +285,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                              |
 | `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                              |
 | `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                        |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Indicates Amazon Cognito with OIDC federation                                                                                                                        |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                             |
 | `PHYSNA_ADDON`                  | Enables Physna add-on frontend features (viewer plugin, future Physna-powered UI surfaces). Emitted automatically when `app.addons.usePhysnaSync.enabled` is `true`. |
 

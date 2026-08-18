@@ -88,9 +88,12 @@ const buildFixture = () => {
         encryption: { kmsKey: new kms.Key(stack, "Key") },
     } as unknown as storageResources;
 
-    // Lambda layers reject inline code, so this points at any directory on disk.
+    // Lambda layers reject inline code, so the asset points at a real, TRACKED directory. It must not
+    // be a placeholder such as test/fixtures: git does not track an empty directory, so a fresh CI
+    // checkout has no such path and CDK fails with «CannotFindAsset». infra/common is the same
+    // directory workflowLambdaGrants.test.ts uses for this.
     const layer = new LayerVersion(stack, "Layer", {
-        code: Code.fromAsset(path.join(__dirname, "fixtures")),
+        code: Code.fromAsset(path.join(__dirname, "../common")),
         compatibleRuntimes: [Runtime.PYTHON_3_12],
     });
     const vpc = new ec2.Vpc(stack, "Vpc");

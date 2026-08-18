@@ -281,6 +281,7 @@ Configuration values resolve through a four-tier fallback chain:
 | `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                               |
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                  |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
 
 ## Nested Stack Dependency Chain

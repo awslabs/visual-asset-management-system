@@ -199,6 +199,11 @@ export class CoreVAMSStack extends cdk.Stack {
             this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO_SAML);
         }
 
+        //See if we have enabled OIDC settings (mutually exclusive with SAML)
+        if (props.config.app.authProvider.useCognito.useOidc) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO_OIDC);
+        }
+
         //Setup Auth (Nested Stack)
         const authBuilderNestedStack = new AuthBuilderNestedStack(this, "AuthBuilder", {
             lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,

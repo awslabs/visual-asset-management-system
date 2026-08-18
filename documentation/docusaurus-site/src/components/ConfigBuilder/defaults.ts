@@ -328,15 +328,18 @@ const COMMERCIAL: ConfigShape = {
             presignedUrlTimeoutSeconds: 86400,
             authorizerOptions: {
                 allowedIpRanges: [],
+                defaultUserRoleName: "",
             },
             useCognito: {
                 enabled: true,
                 useSaml: false,
+                useOidc: false,
                 useUserPasswordAuthFlow: false,
                 credTokenTimeoutSeconds: 3600,
             },
             useExternalOAuthIdp: {
                 enabled: false,
+                idpDisplayName: "",
                 idpAuthProviderUrl: null,
                 idpAuthClientId: null,
                 idpAuthProviderScope: null,

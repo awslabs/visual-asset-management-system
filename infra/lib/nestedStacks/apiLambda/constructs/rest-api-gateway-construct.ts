@@ -22,6 +22,7 @@ import { generateUniqueNameHash } from "../../../helper/security";
 import { AmplifyConfigLambdaConstruct } from "./amplify-config-lambda-construct";
 import { VamsVersionLambdaConstruct } from "./vams-version-lambda-construct";
 import { samlSettings } from "../../../../config/saml-config";
+import { oidcSettings } from "../../../../config/oidc-config";
 import { HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 
 /**
@@ -130,22 +131,35 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         });
         authorizerFn.grantInvoke(authInvokeRole);
 
-        // Cognito hosted UI domain for federated (SAML) sign-in. Amplify's oauth.domain
+        // Cognito hosted UI domain for federated (SAML or OIDC) sign-in. Amplify's oauth.domain
         // expects a bare hostname (it prepends https:// itself), and the suffix is
         // partition-specific (GovCloud uses auth-fips; EU Sovereign uses its own TLD).
         const cognitoHostedUiDomain = config.app.authProvider.useCognito.useSaml
             ? `${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : config.app.authProvider.useCognito.useOidc
+            ? `${oidcSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
             : "";
+
+        // SAML and OIDC are mutually exclusive (enforced in getConfig), so at most one of these
+        // yields a federated config; neither does for a plain Cognito deployment, and the frontend
+        // then reports COGNITO_FEDERATED=false and renders the native Authenticator.
+        const federatedIdentitySettings = config.app.authProvider.useCognito.useSaml
+            ? samlSettings
+            : config.app.authProvider.useCognito.useOidc
+            ? oidcSettings
+            : undefined;
+
         const amplifyConfig = new AmplifyConfigLambdaConstruct(this, "AmplifyConfig", {
             config,
             authResources: props.authResources,
             region: config.env.region,
             apiUrl: "", // derived at runtime from the request context (see construct)
-            ...(config.app.authProvider.useCognito.useSaml
+            ...(federatedIdentitySettings
                 ? {
                       cognitoFederatedConfig: {
                           customCognitoAuthDomain: cognitoHostedUiDomain,
-                          customFederatedIdentityProviderName: samlSettings.name,
+                          customFederatedIdentityProviderName: federatedIdentitySettings.name,
+                          idpDisplayName: federatedIdentitySettings.displayName,
                       },
                   }
                 : {}),
