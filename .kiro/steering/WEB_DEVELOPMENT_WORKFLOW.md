@@ -792,7 +792,7 @@ npm run prettier-fix
 -   [ ] `Synonyms` used for all user-visible entity names
 -   [ ] All pages lazy-loaded in `routes.tsx`
 -   [ ] HashRouter used (no BrowserRouter)
--   [ ] React 17 compatible (no React 18 APIs)
+-   [ ] React 18 APIs kept to the orchestration module unless there is a reason otherwise
 -   [ ] TypeScript used for all new files
 -   [ ] `appCache` used instead of Amplify Cache
 -   [ ] `getDualValidAccessToken` used for auth tokens
@@ -860,7 +860,7 @@ npm run prettier-fix
 6. **Using Amplify Cache** -- use appCache
 7. **Manually getting auth tokens** -- use getDualValidAccessToken
 8. **Hardcoding entity display names** -- use Synonyms
-9. **Using React 18 APIs** -- project is React 17
+9. **Spreading React 18 APIs across the codebase** -- allowed in `features/orchestration/`, used sparingly elsewhere
 10. **Using yarn** -- project uses npm
 11. **Creating .js files** -- all new files must be TypeScript
 12. **Hardcoding colors/spacing** -- use Cloudscape design tokens or theme.css

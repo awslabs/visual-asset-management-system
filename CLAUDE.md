@@ -8,13 +8,13 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 -   **React frontend** (`web/`) — Cloudscape UI, many viewer plugins for 3D/media
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
--   **CDK TypeScript infrastructure** (`infra/`) — 11 nested stacks, multi-partition support
+-   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
 -   **Processing pipelines** (`backendPipelines/`) — 3D conversion, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos 3 (omni), and more
 
 ### **Version Info**
 
-VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 20.x (Lambda). React 17.0.2 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
+VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
 
 **Rolling the VAMS version** — the version string is duplicated across three files; update all of them together in the same change:
 
@@ -59,7 +59,7 @@ root/
 │   └── CLAUDE.md              # Documentation development guide
 ├── .kiro/steering/            # Detailed workflow docs (Kiro steering, supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
-└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.4_to_v2.5)
+└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.5_to_v2.6)
 ```
 
 ---
@@ -87,7 +87,7 @@ Cognito/External OAuth → ID Token → Custom Lambda Authorizer
 ### **Frontend Architecture**
 
 ```
-React 17 + Cloudscape → HashRouter → apiClient (fetch-based)
+React 18 + Cloudscape → HashRouter → apiClient (fetch-based)
   → Feature switches from /api/secure-config → conditional UI rendering
 ```
 
@@ -101,7 +101,7 @@ CDK config (infra/config/config.json)
 
 ### **Pipeline Architecture**
 
-Three creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event). SQS and EventBridge are async-only with optional Step Functions Task Token callback. A fourth type, **DeadlineCloud** (async-only, callback mandatory), is supported at the execution layer (`DeadlineCloudTaskBuilder` + `deadlineCloudJobCallback` lambda, gated by `app.pipelines.deadlineCloudExecutionTypeEnabled`); pipeline creation with this type lands with the pipeline/workflow table overhaul.
+Four creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event), and **DeadlineCloud** (AWS Deadline Cloud job). SQS and EventBridge are async-only with optional Step Functions Task Token callback. DeadlineCloud is async-only with a **mandatory** callback (`waitForCallback` must be `Enabled`), is built by `DeadlineCloudTaskBuilder` + the `deadlineCloudJobCallback` lambda, and is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` — accepted only in the commercial `aws` partition, and rejected at pipeline create when the deployment has not enabled it.
 
 ```
 S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge → AWS Batch containers (optional)
@@ -487,7 +487,7 @@ Runtime versions are in the Project Overview version table.
 
 -   **Frontend (`web/`)**: Cloudscape Design System, AWS Amplify v6 (auth), custom fetch-based `apiClient` (auto auth headers), HashRouter, TypeScript throughout (`__mocks__/*.js` remain JS). Viewer plugins: Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM.
 -   **Backend (`backend/`)**: Casbin ABAC/RBAC, boto3, AWS Lambda Powertools (logging, tracing). Pydantic v1 only.
--   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 11 nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
+-   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 14 nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
 -   **CLI (`tools/VamsCLI/`)**: Click command framework, profile-based multi-environment config, `--json-output` for machine-readable output.
 -   **MCP server (`tools/VamsMCP/`)**: Model Context Protocol server (`mcp` SDK) exposing the VAMS API as agent tools over stdio. Stores no credentials — reuses the `vamscli` profile and `APIClient`. Write and destructive tools are gated off by default via `VAMS_ENABLE_WRITES` / `VAMS_ENABLE_DESTRUCTIVE`.
 -   **Agent skill (`tools/VamsAgentSkill/`)**: Portable skill for operating a live deployment through `vamscli`; self-discovers commands, read-only by default. Surfaced in Claude Code as `/vams-agent`.

@@ -6,7 +6,7 @@ This page provides a comprehensive catalog of Visual Asset Management System (VA
 
 ## Web Interface Features
 
-The VAMS web interface is a React 17 application built with Vite and the AWS Cloudscape Design System. It provides a complete browser-based experience for asset management and visualization.
+The VAMS web interface is a React 18 application built with Vite and the AWS Cloudscape Design System. It provides a complete browser-based experience for asset management and visualization.
 
 ### Viewer Plugins
 
@@ -164,7 +164,7 @@ The VamsCLI is a Python-based command line tool built on the Click framework. It
 
 ### Search Indexing
 
--   **Dual-index architecture** -- Separate Amazon OpenSearch indexes for assets (`vams-assets-v2`) and files (`vams-files-v2`)
+-   **Dual-index architecture** -- Separate Amazon OpenSearch indexes for assets (`vams-assets-v3`) and files (`vams-files-v3`)
 -   **Event-driven indexing** -- Amazon SNS and Amazon SQS-based automatic index synchronization on asset and file changes
 -   **Preview file indexing** -- `str_previewfilekey` and `str_assetlocationkey` fields in search indexes for optimized UI rendering
 -   **Re-index on deploy** -- Optional `reindexOnCdkDeploy` flag for full index rebuild during deployment

@@ -23,7 +23,7 @@ While AWS Lambda functions run on Python 3.12, local development and testing use
 
 ## Frontend Setup
 
-The VAMS frontend is a React 17 single-page application built with Vite.
+The VAMS frontend is a React 18 single-page application built with Vite.
 
 ### Install Dependencies
 

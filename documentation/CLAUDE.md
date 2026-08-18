@@ -11,7 +11,7 @@ VAMS documentation is built with **Docusaurus** (React-based static site generat
 
 -   **Docusaurus config**: `documentation/docusaurus-site/docusaurus.config.ts`
 -   **Sidebar config**: `documentation/docusaurus-site/sidebars.ts`
--   **Source pages**: `documentation/docusaurus-site/docs/` (78 Markdown files)
+-   **Source pages**: `documentation/docusaurus-site/docs/` (132 Markdown and MDX pages)
 -   **Custom CSS**: `documentation/docusaurus-site/src/css/custom.css`
 -   **Custom React components**: `documentation/docusaurus-site/src/components/` (e.g. `ConfigBuilder/` — the interactive `config.json` builder embedded in `docs/deployment/config-builder.mdx`)
 -   **Static images**: `documentation/docusaurus-site/static/img/`
@@ -32,7 +32,7 @@ docusaurus-site/docs/
 ├── deployment/                 # Prerequisites, deploy, config reference, external S3, update, uninstall
 ├── user-guide/                 # Getting started, web UI, upload tutorial, asset mgmt, search, metadata, permissions
 ├── cli/                        # CLI getting started, installation, command reference, automation
-├── pipelines/                  # Pipeline overview + 10 individual pipeline docs + custom pipeline guide
+├── pipelines/                  # Pipeline overview + 15 individual pipeline docs + custom pipeline guide
 ├── developer/                  # Dev setup, backend, frontend, CDK, viewer plugins, audit logging
 ├── api/                        # API overview, auth, assets, files, metadata, search, pipelines, workflows, tags
 ├── troubleshooting/            # Common issues, known limitations, FAQ
@@ -168,15 +168,15 @@ The sidebar uses a hierarchical tree with collapsible categories:
 ```
 Home (index.md)
 ├── Overview (5 pages)
-├── Core Concepts (8 pages)
+├── Core Concepts (10 pages)
 ├── Architecture (6 pages)
-├── Deployment (7 pages)
-├── User Guide (11 pages)
+├── Deployment (8 pages)
+├── User Guide (12 pages)
 └── Developer Guide
     ├── Setup, Backend, Frontend, CDK, Viewer Plugins, Audit Logging
     ├── CLI Reference (4+ pages with commands/ subcategory)
-    ├── Pipelines (11 pages)
-    ├── API Reference (11 pages)
+    ├── Pipelines (18 pages)
+    ├── API Reference (15 pages)
     └── Troubleshooting (3 pages)
 Additional (5 pages)
 ```
@@ -187,7 +187,7 @@ When adding new pages, always update `sidebars.ts` to include the page in the co
 
 Documentation is deployed automatically via CI/CD when changes are pushed to `main` or `release/*` branches:
 
--   **GitLab**: `.gitlab-ci.yml` → builds with `node:20-slim`, outputs to `public/` for GitLab Pages
+-   **GitLab**: `.gitlab-ci.yml` → builds with `node:22-slim`, outputs to `public/` for GitLab Pages
 -   **GitHub**: `.github/workflows/docs.yml` → builds with `actions/setup-node@v4`, deploys via `actions/deploy-pages@v4`
 
 Both pipelines only trigger when files under `documentation/docusaurus-site/` change.

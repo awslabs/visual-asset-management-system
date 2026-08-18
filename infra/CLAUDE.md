@@ -55,7 +55,7 @@ infra/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # Publishes 62 SSM String parameters (57 resource names + 5 legacy)
+        resourceNamesBuilder-nestedStack.ts  # Publishes 64 SSM String parameters (57 resource names + 7 legacy)
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
@@ -112,7 +112,7 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
-  |     +-- ResourceNamesBuilder (publishes 62 SSM parameters)
+  |     +-- ResourceNamesBuilder (publishes 64 SSM parameters)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
@@ -457,7 +457,7 @@ Whenever you **add or change** an S3 bucket, DynamoDB table, or CloudWatch log g
 
 These axes are independent. **Retained + auto-named** resources (asset, auxiliary, artefacts, access logs buckets; all DynamoDB tables) survive teardown but do **not** block redeploy. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
 
-**SSM String parameters** (62 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
+**SSM String parameters** (64 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 

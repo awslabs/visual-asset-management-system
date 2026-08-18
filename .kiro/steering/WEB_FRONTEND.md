@@ -1340,12 +1340,6 @@ Development targets: Latest Chrome, Firefox, Safari.
 
 ### 18.6 React Version
 
-This project uses **React 17**, not React 18. Do NOT use:
+This project uses **React 18.3**. The entry point (`index.tsx`) mounts with `createRoot` from `react-dom/client`.
 
--   `createRoot` (React 18)
--   `useId` (React 18)
--   `useSyncExternalStore` (React 18)
--   `useTransition` / `useDeferredValue` (React 18)
--   Automatic batching assumptions (React 18)
-
-The app uses `ReactDOM.render` (React 17 style).
+React 18 APIs (`useId`, `useSyncExternalStore`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to stay consistent with the existing codebase conventions.

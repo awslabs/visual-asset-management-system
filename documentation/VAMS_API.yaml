@@ -1002,6 +1002,51 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
             -   DefaultCognitoAuthorizer: []
+    /auth/constraintsTemplateImport:
+        post:
+            tags:
+                - auth
+            summary: "Import a constraint template"
+            description: >-
+                Imports one or more authorization constraints from a JSON constraint
+                template, for bulk-provisioning permissions. A criterion whose field is
+                not valid for its object type is rejected.
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            description: >-
+                                The constraint template JSON. See the templates in
+                                documentation/permissionsTemplates/ for examples.
+            responses:
+                "200":
+                    description: Template imported successfully
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Template imported successfully"
+                "400":
+                    description: Invalid template
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Forbidden
+                "500":
+                    description: Internal server error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
     /auth/constraints/permissionObjects:
         get:
             tags:

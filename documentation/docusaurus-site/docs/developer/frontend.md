@@ -14,8 +14,8 @@ This guide covers development patterns for the VAMS React frontend, including pr
 | React Router                | v6      | Client-side routing (HashRouter) |
 | `@badgateway/oauth2-client` | 2.4.2   | External OAuth2 PKCE flow        |
 
-:::info[React 17]
-This project uses React 17, not React 18. Do not use React 18 APIs such as `createRoot`, `useId`, `useSyncExternalStore`, `useTransition`, or `useDeferredValue`. The app uses `ReactDOM.render`.
+:::info[React 18]
+This project uses React 18. The app mounts with `createRoot` from `react-dom/client`, and React 18 APIs such as `useId`, `useSyncExternalStore`, `useTransition`, and `useDeferredValue` are available.
 :::
 
 ## Project Structure

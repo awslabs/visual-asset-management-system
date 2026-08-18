@@ -173,4 +173,4 @@ To create a custom processing pipeline:
 6. Register the pipeline in the pipeline builder nested stack.
 7. Add the pipeline feature flag to the VPC builder if it requires AWS Batch or Amazon ECR endpoints.
 
-VAMS pipelines support three execution types: **Lambda** (synchronous or asynchronous), **Amazon SQS** (asynchronous), and **Amazon EventBridge** (asynchronous). Refer to the [Developer Guide](../developer/setup.md) for detailed pipeline development instructions.
+VAMS pipelines support four execution types: **Lambda** (synchronous or asynchronous), **Amazon SQS** (asynchronous), **Amazon EventBridge** (asynchronous), and **AWS Deadline Cloud** (asynchronous job submission, available only in the commercial AWS partition when `app.pipelines.deadlineCloudExecutionTypeEnabled` is set). Refer to the [Developer Guide](../developer/setup.md) for detailed pipeline development instructions.

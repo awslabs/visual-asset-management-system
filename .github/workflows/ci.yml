@@ -26,6 +26,8 @@ jobs:
 
             - name: Setup node for the whole package
               uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
 
             - name: Clone automated security helper
               uses: actions/checkout@v4

@@ -35,7 +35,7 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 17 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 20 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming

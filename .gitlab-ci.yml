@@ -17,7 +17,7 @@ include:
 # Builds only the current branch's docs
 pages:
     stage: deploy
-    image: node:20-slim
+    image: node:22-slim
     variables:
         DOCS_URL: "https://aws-spatial-prototyping.pages.aws.dev"
     before_script:
