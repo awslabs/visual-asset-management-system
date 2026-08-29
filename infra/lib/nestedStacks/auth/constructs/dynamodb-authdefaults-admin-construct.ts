@@ -196,6 +196,22 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
             role: props.customResourceRole,
         });
 
+        // The seeded role above is written with mfaRequired false, and user pool MFA is optional, so
+        // the administrator account reaches every administrative route with a password alone until MFA
+        // is enrolled for it. Reported only when Amazon Cognito holds that password: with an external
+        // OAuth IDP the second factor belongs to the provider, and the MFA claim the authorizer
+        // resolves is always false there, which makes an mfaRequired role inactive rather than safer.
+        if (props.config.app.authProvider.useCognito.enabled) {
+            cdk.Annotations.of(this).addWarningV2(
+                "VAMS:AuthDefaults:bootstrapAdminMfaNotRequired",
+                `The seeded "${roleNameAdmin}" role is created with mfaRequired false, so the ` +
+                    `bootstrap administrator "${props.config.app.adminUserId}" is not MFA ` +
+                    `protected. This role is re-seeded on every deployment, so change it by ` +
+                    `registering an MFA factor for that user and setting mfaRequired on a separate ` +
+                    `role that carries the administrative permissions.`
+            );
+        }
+
         const awsSdkCallUserRolesSystem: AwsSdkCall = {
             service: "DynamoDB",
             action: "putItem",

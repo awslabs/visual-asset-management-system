@@ -20,6 +20,7 @@ import * as Service from "../lib/helper/service-helper";
 import * as s3AssetBuckets from "../lib/helper/s3AssetBuckets";
 import { buildVamsExecutePreview3dThumbnailPipelineFunction } from "../lib/nestedStacks/pipelines/preview/3dThumbnail/lambdaBuilder/preview3dThumbnailFunctions";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
@@ -44,7 +45,7 @@ beforeAll(() => {
     const config = createMockConfig();
     Service.SetConfig(config);
 
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, "Preview3dThumbnailTestStack", {
         env: { account: ACCOUNT, region: REGION },
     });

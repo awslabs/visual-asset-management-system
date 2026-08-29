@@ -545,8 +545,8 @@ vamscli database list --json-output
 vamscli tag-type list --show-tags --json-output
 ```
 
-:::warning[Terminal encoding]
-The VamsCLI prints Unicode status indicators such as `✓` and `✗`. On Windows, use a UTF-8 capable terminal or set `PYTHONIOENCODING=utf-8` to avoid encoding errors.
+:::note[Terminal encoding]
+The VamsCLI prints Unicode status indicators such as `✓` and `✗`, and writes UTF-8 regardless of the system code page, so piping or redirecting these commands on Windows needs no additional configuration.
 :::
 
 ---

@@ -34,7 +34,7 @@ export const SECTIONS: Section[] = [
         id: "networking",
         label: "Networking (VPC)",
         description:
-            "VPC creation or import. Auto-enabled by ALB, provisioned OpenSearch, and container pipelines.",
+            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, and the container pipelines.",
         order: 3,
     },
     {
@@ -376,7 +376,7 @@ export const FIELDS: FieldMeta[] = [
         label: "Enable global VPC",
         input: "boolean",
         section: "networking",
-        help: "Auto-enabled when ALB, provisioned OpenSearch, or any container pipeline is on.",
+        help: "Required when ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, or any container pipeline is enabled.",
     },
     {
         path: "app.useGlobalVpc.vpcCidrRange",
@@ -1278,7 +1278,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-gpu",
         advanced: true,
-        help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Not available in GovCloud.",
+        help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Available only in the commercial AWS partition — not available in GovCloud or EU Sovereign Cloud.",
     },
     // NVIDIA Cosmos shared settings + models
     {

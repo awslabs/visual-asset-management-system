@@ -19,6 +19,12 @@ from .exceptions import (
     ConfigurationError, ProfileNotFoundError, ProfileError,
     InvalidProfileNameError, ProfileAlreadyExistsError
 )
+from .logging import OWNER_ONLY_DIR_MODE, OWNER_ONLY_FILE_MODE, restrict_path
+
+
+def _owner_only_opener(path, flags):
+    """`open()` opener that creates a file with owner-only access from the outset."""
+    return os.open(path, flags, OWNER_ONLY_FILE_MODE)
 
 
 def read_active_profile_name() -> str:
@@ -70,8 +76,11 @@ class ProfileManager:
         self.base_config_dir.mkdir(parents=True, exist_ok=True)
         
     def ensure_profile_dir(self):
-        """Ensure the profile-specific directory exists."""
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        """Ensure the profile-specific directory exists and is readable only by its owner."""
+        self.profile_dir.mkdir(parents=True, exist_ok=True, mode=OWNER_ONLY_DIR_MODE)
+        # `mode` applies only to a directory this call creates, so a profile directory written by an
+        # earlier run is narrowed here.
+        restrict_path(self.profile_dir, OWNER_ONLY_DIR_MODE)
     
     def migrate_legacy_profile(self):
         """Migrate legacy single-profile configuration to default profile."""
@@ -201,11 +210,15 @@ class ProfileManager:
             raise ConfigurationError(f"Failed to load configuration for profile '{self.profile_name}': {e}")
             
     def save_auth_profile(self, auth_data: Dict[str, Any]):
-        """Save authentication profile for this profile."""
+        """Save authentication profile for this profile.
+
+        Holds the live Cognito access and refresh tokens, so the file is owner-only.
+        """
         self.ensure_profile_dir()
-        with open(self.auth_profile_file, 'w') as f:
+        with open(self.auth_profile_file, 'w', opener=_owner_only_opener) as f:
             json.dump(auth_data, f, indent=2)
-            
+        restrict_path(self.auth_profile_file, OWNER_ONLY_FILE_MODE)
+
     def load_auth_profile(self) -> Optional[Dict[str, Any]]:
         """Load authentication profile for this profile."""
         if not self.auth_profile_file.exists():
@@ -225,11 +238,15 @@ class ProfileManager:
             self.credentials_file.unlink()
             
     def save_credentials(self, credentials: Dict[str, str]):
-        """Save user credentials for this profile (if explicitly requested)."""
+        """Save user credentials for this profile (if explicitly requested).
+
+        Holds the plaintext password, so the file is owner-only.
+        """
         self.ensure_profile_dir()
-        with open(self.credentials_file, 'w') as f:
+        with open(self.credentials_file, 'w', opener=_owner_only_opener) as f:
             json.dump(credentials, f, indent=2)
-            
+        restrict_path(self.credentials_file, OWNER_ONLY_FILE_MODE)
+
     def load_credentials(self) -> Optional[Dict[str, str]]:
         """Load saved credentials for this profile."""
         if not self.credentials_file.exists():

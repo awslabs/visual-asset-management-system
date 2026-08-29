@@ -1077,6 +1077,36 @@ class TestDeleteFolderIfEmpty:
         assert events == ["db-1/asset-1/sub"]
 
 
+def _meta_row(key, value="v", value_type="string"):
+    return {"metadataKey": key, "metadataValue": value, "metadataValueType": value_type}
+
+
+def _attr_row(key, value="v", value_type="string"):
+    return {"attributeKey": key, "attributeValue": value, "attributeValueType": value_type}
+
+
+class _PagedFakeTable:
+    """Fake DynamoDB table serving a fixed sequence of query pages.
+
+    Every page but the last carries a ``LastEvaluatedKey``, and each call's kwargs
+    are recorded so a test can assert the cursor was threaded. A call past the last
+    page raises ``IndexError``, so a runaway loop fails instead of hanging.
+    """
+
+    def __init__(self, *pages):
+        self._responses = []
+        for index, items in enumerate(pages):
+            response = {"Items": list(items)}
+            if index < len(pages) - 1:
+                response["LastEvaluatedKey"] = {"cursor": f"page{index + 1}"}
+            self._responses.append(response)
+        self.calls = []
+
+    def query(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._responses[len(self.calls) - 1]
+
+
 @pytest.mark.unit
 class TestGetFileMetadata:
     def test_returns_metadata_and_attributes_separately(self, monkeypatch):
@@ -1122,6 +1152,62 @@ class TestGetFileMetadata:
         assert "material" in attrs
         assert attrs["material"]["value"] == "steel"
 
+    def test_metadata_and_attributes_paginate_independently(self, monkeypatch):
+        """Two metadata pages alongside one attribute page: both dicts complete.
+
+        A single cursor shared across the two tables fails here — it either carries
+        the metadata table's cursor into the attribute query or re-queries the wrong
+        table — while passing a test where both tables have the same page count.
+        """
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        meta_table = _PagedFakeTable([_meta_row("m1")], [_meta_row("m2")])
+        attr_table = _PagedFakeTable([_attr_row("a1")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", meta_table)
+        monkeypatch.setattr(pc, "file_attribute_table", attr_table)
+
+        metadata, attrs = pc.get_file_metadata("db-1", "asset-1", "/sub/part.step")
+
+        assert sorted(metadata.keys()) == ["m1", "m2"]
+        assert sorted(attrs.keys()) == ["a1"]
+        assert len(meta_table.calls) == 2
+        assert len(attr_table.calls) == 1
+        assert meta_table.calls[1]["ExclusiveStartKey"] == {"cursor": "page1"}
+        assert "ExclusiveStartKey" not in attr_table.calls[0]
+
+    def test_attributes_paginate_while_metadata_does_not(self, monkeypatch):
+        """The mirrored split, so the fix cannot page only the first table."""
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        meta_table = _PagedFakeTable([_meta_row("m1")])
+        attr_table = _PagedFakeTable([_attr_row("a1")], [_attr_row("a2")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", meta_table)
+        monkeypatch.setattr(pc, "file_attribute_table", attr_table)
+
+        metadata, attrs = pc.get_file_metadata("db-1", "asset-1", "/sub/part.step")
+
+        assert sorted(metadata.keys()) == ["m1"]
+        assert sorted(attrs.keys()) == ["a1", "a2"]
+        assert len(meta_table.calls) == 1
+        assert len(attr_table.calls) == 2
+        assert attr_table.calls[1]["ExclusiveStartKey"] == {"cursor": "page1"}
+
+    def test_single_page_each_issues_one_query_each(self, monkeypatch):
+        """Positive control: the terminating case for both tables."""
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        meta_table = _PagedFakeTable([_meta_row("m1")])
+        attr_table = _PagedFakeTable([_attr_row("a1")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", meta_table)
+        monkeypatch.setattr(pc, "file_attribute_table", attr_table)
+
+        metadata, attrs = pc.get_file_metadata("db-1", "asset-1", "/sub/part.step")
+
+        assert list(metadata.keys()) == ["m1"]
+        assert list(attrs.keys()) == ["a1"]
+        assert len(meta_table.calls) == 1
+        assert len(attr_table.calls) == 1
+
 
 @pytest.mark.unit
 class TestGetAssetMetadata:
@@ -1144,6 +1230,66 @@ class TestGetAssetMetadata:
         monkeypatch.setattr(pc, "asset_file_metadata_table", FakeTable())
         metadata = pc.get_asset_metadata("db-1", "asset-1")
         assert metadata["partFamily"]["value"] == "widgets"
+
+    def test_pages_to_exhaustion_and_threads_the_cursor(self, monkeypatch):
+        """Keys from both pages arrive, and page 2 is fetched with page 1's cursor.
+
+        Asserting only the merged result would also pass for a loop that re-reads
+        page 1 forever, so the ``ExclusiveStartKey`` assertion is the load-bearing one.
+        """
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        table = _PagedFakeTable([_meta_row("onPage1")], [_meta_row("onPage2")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", table)
+
+        metadata = pc.get_asset_metadata("db-1", "asset-1")
+
+        assert sorted(metadata.keys()) == ["onPage1", "onPage2"]
+        assert len(table.calls) == 2
+        assert "ExclusiveStartKey" not in table.calls[0]
+        assert table.calls[1]["ExclusiveStartKey"] == {"cursor": "page1"}
+
+    def test_single_page_issues_exactly_one_query(self, monkeypatch):
+        """Positive control: a single page is returned whole and read once.
+
+        A paging bug that drops the final page, or that re-reads page 1, fails here.
+        """
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        table = _PagedFakeTable([_meta_row("only")])
+        monkeypatch.setattr(pc, "asset_file_metadata_table", table)
+
+        metadata = pc.get_asset_metadata("db-1", "asset-1")
+
+        assert list(metadata.keys()) == ["only"]
+        assert len(table.calls) == 1
+
+    def test_paging_stops_at_the_page_cap(self, monkeypatch):
+        """A cursor that never clears terminates at ``_METADATA_QUERY_MAX_PAGES``."""
+        import backend.backend.handlers.addon.physna.physnaCommon as pc
+
+        cap = pc._METADATA_QUERY_MAX_PAGES
+
+        class NeverEndingTable:
+            def __init__(self):
+                self.call_count = 0
+
+            def query(self, **kwargs):
+                self.call_count += 1
+                if self.call_count > cap + 5:
+                    raise AssertionError("paging loop is not bounded by a page cap")
+                return {
+                    "Items": [_meta_row(f"k{self.call_count}")],
+                    "LastEvaluatedKey": {"cursor": self.call_count},
+                }
+
+        table = NeverEndingTable()
+        monkeypatch.setattr(pc, "asset_file_metadata_table", table)
+
+        metadata = pc.get_asset_metadata("db-1", "asset-1")
+
+        assert table.call_count == cap
+        assert len(metadata) == cap
 
 
 @pytest.mark.unit

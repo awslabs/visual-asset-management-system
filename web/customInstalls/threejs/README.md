@@ -142,7 +142,7 @@ threejs/
 ├── package.json          # Dependencies and build scripts
 ├── webpack.config.js     # Webpack bundling configuration
 ├── threejsInstall.js     # Main entry point for the bundle
-├── install.js            # Installation script (called by yarn postinstall)
+├── install.js            # Installation script (called by npm postinstall)
 └── README.md            # This file
 ```
 

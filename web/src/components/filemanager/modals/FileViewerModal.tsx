@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
-import { Modal, Box, SpaceBetween, Button } from "@cloudscape-design/components";
+import { Modal, Box, Button } from "@cloudscape-design/components";
 import { DynamicViewer } from "../../../visualizerPlugin/components/DynamicViewer";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 

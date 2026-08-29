@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
@@ -49,6 +50,10 @@ export default function ApiKeys() {
     const [showAdminMode, setShowAdminMode] = useState(false);
     const [showUserMode, setShowUserMode] = useState(false);
     const showModeToggle = showAdminMode && showUserMode;
+    // Set when neither mode could be determined. The page then offers a retry instead of
+    // guessing a privilege level.
+    const [permissionsUnavailable, setPermissionsUnavailable] = useState(false);
+    const [resolveAttempt, setResolveAttempt] = useState(0);
 
     const [mode, setMode] = useState<ApiKeyManagementMode>("admin");
     const [reload, setReload] = useState(false);
@@ -59,6 +64,9 @@ export default function ApiKeys() {
         const resolveModes = async () => {
             let admin = isApiRouteAllowed("/auth/api-keys", "GET");
             let user = isApiRouteAllowed("/auth/user/api-keys", "GET");
+            // Set only when the backend does not serve the allowed-routes listing at all,
+            // which is the one case with nothing to gate on.
+            let listingAbsent = false;
             if (admin === null || user === null) {
                 // Cache unavailable -- fetch the allowed routes directly
                 try {
@@ -71,28 +79,37 @@ export default function ApiKeys() {
                         );
                         admin = isApiRouteAllowed("/auth/api-keys", "GET");
                         user = isApiRouteAllowed("/auth/user/api-keys", "GET");
+                    } else if (result[2] === 404) {
+                        listingAbsent = true;
                     }
                 } catch (err) {
                     console.log("Error fetching allowed API routes:", err);
                 }
             }
             if (cancelled) return;
-            // Backwards compatibility: when access is still undeterminable
-            // (e.g. older backend without the allowed-routes endpoint),
-            // default to admin mode as before.
-            const adminMode = admin !== false;
+            // The gate fails closed: a permission check that could not complete must not open
+            // the tenant-wide admin surface, which would render the admin form and call the
+            // admin API for a self-service-only user and leave them no way to their own keys.
+            // Only an absent listing (404) keeps the historical admin default.
+            const undeterminable = !listingAbsent && (admin === null || user === null);
+            const adminMode = listingAbsent || admin === true;
             const userMode = user === true;
+            setPermissionsUnavailable(undeterminable);
             setShowAdminMode(adminMode);
             setShowUserMode(userMode);
             setMode(adminMode ? "admin" : "user");
-            setModesResolved(true);
-            setReload(true);
+            setModesResolved(!undeterminable);
+            if (undeterminable) {
+                setLoading(false);
+            } else {
+                setReload(true);
+            }
         };
         resolveModes();
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [resolveAttempt]);
     const [allItems, setAllItems] = useState<any[]>([]);
     const [selectedItems, setSelectedItems] = useState<any[]>([]);
     const [createOpen, setCreateOpen] = useState(false);
@@ -243,6 +260,44 @@ export default function ApiKeys() {
             sortingField: "isActive",
         },
     ];
+
+    // Nothing about the user's access could be established, so no key list and no actions are
+    // offered -- only a way to try the permission check again.
+    if (permissionsUnavailable) {
+        return (
+            <Box padding={{ top: "m", horizontal: "l" }}>
+                <Grid gridDefinition={[{ colspan: 12 }]}>
+                    <div>
+                        <TextContent>
+                            <h1>API Key Management</h1>
+                        </TextContent>
+                    </div>
+                </Grid>
+                <Grid gridDefinition={[{ colspan: 12 }]}>
+                    <Alert
+                        type="error"
+                        statusIconAriaLabel="Error"
+                        header="Could not determine your permissions"
+                        action={
+                            <Button
+                                onClick={() => {
+                                    setPermissionsUnavailable(false);
+                                    setLoading(true);
+                                    setResolveAttempt((attempt) => attempt + 1);
+                                }}
+                                data-testid="retry-resolve-api-key-modes-button"
+                            >
+                                Retry
+                            </Button>
+                        }
+                    >
+                        The permission check for API key management did not complete, so API keys
+                        cannot be shown. Retry, or reload the page.
+                    </Alert>
+                </Grid>
+            </Box>
+        );
+    }
 
     return (
         <>

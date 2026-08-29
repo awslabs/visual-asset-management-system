@@ -83,7 +83,7 @@ All registered pipelines accept any supported input file format (`.all`) and ope
 
 ## VNTANA optimization capabilities
 
-The VNTANA engine provides the following optimization modules that can be configured through pipeline input parameters:
+The VNTANA engine provides the following optimization modules, configured through the template configuration body the run uses:
 
 -   **Mesh decimation** -- Reduces polygon count while preserving visual quality.
 -   **Texture optimization** -- Compresses and resizes textures for target delivery platforms.
@@ -93,7 +93,9 @@ The VNTANA engine provides the following optimization modules that can be config
 -   **Animation preservation** -- Maintains skeletal and morph target animations during conversion.
 
 :::info[Template-based configuration]
-VNTANA supports template-based optimization configurations through the `inputParameters` field. Templates define a sequence of optimization and conversion modules with per-module settings. Refer to the VNTANA documentation for the full template schema and available options.
+VNTANA supports its own optimization templates, supplied in the configuration body of the VAMS pipeline template the run uses. A VNTANA template defines a sequence of optimization and conversion modules with per-module settings. Refer to the VNTANA documentation for the full template schema and available options.
+
+Deployment registers one VAMS pipeline template per output format (`model-ops-to-glb`, `model-ops-to-gltf`, `model-ops-to-usdz`), each carrying only its `outputType`. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`). To supply a VNTANA optimization template, either register a pipeline template whose configuration body carries it, or override the selected template's body for a single run -- the pipeline permits a per-run override (`systemConfig.allowCustomTemplateOverride` is `true`).
 :::
 
 ## AWS Marketplace integration

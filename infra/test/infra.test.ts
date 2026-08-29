@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as cdk from "aws-cdk-lib";
 import * as Infra from "../lib/core-stack";
 import * as Config from "../config/config";
 import * as Service from "../lib/helper/service-helper";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 /**
  * Build a minimal mock configuration for testing. The public (`ConfigPublic`)
@@ -57,7 +57,7 @@ const createMockConfig = (): Config.Config => {
 test("Core stack synthesizes", () => {
     // CoreVAMSStack reads the "environments" context (tags + IAM role transform),
     // so seed it the way cdk.json does.
-    const app = new cdk.App({
+    const app = newTestApp({
         context: {
             environments: {
                 common: { SolutionName: "AWSVisualAssetManagementSystem" },

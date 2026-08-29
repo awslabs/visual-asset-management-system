@@ -120,6 +120,42 @@ def relative_subdir_from_manifest_path(relative_path):
     return trimmed.rsplit("/", 1)[0]
 
 
+# The folder a converted file is written under when the conversion does not change the file
+# extension, so a same-format re-export is a sibling of its source rather than a new version of it.
+# The name matches rapidPipeline's, so every conversion pipeline places a same-format output alike.
+SAME_FORMAT_OUTPUT_SUBDIR = "optimized"
+
+
+def output_relative_subdir(relative_subdir, input_extension, output_extension):
+    """The subdirectory the converted file is written under, relative to the output-files prefix:
+    the input file's own subdirectory within the asset, plus a trailing `optimized` folder when the
+    conversion does not change the file extension.
+
+    Every format this pipeline exports is also a format it accepts, and each built-in template pins
+    one target format, so a template whose target is the input file's own format is a same-extension
+    run (`.glb` with Convert to GLB, `.gltf` with Convert to GLTF, `.obj` with Convert to OBJ,
+    `.stl` with Convert to STL). The output keeps both the input's subdirectory and its file name, so
+    in that case the output's ASSET-RELATIVE path equals the input's; the workflow's process-output
+    step writes each staged output back to the output asset at exactly that relative path, so the
+    write-back would land a new version of the operator's source object rather than a sibling file.
+    The extra folder is what keeps the two apart, and it is a folder rather than a changed file name
+    because the name is what identifies the converted model.
+
+    The two extensions decide it on their own: the output file name is the input's stem plus the
+    output extension, so equal extensions is exactly the case where the two names — and therefore the
+    two relative paths — coincide. Both are compared in the lower case this pipeline normalizes them
+    to, so a `.STL` source re-exported as `.stl` is also treated as same-format: its output would
+    otherwise differ from its source by extension case alone. A format-changing conversion still
+    lands directly beside its source, and the folder is constant per format, so it separates the
+    output from the input rather than separating runs from each other (the workflow's own output path
+    extension does that).
+    """
+    subdir = (relative_subdir or "").strip("/")
+    if input_extension != output_extension:
+        return subdir
+    return f"{subdir}/{SAME_FORMAT_OUTPUT_SUBDIR}" if subdir else SAME_FORMAT_OUTPUT_SUBDIR
+
+
 def resolve_inputs_from_manifest(data):
     """Resolve the input file path, output-files path and the input's asset-relative subdirectory
     from the workflow manifest (inputManifestS3Location), falling back to the legacy top-level body
@@ -194,13 +230,17 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     mesh.export(output_file, file_type=output_filetype.lstrip('.'))
 
     # Upload output file to S3. The converted file keeps the input file's subdirectory within the
-    # asset so the write-back step places it beside the input rather than at the asset root.
+    # asset so the write-back step places it beside the input rather than at the asset root. A
+    # conversion that does not change the file extension gains one further folder, so the write-back
+    # cannot resolve to the input's own key.
+    output_subdir = output_relative_subdir(
+        relative_subdir, input_s3_asset_extension, output_filetype)
     outputFileName, _ = os.path.splitext(os.path.basename(input_key)) #get the original file name without extension
     outputFileName = f"{outputFileName}{output_filetype}" #add final output extension
     if not output_key.endswith("/"):
         output_key += "/"
-    if relative_subdir:
-        output_key = f"{output_key}{relative_subdir.strip('/')}/"
+    if output_subdir:
+        output_key = f"{output_key}{output_subdir}/"
     output_key = f"{output_key}{outputFileName}" #get final storage key location for output file
     uploadV2(output_bucket, output_key, output_file) #upload to storage
 

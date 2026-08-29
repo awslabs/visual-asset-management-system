@@ -44,7 +44,7 @@ When the external bucket lives in a **different** AWS account, VAMS cannot confi
 
 -   **TLS enforcement** -- VAMS does **not** add the `aws:SecureTransport=false` deny statement to an external bucket. You must add it to the bucket policy yourself ([Step 1](#step-1-configure-the-s3-bucket-policy)).
 -   **Additional bucket policy statements** -- Custom statements from `infra/config/policy/s3AdditionalBucketPolicyConfig.json` are **not** applied to external buckets. Replicate them in the bucket policy in Account B if required.
--   **Event notifications** -- VAMS configures Amazon S3 event notifications on the bucket during deployment. This requires the VAMS deployment to have bucket-owner permissions on the external bucket and **overwrites the bucket's existing notification configuration** (see [Step 1](#step-1-configure-the-s3-bucket-policy) and the [limitations](#known-limitations-for-cross-account-buckets) below).
+-   **Event notifications** -- VAMS configures Amazon S3 event notifications on the bucket during deployment. This requires the VAMS deployment to have bucket-owner permissions on the external bucket, including `s3:GetBucketNotification` so that existing notification entries can be read and preserved (see [Step 1](#step-1-configure-the-s3-bucket-policy) and the [limitations](#known-limitations-for-cross-account-buckets) below).
 -   **Encryption key access** -- Both the VAMS-owned AWS KMS key (used by the notification topics) and the external bucket's KMS key (if any) require cross-account key policy grants ([Step 3](#step-3-configure-kms-key-policy-conditional)).
 
 Review [Known limitations for cross-account buckets](#known-limitations-for-cross-account-buckets) before deploying.
@@ -64,7 +64,7 @@ Each entry in the `externalAssetBuckets` array supports the following fields:
 | `baseAssetsPrefix`      | String | Yes                                 | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root.                                                   |
 | `defaultSyncDatabaseId` | String | Yes                                 | The VAMS database ID that assets discovered in this bucket are assigned to.                                                                           |
 | `bucketAccountId`       | String | Recommended for cross-account       | The 12-digit AWS account ID that owns the bucket. Enables VAMS to import the bucket as cross-account and to scope event-notification source policies. |
-| `bucketRegion`          | String | Recommended for cross-account       | The AWS Region of the bucket. Defaults to the VAMS deployment Region when omitted.                                                                    |
+| `bucketRegion`          | String | Optional                            | The AWS Region of the bucket. **Must equal the VAMS deployment Region** — Amazon S3 requires an event-notification destination to be in the bucket's Region, and VAMS creates its notification topics in the deployment Region. Defaults to the deployment Region when omitted; a differing value is rejected at synth. |
 | `bucketKmsKeyArn`       | String | Required if the bucket uses SSE-KMS | The ARN of the AWS KMS key the bucket is encrypted with. VAMS grants this key to its Lambda and pipeline roles so they can read and write objects.    |
 
 :::note[Registering a bucket under multiple prefixes]
@@ -370,7 +370,7 @@ For a bucket VAMS owns, the deployment applies the full set of bucket policies a
 VAMS configures automatically (from Account A) for each external bucket entry:
 
 -   **Bucket import** -- Imports the Amazon S3 bucket reference using the provided ARN.
--   **Event notifications** -- Creates Amazon SNS topics and configures Amazon S3 event notifications on the bucket to enable automatic file synchronization. This requires bucket-owner permissions in Account B and overwrites the bucket's existing notification configuration (see [Known limitations](#known-limitations-for-cross-account-buckets)).
+-   **Event notifications** -- Creates Amazon SNS topics and configures Amazon S3 event notifications on the bucket to enable automatic file synchronization. This requires bucket-owner permissions in Account B. Notification entries that VAMS does not own are preserved (see [Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket)).
 -   **DynamoDB registration** -- Populates the S3 Asset Buckets Amazon DynamoDB table with bucket metadata (bucket name, prefix, sync database ID, versioning status).
 -   **Lambda and pipeline permissions** -- Grants the VAMS Lambda and pipeline IAM roles permission to read from and write to the external bucket ARN.
 
@@ -383,6 +383,41 @@ The bucket owner must configure manually (in Account B), because VAMS cannot app
 
 :::note
 Assets store which bucket and prefix they are assigned to upon creation. Changes made directly to Amazon S3 buckets (outside of VAMS) are synchronized back to Amazon DynamoDB tables and Amazon OpenSearch indexes through the event notification pipeline.
+:::
+
+## Event notifications on a shared bucket
+
+Amazon S3 allows a single notification configuration per bucket, so a bucket that VAMS shares with another
+consumer needs its entries combined rather than replaced. VAMS imports an external bucket by ARN, which
+makes the notification configuration **unmanaged** — the deployment reads the bucket's current
+configuration, keeps every entry it does not own, appends its own entries, and writes the combined result
+back.
+
+Three rules govern which entries survive:
+
+-   **Entries VAMS does not own are preserved.** Ownership is determined by an identifier that the
+    deployment stamps on the entries it creates. Topic, queue, and Lambda entries created by anything else —
+    another application, a data lake ingestion pipeline, a manually configured notification — are carried
+    through unchanged.
+-   **On the first deployment against a bucket, every existing entry is treated as external** and is
+    therefore preserved.
+-   **An existing Amazon EventBridge configuration is always preserved**, because there is no identifier
+    that distinguishes an EventBridge configuration created by VAMS from one created by another consumer.
+
+Two consequences follow for the bucket policy and for planning:
+
+-   The bucket policy must grant `s3:GetBucketNotification` in addition to `s3:PutBucketNotification`
+    ([Step 1](#step-1-configure-the-s3-bucket-policy)). The read is what makes preservation possible; if it
+    is denied, the deployment fails rather than writing a configuration that drops the other consumer's
+    entries.
+-   Removing VAMS from a bucket removes only the VAMS entries. The other consumer's notifications remain in
+    place after the VAMS stack is deleted.
+
+:::note[Prefix filters and overlapping registrations]
+Each registered `baseAssetsPrefix` becomes its own prefix-filtered entry within the single notification
+configuration. This is why the same bucket ARN may be registered under multiple prefixes but the prefixes
+must not overlap — Amazon S3 cannot route an object event to an ambiguous prefix filter. The CDK deployment
+rejects overlapping prefixes during configuration validation, before any notification is written.
 :::
 
 ## Verification
@@ -413,12 +448,16 @@ After deployment, use the following checklist to verify the external bucket inte
 
 Because VAMS imports external buckets by ARN — which carries no account identifier — some behaviors that work transparently for same-account buckets require extra attention or have constraints when the bucket lives in another account:
 
--   **Event notification configuration is overwritten, not merged.** When VAMS configures S3 event notifications on the external bucket, it replaces the bucket's existing notification configuration. If the bucket already publishes events to other consumers (for example, an existing data lake ingestion pipeline), those configurations are removed. Re-add them alongside the VAMS notifications after deployment, or use a dedicated bucket or prefix for VAMS.
+-   **Event notification entries are merged, and the merge depends on a bucket-owner read permission.** VAMS registers its notification entries alongside any that already exist on the bucket rather than replacing the configuration, so a bucket that already publishes events to another consumer — for example an existing data lake ingestion pipeline — keeps those entries. The merge is performed by reading the current configuration and writing it back with the VAMS entries added, which is why the bucket policy must grant `s3:GetBucketNotification` as well as `s3:PutBucketNotification` ([Step 1](#step-1-configure-the-s3-bucket-policy)). If only `s3:PutBucketNotification` is granted, the deployment fails rather than silently discarding the existing entries. See [Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket) for the identity rules that govern which entries VAMS considers its own.
 -   **Bucket-level policies are not applied by VAMS.** TLS enforcement and any additional bucket policy statements must be applied by the bucket owner in Account B ([Step 1](#step-1-configure-the-s3-bucket-policy)). VAMS applies these only to buckets it owns.
--   **External KMS access is not granted to VAMS roles automatically.** If the external bucket uses an Account B CMK, you must grant that key to the VAMS Lambda and pipeline roles manually ([Step 4](#step-4-configure-cross-account-iam-conditional)). VAMS grants only its own KMS key to those roles.
+-   **External KMS access depends on the `bucketKmsKeyArn` field.** When the bucket entry sets `bucketKmsKeyArn`, VAMS grants `kms:Decrypt`, `kms:GenerateDataKey*`, and `kms:DescribeKey` on that key to its Lambda execution roles and pipeline task roles during deployment. The key policy in Account B must still admit the VAMS account ([Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms)) — an IAM grant alone does not cross the account boundary. If you omit `bucketKmsKeyArn`, no grant is generated and you must attach the key policy to the VAMS roles yourself ([Step 4](#step-4-configure-cross-account-iam-conditional)).
 -   **SNS source-account scoping.** Event notifications from a cross-account bucket publish to VAMS-owned SNS topics. If VAMS uses a CMK, the VAMS key policy must admit the external bucket's account as an S3 notification source ([Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled)). Delivery failures here are silent — notifications simply do not arrive.
 -   **Object ownership on writes.** VAMS writes objects using its Account A execution-role credentials and sets the `bucket-owner-full-control` canned ACL so the bucket owner (Account B) retains control. On a bucket with ACLs enabled, the bucket policy must allow `s3:PutObjectAcl` for this to succeed; on a bucket with Object Ownership set to _Bucket owner enforced_, ownership is automatic and the ACL is a no-op ([object ownership](#object-ownership-cross-account-writes)).
--   **Partition and region must match the deployment.** The external bucket ARN must use the same AWS partition as the VAMS deployment (for example, both `arn:aws` or both `arn:aws-us-gov`), and the bucket should be in the same Region as the VAMS deployment for event notifications and `kms:ViaService` conditions to resolve correctly.
+-   **The bucket must be in the same AWS Region as the deployment. Cross-account is supported; cross-Region is not.** This is an Amazon S3 constraint rather than a VAMS preference: S3 requires an event-notification destination to be in the same Region as the bucket, and VAMS creates its notification topics in the deployment Region. A bucket in another Region therefore cannot be wired for synchronization at all. The CDK deployment rejects a `bucketRegion` that does not match the deployment Region during configuration validation, so the mismatch fails at synth with a message naming both Regions rather than part-way through the deploy.
+
+    Separately from the S3 constraint, serving asset files across Regions is not a good pattern for this workload: every read and write would cross a Region boundary, adding latency and data-transfer cost to operations that routinely move multi-gigabyte 3D assets, and pipeline containers would pull their inputs cross-Region. Where a bucket's Region was chosen for data-residency reasons, processing the data in another Region also works against that choice. If assets must stay in a Region other than the deployment's, deploy VAMS into that Region.
+
+-   **Partition must match the deployment.** The external bucket ARN must use the same AWS partition as the VAMS deployment — for example both `arn:aws`, or both `arn:aws-us-gov`. This also keeps `kms:ViaService` conditions resolvable.
 -   **Prefixes on a shared bucket must not overlap.** A bucket ARN may be registered under multiple prefixes, but Amazon S3 permits only one notification configuration per bucket, so the prefixes must be mutually non-overlapping (no prefix may be a path-prefix of another, and the bucket root cannot be combined with any other prefix). VAMS merges the registrations into a single notification configuration with one prefix-filtered entry per prefix. The CDK deployment fails validation if it detects overlapping prefixes or inconsistent per-bucket attributes (account, region, KMS key) across entries for the same ARN.
 
 ## Troubleshooting
@@ -446,7 +485,7 @@ Every Amazon S3 bucket registered in VAMS has a `baseAssetsPrefix` value. This p
 
 ### Asset folder structure
 
-When VAMS creates a new asset, it creates a folder at `\{baseAssetsPrefix\}\{assetId\}/` within the bucket. All files belonging to that asset are stored under this folder, preserving any relative directory structure from the upload.
+When VAMS creates a new asset, it creates a folder at `{baseAssetsPrefix}{assetId}/` within the bucket. All files belonging to that asset are stored under this folder, preserving any relative directory structure from the upload.
 
 ```
 s3://bucket-name/
@@ -467,17 +506,17 @@ VAMS reserves several prefixes within the `baseAssetsPrefix` for internal use:
 
 | Prefix                                         | Purpose          | Description                                                              |
 | ---------------------------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `\{baseAssetsPrefix\}\{assetId\}/`             | Asset files      | All files belonging to an asset, including subdirectories                |
-| `\{baseAssetsPrefix\}previews/\{assetId\}/`    | File previews    | Thumbnail and preview images generated by pipelines or uploaded manually |
-| `\{baseAssetsPrefix\}temp-uploads/`            | Upload staging   | Temporary storage for multipart uploads; cleaned up after completion     |
-| `pipelines/\{pipelineType\}/\{jobId\}/output/` | Pipeline outputs | Processing pipeline results (written by Step Functions workflows)        |
+| `{baseAssetsPrefix}{assetId}/`             | Asset files      | All files belonging to an asset, including subdirectories                |
+| `{baseAssetsPrefix}previews/{assetId}/`    | File previews    | Thumbnail and preview images generated by pipelines or uploaded manually |
+| `{baseAssetsPrefix}temp-uploads/`            | Upload staging   | Temporary storage for multipart uploads; cleaned up after completion     |
+| `pipelines/{pipelineType}/{jobId}/output/` | Pipeline outputs | Processing pipeline results (written by Step Functions workflows)        |
 
 The auxiliary bucket (a separate bucket managed by VAMS) stores:
 
 | Prefix                                 | Purpose        | Description                                                                |
 | -------------------------------------- | -------------- | -------------------------------------------------------------------------- |
-| `metadata/\{databaseId\}/\{assetId\}/` | Metadata files | Metadata files produced by pipelines (JSON, XMP)                           |
-| `\{assetId\}/`                         | Viewer data    | Non-versioned data for specific viewers (for example, Potree octree files) |
+| `metadata/{databaseId}/{assetId}/` | Metadata files | Metadata files produced by pipelines (JSON, XMP)                           |
+| `{assetId}/`                         | Viewer data    | Non-versioned data for specific viewers (for example, Potree octree files) |
 
 ### How databases, buckets, and assets relate
 
@@ -495,7 +534,7 @@ graph TD
 
 -   A **database** is mapped to a default S3 bucket (and prefix) via the S3 Asset Buckets Amazon DynamoDB table.
 -   A bucket can back multiple databases by registering its ARN once per database with a different, non-overlapping `baseAssetsPrefix` for each.
--   Each **asset** lives under `\{baseAssetsPrefix\}\{assetId\}/` in its database's bucket.
+-   Each **asset** lives under `{baseAssetsPrefix}{assetId}/` in its database's bucket.
 -   **Files** within an asset preserve their relative directory structure from upload.
 
 ### Example: full S3 key layout
@@ -610,10 +649,10 @@ Deploy the CDK stack. This configures Amazon S3 event notifications on your buck
 
 After deployment, place a file named `init` inside each asset folder. This triggers the bucket sync Lambda to:
 
-1. Detect the new file event for `\{baseAssetsPrefix\}\{assetId\}/init`.
+1. Detect the new file event for `{baseAssetsPrefix}{assetId}/init`.
 2. Extract the `assetId` from the S3 key (the first path segment after the `baseAssetsPrefix`).
 3. Look up or auto-create the VAMS database for this bucket and prefix.
-4. Create a new asset record in Amazon DynamoDB with `assetLocation.Key` pointing to `\{baseAssetsPrefix\}\{assetId\}/`.
+4. Create a new asset record in Amazon DynamoDB with `assetLocation.Key` pointing to `{baseAssetsPrefix}{assetId}/`.
 5. Determine the asset type from the other files in the folder (file extension for single files, `folder` for multiple files).
 6. **Delete the `init` file** from Amazon S3 automatically.
 7. Skip sending the `init` file to the file indexer (it is not a real asset file).

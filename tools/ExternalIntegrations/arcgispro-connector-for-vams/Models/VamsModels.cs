@@ -190,6 +190,11 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("isArchived")]
         public bool IsArchived { get; set; }
 
+        /// <summary>
+        /// The file's VAMS primary type. Requires a per-object metadata read, which a basic file
+        /// listing skips — a <c>file list --basic</c> item carries <c>primaryType: null</c>. Only the
+        /// file-info API populates it for the commands this connector runs.
+        /// </summary>
         [JsonPropertyName("primaryType")]
         public string PrimaryType { get; set; } = string.Empty;
 
@@ -215,6 +220,12 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("lastModified")]
         public string LastModified { get; set; } = string.Empty;
 
+        /// <summary>
+        /// S3 version id of the file's current version. Populated by NEITHER command this connector
+        /// runs: a basic file listing returns <c>versionId: null</c>, and the file-info response
+        /// carries version ids only inside its <c>versions[]</c> history, not at the top level. It is
+        /// always empty here.
+        /// </summary>
         [JsonPropertyName("versionId")]
         public string VersionId { get; set; } = string.Empty;
 
@@ -224,6 +235,12 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("storageClass")]
         public string StorageClass { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Path to this file's generated preview image. A basic file listing returns <c>""</c> for
+        /// every entry — preview resolution is one of the passes basic mode skips — so an empty value
+        /// means "not reported", not "no preview exists". <c>ImagePreviewViewModel</c> re-checks via
+        /// the file-info API before concluding a file has no preview.
+        /// </summary>
         [JsonPropertyName("previewFile")]
         public string PreviewFile { get; set; } = string.Empty;
 
@@ -239,8 +256,18 @@ namespace VamsDatabaseExplorer.Models
         [JsonIgnore]
         public string Key => string.IsNullOrEmpty(FileKey) ? RelativePath : FileKey;
 
+        /// <summary>
+        /// The primary type, or "unknown" when the response did not report one. A basic listing sends
+        /// <c>null</c> and an older one omits the field, so both the null and the empty case have to
+        /// resolve to "unknown" — <c>?? "unknown"</c> alone leaves an omitted field as an empty
+        /// string, which prints as a blank type rather than an honest one.
+        /// </summary>
         [JsonIgnore]
-        public string Type => PrimaryType ?? "unknown";
+        public string Type => string.IsNullOrEmpty(PrimaryType) ? "unknown" : PrimaryType;
+
+        /// <summary>Whether the response reported a primary type at all (a basic listing does not).</summary>
+        [JsonIgnore]
+        public bool HasPrimaryType => !string.IsNullOrEmpty(PrimaryType);
 
         [JsonIgnore]
         public string State => IsArchived ? "archived" : "available";

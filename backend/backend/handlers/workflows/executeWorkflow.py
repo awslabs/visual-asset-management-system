@@ -1315,10 +1315,19 @@ def _verify_inputs_exist(selected_inputs, asset_records):
 # Concurrency guard
 #######################
 
-def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, seen):
+def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, seen,
+                             workflow_composite=""):
     """Yield distinct, not-yet-seen workflowExecutionIds for a (databaseId:assetId) partition,
     newest-first, filtered to the exact input file keys when restriction is perInputFile. Paginates
-    to exhaustion; the per-partition inspection bound is applied by the caller."""
+    to exhaustion; the per-partition inspection bound is applied by the caller.
+
+    Filtered to `workflow_composite` here, from the workflow ids the input row already carries, so
+    the caller's inspection budget is spent only on executions of THIS workflow. The by-asset GSI is
+    not partitioned by workflow, so without this a busy asset's runs of unrelated workflows exhaust
+    the budget before a conflicting run of this one is ever examined. A row written without workflow
+    ids (a migrated row) is kept as a candidate: the definitive workflow check then happens on its
+    main row in `_execution_running`, so an unlabelled row costs a read rather than a missed
+    conflict."""
     query_kwargs = {
         "IndexName": "WorkflowExecInputsByAssetGSI",
         "KeyConditionExpression": Key("databaseId:assetId").eq(partition),
@@ -1329,6 +1338,12 @@ def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, se
         for input_item in resp.get("Items", []):
             if restriction == "perInputFile" and input_item.get("inputAssetFileKey") not in file_keys:
                 continue
+            row_workflow_database_id = input_item.get("workflowDatabaseId", "")
+            row_workflow_id = input_item.get("workflowId", "")
+            if workflow_composite and row_workflow_database_id and row_workflow_id:
+                if er.workflow_composite_key(
+                        row_workflow_database_id, row_workflow_id) != workflow_composite:
+                    continue
             execution_id = input_item.get("workflowExecutionId", "")
             if not execution_id or execution_id in seen:
                 continue
@@ -1340,14 +1355,34 @@ def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, se
 
 
 def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs, asset_records,
-                              restriction):
+                              restriction, notices=None):
     """True when a still-running execution of this workflow conflicts with the concurrency
     restriction:
       - none: never conflicts.
       - perAsset: a running execution touching any of the selected inputs' assets.
       - perInputFile: a running execution on any of the exact selected input file keys.
-    The number of distinct executions confirmed via Step Functions is bounded by
-    MAX_CONCURRENCY_CANDIDATES_INSPECTED (warns rather than silently truncating)."""
+
+    Confirming one candidate costs a main-row read plus a Step Functions describe, so the number of
+    distinct executions confirmed is bounded. The budget is spent ROUND-ROBIN over the selected assets
+    rather than pre-split into equal shares: every asset contributes its newest candidate before any of
+    them contributes a second, which keeps a long-history asset from consuming everything while
+    reserving nothing for an asset that has fewer candidates than a share would hand it. A floor of one
+    budget unit per asset keeps the guarantee that no selected asset goes entirely unexamined however
+    many the request spans.
+
+    A budget that runs out is NOT evidence of a conflict, and it does not deny the launch: it is
+    reported through `notices` (surfaced as an execute warning) and the run proceeds. Rejecting instead
+    is unrecoverable - an asset's execution count only grows, so once past the bound every later launch
+    on it fails identically with nothing the caller can change, and this same path runs as SYSTEM_USER
+    for trigger-dispatched runs, which would stop file-upload automation on exactly the assets that are
+    busiest, with only a log line to say so.
+
+    What that concedes is narrow, and needs POST on the workflow and on the assets already: to slip a
+    second concurrent run past the guard, more executions of THIS workflow on THESE assets must have
+    started after the still-running one than the budget covers (the walk is newest-first, so a
+    currently-running execution is normally among the first candidates examined). The effect is two runs
+    of the caller's own workflow writing the caller's own asset, no wider access - and the response
+    states that the limit could not be confirmed rather than implying it held."""
     if restriction not in ("perAsset", "perInputFile"):
         return False
 
@@ -1355,7 +1390,9 @@ def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs
     main_table = dynamodb.Table(workflow_execution_database_v2)
     composite = er.workflow_composite_key(workflow_database_id, workflow_id)
 
-    asset_partitions = {f"{i['databaseId']}:{i['assetId']}" for i in selected_inputs}
+    # Sorted, not a bare set: the round-robin below visits the partitions in this order, and a
+    # deterministic order keeps which asset is examined first from varying between identical requests.
+    asset_partitions = sorted({f"{i['databaseId']}:{i['assetId']}" for i in selected_inputs})
     # inputAssetFileKey is stored as the normalized FULL asset key (asset root + relative), so build
     # the comparison set the same way (per its own asset's root) rather than from the relative key.
     file_keys = set()
@@ -1367,18 +1404,45 @@ def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs
         file_keys.add(er.normalize_file_key(full_key))
 
     seen = set()
+    # One budget for the whole request, spent a candidate at a time across the partitions in turn. A
+    # walker is a lazy generator, so a partition costs a query only when its turn comes and only while
+    # budget remains. `pending` empties only when EVERY partition's candidates are exhausted, which is
+    # what separates "inspected all of them and none is running" from "ran out of budget".
+    walkers = {partition: _candidate_execution_ids(
+        inputs_table, partition, file_keys, restriction, seen, workflow_composite=composite)
+        for partition in asset_partitions}
+    # Never fewer budget units than there are partitions, so each selected asset still gets its newest
+    # candidate examined however broad the selection is - the anti-starvation floor the per-share split
+    # provided, without the share's side effect of stopping while most of the budget is unspent.
+    budget = max(MAX_CONCURRENCY_CANDIDATES_INSPECTED, len(asset_partitions))
+    pending = list(asset_partitions)
     inspected = 0
-    for partition in asset_partitions:
-        for execution_id in _candidate_execution_ids(
-                inputs_table, partition, file_keys, restriction, seen):
-            if inspected >= MAX_CONCURRENCY_CANDIDATES_INSPECTED:
-                logger.warning(
-                    f"Concurrency check bounded at {MAX_CONCURRENCY_CANDIDATES_INSPECTED} distinct "
-                    "executions; older executions were not inspected.")
-                return False
+    while pending and inspected < budget:
+        for partition in list(pending):
+            if inspected >= budget:
+                break
+            # A generator cannot yield None, so None is an unambiguous exhaustion sentinel.
+            execution_id = next(walkers[partition], None)
+            if execution_id is None:
+                pending.remove(partition)
+                continue
             inspected += 1
             if _execution_running(main_table, execution_id, composite):
                 return True
+    if pending:
+        # No conflict was found and the candidates were not exhausted. Reported, not rejected: an
+        # unspent-candidate count is a statement about this request's budget, not about concurrency, and
+        # a rejection here can never be cleared by the caller (or by the trigger dispatcher, which calls
+        # this as SYSTEM_USER with no one to read the error).
+        logger.warning(
+            f"Concurrency check confirmed {inspected} executions of this workflow across "
+            f"{len(asset_partitions)} selected asset(s) without exhausting the candidates, so the "
+            f"{restriction} restriction could not be confirmed; the launch proceeds.")
+        if notices is not None:
+            notices.append(
+                "This workflow limits concurrent executions. The selected assets have more executions "
+                "of it than one request can examine, so no conflicting execution was found but the "
+                "limit could not be fully confirmed.")
     return False
 
 
@@ -1434,9 +1498,13 @@ def _write_execution_input_files(execution_id, run_bucket, pipelines_count, meta
 
     for idx in range(pipelines_count):
         cfg_key = er.pipeline_input_config_key(execution_id, idx + 1)
+        # Every step gets an object at its own config key, so configKeys[idx] is always step idx + 1.
+        # A step with no configuration body gets an empty JSON object: the key is declared
+        # application/json and reaches the step as inputConfigurationS3Location, so a zero-byte body
+        # is a location every reader has to special-case before it can parse it.
         cfg_body = pipeline_config_bodies[idx] if idx < len(pipeline_config_bodies) else ""
         s3c.put_object(Bucket=run_bucket, Key=cfg_key,
-                       Body=(cfg_body or "").encode("utf-8"), ContentType="application/json")
+                       Body=(cfg_body or "{}").encode("utf-8"), ContentType="application/json")
         locations["configKeys"].append(cfg_key)
 
         # Per-step DELIVERY narrowing — the second half of the two-level metadataInputs contract.
@@ -1573,6 +1641,14 @@ def _render_output_path_extension(extension, manifest, execution_context, metada
         logger.error(f"Output base path extension uses undefined template tag(s): {e.unknown_tags}")
         raise VAMSGeneralErrorResponse(
             "The output base path extension uses one or more undefined template tags.")
+    except tr.RenderedConfigTooLargeError as e:
+        # A metadata-content tag emits the whole payload at every occurrence, so an extension
+        # repeating one renders past the limit. That is the caller's to shrink, so it answers 400
+        # naming the limit rather than falling through to the handler's internal_error.
+        logger.error(f"Output base path extension renders past the {e.limit}-character limit")
+        raise VAMSGeneralErrorResponse(
+            f"The output base path extension renders to more than {e.limit} characters. Reduce the "
+            f"template tags it repeats.")
     unescaped = _unescape_rendered_path(rendered)
     normalized = ope.normalize_output_path_extension(unescaped)
     segments = [s for s in normalized.split("/") if s]
@@ -1771,10 +1847,17 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     pipeline_config_bodies = []
     for idx, record in enumerate(pipeline_records):
         composite = er.pipeline_composite_key(record.get("databaseId", ""), record.get("pipelineId", ""))
-        rendered = (resolved_configs.get(composite) or {}).get("renderedConfig", "")
+        resolved_config = resolved_configs.get(composite) or {}
+        rendered = resolved_config.get("renderedConfig", "")
         if idx == 0:
+            # The template's declared configFormat decides how a system tag's scalar value is escaped.
+            # Rendering an 'xml' body under the default json escape leaves '&', '<' and '>' raw, so a
+            # file key carrying one of them emits markup the pipeline's parser rejects or misreads —
+            # and stage 1 escaped the same body's USER tags for the declared format, so the two halves
+            # of one body would disagree. The format is resolved with the body, on the same entry.
             pipeline_config_bodies.append(tr.render_config(
-                rendered, first_manifest, first_context, metadata_loader=_metadata_payload))
+                rendered, first_manifest, first_context, metadata_loader=_metadata_payload,
+                config_format=(resolved_config.get("configFormat", "") or tr.CONFIG_FORMAT_JSON)))
         else:
             pipeline_config_bodies.append(rendered)
 
@@ -2294,10 +2377,14 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         return validation_error(body={"message": {"executionValidationErrors": validation_errors}},
                                 event=event)
 
-    # 10) Concurrency guard per the workflow's concurrencyRestriction.
+    # 10) Concurrency guard per the workflow's concurrencyRestriction. concurrency_notices carries the
+    #     case where the guard found no conflicting execution but could not examine every candidate, so
+    #     the response says the limit was not fully confirmed instead of the launch being denied.
     restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
+    concurrency_notices = []
     if _running_execution_exists(
-            workflow_database_id, workflow_id, selected_inputs, asset_records, restriction):
+            workflow_database_id, workflow_id, selected_inputs, asset_records, restriction,
+            notices=concurrency_notices):
         return validation_error(body={
             "message": "A conflicting execution of this workflow is already running."}, event=event)
 
@@ -2319,7 +2406,7 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     output_extension = _resolve_requested_output_extension(request_model, workflow)
     warnings = _missing_metadata_source_warnings(
         pipeline_records, resolved_configs, metadata_inputs, metadata_source_assets,
-        metadata_source_databases) + capture_notices
+        metadata_source_databases) + capture_notices + concurrency_notices
     execution_id = _launch_workflow(
         workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
         selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
@@ -2423,6 +2510,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.error(f"Input configuration uses undefined template tag(s): {e.unknown_tags}")
         return validation_error(body={"message":
             "An input configuration uses one or more undefined template tags."}, event=event)
+    except tr.RenderedConfigTooLargeError as e:
+        # The render limit exists because a metadata-content tag emits the whole payload at every
+        # occurrence, so a body repeating one renders far larger than the body itself. That is a
+        # caller-input problem, and the error carries the limit so the response can name it — without
+        # this arm it reaches the terminal `except Exception` and answers 500 for a 400 condition. The
+        # render precedes start_execution, so nothing is left running.
+        logger.error(f"Input configuration renders past the {e.limit}-character limit")
+        return validation_error(body={"message":
+            f"An input configuration renders to more than {e.limit} characters. Reduce the template "
+            f"tags it repeats, or the amount of metadata the run captures."}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={"message": str(v)}, event=event)

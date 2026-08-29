@@ -36,6 +36,12 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 All metadata values are stored and transmitted as strings, regardless of type. The `metadataValueType` field indicates how the string should be interpreted and validated.
 :::
 
+:::note[Incomplete Records]
+A metadata record that carries no stored value, or no stored value type, is returned with that field as `null`. The record stays visible in the response along with its key. On a create or update, `null` in either field is read as the field not being supplied: `metadataValue` stores an empty value, and `metadataValueType` takes the default `"string"`. An item taken from a `GET` response can therefore be submitted back unchanged to complete the record.
+
+Completing a record does not bypass schema validation. Where a schema marks the field as required, a write that leaves its value empty is rejected — supply a value for that field in the same request.
+:::
+
 ---
 
 ## Asset Metadata
@@ -139,8 +145,8 @@ Adds new metadata items to an asset. Supports bulk creation of multiple items in
 | ------------------------------ | ------ | -------- | ------------------------------------------------------- |
 | `metadata`                     | array  | Yes      | List of metadata items. Must contain at least one item. |
 | `metadata[].metadataKey`       | string | Yes      | Metadata key (1-256 characters).                        |
-| `metadata[].metadataValue`     | string | Yes      | Metadata value as string.                               |
-| `metadata[].metadataValueType` | string | No       | Value type. Default: `"string"`.                        |
+| `metadata[].metadataValue`     | string | Yes      | Metadata value as string. `null` stores an empty value. |
+| `metadata[].metadataValueType` | string | No       | Value type. `null` or omitted: `"string"`.              |
 
 **Response:**
 
@@ -781,6 +787,300 @@ Returns a bulk operation response.
 | `403`  | Not authorized.        |
 | `404`  | Asset link not found.  |
 | `500`  | Internal server error. |
+
+---
+
+## Metadata Schemas
+
+A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` accepts only metadata keys an applicable schema declares.
+
+A schema is scoped to one database and one entity type. Use `GLOBAL` as the `databaseId` for a schema that applies across every database. Schemas are authorized with the `metadataSchema` object type on `databaseId`, `metadataSchemaName`, and `metadataSchemaEntityType`.
+
+### Entity types
+
+| Entity type           | Applies to                                                                |
+| --------------------- | ------------------------------------------------------------------------- |
+| `databaseMetadata`    | Database-level metadata                                                   |
+| `assetMetadata`       | Asset-level metadata                                                      |
+| `fileMetadata`        | File-level metadata                                                       |
+| `fileAttribute`       | File attributes. Only the `string` value type is accepted on these fields |
+| `assetLinkMetadata`   | Asset-link metadata                                                       |
+
+### Field definitions
+
+A schema's `fields` object holds a `fields` array of 1 to 500 field definitions. Field key names must be unique within a schema.
+
+| Field                       | Type          | Required | Description                                                                                                                                                    |
+| --------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `metadataFieldKeyName`      | string        | Yes      | Field key name (1-256 chars). Matches the `metadataKey` of the metadata record it governs.                                                                      |
+| `metadataFieldValueType`    | string        | Yes      | One of the [supported value types](#supported-value-types). Accepted case-insensitively.                                                                        |
+| `required`                  | boolean       | No       | Whether a value must be supplied for this field. Defaults to `false`.                                                                                          |
+| `sequence`                  | number        | No       | Display order, 0-based; lower numbers appear first.                                                                                                            |
+| `dependsOnFieldKeyName`     | array[string] | No       | Field key names this field depends on, at most 500 entries of 256 characters each.                                                                              |
+| `controlledListKeys`        | array[string] | No       | Allowed values, at most 1,000 entries of 256 characters each. Required when `metadataFieldValueType` is `inline_controlled_list`, and rejected for other types. |
+| `defaultMetadataFieldValue` | string        | No       | Default value. Validated against `metadataFieldValueType`, and for a controlled list must be one of `controlledListKeys`.                                       |
+
+---
+
+### List metadata schemas
+
+Retrieves metadata schemas, optionally filtered by database and entity type.
+
+```
+GET /metadataschema
+```
+
+#### Query parameters
+
+| Parameter            | Type   | Required | Default | Description                                                                    |
+| -------------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
+| `databaseId`         | string | No       | `null`  | Return only the schemas scoped to this database. `GLOBAL` is accepted.          |
+| `metadataEntityType` | string | No       | `null`  | Return only the schemas for this entity type. Accepted case-insensitively.      |
+| `maxItems`           | number | No       | `30000` | Maximum number of items to return                                              |
+| `pageSize`           | number | No       | `3000`  | Number of items per page                                                       |
+| `startingToken`      | string | No       | `null`  | Pagination token from a previous response's `NextToken`                         |
+
+#### Response
+
+```json
+{
+    "Items": [
+        {
+            "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "databaseId": "architecture-db",
+            "metadataSchemaEntityType": "assetMetadata",
+            "schemaName": "Building record",
+            "fileKeyTypeRestriction": null,
+            "fields": {
+                "fields": [
+                    {
+                        "metadataFieldKeyName": "building_name",
+                        "metadataFieldValueType": "string",
+                        "required": true,
+                        "sequence": 0
+                    },
+                    {
+                        "metadataFieldKeyName": "review_status",
+                        "metadataFieldValueType": "inline_controlled_list",
+                        "required": false,
+                        "sequence": 1,
+                        "controlledListKeys": ["draft", "in_review", "approved"],
+                        "defaultMetadataFieldValue": "draft"
+                    }
+                ]
+            },
+            "enabled": true,
+            "dateCreated": "2026-03-15T10:30:00",
+            "dateModified": "2026-03-15T10:30:00",
+            "createdBy": "user@example.com",
+            "modifiedBy": "user@example.com"
+        }
+    ],
+    "NextToken": null
+}
+```
+
+`NextToken` is present only when more schemas remain.
+
+#### Error responses
+
+| Status | Description                            |
+| ------ | -------------------------------------- |
+| `400`  | Invalid parameters or pagination token |
+| `403`  | Not authorized                         |
+| `500`  | Internal server error                  |
+
+---
+
+### Get a metadata schema
+
+Retrieves a single metadata schema by its identifier.
+
+```
+GET /database/{databaseId}/metadataSchema/{metadataSchemaId}
+```
+
+#### Path parameters
+
+| Parameter          | Type   | Required | Description                                     |
+| ------------------ | ------ | -------- | ----------------------------------------------- |
+| `databaseId`       | string | Yes      | Database identifier. `GLOBAL` is accepted.      |
+| `metadataSchemaId` | string | Yes      | Metadata schema identifier                      |
+
+#### Response
+
+Returns a single schema object in the same format as the items in the list response.
+
+#### Error responses
+
+| Status | Description                 |
+| ------ | --------------------------- |
+| `400`  | Invalid path parameters     |
+| `403`  | Not authorized              |
+| `404`  | Metadata schema not found   |
+| `500`  | Internal server error       |
+
+---
+
+### Create a metadata schema
+
+Creates a metadata schema for one database and entity type.
+
+```
+POST /metadataschema
+```
+
+#### Request body
+
+| Field                      | Type    | Required | Description                                                                                                                                         |
+| -------------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`               | string  | Yes      | Database the schema applies to. Use `GLOBAL` for a schema that applies across every database. The database must exist.                               |
+| `metadataSchemaEntityType` | string  | Yes      | Entity type the schema governs. See [Entity types](#entity-types).                                                                                   |
+| `schemaName`               | string  | Yes      | Schema name (1-256 chars).                                                                                                                          |
+| `fields`                   | object  | Yes      | Field definitions. See [Field definitions](#field-definitions).                                                                                     |
+| `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each at most 10 characters. Accepted only for `fileMetadata` and `fileAttribute` entity types. |
+| `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                 |
+
+#### Request body example
+
+```json
+{
+    "databaseId": "architecture-db",
+    "metadataSchemaEntityType": "assetMetadata",
+    "schemaName": "Building record",
+    "enabled": true,
+    "fields": {
+        "fields": [
+            {
+                "metadataFieldKeyName": "building_name",
+                "metadataFieldValueType": "string",
+                "required": true,
+                "sequence": 0
+            },
+            {
+                "metadataFieldKeyName": "review_status",
+                "metadataFieldValueType": "inline_controlled_list",
+                "sequence": 1,
+                "controlledListKeys": ["draft", "in_review", "approved"],
+                "defaultMetadataFieldValue": "draft"
+            }
+        ]
+    }
+}
+```
+
+#### Response
+
+```json
+{
+    "success": true,
+    "message": "Metadata schema 'Building record' created successfully",
+    "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000"
+}
+```
+
+#### Error responses
+
+| Status | Description                                                                       |
+| ------ | --------------------------------------------------------------------------------- |
+| `400`  | Validation error, a `fileKeyTypeRestriction` on an unsupported entity type, or a `databaseId` that does not exist |
+| `403`  | Not authorized                                                                    |
+| `500`  | Internal server error                                                             |
+
+---
+
+### Update a metadata schema
+
+Updates a metadata schema. The schema to update is identified by `metadataSchemaId` in the request body; `databaseId` and `metadataSchemaEntityType` are fixed at creation and cannot be changed.
+
+```
+PUT /metadataschema
+```
+
+#### Request body
+
+At least one field other than `metadataSchemaId` must be provided. Supplying `fields` replaces the schema's entire field set.
+
+| Field                    | Type    | Required | Description                                                         |
+| ------------------------ | ------- | -------- | ------------------------------------------------------------------- |
+| `metadataSchemaId`       | string  | Yes      | Identifier of the schema to update                                  |
+| `schemaName`             | string  | No       | Updated schema name (1-256 chars)                                   |
+| `fields`                 | object  | No       | Replacement field definitions. See [Field definitions](#field-definitions). |
+| `fileKeyTypeRestriction` | string  | No       | Updated comma-delimited file extensions                             |
+| `enabled`                | boolean | No       | Toggle schema enforcement                                           |
+
+#### Response
+
+```json
+{
+    "success": true,
+    "message": "Metadata schema updated successfully",
+    "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "operation": "update",
+    "timestamp": "2026-03-16T14:20:00.000000"
+}
+```
+
+#### Error responses
+
+| Status | Description                                                                     |
+| ------ | ------------------------------------------------------------------------------- |
+| `400`  | Validation error, no updatable field supplied, or the schema does not exist      |
+| `403`  | Not authorized                                                                  |
+| `500`  | Internal server error                                                           |
+
+---
+
+### Delete a metadata schema
+
+Deletes a metadata schema.
+
+```
+DELETE /database/{databaseId}/metadataSchema/{metadataSchemaId}
+```
+
+#### Path parameters
+
+| Parameter          | Type   | Required | Description                                |
+| ------------------ | ------ | -------- | ------------------------------------------ |
+| `databaseId`       | string | Yes      | Database identifier. `GLOBAL` is accepted. |
+| `metadataSchemaId` | string | Yes      | Metadata schema identifier                 |
+
+#### Request body
+
+The request body is required and must confirm the deletion.
+
+| Field           | Type    | Required | Description                                  |
+| --------------- | ------- | -------- | -------------------------------------------- |
+| `confirmDelete` | boolean | Yes      | Must be `true`; the delete is rejected otherwise |
+
+```json
+{
+    "confirmDelete": true
+}
+```
+
+#### Response
+
+```json
+{
+    "success": true,
+    "message": "Metadata schema deleted successfully",
+    "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "operation": "delete",
+    "timestamp": "2026-03-16T14:20:00.000000"
+}
+```
+
+#### Error responses
+
+| Status | Description                                                                        |
+| ------ | ---------------------------------------------------------------------------------- |
+| `400`  | Invalid path parameters, `confirmDelete` not `true`, or the schema does not exist    |
+| `403`  | Not authorized                                                                     |
+| `500`  | Internal server error                                                              |
 
 ---
 

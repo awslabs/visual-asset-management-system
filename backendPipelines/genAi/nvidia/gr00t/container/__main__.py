@@ -16,6 +16,7 @@ SFN task callbacks handled by pipelineEnd Lambda.
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -27,7 +28,7 @@ from urllib.parse import urlparse
 import manifest_io
 from evaluation import run_evaluation
 from inference import run_training
-from model_manager import ensure_models_cached, backup_cache_to_s3
+from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached, backup_cache_to_s3
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -37,7 +38,16 @@ logging.basicConfig(
 
 INPUT_DIR = Path("/tmp/input")
 OUTPUT_DIR = Path("/tmp/output")
-HF_CACHE_BASE = "/mnt/efs/gr00t-models/hf_cache"
+# One EFS filesystem is mounted at one path by ALL FOUR Cosmos pipelines, so a cache directory
+# that does not name the pipeline is shared by all of them -- and the cache check asks only
+# whether the directory holds any weights at all. The first pipeline to run would populate it
+# and every other one would read a hit, skip its own S3 restore, and download its weights during
+# inference instead, while the backup uploaded the combined directory to each pipeline's own
+# prefix. This lay dormant only because the mount never worked -- an unmounted path is an empty
+# local directory, so the check was correctly a miss -- so fixing the mount is what activates it.
+# The segment comes from the S3 prefix that already identifies this pipeline, so the filesystem
+# layout and the backup layout cannot drift apart.
+HF_CACHE_BASE = f"/mnt/efs/gr00t-models/hf_cache/{S3_HF_CACHE_PREFIX.split('/')[0]}"
 
 # Default training config values
 DEFAULTS = {
@@ -226,6 +236,72 @@ def upload_output_to_s3(local_dir: Path, s3_output_path: str, output_folder_name
     return s3_dest
 
 
+# The HuggingFace owners a base model may be pulled from. baseModelPath reaches from_pretrained, which
+# downloads the named repository into the shared EFS HuggingFace cache that every later run restores
+# from, so the owner set is the trust boundary: NVIDIA's own GR00T releases. A deployment with its own
+# mirror or internal base adds owners through GR00T_ADDITIONAL_BASE_MODEL_OWNERS (comma-separated); the
+# list is additive, so 'nvidia' and locally available models are always usable.
+#
+# Twin of the same four names in ../lambda/vamsExecuteGr00tFinetunePipeline.py, which validates the
+# sources it can see: asset metadata and the execute-time input configuration. The check is repeated
+# here because resolve_config merges the asset's own gr00t_config.json OVER that value, making this
+# container the point of use. The image carries only the files this directory's Dockerfile COPYs, so the
+# lambda module is not importable here -- the two copies are kept identical by hand and change together.
+ALLOWED_BASE_MODEL_OWNERS = ("nvidia",)
+ADDITIONAL_BASE_MODEL_OWNERS_ENV = "GR00T_ADDITIONAL_BASE_MODEL_OWNERS"
+
+# One segment of a repository id or of a local model path, matched in full: '..', an empty segment,
+# whitespace and URL/shell punctuation are all outside it, so a value cannot traverse out of the path
+# it names.
+_MODEL_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
+
+
+def allowed_base_model_owners():
+    """The allowlisted HuggingFace owners, lowercased, including any the deployment adds by
+    environment. Malformed entries are ignored rather than widening the list to an unusable value."""
+    owners = [owner.lower() for owner in ALLOWED_BASE_MODEL_OWNERS]
+    for entry in os.environ.get(ADDITIONAL_BASE_MODEL_OWNERS_ENV, "").split(","):
+        owner = entry.strip().lower()
+        if owner and _MODEL_PATH_SEGMENT.fullmatch(owner) and owner not in owners:
+            owners.append(owner)
+    return tuple(owners)
+
+
+def validate_base_model_path(base_model_path):
+    """The base model this run may load, normalized; "" when the run names none.
+
+    Two shapes are usable. An ``owner/name`` HuggingFace repository id is fetched from HuggingFace,
+    so its owner must be allowlisted. An absolute path is read from the container's own filesystem —
+    the EFS cache, or a checkpoint a previous run wrote — and needs no allowlist, but every segment
+    must be a plain name so the value cannot traverse elsewhere. Anything else raises: the value also
+    names the output folder the run writes, and an unallowlisted repository would be downloaded into
+    the shared cache.
+    """
+    value = "" if base_model_path is None else str(base_model_path).strip()
+    if not value:
+        return ""
+
+    if value.startswith("/"):
+        segments = value.rstrip("/").split("/")[1:]
+        if segments and all(_MODEL_PATH_SEGMENT.fullmatch(segment) for segment in segments):
+            return value
+        raise Exception(
+            f"Gr00t baseModelPath '{value}' is not a usable local model path. An absolute path may "
+            "not contain empty or relative segments.")
+
+    owners = allowed_base_model_owners()
+    segments = value.split("/")
+    if (len(segments) == 2
+            and all(_MODEL_PATH_SEGMENT.fullmatch(segment) for segment in segments)
+            and segments[0].lower() in owners):
+        return value
+
+    raise Exception(
+        f"Gr00t baseModelPath '{value}' is not an allowed base model. Supply a HuggingFace "
+        f"repository owned by one of: {', '.join(owners)} (for example 'nvidia/GR00T-N1.5-3B'), or "
+        "an absolute path to a model already available to the container.")
+
+
 def resolve_config(definition: Dict, asset_dir: Path) -> Dict:
     """
     Resolve training config using 3-tier priority:
@@ -233,7 +309,7 @@ def resolve_config(definition: Dict, asset_dir: Path) -> Dict:
     2. Asset metadata / merged gr00tConfig from Lambda (middle)
     3. Defaults (lowest)
 
-    Returns merged config dict.
+    Returns merged config dict. Raises when the merged baseModelPath is not an allowed base model.
     """
     config = dict(DEFAULTS)
 
@@ -261,6 +337,15 @@ def resolve_config(definition: Dict, asset_dir: Path) -> Dict:
             logger.info(f"Applied gr00t_config.json overrides: {list(file_config.keys())}")
         except Exception as e:
             logger.warning(f"Failed to parse gr00t_config.json: {e}")
+
+    # The MERGED value is the one this container loads, whichever source supplied it, so the allowlist
+    # is applied here at the point of use -- AFTER the gr00t_config.json merge above and OUTSIDE both
+    # parse handlers, inside which a rejection would be logged as a warning and the run would continue
+    # on the rejected value. A blank value leaves the container on its own default rather than handing
+    # from_pretrained an empty path.
+    config["baseModelPath"] = (validate_base_model_path(config.get("baseModelPath"))
+                               or DEFAULTS["baseModelPath"])
+    logger.info(f"Gr00t base model: {config['baseModelPath']}")
 
     return config
 

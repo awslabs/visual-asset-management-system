@@ -29,6 +29,28 @@ def get_profile_manager_from_context(ctx: Optional[click.Context] = None) -> Pro
     return ProfileManager(profile_name)
 
 
+def invoked_from_another_command(ctx: Optional[click.Context] = None) -> bool:
+    """True when this command is running under another command's `ctx.invoke()`.
+
+    Transfer commands exit non-zero when a transfer did not fully apply, so a CI step can tell a
+    partial copy from a complete one. Several of them are also called programmatically -- the
+    `industry` commands invoke `file upload` and `assets export`, read `overall_success` off the
+    returned result, and decide for themselves how to proceed -- and setting the process exit code
+    is not this command's business on that path (Rule 16).
+
+    Click gives an invoked command a context whose parent is the CALLING command's context, so an
+    ancestor that is a plain Command rather than a Group means another command is driving. From the
+    command line every ancestor is a Group.
+    """
+    if ctx is None:
+        return False
+    parent = ctx.parent
+    while parent is not None:
+        if not isinstance(parent.command, click.Group):
+            return True
+        parent = parent.parent
+    return False
+
 
 def requires_setup_and_auth(func):
     """

@@ -87,6 +87,12 @@ def lambda_handler(event, context):
     input_metadata_s3_location = event.get('inputMetadataS3Location', '')
     input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
 
+    # The input manifest S3 location and the assetId locate the input file within its asset. The
+    # constructPipeline state reads them to keep the converted file under the same subdirectory
+    # within the asset as its source file, so both travel in the state machine input.
+    input_manifest_s3_location = event.get('inputManifestS3Location', '')
+    asset_id = event.get('assetId', '')
+
     # Orchestration event prefix for optional sub-process registration
     orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
 
@@ -139,6 +145,8 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        "inputManifestS3Location": input_manifest_s3_location,
+        "assetId": asset_id,
         "externalSfnTaskToken": external_sfn_task_token,
         "outputFileType": output_file_type
     }

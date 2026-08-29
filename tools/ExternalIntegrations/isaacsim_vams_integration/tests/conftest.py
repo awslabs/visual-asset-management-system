@@ -61,17 +61,23 @@ _install_kit_stubs()
 @pytest.fixture
 def cli_service(monkeypatch):
     """A VamsCliService with the executable check and the auth gate bypassed. Commands are recorded
-    on ``service.commands`` and each call returns the next queued JSON payload from
-    ``service.responses``."""
+    on ``service.commands``, any stdin payload on ``service.stdin_payloads``, and each call returns
+    the next queued JSON payload from ``service.responses``.
+
+    ``service.commands`` records the arguments AFTER the ``[vamscli, --profile, X]`` prefix, which is
+    assembled inside the real ``_execute_command``. Assertions about that prefix, or about a
+    credential reaching stdin, belong in the suites that patch ``subprocess.run`` instead."""
     from vams.connector.isaacsim import vams_cli_service as module
 
     monkeypatch.setattr(module.VamsCliService, "_verify_cli_installed", lambda self: None)
     service = module.VamsCliService()
     service.commands = []
     service.responses = []
+    service.stdin_payloads = []
 
-    def _execute(args):
+    def _execute(args, stdin_payload=None):
         service.commands.append(list(args))
+        service.stdin_payloads.append(stdin_payload)
         return service.responses.pop(0) if service.responses else "{}"
 
     monkeypatch.setattr(service, "_execute_command", _execute)

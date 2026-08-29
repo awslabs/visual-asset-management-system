@@ -58,6 +58,204 @@ def resolve_asset_metadata(metadata_obj: dict) -> dict:
     return metadata_obj
 
 
+# Ceilings on what a single input archive may extract to. The Batch instance this container runs on has
+# one 200 GiB gp3 root volume, and the container's `/tmp` — where `main.py` unpacks every archive — is a
+# bind mount of a directory on that volume, shared with the operating system, the container image, the
+# models and the run's own outputs. The byte ceiling is therefore the volume itself: an archive that
+# expands past it cannot fit whatever this code does, so the ceiling refuses no input that could have
+# finished, while a ceiling above the volume would bound nothing. Splat and photogrammetry inputs are
+# image sets and videos in the tens to hundreds of gigabytes and are admitted up to what the volume
+# holds — a capture larger than that needs a larger volume (the launch template block device in
+# `batch-gpu-pipeline.ts`), not a larger ceiling. Entry count is a separate failure mode: inode and
+# directory-metadata exhaustion, which an archive of millions of near-empty files reaches while
+# occupying almost no space. A COLMAP bundle of the largest capture the volume holds — on the order of
+# 6,000 frames with masks and per-image sparse records — stays well inside it.
+MAX_ARCHIVE_EXTRACTED_BYTES = 200 * 1024 ** 3
+MAX_ARCHIVE_ENTRY_COUNT = 1000000
+
+
+def enforce_archive_extraction_limits(entries,
+                                     max_entry_count=MAX_ARCHIVE_ENTRY_COUNT,
+                                     max_declared_bytes=MAX_ARCHIVE_EXTRACTED_BYTES):
+    """The (entry count, total declared bytes) of an archive, refusing one that exceeds a ceiling.
+
+    Reads only the central-directory metadata `zipfile` has already parsed, so the decision costs no
+    disk and no extraction. Entry count is enforced here and only here: an entry has to be listed to be
+    extracted at all, and inode exhaustion is reached by entries that each declare almost nothing. The
+    declared byte total is an ADVISORY early reject rather than the protection — the sizes are the
+    archive's own account of itself — and the ceiling it is measured against is the one
+    `ExtractionByteBudget` enforces on the bytes extraction actually produces. Both counters are tested
+    as the entries are walked and raise on the entry that crosses a ceiling, so an archive declaring
+    millions of entries is refused without the whole list being summed. A `ValueError` is the same
+    failure shape as the surrounding zip-slip check.
+    """
+    total_declared_bytes = 0
+    entry_count = 0
+    for entry in entries:
+        entry_count += 1
+        if entry_count > max_entry_count:
+            raise ValueError(
+                f"Archive entry count exceeds the extraction limit of {max_entry_count} entries")
+        total_declared_bytes += _declared_size(entry, 'file_size')
+        if total_declared_bytes > max_declared_bytes:
+            entry_name = getattr(entry, 'filename', '')
+            raise ValueError(
+                f"Archive declares more than the extraction limit of {max_declared_bytes} "
+                f"bytes, reached at entry '{entry_name}'")
+    return entry_count, total_declared_bytes
+
+
+def _declared_size(entry, attribute: str) -> int:
+    """The non-negative byte count an archive entry declares, treating anything unusable as zero."""
+    try:
+        return max(int(getattr(entry, attribute, 0) or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+class ExtractionByteBudget:
+    """The bytes one extraction has actually produced, refusing to let it pass a ceiling.
+
+    Bounds what an archive writes rather than what it says it will write: `metered` wraps the member
+    handle the extraction copies from, so every byte counted is a byte on its way into a file on the
+    volume, whatever the central directory declared for that entry. The total runs across the whole
+    extraction, so a payload split over many entries reaches the same ceiling, and the refusal lands on
+    the read that crosses it — part way through a member, with the rest still unwritten.
+    """
+
+    def __init__(self, max_bytes=MAX_ARCHIVE_EXTRACTED_BYTES):
+        self.max_bytes = max_bytes
+        self.extracted_bytes = 0
+
+    def metered(self, member, name=''):
+        """The member handle, charging every byte read out of it against this budget."""
+        return _MeteredArchiveMember(member, self, name)
+
+    def charge(self, byte_count, name=''):
+        self.extracted_bytes += byte_count
+        if self.extracted_bytes > self.max_bytes:
+            raise ValueError(
+                f"Archive extraction exceeds the extraction limit of {self.max_bytes} bytes, "
+                f"reached while writing entry '{name}'")
+
+
+class _MeteredArchiveMember:
+    """An archive member handle that charges what it reads to an `ExtractionByteBudget`.
+
+    Covers the read methods an extraction copies with (`read`, `read1`, `readinto`); everything else is
+    the member's own.
+    """
+
+    def __init__(self, member, budget, name):
+        self._member = member
+        self._budget = budget
+        self._name = name
+
+    def read(self, *args, **kwargs):
+        data = self._member.read(*args, **kwargs)
+        self._budget.charge(len(data), self._name)
+        return data
+
+    def read1(self, *args, **kwargs):
+        data = self._member.read1(*args, **kwargs)
+        self._budget.charge(len(data), self._name)
+        return data
+
+    def readinto(self, buffer):
+        byte_count = self._member.readinto(buffer)
+        self._budget.charge(byte_count or 0, self._name)
+        return byte_count
+
+    def __enter__(self):
+        self._member.__enter__()
+        return self
+
+    def __exit__(self, *exception):
+        return self._member.__exit__(*exception)
+
+    def __getattr__(self, attribute):
+        return getattr(self._member, attribute)
+
+
+_MEMBER_OPEN_UNSHADOWED = object()
+
+
+def extract_within_limits(archive, extractall, *args, **kwargs):
+    """One archive extraction, bounded by the entry ceiling and by the bytes it actually writes.
+
+    The byte ceiling is charged against the member handles the extraction copies from, by shadowing
+    `open` on the archive being extracted for the duration of the call: `zipfile` reads a member through
+    it and writes what it reads to the target file, so the running total is the extraction's real
+    footprint on the volume rather than the central directory's account of what that footprint will be.
+    Shadowing the one archive rather than `ZipFile` leaves every other archive and every read that is
+    not this extraction unmetered. Each extraction carries its own budget: `main.py` unpacks into a
+    single temp directory under `DATASET_PATH`, so what the volume has to hold is the largest single
+    extraction rather than the sum of them.
+    """
+    enforce_archive_extraction_limits(archive.infolist())
+    budget = ExtractionByteBudget(MAX_ARCHIVE_EXTRACTED_BYTES)
+    unmetered_open = archive.open
+    shadowed_open = archive.__dict__.get('open', _MEMBER_OPEN_UNSHADOWED)
+
+    def metered_open(name, *open_args, **open_kwargs):
+        return budget.metered(unmetered_open(name, *open_args, **open_kwargs),
+                              getattr(name, 'filename', name))
+
+    archive.open = metered_open
+    try:
+        return extractall(*args, **kwargs)
+    finally:
+        if shadowed_open is _MEMBER_OPEN_UNSHADOWED:
+            archive.__dict__.pop('open', None)
+        else:
+            archive.open = shadowed_open
+
+
+FAILURE_CAUSE_MAX_LENGTH = 256
+
+
+def failure_cause(error) -> str:
+    """The `SendTaskFailure` cause for a failed `main.py` run, within the length the peer pipelines use.
+
+    Carries the exit status rather than the launched command: the command is the launcher source, which
+    would fill the whole cause and leave the status out of it.
+    """
+    cause = ("Pipeline execution failed with exit status "
+             f"{getattr(error, 'returncode', 'unknown')}")
+    return cause[:FAILURE_CAUSE_MAX_LENGTH]
+
+
+# `main.py` extracts the input archive through `zipfile.ZipFile.extractall`, at more than one site and
+# entirely inside the upstream-synced source tree. It runs as a child process, so the child installs
+# the limits around that method before executing the script: the wrapper is what applies
+# extract_within_limits to every extraction, wherever upstream performs it, so the entry ceiling and the
+# running total of extracted bytes cover each one. `run_path` with `run_name='__main__'` reproduces
+# `python main.py` — it sets `sys.argv[0]` and `__file__` to the script and puts its directory first on
+# `sys.path`, which is what `main.py` resolves `config.json` and its sibling modules against. The entry
+# module loads under its own name, so `main()` does not re-run.
+_GUARDED_MAIN_LAUNCHER = """
+import importlib.util
+import runpy
+import zipfile
+
+_spec = importlib.util.spec_from_file_location('vams_container_entry', {entry_path!r})
+_entry = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_entry)
+
+_extractall = zipfile.ZipFile.extractall
+
+
+def _limited_extractall(self, *args, **kwargs):
+    return _entry.extract_within_limits(self, _extractall.__get__(self), *args, **kwargs)
+
+
+zipfile.ZipFile.extractall = _limited_extractall
+print('Archive extraction limits active: %d extracted bytes / %d entries'
+      % (_entry.MAX_ARCHIVE_EXTRACTED_BYTES, _entry.MAX_ARCHIVE_ENTRY_COUNT))
+runpy.run_path({script_path!r}, run_name='__main__')
+"""
+
+
 def set_config_parameters(params: dict, metadata: dict):
     """
     Set environment variables for valid config parameters.
@@ -213,10 +411,12 @@ def main():
     env = os.environ.copy()
     env['PYTHONPATH'] = '/opt/ml/code'
     
-    # Call the existing main.py from the directory
+    # Call the existing main.py from the directory, under the archive extraction limits
     try:
         print("Starting main.py with real-time output...")
-        result = subprocess.run([sys.executable, 'main.py'], # nosemgrep: dangerous-subprocess-use-audit
+        launcher = _GUARDED_MAIN_LAUNCHER.format(
+            entry_path=os.path.abspath(__file__), script_path='main.py')
+        result = subprocess.run([sys.executable, '-c', launcher], # nosemgrep: dangerous-subprocess-use-audit
                               cwd='/opt/ml/code',
                               env=env,
                               check=True)
@@ -245,7 +445,7 @@ def main():
             sfn_client.send_task_failure(
                 taskToken=task_token,
                 error='Pipeline Failure',
-                cause=f'Pipeline execution failed with error: {str(e)}'
+                cause=failure_cause(e)
             )
             print("Failure callback sent")
         

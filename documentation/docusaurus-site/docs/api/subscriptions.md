@@ -103,6 +103,7 @@ VAMS resolves each subscriber's email from their user profile. If a subscriber d
 | ------ | --------------------------------------------------------------------------- |
 | `400`  | Invalid fields, subscriber already exists, or subscriber has no valid email |
 | `403`  | Not authorized to modify subscriptions for this asset                       |
+| `404`  | Asset not found                                                             |
 | `500`  | Internal server error                                                       |
 
 ---
@@ -144,6 +145,7 @@ Same structure as [Create a subscription](#create-a-subscription). The full subs
 | ------ | ------------------------------------------------------- |
 | `400`  | Subscription does not exist or invalid subscriber email |
 | `403`  | Not authorized                                          |
+| `404`  | Asset not found                                         |
 | `500`  | Internal server error                                   |
 
 ---
@@ -190,6 +192,7 @@ DELETE /subscriptions
 | ------ | ---------------------- |
 | `400`  | Subscription not found |
 | `403`  | Not authorized         |
+| `404`  | Asset not found        |
 | `500`  | Internal server error  |
 
 ---

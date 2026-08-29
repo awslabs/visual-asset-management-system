@@ -126,8 +126,28 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         }
 
         // 2) Role API Gateway assumes to invoke the authorizer
+        //
+        // The trust narrows API Gateway to acting for this account, so an API in another account
+        // cannot name this role as its own `authorizerCredentials` and drive the authorizer with
+        // events it controls.
+        //
+        // The condition is one key under the `...IfExists` operator form, and both halves of that
+        // are load-bearing. API Gateway does not document which global condition keys it populates
+        // on the `sts:AssumeRole` it makes for authorizer credentials, and that assume-role is the
+        // only path to the authorizer — so a condition that fails closed returns 500 on every
+        // route, including the anonymous ones, since they share this authorizer. `...IfExists`
+        // denies a foreign account whenever the key is supplied and leaves the assume-role working
+        // when it is not. The key is `aws:SourceAccount` because it has a single possible value
+        // shape (this account id), whereas an API Gateway `aws:SourceArn` has two plausible ones —
+        // the `execute-api` data-plane ARN and the `apigateway` control-plane ARN, whose account
+        // field is empty — so a pattern written for either one fails closed against the other.
+        // Naming the API in an ARN is not available here in any case: the API's inline OpenAPI
+        // document carries this role's ARN, so referring to `this.restApiId` makes the two
+        // resources reference each other.
         const authInvokeRole = new iam.Role(this, "RestAuthorizerInvokeRole", {
-            assumedBy: Service("APIGATEWAY").Principal,
+            assumedBy: new iam.PrincipalWithConditions(Service("APIGATEWAY").Principal, {
+                StringEqualsIfExists: { "aws:SourceAccount": config.env.account },
+            }),
         });
         authorizerFn.grantInvoke(authInvokeRole);
 
@@ -206,10 +226,15 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             ],
             deploy: false,
             // Provision the account-level API Gateway CloudWatch role (required for the
-            // stage's execution logging) and tear it down with the stack. DESTROY avoids
-            // an orphaned, fixed-named role colliding on a later redeploy after a rollback.
+            // stage's execution logging). The policy applies to both the role and the
+            // AWS::ApiGateway::Account resource it is attached to, and that resource is an
+            // account + Region singleton shared by every REST API there — so RETAIN keeps
+            // API Gateway logging in place for co-resident deployments when this one is torn
+            // down. The retained role carries a fixed name (the IamRoleTransform aspect names
+            // every role in the tree), so it has to be deleted before this deployment is
+            // redeployed into the same account and Region.
             cloudWatchRole: true,
-            cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.DESTROY,
+            cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN,
         });
 
         // Minimum TLS version + cipher suite on the REST API itself. `securityPolicy` is a

@@ -107,7 +107,7 @@
             "name": "Columnar Data Viewer",
             "description": "View columnar data in table format",
             "componentPath": "./viewers/ColumnarViewerPlugin/ColumnarViewerComponent",
-            "supportedExtensions": [".rds", ".fcs", ".csv"],
+            "supportedExtensions": [".fcs", ".csv"],
             "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 2,
@@ -366,6 +366,7 @@
                 ".stp",
                 ".step",
                 ".iges",
+                ".igs",
                 ".brep"
             ],
             "supportsMultiFile": false,

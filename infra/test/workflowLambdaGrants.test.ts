@@ -6,6 +6,10 @@
 /**
  * Least-privilege checks on the synthesized execution-role policies of the workflow/execution
  * lambdas: every AWS action a handler calls is granted, and no table a handler never resolves is.
+ *
+ * Guards FIX-038 (S1-INFRA-079): an unscoped states:StopExecution / batch:TerminateJob grant lets
+ * executionService reach any execution or job in the account, driven by registration data that is
+ * validated only for ARN shape.
  */
 
 import * as path from "path";
@@ -27,6 +31,7 @@ import {
     buildProcessWorkflowExecutionOutputFunction,
 } from "../lib/lambdaBuilder/workflowFunctions";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 /** Commercial-template config with a fixed synth environment. */
 const createMockConfig = (): Config.Config => {
@@ -94,7 +99,7 @@ const synthWorkflowLambda = (
 ): SynthedLambda => {
     const config = createMockConfig();
     Service.SetConfig(config);
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, "GrantStack", {
         env: { account: config.env.account, region: config.env.region },
     });

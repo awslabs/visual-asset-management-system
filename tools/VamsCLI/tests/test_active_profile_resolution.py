@@ -127,3 +127,51 @@ class TestProfileResolutionWiring:
         with patch.object(api_client_module, "read_active_profile_name", return_value="prod5"):
             client = api_client_module.APIClient("https://example.invalid/api")
         assert client.profile_manager.profile_name == "prod5"
+
+
+class TestTheProfileFlagContractTheConnectorsDependOn:
+    """The external connectors pass `--profile` on every invocation; this pins what they rely on.
+
+    Neither the Isaac Sim nor the ArcGIS Pro connector imports this package — they build an argument
+    vector and spawn `vamscli`. Nothing catches a change to this contract at build or import time.
+    """
+
+    def test_an_explicit_profile_wins_and_an_omitted_one_follows_the_marker(self):
+        """Both directions in one test, so an inverted precedence cannot pass either half.
+
+        Split across two tests, a resolution that ignored the flag entirely would still satisfy the
+        "omitted follows the marker" half, and a resolution that ignored the marker entirely would
+        still satisfy the "explicit wins" half.
+        """
+        from vamscli.main import cli
+
+        with patch("vamscli.utils.profile.read_active_profile_name", return_value="switchedto"):
+            explicit = cli.make_context("vamscli", ["--profile", "namedprof", "database", "list"])
+            omitted = cli.make_context("vamscli", ["database", "list"])
+
+        assert explicit.obj["profile_name"] == "namedprof", (
+            "an explicit --profile no longer wins; a connector configured for one deployment would "
+            "run against whichever one `profile switch` last selected"
+        )
+        assert omitted.obj["profile_name"] == "switchedto", (
+            "an omitted --profile no longer follows the active-profile marker, so `profile switch` "
+            "is a no-op again"
+        )
+
+    def test_the_flag_is_rejected_after_the_subcommand(self, cli_runner, generic_command_mocks):
+        """`--profile` is a group-level option, which is why the connectors must PREPEND it.
+
+        A connector fix that appended the flag would satisfy an argv-membership assertion and then
+        fail at runtime here. Recorded on the CLI side because that is where the rejection lives.
+        """
+        from vamscli.main import cli
+
+        with generic_command_mocks("database") as mocks:
+            mocks["api_client"].list_databases.return_value = {"Items": []}
+
+            prepended = cli_runner.invoke(cli, ["--profile", "namedprof", "database", "list"])
+            appended = cli_runner.invoke(cli, ["database", "list", "--profile", "namedprof"])
+
+        assert prepended.exit_code == 0, prepended.output
+        assert appended.exit_code != 0
+        assert "No such option" in appended.output and "--profile" in appended.output

@@ -22,6 +22,13 @@ At runtime, asset and file changes flow through Amazon DynamoDB streams to the *
 
 To (re)populate the indexes from the source data in DynamoDB and Amazon S3 — for example after an index-name change, a schema change, or a fresh collection — use the [Reindex utility](utilities/reindex.md), or set `app.openSearch.reindexOnCdkDeploy = true` for a single deployment (then set it back to `false`). Reindexing requires the index mappings to already exist (see above).
 
+### Indexed fields the web UI depends on
+
+Two indexed fields change what the search page can do, and both are populated by the indexers, so a document only carries them once it has been indexed or reindexed:
+
+-   **`geo_MD_location`** — the derived `geo_shape` the indexer builds from each asset's or file's location metadata. The geospatial filter queries this field only, so a document that does not carry it is not returned by the filter until it is reindexed. The map view is more forgiving: when `geo_MD_location` is absent it falls back to reading a `location` metadata field (GeoJSON, or a `{longitude, latitude, altitude}` object) and then to separate `latitude` and `longitude` metadata fields, so such documents still plot on the map while remaining invisible to the filter.
+-   **`previewFileKey`** — the asset's preview image key. When the field is present in the index, the web UI renders the thumbnail straight from it and skips the per-asset preview API call, which is what makes thumbnails load quickly on a large result page. When it is absent, the UI falls back to resolving the asset-level preview image through the API.
+
 ## Serverless
 
 Amazon OpenSearch Serverless auto-scales compute and removes cluster management. Enable it with `app.openSearch.useServerless.enabled = true`.
@@ -41,8 +48,8 @@ The two generations expose different collection endpoint hostnames, which requir
 
 | Generation                       | Collection endpoint hostname                      | Data-plane VPC endpoint                                                                                     |
 | -------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Next-generation (`nextGen=true`) | `\{collection-id\}.aoss.\{region\}.on.aws`        | Standard AWS PrivateLink interface endpoint (Amazon EC2 service `com.amazonaws.\{region\}.aoss-data`)       |
-| Classic (`nextGen=false`)        | `\{collection-id\}.\{region\}.aoss.amazonaws.com` | Amazon OpenSearch Serverless-managed endpoint, which provisions its own Amazon Route 53 private hosted zone |
+| Next-generation (`nextGen=true`) | `{collection-id}.aoss.{region}.on.aws`        | Standard AWS PrivateLink interface endpoint (Amazon EC2 service `com.amazonaws.{region}.aoss-data`)       |
+| Classic (`nextGen=false`)        | `{collection-id}.{region}.aoss.amazonaws.com` | Amazon OpenSearch Serverless-managed endpoint, which provisions its own Amazon Route 53 private hosted zone |
 
 When `allowPublic = true`, the collection is reachable over the public internet (subject to data-access policies) and no VPC endpoint is needed. When `allowPublic = false` (recommended for production), the collection is reachable only through a VPC endpoint and requires:
 
@@ -197,7 +204,7 @@ The shard count and the replica count are **fixed at index creation**. Changing 
 -   **VPC required:** a provisioned domain runs in the VPC; `app.useGlobalVpc.enabled` must be `true`.
 -   **3-AZ Standby must be created fresh:** switching an existing 2-AZ domain to `availabilityZoneCount: 3` in place is rejected by the service. To move to 3-AZ Standby, deploy with OpenSearch disabled to remove the domain, then re-enable with `availabilityZoneCount: 3`, then reindex.
 -   **Fragile in-place updates:** domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the CloudFormation custom-resource timeout. A major engine-version upgrade may require deploying with OpenSearch disabled, then re-enabling.
--   **Service-linked role:** a provisioned domain in a VPC requires the `AWSServiceRoleForAmazonOpenSearchService` service-linked role. VAMS creates it idempotently during deployment (created if missing, left unchanged if present), so the _"you must enable a service-linked role"_ error should no longer require a manual retry. The role is account-wide and is not removed on stack teardown.
+-   **Service-linked role:** a provisioned domain in a VPC requires the `AWSServiceRoleForAmazonOpenSearchService` service-linked role. VAMS creates it idempotently during deployment (created if missing, left unchanged if present), so the _"you must enable a service-linked role"_ error needs no manual retry. The role is account-wide and is not removed on stack teardown.
 
 ## Disabling OpenSearch
 

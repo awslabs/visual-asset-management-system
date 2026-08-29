@@ -49,32 +49,47 @@ except Exception as e:
 
 roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
 
+
+class AuthorizationDenied(Exception):
+    """Object-level authorization refused the caller.
+
+    Raised rather than returned so a business-logic function has one return type -- its
+    response model -- and a denial cannot be mistaken for data by its caller. Translated to
+    authorization_error() by the request handler.
+    """
+
+
 #######################
 # Business Logic Functions
 #######################
 
 def create_role(role_data, claims_and_roles):
     """Create a new role
-    
+
     Args:
         role_data: Dictionary with role creation data
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         RoleOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to create the role
     """
+    # Check authorization
+    role_object = {
+        'roleName': role_data['roleName'],
+        'object__type': 'role'
+    }
+
+    if len(claims_and_roles["tokens"]) == 0:
+        raise AuthorizationDenied()
+
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if not casbin_enforcer.enforce(role_object, "POST"):
+        raise AuthorizationDenied()
+
     try:
-        # Check authorization
-        role_object = {
-            'roleName': role_data['roleName'],
-            'object__type': 'role'
-        }
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(role_object, "POST"):
-                return authorization_error()
-        
         # Create the role item
         logger.info(f"Creating role {role_data['roleName']}")
         
@@ -120,26 +135,31 @@ def create_role(role_data, claims_and_roles):
 
 def update_role(role_data, claims_and_roles):
     """Update an existing role
-    
+
     Args:
         role_data: Dictionary with role update data
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         RoleOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to update the role
     """
+    # Check authorization
+    role_object = {
+        'roleName': role_data['roleName'],
+        'object__type': 'role'
+    }
+
+    if len(claims_and_roles["tokens"]) == 0:
+        raise AuthorizationDenied()
+
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if not casbin_enforcer.enforce(role_object, "PUT"):
+        raise AuthorizationDenied()
+
     try:
-        # Check authorization
-        role_object = {
-            'roleName': role_data['roleName'],
-            'object__type': 'role'
-        }
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(role_object, "PUT"):
-                return authorization_error()
-        
         # Update the role
         logger.info(f"Updating role {role_data['roleName']}")
         
@@ -238,7 +258,9 @@ def handle_post_request(event):
         
         # Return success response
         return success(body=result.dict())
-        
+
+    except AuthorizationDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
@@ -302,7 +324,9 @@ def handle_put_request(event):
         
         # Return success response
         return success(body=result.dict())
-        
+
+    except AuthorizationDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)

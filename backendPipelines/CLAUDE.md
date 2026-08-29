@@ -4,10 +4,12 @@ This is the Claude Code steering document for the `backendPipelines/` tree. It c
 
 ## Pipeline Architecture
 
-VAMS supports three pipeline execution types: **Lambda** (sync or async invocation of a Lambda function), **SQS** (async message to an SQS queue), and **EventBridge** (async event to an EventBridge bus). SQS and EventBridge pipelines are async-only and support optional callback via Step Functions Task Tokens.
+VAMS supports four pipeline execution types (`PIPELINE_EXECUTION_TYPES` in `backend/backend/models/pipelines.py`): **Lambda** (sync or async invocation of a Lambda function), **SQS** (async message to an SQS queue), **EventBridge** (async event to an EventBridge bus), and **DeadlineCloud** (an AWS Deadline Cloud job). SQS and EventBridge pipelines are async-only and support optional callback via Step Functions Task Tokens.
+
+DeadlineCloud is async-only and its callback is **mandatory** — `createJob` only queues the job, so `waitForCallback` must be `Enabled` or pipeline create is rejected with a `400`. It is built by `DeadlineCloudTaskBuilder` (`backend/backend/common/workflows/stepfunctions_builder.py`) plus the `deadlineCloudJobCallback` handler, and is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled`: accepted only in the commercial `aws` partition, and rejected at pipeline create when the deployment has not enabled it. Because the type has no non-callback route, treat `SendTaskFailure` as required for it — see [Reporting Failure on a Task-Token Pipeline](#reporting-failure-on-a-task-token-pipeline).
 
 ```
-S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge → AWS Batch containers (optional)
+S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge / DeadlineCloud → AWS Batch containers (optional)
   backendPipelines/{useCase}/lambda/    -- orchestration
   backendPipelines/{useCase}/container/ -- processing
 ```
@@ -32,6 +34,54 @@ The workflow ASL generates several S3 paths passed to each pipeline step. Pipeli
 -   **Use `outputS3AssetPreviewPath`** only for asset-level preview images (not file-level previews).
 -   **Use `inputOutputS3AssetAuxiliaryFilesPath`** only for temporary files during processing or for special non-versioned preview data (e.g., Potree octree viewer files) that the frontend reads directly from the auxiliary bucket.
 -   The `constructPipeline` lambda should prefer the appropriate output path when provided, falling back to the auxiliary path only for direct/local invocations where workflow context is unavailable.
+
+## Metadata and Attribute Output Formats (`outputS3AssetMetadataPath`)
+
+The process-output step (`handlers/workflows/sfn/processWorkflowExecutionOutput.py`) decides what a
+JSON file under `outputS3AssetMetadataPath` means **from its file name**, matched on suffix anywhere
+under the path (subdirectories included). There are exactly three shapes:
+
+| File name written by the pipeline   | Written to                       | Store           |
+| ----------------------------------- | -------------------------------- | --------------- |
+| `asset.metadata.json`               | The asset (recorded against `/`) | Asset metadata  |
+| `<relativeFilePath>.metadata.json`  | That file                        | File metadata   |
+| `<relativeFilePath>.attribute.json` | That file                        | File attributes |
+
+`asset.metadata.json` is a **reserved basename**: any other `*.metadata.json` is treated as
+file-level and its target path is derived from the file name, so a pipeline that names its
+asset-level file anything else silently writes file metadata against a path that does not exist.
+
+All three use the same body. `updateType` is `update` (upsert, the default) or `replace_all`:
+
+```json
+{
+    "type": "metadata",
+    "updateType": "update",
+    "metadata": [{ "metadataKey": "AB_geometric_metadata", "metadataValue": "{\"volume\": 12.4}" }]
+}
+```
+
+`type` is `metadata` or `attribute` and is auto-corrected to match the file name, so the file name is
+what actually decides. A missing or non-list `metadata` array fails the write-back.
+
+**A pipeline may annotate a file it produces in the same run.** The process-output step ingests
+`outputS3AssetFilesPath` **before** it lists `outputS3AssetMetadataPath` — the file write is
+synchronous and its per-file outcome is read first — so by the time metadata is written the new file
+exists on the asset. Write the new file to `outputS3AssetFilesPath` and its metadata to
+`outputS3AssetMetadataPath` in the same execution; no second run or ordering flag is needed.
+
+Two consequences of that ordering worth designing to:
+
+-   The metadata target path must match the file's **final asset-relative path**, which includes the
+    workflow's `defaultOutputFileBaseExecutionPathExtension`. The step applies that extension when
+    deriving the target, so name the metadata file after the relative path the pipeline wrote, not
+    after the absolute S3 key.
+-   Metadata for a file whose ingestion FAILED is rejected by the metadata service's own
+    file-existence check, and the execution is recorded FAILED. That is intended: it prevents metadata
+    rows accumulating against files that never landed.
+
+Ordering and all three write kinds are pinned by
+`backend/tests/handlers/workflows/test_processOutput_write_order.py`.
 
 ## Preserving Relative Paths for Asset-Adjacent Outputs
 
@@ -300,3 +350,4 @@ vamscli pipeline template list -d GLOBAL -p {pipelineId}
 13. **Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`** with all new pipeline configuration options (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, and any pipeline-specific settings). Follow the existing format: `-   \`app.pipelines.{pipelineName}.{option}\` | default: {value} | #{description}`.
 14. **Update licenses/attributions** when a pipeline adds, removes, or changes a third-party model, container base image, or dependency with its own license. Update **both** `NOTICE.md` (the per-pipeline dependency table + attribution note at the repo root) **and** `documentation/docusaurus-site/docs/additional/notices.md` (the per-pipeline license paragraph + the closing attribution/reference list). Record the exact license (e.g. NVIDIA Open Model License, OpenMDW-1.1, Apache-2.0) and any required attribution string. A model under a new license (as Cosmos 3 uses OpenMDW-1.1 rather than the NVIDIA Open Model License) must be reflected in both files, and the pipeline doc page's Prerequisites + Attribution sections.
 15. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _fourteen_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.
+16. **Update the root `CLAUDE.md`** — its Project Overview pipeline list and its directory tree both enumerate the pipeline set, and the tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist. Required by root `CLAUDE.md` Rule 11 ("New pipeline"). Also add a row to `documentation/docusaurus-site/docs/pipelines/` and its `pipelines/overview.md` table per `documentation/CLAUDE.md`.

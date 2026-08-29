@@ -231,12 +231,16 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         
         # Check permissions
         asset["object__type"] = "asset"
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(asset, operation):
-                raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
-        
+
+        # An empty token list carries no authenticated identity, so authorization
+        # cannot be evaluated and the request is denied.
+        if len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(asset, operation):
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+
         return asset
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
@@ -874,23 +878,25 @@ def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claim
     # Check permissions on both assets
     source_asset["object__type"] = "asset"
     dest_asset["object__type"] = "asset"
-    
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        
-        # Need GET permission on source and POST permission on destination
-        source_allowed = casbin_enforcer.enforce(source_asset, "GET")
-        dest_allowed = casbin_enforcer.enforce(dest_asset, "POST")
-        
-        if not source_allowed:
-            raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
-        
-        if not dest_allowed:
-            raise VAMSGeneralErrorResponse("Not authorized to write to destination asset")
-        
-        return True
-    
-    return False
+
+    # An empty token list carries no authenticated identity, so authorization
+    # cannot be evaluated and the request is denied.
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+
+    # Need GET permission on source and POST permission on destination
+    source_allowed = casbin_enforcer.enforce(source_asset, "GET")
+    dest_allowed = casbin_enforcer.enforce(dest_asset, "POST")
+
+    if not source_allowed:
+        raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
+
+    if not dest_allowed:
+        raise VAMSGeneralErrorResponse("Not authorized to write to destination asset")
+
+    return True
 
 def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, change_source: str = None, change_user_id: str = None, from_db: str = None, from_asset: str = None, from_path: str = None) -> bool:
     """Move an S3 object from one location to another
@@ -2536,7 +2542,8 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         dest_asset = get_asset_with_permissions(effective_dest_db, dest_asset_id or assetId, "POST", claims_and_roles)
 
         # Validate cross-asset permissions
-        validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles)
+        if not validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles):
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
     else:
         # Same asset, need POST permission
         dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
@@ -2895,21 +2902,28 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # Get the relative path for comparison with fileKey in version records.
+    # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
+    # or "subfolder/model.glb"), while file_path may include the assetId prefix and
+    # may or may not carry a leading slash. Strip the base_key prefix from the
+    # resolved key to get the same relative path format.
+    relative_path_for_lookup = full_key
+    if base_key and relative_path_for_lookup.startswith(base_key):
+        relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
+    relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
     
     # Get object metadata
     metadata = get_s3_object_metadata(bucket, full_key, include_versions)
     
     # Check for Asset Version Mismatch
     # Get current asset version ID if available and versions are requested and not a folder
-    if include_versions and 'versions' in metadata and metadata.get("isFolder", False) and asset.get('currentVersionId'):
+    if include_versions and 'versions' in metadata and not metadata.get("isFolder", False) and asset.get('currentVersionId'):
         current_version_id = asset.get('currentVersionId', '0')
         
         if current_version_id:
-            # Get the relative path without leading slash for comparison
-            relative_path = file_path.lstrip('/')
-            
             # Get file version for the current asset version
-            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, relative_path)
+            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, relative_path_for_lookup)
             
             # Find the matching version record
             matching_version = None
@@ -2936,14 +2950,6 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             # Build composite key for the databaseIdAssetIdIndex GSI
             db_asset_composite_key = f"{databaseId}:{assetId}"
 
-            # Get the relative path for comparison with fileKey in version records.
-            # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
-            # or "subfolder/model.glb"), while file_path may include the assetId prefix.
-            # Strip the base_key prefix to get the same relative path format.
-            relative_path_for_lookup = full_key
-            if base_key and relative_path_for_lookup.startswith(base_key):
-                relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
-            relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
             #logger.info(f"Enriching file versions: file_path='{file_path}', full_key='{full_key}', base_key='{base_key}', relative_path_for_lookup='{relative_path_for_lookup}'")
 
             # Change-history records for this asset, keyed by (filePath, versionId),
@@ -3612,10 +3618,13 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3699,10 +3708,13 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3783,10 +3795,13 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3868,10 +3883,13 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3955,10 +3973,13 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4040,10 +4061,13 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4139,10 +4163,13 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4231,10 +4258,13 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4418,10 +4448,13 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4480,10 +4513,13 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4564,10 +4600,13 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4650,10 +4689,13 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})

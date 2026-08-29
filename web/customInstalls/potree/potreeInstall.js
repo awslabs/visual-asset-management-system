@@ -11,12 +11,12 @@ const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
 const viewerId = "potree-viewer";
-const gitRepoSourceDestDir = "./customInstalls/potree/source"; //Relative to base web directory where yarn/npm is run
+const gitRepoSourceDestDir = "./customInstalls/potree/source"; //Relative to base web directory where npm is run
 const gitRepoUrl = "https://github.com/potree/potree.git";
 const gitRepoCommitHash = "f6ac2d3b";
 const patchFilePath = "./../Potree-Fork_f6ac2d3b.patch"; //Patch file relative to git source directory
 
-const destinationDir = "./public/viewers/potree_libs"; //Relative to base web directory where yarn/npm is run
+const destinationDir = "./public/viewers/potree_libs"; //Relative to base web directory where npm is run
 
 // Function to cleanup previous git source and build binaries
 const previousCleanUp = async () => {
@@ -51,17 +51,6 @@ const npmBuild = () => {
     try {
         execSync("npm install", { cwd: gitRepoSourceDestDir }); //Install dependencies
         console.log("Potree Build NPM install complete");
-        // Best-effort: apply safe (non-breaking) npm audit fixes before building.
-        // Non-fatal — npm audit fix exits non-zero when unfixable vulnerabilities
-        // remain (those need --force/manual review, which we do NOT apply).
-        try {
-            execSync("npm audit fix", { cwd: gitRepoSourceDestDir });
-            console.log("Potree Build npm audit fix complete");
-        } catch (auditErr) {
-            console.warn(
-                "Potree Build npm audit fix reported unresolved/unfixable vulnerabilities (continuing)."
-            );
-        }
         execSync("npm run build", { cwd: gitRepoSourceDestDir }); //Run build script
         console.log("Potree Build NPM build complete");
     } catch (err) {

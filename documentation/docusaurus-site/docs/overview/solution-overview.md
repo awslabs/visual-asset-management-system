@@ -30,8 +30,8 @@ Associated data such as textures, materials, bills of materials, quality analysi
 
 As an **open-source project** (Apache 2.0), VAMS is designed for extensibility. Organizations can integrate new viewer plugins, upstream data sources, downstream consumers, and custom workflow pipelines — adapting the platform to their specific requirements without vendor lock-in. Several ISVs have built commercial products on top of VAMS, and enterprise customers across defense, energy, manufacturing, and construction have adopted and contributed to the solution.
 
-:::info[Current Version]
-VAMS supports Python 3.12 Lambda runtime, Node.js 22.x, React 18 with Vite build tooling, and AWS CDK v2 infrastructure. See `infra/config/config.ts` for the current version.
+:::info[Runtimes and tooling]
+For the runtime versions and build tooling VAMS deploys with, and the versions you need to install to deploy it, see [Prerequisites](../deployment/prerequisites.md) and the [Developer Guide](../developer/setup.md).
 :::
 
 ---
@@ -97,7 +97,7 @@ AWS GovCloud deployments require `useGlobalVpc.enabled` set to `true`, `useCloud
 
 ## Architecture Overview
 
-VAMS deploys as an AWS CloudFormation stack managed by AWS CDK, consisting of 10 nested stacks that provide modular resource organization.
+VAMS deploys as an AWS CloudFormation stack managed by AWS CDK, organized into nested stacks so that storage, authentication, the API, search, the web distribution, and each optional processing pipeline are provisioned as separable units.
 
 ```mermaid
 graph TB

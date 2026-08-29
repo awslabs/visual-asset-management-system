@@ -286,3 +286,92 @@ describe("TemplateForm — tag schema and body preservation", () => {
         expect(mockCreate).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * Edit-to-edit navigation between two templates under the same route pattern.
+ *
+ * routes.tsx reuses one Route element per pattern, so a templateId change re-renders the loader
+ * without unmounting it. With the target already in the TanStack cache the query is `success` on that
+ * first render, so `isLoading` never goes true and the loader's spinner branch — the only thing that
+ * would remount the form — never runs. Every field is seeded from `initial` with useState, so the form
+ * would keep the previous template's values and Save would write them under the NEW templateId.
+ */
+describe("TemplateFormEditLoader target change", () => {
+    const templateA: Template = {
+        pipelineDatabaseId: "db1",
+        pipelineId: "p1",
+        templateId: "t-a",
+        templateName: "Template A",
+        description: "a",
+        configFormat: "json",
+        configBody: '{"from":"A"}',
+        allowCustomEdit: false,
+        inputInstructions: "",
+        overrides: {},
+        isDefault: false,
+        tagSchema: [],
+    } as unknown as Template;
+
+    const templateB: Template = {
+        ...templateA,
+        templateId: "t-b",
+        templateName: "Template B",
+        description: "b",
+        configBody: '{"from":"B"}',
+    } as unknown as Template;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("re-seeds every field when the cached edit target changes without a remount", async () => {
+        const { useTemplate } = require("../api/queries");
+        useTemplate.mockReturnValue({ data: templateA, isLoading: false });
+
+        const view = render(
+            <TemplateFormEditLoader databaseId="db1" pipelineId="p1" templateId="t-a" />,
+            { wrapper: createWrapper() }
+        );
+
+        // Control: A's own values are what is on screen before the navigation.
+        expect(screen.getByDisplayValue("Template A")).toBeInTheDocument();
+
+        // Edit A, then navigate to B — cached, so isLoading stays false.
+        await userEvent.clear(screen.getByDisplayValue("Template A"));
+        await userEvent.type(screen.getByPlaceholderText("Template name"), "A edited");
+        expect(screen.getByDisplayValue("A edited")).toBeInTheDocument();
+
+        useTemplate.mockReturnValue({ data: templateB, isLoading: false });
+        view.rerender(<TemplateFormEditLoader databaseId="db1" pipelineId="p1" templateId="t-b" />);
+
+        expect(screen.getByDisplayValue("Template B")).toBeInTheDocument();
+        expect(screen.queryByDisplayValue("A edited")).not.toBeInTheDocument();
+    });
+
+    it("saves the new target's body, not the previous one's", async () => {
+        const { useTemplate } = require("../api/queries");
+        useTemplate.mockReturnValue({ data: templateA, isLoading: false });
+
+        const view = render(
+            <TemplateFormEditLoader databaseId="db1" pipelineId="p1" templateId="t-a" />,
+            { wrapper: createWrapper() }
+        );
+        await userEvent.clear(screen.getByDisplayValue("Template A"));
+        await userEvent.type(screen.getByPlaceholderText("Template name"), "A edited");
+
+        useTemplate.mockReturnValue({ data: templateB, isLoading: false });
+        view.rerender(<TemplateFormEditLoader databaseId="db1" pipelineId="p1" templateId="t-b" />);
+
+        // Basic -> Configuration -> Tags -> Review, then Save.
+        for (let i = 0; i < 3; i++) {
+            await userEvent.click(screen.getByRole("button", { name: "Next" }));
+        }
+        await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+        await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+        const call = mockUpdate.mock.calls[0][0];
+        expect(call.templateId).toBe("t-b");
+        expect(call.body.templateName).toBe("Template B");
+        expect(call.body.configBody).toBe('{"from":"B"}');
+    });
+});

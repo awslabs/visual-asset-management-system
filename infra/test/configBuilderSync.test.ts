@@ -12,7 +12,7 @@
  * infra/config/. It is not generated, so it silently drifts whenever a config
  * option is added or a default changes. These tests fail loudly on that drift:
  *
- *   1. defaults.ts presets must deep-equal the two template JSONs.
+ *   1. defaults.ts presets must deep-equal the three template JSONs.
  *   2. schema.ts FIELDS must cover every leaf of the ConfigPublic interface
  *      (and must not reference paths that no longer exist).
  *
@@ -23,9 +23,16 @@
  *
  * Out of scope (mirror imperative logic in getConfig() that cannot be checked
  * declaratively; guarded by the steering-doc rules instead): validation.ts and
- * derived.ts. Note: derived.ts's VPC_IMPLYING_PATHS currently lists a few
- * pipelines (usePreview3dThumbnail, useNvidiaCosmos, useNvidiaGr00t) that the
- * config.ts auto-enable block does not — a known divergence to revisit.
+ * derived.ts.
+ *
+ * Where getConfig() rejects a feature combination rather than adjusting the config,
+ * the ConfigBuilder mirrors the rejection as a validation.ts error rule and derives
+ * nothing. The VPC requirement is the worked example: getConfig() collects the 15
+ * VPC-requiring features and throws when app.useGlobalVpc.enabled is false, and
+ * validation.ts carries one error rule per feature. derived.ts performs no config
+ * mutation at all, so nothing here needs to reconcile the two lists — but a feature
+ * added to the getConfig() collection does need adding to validation.ts, which no
+ * test enforces.
  */
 
 import * as fs from "fs";

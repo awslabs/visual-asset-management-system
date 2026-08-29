@@ -405,8 +405,9 @@ export function buildApiGatewayAuthorizerRestFunction(
         environment: environment,
     });
 
-    // Grant API Gateway invoke permissions
-    fun.grantInvoke(Service("APIGATEWAY").Principal);
+    // API Gateway invokes this authorizer through the credentials role named as
+    // authorizerCredentials on both OpenAPI security schemes (see rest-api-gateway-construct),
+    // which holds the invoke grant, so the function carries no resource-based invoke policy.
 
     // Grant API key table read access for authorizer lookups
     storageResources.dynamo.apiKeyStorageTable.grantReadData(fun);

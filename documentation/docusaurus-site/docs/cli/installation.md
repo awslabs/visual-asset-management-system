@@ -244,21 +244,13 @@ export VAMS_CLI_INITIAL_RETRY_DELAY=2.0
 vamscli assets list -d my-database --auto-paginate
 ```
 
-## UTF-8 Terminal Requirements
+## Terminal Encoding
 
-VamsCLI uses Unicode characters for status indicators in CLI output. If you see encoding errors, ensure your terminal supports UTF-8.
+VamsCLI uses Unicode characters for status indicators in CLI output. It writes UTF-8 on standard output and standard error regardless of the system code page, so commands succeed on any terminal and when output is redirected to a file or piped to another process. No environment variable is required.
 
 ### Windows
 
-Use one of the following approaches:
-
--   **Windows Terminal** (recommended) -- UTF-8 by default
--   **VS Code integrated terminal** -- UTF-8 by default
--   **Legacy Command Prompt** -- Set the environment variable before running VamsCLI:
-
-    ```bash
-    set PYTHONIOENCODING=utf-8
-    ```
+Windows Terminal and the Visual Studio Code integrated terminal display the status indicators as intended. A legacy Command Prompt using a raster font may draw an unsupported character as a box or a question mark; this affects only how the character is drawn, and the command still completes and reports the same exit code.
 
 ### macOS and Linux
 

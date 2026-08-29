@@ -219,6 +219,20 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
         if (!assetKey || initializationRef.current) return;
         initializationRef.current = true;
 
+        // A re-run means a different file: go back to the loading state so the
+        // panel and HUD don't stay mounted against the destroyed application.
+        setSceneReady(false);
+        setIsLoading(true);
+        setLoadingMessage("Initializing viewer...");
+
+        // Owned by this effect run and released in its cleanup. Held here (rather
+        // than only inside initViewer) so the cleanup can reach them even when it
+        // runs while initViewer is still awaiting.
+        let cancelled = false;
+        let appRef: any = null;
+        let canvasRef: HTMLCanvasElement | null = null;
+        let resizeObserverRef: ResizeObserver | null = null;
+
         const initViewer = async () => {
             try {
                 console.log("PlayCanvas Gaussian Splat Viewer: Starting initialization");
@@ -226,6 +240,12 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
 
                 // Create canvas directly in DOM
                 const canvas = document.createElement("canvas");
+                canvasRef = canvas;
+                canvas.setAttribute("role", "img");
+                canvas.setAttribute(
+                    "aria-label",
+                    `Gaussian splat 3D view${assetKey ? `: ${assetKey.split("/").pop()}` : ""}`
+                );
                 canvas.style.width = "100%";
                 canvas.style.height = "100%";
                 canvas.style.display = "block";
@@ -251,6 +271,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                 // Load PlayCanvas engine
                 setLoadingMessage("Loading PlayCanvas engine...");
                 const pc = await PlayCanvasGaussianSplatDependencyManager.loadPlayCanvas();
+                if (cancelled) return;
                 console.log("PlayCanvas Gaussian Splat Viewer: PlayCanvas engine loaded");
 
                 // Create PlayCanvas application with high resolution settings
@@ -266,6 +287,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                         powerPreference: "high-performance",
                     },
                 });
+                appRef = app;
 
                 // Configure application settings for high quality
                 app.scene.clusteredLightingEnabled = false;
@@ -329,6 +351,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
 
                 // Set up resize observer
                 const resizeObserver = new ResizeObserver(handleResize);
+                resizeObserverRef = resizeObserver;
                 if (containerRef.current) {
                     resizeObserver.observe(containerRef.current);
                 }
@@ -359,6 +382,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                     assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
+                if (cancelled) return;
 
                 if (response && Array.isArray(response) && response[0] !== false) {
                     console.log(
@@ -378,6 +402,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
 
                         // Load the asset
                         asset.ready(() => {
+                            if (cancelled) return;
                             try {
                                 console.log(
                                     "PlayCanvas Gaussian Splat Viewer: Asset ready, creating entity"
@@ -508,11 +533,30 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
         // Cleanup function
         return () => {
             console.log("PlayCanvas Gaussian Splat Viewer: Cleaning up");
+            cancelled = true;
 
             // Clean up camera controls event listeners
             if (cameraControlsRef.current && cameraControlsRef.current.destroy) {
                 cameraControlsRef.current.destroy();
             }
+            cameraControlsRef.current = null;
+
+            // Destroy the application. Its update loop otherwise keeps running
+            // against a detached canvas, holding the WebGL context and every
+            // splat buffer it uploaded.
+            try {
+                resizeObserverRef?.disconnect();
+                appRef?.destroy();
+            } catch (destroyErr) {
+                console.warn("PlayCanvas Gaussian Splat Viewer: destroy error:", destroyErr);
+            }
+            resizeObserverRef = null;
+            appRef = null;
+            canvasRef?.remove();
+            canvasRef = null;
+            viewerInstanceRef.current = null;
+            initialCameraStateRef.current = null;
+            initializationRef.current = false;
         };
     }, [assetKey, assetId, databaseId, versionId, assetVersionId]);
 

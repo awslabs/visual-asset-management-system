@@ -7,9 +7,10 @@ import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Template } from "aws-cdk-lib/assertions";
 import { addPresignedUrlNetworkRestrictionsToBucketPolicy } from "../lib/helper/security";
+import { newTestApp } from "./support/testApp";
 
 const makeStackWithBucket = () => {
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, "TestStack");
     const bucket = new s3.Bucket(stack, "TestBucket");
     return { stack, bucket };

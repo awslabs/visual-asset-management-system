@@ -79,53 +79,23 @@ def _record_sync(object_type, action, success, database_id, asset_id=None,
 
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset storage table name")
-    asset_storage_table_name = None
-
-try:
     asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset file metadata table name")
-    asset_file_metadata_storage_table_name = None
-
-try:
     s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving S3 asset buckets table name")
-    s3_asset_buckets_storage_table_name = None
-
-try:
     asset_links_storage_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
-except Exception as e:
-    logger.exception("Failed resolving asset links v2 table name")
-    asset_links_storage_table_v2_name = None
-
-try:
     asset_links_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset links metadata table name")
-    asset_links_metadata_storage_table_name = None
-
-try:
     asset_versions_storage_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset versions table name")
-    asset_versions_storage_table_name = None
-
-try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading Garnet environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-asset_storage_table = dynamodb.Table(asset_storage_table_name) if asset_storage_table_name else None
-asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name) if asset_file_metadata_storage_table_name else None
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
-asset_links_table = dynamodb.Table(asset_links_storage_table_v2_name) if asset_links_storage_table_v2_name else None
-asset_links_metadata_table = dynamodb.Table(asset_links_metadata_storage_table_name) if asset_links_metadata_storage_table_name else None
-asset_versions_table = dynamodb.Table(asset_versions_storage_table_name) if asset_versions_storage_table_name else None
+asset_storage_table = dynamodb.Table(asset_storage_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
+asset_links_table = dynamodb.Table(asset_links_storage_table_v2_name)
+asset_links_metadata_table = dynamodb.Table(asset_links_metadata_storage_table_name)
+asset_versions_table = dynamodb.Table(asset_versions_storage_table_name)
 
 #######################
 # Data Retrieval Functions - Asset Links

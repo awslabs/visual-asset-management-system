@@ -15,7 +15,8 @@ from urllib.parse import quote, urljoin
 _TOKEN_REFRESH_LOCK = threading.Lock()
 
 from ..constants import (
-    API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, MAX_AUTH_RETRIES, MINIMUM_API_VERSION,
+    API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT, MAX_AUTH_RETRIES,
+    MINIMUM_API_VERSION,
     API_LOGIN_PROFILE, API_SECURE_CONFIG, API_ASSETS, API_DATABASE_ASSETS, API_DATABASE_ASSET,
     API_CREATE_FOLDER, API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_ASSET_PREVIEW, 
@@ -72,8 +73,10 @@ class APIClient:
         # constructed without one would read another deployment's credentials.
         self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
-        self.session.timeout = DEFAULT_TIMEOUT
-        
+        # requests reads a timeout only from the per-request keyword, never from an attribute on the
+        # Session, so the pair is applied in _make_request instead.
+        self.request_timeout = (DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT)
+
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers."""
         headers = {
@@ -133,6 +136,9 @@ class APIClient:
             # Don't fail if logging fails
             pass
         
+        # setdefault, so a caller that names its own timeout (the availability probe) keeps it.
+        kwargs.setdefault('timeout', self.request_timeout)
+
         try:
             start_time = time.time()
             response = self.session.request(method, url, headers=headers, **kwargs)
@@ -525,14 +531,14 @@ class APIClient:
         """Make GET request."""
         return self._make_request('GET', endpoint, include_auth, **kwargs)
         
-    def post(self, endpoint: str, data: Optional[Dict[str, Any]] = None, 
+    def post(self, endpoint: str, data: Optional[Dict[str, Any]] = None,
              include_auth: bool = True, **kwargs) -> requests.Response:
         """Make POST request."""
         if data:
             kwargs['json'] = data
         return self._make_request('POST', endpoint, include_auth, **kwargs)
-        
-    def put(self, endpoint: str, data: Optional[Dict[str, Any]] = None, 
+
+    def put(self, endpoint: str, data: Optional[Dict[str, Any]] = None,
             include_auth: bool = True, **kwargs) -> requests.Response:
         """Make PUT request."""
         if data:
@@ -3471,6 +3477,70 @@ class APIClient:
 
     # Asset Export API Methods
 
+    def _resolve_staged_export_payload(self, response: requests.Response) -> Dict[str, Any]:
+        """Return the export payload, fetching it from its presigned URL when it was staged.
+
+        An export payload above the backend's inline size limit is not in the response body. The
+        backend writes it to the VAMS auxiliary Amazon S3 bucket and answers `303 See Other` with a
+        presigned URL in `Location`, plus a JSON envelope carrying the same URL as
+        `presignedExportPayloadUrl` for clients that do not follow redirects.
+
+        Two paths therefore arrive here, and both must yield the payload:
+
+        1.  **The redirect was followed** (the default: `requests.Session.request` sets
+            `allow_redirects=True`, and `Session.rebuild_auth` drops the `Authorization` header on
+            the host change, which Amazon S3 requires since the presigned URL carries its own
+            authorization in the query string). `response` is already the staged object and its body
+            is the payload — returned unchanged.
+        2.  **The redirect was not followed**, so `response` is the envelope. Left unhandled this is
+            the damaging case: the envelope parses cleanly as JSON, so the caller receives a dict
+            with a 200-shaped success and simply no `assets` key. This method detects the envelope
+            and fetches the URL itself.
+
+        Handling case 2 explicitly is what makes the behavior a property of this client rather than
+        of a library default it never states.
+        """
+        payload = response.json()
+
+        # The envelope is identified by its own field, not by status code: by the time a followed
+        # redirect returns, the status is 200 and the 303 is only visible in response.history.
+        if not isinstance(payload, dict):
+            return payload
+        staged_url = payload.get('presignedExportPayloadUrl')
+        if not staged_url:
+            # A 303 whose body was not the expected envelope: fall back to the Location header
+            # rather than returning a body that is definitely not the payload.
+            if response.status_code == 303:
+                staged_url = response.headers.get('Location')
+            if not staged_url:
+                return payload
+
+        from .logging import get_logger
+        logger = get_logger()
+        # Never log the URL itself — a presigned URL is a bearer credential in its query string.
+        logger.debug("Export payload was staged; retrieving it from its presigned URL")
+
+        try:
+            # A separate request with no VAMS auth: the presigned URL authorizes itself, and Amazon
+            # S3 rejects a request presenting two authorization mechanisms. `self.session` carries no
+            # default Authorization header (headers are built per request in _make_request), so this
+            # sends none.
+            staged_response = self.session.get(staged_url, timeout=self.request_timeout)
+            staged_response.raise_for_status()
+            return staged_response.json()
+        except requests.exceptions.RequestException as e:
+            raise APIError(
+                "Asset export failed: the export payload was staged for download but could not be "
+                f"retrieved from its presigned URL ({e}). The URL expires after "
+                f"{payload.get('presignedExportPayloadExpiresIn', 'the configured')} seconds; retry "
+                "the export if it has elapsed."
+            )
+        except ValueError as e:
+            raise APIError(
+                "Asset export failed: the staged export payload was retrieved but is not valid "
+                f"JSON ({e})."
+            )
+
     def export_asset(self, database_id: str, asset_id: str, export_params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Export comprehensive asset data with filtering options.
@@ -3494,7 +3564,7 @@ class APIClient:
         
         Returns:
             API response with assets, relationships, and pagination info
-        
+
         Raises:
             AssetNotFoundError: When asset is not found
             DatabaseNotFoundError: When database doesn't exist
@@ -3503,9 +3573,9 @@ class APIClient:
         """
         try:
             endpoint = API_ASSET_EXPORT.format(databaseId=database_id, assetId=asset_id)
-            # Backend expects POST with JSON body
+            # Backend expects POST with JSON body.
             response = self.post(endpoint, data=export_params, include_auth=True)
-            return response.json()
+            return self._resolve_staged_export_payload(response)
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:

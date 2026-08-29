@@ -9,7 +9,9 @@ from typing import List, Optional
 
 import click
 
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.decorators import (
+    requires_setup_and_auth, get_profile_manager_from_context, invoked_from_another_command
+)
 from ..utils.json_output import output_status, output_result, output_error
 from ..utils.logging import log_debug
 from ..utils.exceptions import (
@@ -226,7 +228,11 @@ def file():
 def upload(ctx: click.Context, files_or_directory, database_id, asset_id, directory, asset_preview,
            asset_location, recursive, parallel_uploads, retry_attempts, force_skip,
            json_input, json_output, hide_progress):
-    """Upload files to an asset."""
+    """Upload files to an asset.
+
+    Exits non-zero when any file failed to upload, so a partial transfer is distinguishable from a
+    complete one. The response still reports `overall_success`, `successful_files` and `failed_files`.
+    """
     try:
         # Parse JSON input if provided
         json_data = parse_json_input(json_input) if json_input else {}
@@ -512,7 +518,18 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             success_message=success_msg,
             cli_formatter=format_upload_result
         )
-        
+
+        # A partial or wholly failed transfer must not exit 0. At the shell level an exit code is the
+        # only signal a `set -e` script or a connector (which checks the code, not the payload) can
+        # act on, and treating an incomplete upload as success leaves downstream steps running
+        # against an asset missing files. The payload is emitted first, so `failed_files` and the
+        # per-file errors are still on stdout for a JSON consumer. Under another command's
+        # `ctx.invoke()` the result is returned instead (Rule 16), because that caller owns the
+        # decision.
+        if not result["overall_success"] and not invoked_from_another_command(ctx):
+            log_debug(f"Upload command completed with failures: {result['failed_files']} file(s)")
+            sys.exit(1)
+
         # Return result for programmatic use (Rule 16)
         log_debug("Upload command completed successfully")
         return result

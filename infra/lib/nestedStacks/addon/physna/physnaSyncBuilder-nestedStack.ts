@@ -142,7 +142,27 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
             registry: props.registry,
         });
 
-        // SQS queues — one per SNS topic subscription
+        // Deliveries a message gets before its queue moves it to the dead-letter queue.
+        // A record the consumer rejects alone is redelivered alone, but a failure it cannot
+        // pin on one record reports the WHOLE batch, and a timeout reports none of it, so the
+        // count is not per-message in the failure mode that matters: three deliveries spaced
+        // by the 960 s visibility timeout below is ~45 minutes before a persistent fault
+        // dead-letters a batch's healthy records too, which then need a DLQ redrive inside
+        // its 14-day retention.
+        const syncQueueMaxReceiveCount = 3;
+
+        // SQS queues — one per SNS topic subscription, each with its own dead-letter queue.
+        // A message the consumer cannot process is retained there instead of deleted, and one
+        // DLQ per queue keeps the file sync's failures distinguishable from the asset sync's.
+        const fileSyncDlq = new sqs.Queue(this, "PhysnaFileSyncSqsDLQ", {
+            retentionPeriod: cdk.Duration.days(14),
+            encryption: props.storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: props.storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+
         const fileSyncQueue = new sqs.Queue(this, "PhysnaFileSyncSqsQueue", {
             queueName: `${props.config.name}-${props.config.app.baseStackName}-physnaFileSync`,
             visibilityTimeout: cdk.Duration.seconds(960),
@@ -151,6 +171,10 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 : sqs.QueueEncryption.SQS_MANAGED,
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
+            deadLetterQueue: {
+                queue: fileSyncDlq,
+                maxReceiveCount: syncQueueMaxReceiveCount,
+            },
         });
         fileSyncQueue.grantSendMessages(Service("SNS").Principal);
         props.storageResources.sns.fileIndexerSnsTopic.addSubscription(
@@ -171,6 +195,9 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 target: fileSyncFunction,
                 batchSize: fileSyncBatchSize,
                 maxBatchingWindow: cdk.Duration.seconds(3),
+                // Emits FunctionResponseTypes: ["ReportBatchItemFailures"]. Without it Lambda
+                // ignores the handler's batchItemFailures and deletes the whole batch on a 200.
+                reportBatchItemFailures: true,
             });
             (esmFile.node.defaultChild as lambda.CfnEventSourceMapping).addPropertyDeletionOverride(
                 "Tags"
@@ -180,9 +207,19 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 new eventsources.SqsEventSource(fileSyncQueue, {
                     batchSize: fileSyncBatchSize,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 })
             );
         }
+
+        const assetSyncDlq = new sqs.Queue(this, "PhysnaAssetSyncSqsDLQ", {
+            retentionPeriod: cdk.Duration.days(14),
+            encryption: props.storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: props.storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
 
         const assetSyncQueue = new sqs.Queue(this, "PhysnaAssetSyncSqsQueue", {
             queueName: `${props.config.name}-${props.config.app.baseStackName}-physnaAssetSync`,
@@ -192,6 +229,10 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 : sqs.QueueEncryption.SQS_MANAGED,
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
+            deadLetterQueue: {
+                queue: assetSyncDlq,
+                maxReceiveCount: syncQueueMaxReceiveCount,
+            },
         });
         assetSyncQueue.grantSendMessages(Service("SNS").Principal);
         props.storageResources.sns.assetIndexerSnsTopic.addSubscription(
@@ -205,6 +246,9 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 target: assetSyncFunction,
                 batchSize: 10,
                 maxBatchingWindow: cdk.Duration.seconds(3),
+                // Emits FunctionResponseTypes: ["ReportBatchItemFailures"]. Without it Lambda
+                // ignores the handler's batchItemFailures and deletes the whole batch on a 200.
+                reportBatchItemFailures: true,
             });
             (
                 esmAsset.node.defaultChild as lambda.CfnEventSourceMapping
@@ -214,16 +258,19 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 new eventsources.SqsEventSource(assetSyncQueue, {
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 })
             );
         }
 
+        // Scoped to the two DLQ resources rather than the stack: both source queues now carry a
+        // redrive policy, so a source queue added later without one is still reported.
         NagSuppressions.addResourceSuppressions(
-            this,
+            [fileSyncDlq, assetSyncDlq],
             [
                 {
                     id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these sync events. SQS visibility timeout + Lambda retries are sufficient, and messages can be regenerated from VAMS state if needed.",
+                    reason: "This queue IS the dead-letter queue for a Physna sync source queue. A DLQ is the terminal destination for messages the consumer could not process, so giving it a redrive policy of its own would only defer the same failure to a further queue.",
                 },
             ],
             true

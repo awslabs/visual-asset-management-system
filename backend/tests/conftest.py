@@ -24,21 +24,56 @@ os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("REGION", "us-east-1")
 
-# Mock the customLogging.logger.safeLogger function
+# Mock the customLogging.logger.safeLogger function.
+#
+# The real safeLogger() returns an AWS Lambda Powertools `Logger`, so this stand-in has to accept
+# everything that object accepts or a handler that logs perfectly reasonably blows up inside a test.
+# Two ways that bit before:
+#
+#   * `debug` and `warn` were missing. The backend calls `logger.debug` 22 times and `logger.warn` 3
+#     times, so 25 call sites raised AttributeError as soon as a test reached one. The failure was
+#     order-dependent and therefore baffling: `handlers/authz/__init__.py:111` logs at debug level only
+#     on the "reuse cached enforcer" branch, and the enforcer cache is module-level global state — cold
+#     when the authz tests run alone (branch never taken, suite green) and warm in a full run once any
+#     earlier test has built an enforcer (branch taken, 27 failures in files that had not changed).
+#   * The methods took exactly `(self, message)`. Powertools is routinely called as
+#     `logger.info(msg, extra={...})`, which a single-positional signature rejects.
+#
+# So: every level the real Logger exposes, each accepting arbitrary args. A mock that is narrower than
+# the thing it replaces turns ordinary logging into a test failure at a distance from its cause.
 class MockSafeLogger:
-    def __init__(self, service=None, service_name=None):
+    def __init__(self, service=None, service_name=None, **kwargs):
         self.service = service_name if service_name is not None else service
-        
-    def info(self, message):
+
+    def debug(self, *args, **kwargs):
         pass
-        
-    def warning(self, message):
+
+    def info(self, *args, **kwargs):
         pass
-        
-    def error(self, message):
+
+    def warning(self, *args, **kwargs):
         pass
-        
-    def exception(self, message):
+
+    # Powertools keeps the deprecated alias; the backend still uses it in three places.
+    def warn(self, *args, **kwargs):
+        pass
+
+    def error(self, *args, **kwargs):
+        pass
+
+    def critical(self, *args, **kwargs):
+        pass
+
+    def exception(self, *args, **kwargs):
+        pass
+
+    def append_keys(self, **kwargs):
+        pass
+
+    def remove_keys(self, keys=None):
+        pass
+
+    def set_correlation_id(self, value=None):
         pass
 
 # Create a mock safeLogger function that returns a MockSafeLogger instance
@@ -58,7 +93,23 @@ sys.modules['common'] = MagicMock()
 # pydantic v1 then passes to re.compile(regex=...) at model-class-definition time,
 # crashing collection of any test that imports models.assetsV3.
 sys.modules['common.dynamodb'] = MagicMock()
-sys.modules['common.dynamodb'].get_asset_object_from_id = lambda asset_id: {"assetId": asset_id}
+
+
+def _mock_get_asset_object_from_id(database_id=None, asset_id=None):
+    """Stand-in for common.dynamodb.get_asset_object_from_id.
+
+    Mirrors the real two-argument signature ``(database_id, asset_id)``. The stub
+    previously took a single argument while every caller passes two
+    (``get_asset_object_from_id(None, assetId)``), so any test reaching one of those
+    call sites raised TypeError rather than exercising the handler - which is why the
+    suite could not see whether a caller handles a None return. The real function
+    returns None when the assetId resolves to nothing, so a test covering that path
+    patches this to return None.
+    """
+    return {"assetId": asset_id}
+
+
+sys.modules['common.dynamodb'].get_asset_object_from_id = _mock_get_asset_object_from_id
 sys.modules['common.constants'] = MagicMock()
 sys.modules['common.constants'].STANDARD_JSON_RESPONSE = {
     "statusCode": 200,

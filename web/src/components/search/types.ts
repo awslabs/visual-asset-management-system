@@ -381,7 +381,7 @@ export const FIELD_MAPPINGS: FieldMapping = {
         filterable: true,
         searchable: false,
     },
-    _rectype: {
+    str_rectype: {
         label: "Record Type",
         type: "string",
         sortable: true,

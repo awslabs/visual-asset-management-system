@@ -16,7 +16,9 @@ VAMS supports two update methods depending on the scope of changes being applied
 Complete the following steps before applying any update.
 
 :::danger[Always back up your data before updating]
-VAMS uses `RemovalPolicy.DESTROY` on Amazon DynamoDB tables by default. An update that replaces a table will permanently delete its data.
+VAMS uses `RemovalPolicy.RETAIN` on Amazon DynamoDB tables. An update that replaces a table therefore does **not** delete its data — AWS CloudFormation creates a new, empty table and orphans the old one, which keeps its original auto-generated name and continues to accrue storage charges. The application comes up with no data while the data still exists in the retained table, so the symptom looks like data loss even though nothing was deleted.
+
+Back up before updating, and if an update replaces a table, locate the orphaned table (it is not listed in the updated stack's resources) and either migrate its contents into the new table or delete it once you no longer need it. See [Uninstall the solution](uninstall.md#step-3-delete-dynamodb-tables) for how VAMS tables are named and listed.
 :::
 
 1. **Review the changelog.** Read the [CHANGELOG.md](https://github.com/awslabs/visual-asset-management-system/blob/main/CHANGELOG.md) for breaking changes, required migration scripts, and known issues for the target version.
@@ -88,6 +90,94 @@ CloudFormation changesets update, replace, or delete resources based on the type
 npx cdk diff
 ```
 
+:::
+
+:::warning[Default roles and constraints are overwritten on every deployment]
+The seeded authorization defaults are an exception to the "unchanged resources are left untouched" rule
+above. Every deployment — in-place or A/B — writes them back to Amazon DynamoDB, replacing each record in
+full and re-creating any that were deleted. This is intentional: read-only role constraints are added and
+adjusted between releases, and re-seeding is how an existing deployment receives those changes without a
+migration step.
+
+The records rewritten on every deployment are:
+
+-   The `admin` and `basicReadOnly` role definitions, including their `mfaRequired` setting.
+-   The `admin` role assignments for `app.adminUserId` and the reserved `SYSTEM_USER` identity.
+-   Every default constraint — those with an id beginning `initial_admin_` or `initial_basicro_`.
+-   The user records for `app.adminUserId` (with `app.adminEmailAddress`) and `SYSTEM_USER`.
+
+Because each record is replaced in full, **any hand-edit to a default role, one of its constraints, or a
+seeded user record is lost on the next deployment**, including attributes added to it and an
+`mfaRequired` value changed through the web interface. Customize permissions in a separate role carrying
+its own constraints rather than by editing a default one; roles, user-role assignments, and constraints
+created through the web interface, the API, or the CLI are not touched by a deployment. See
+[Permissions model](../concepts/permissions-model.md) for the constraint structure.
+:::
+
+:::danger[Do not change `app.adminUserId` or `app.adminEmailAddress` after the first deployment]
+The seeded Amazon Cognito administrator is an `AWS::Cognito::UserPoolUser` whose `Username`,
+`UserPoolId`, `UserAttributes` and `DesiredDeliveryMediums` are all **Update-requires-Replacement**.
+Editing either value therefore does not rename the account — AWS CloudFormation creates a new user and
+deletes the old one. Which of two outcomes you get depends only on whether the new username already
+exists in the pool:
+
+- **The new username does not exist.** The deployment **succeeds** and the previous administrator
+  identity is **deleted**. You can no longer sign in as it, and any `userRoles` rows still keyed to the
+  old username grant nothing to nobody. This half is silent — nothing in the deployment output says an
+  administrator was removed.
+- **The new username already exists** (created by hand, or equal to another operator's account). The
+  replacement's create step fails with `AlreadyExists`, the nested authorization stack fails, and the
+  **whole core stack rolls back** — roughly 15 minutes, across every nested stack.
+
+Treat both values as fixed for the life of the deployment. To change who administers VAMS, leave the
+seeded account alone and grant the `admin` role to another user through the web interface, the API, or
+the CLI — those assignments are not overwritten by a deployment.
+
+If the values in your configuration file have already drifted from the deployed stack (for example a
+configuration copied between environments), read the deployed value back before deploying and restore
+it:
+
+```bash
+aws cognito-idp list-users --user-pool-id <pool-id> \
+  --query "Users[].Username" --output text
+```
+
+This behaviour is not specific to any one release; it has always been how the resource is declared.
+:::
+
+:::warning[Built-in pipelines and workflows are re-registered from the CDK schema]
+Each built-in pipeline ships a `vamsSchema` bundle — a pipeline definition, an optional workflow with its
+triggers, and its templates — that the deployment uploads and registers through an AWS CloudFormation
+custom resource. A hash of the bundle's files and of the deploy-time values injected into it is a property of that
+resource, so the registration re-runs whenever a release revises the built-in or the resources it points
+at change. The definitions are owned by the schema, not by the deployment's database, and a re-registration
+replaces them.
+
+A re-registration rewrites, for the ids the bundle names:
+
+-   **The pipeline** — name, category, description, execution configuration and `systemConfig`, and it is
+    written back as **enabled and unarchived**.
+-   **The workflow** — name, category, description, referenced pipelines, sub-dashboard URL and
+    `systemConfig`, also **enabled and unarchived**. Its AWS Step Functions state machine is regenerated.
+-   **Each template the bundle ships** — name, description, configuration format and body, web form,
+    custom-edit flag, input instructions, `systemConfig` overrides, the `isDefault` flag, and the tag
+    schema when the bundle declares one. A shipped template that is the bundle's default reclaims that
+    designation from whichever template held it.
+-   **Each trigger the bundle declares**, matched by trigger type — its input-file filters, default
+    templates, and `enabled` flag, which comes from `autoRegisterAutoTriggerOnFileUpload` when the
+    deployment sets it.
+
+A re-registration does **not** touch execution history or the outputs of past runs, pipelines and workflows
+you created, templates and additional triggers you added under identifiers of your own, or the
+`dateCreated` and `createdBy` provenance of the built-in's records; the rewritten records are attributed to
+`SYSTEM_USER` as their modifier.
+
+The consequence to plan around is that **a built-in disabled or archived in the web interface returns
+enabled**, and that no line in the deployment output flags a replaced change — the custom resource reports
+only what it registered. Turn a built-in off through the deployment configuration instead: setting its
+`autoRegisterWithVAMS` to `false` removes the registration and archives the pipeline and workflow, and
+`autoRegisterAutoTriggerOnFileUpload` controls whether its file-upload trigger fires. See
+[Pipelines and workflows](../concepts/pipelines-and-workflows.md#global-pipelines-versus-database-specific-pipelines).
 :::
 
 ### Step 5: Post-update verification
@@ -209,18 +299,18 @@ If Lambda functions behind a VPC were broken in v2.2, this version restores VPC 
 
 5.  Run the migration:
 
-    === "Linux / macOS"
+    **Linux / macOS**
 
-        ```bash
-        chmod +x run_migration.sh
-        ./run_migration.sh my_migration_config.json
-        ```
+    ```bash
+    chmod +x run_migration.sh
+    ./run_migration.sh my_migration_config.json
+    ```
 
-    === "Windows"
+    **Windows**
 
-        ```powershell
-        .\run_migration.ps1 my_migration_config.json
-        ```
+    ```powershell
+    .\run_migration.ps1 my_migration_config.json
+    ```
 
 6.  The migration performs the following operations:
     -   Migrates metadata from the old table to the new multi-entity metadata tables.
@@ -264,18 +354,18 @@ If Lambda functions behind a VPC were broken in v2.2, this version restores VPC 
 
 5.  Run the migration:
 
-    === "Linux / macOS"
+    **Linux / macOS**
 
-        ```bash
-        chmod +x run_migration.sh
-        ./run_migration.sh my_migration_config.json
-        ```
+    ```bash
+    chmod +x run_migration.sh
+    ./run_migration.sh my_migration_config.json
+    ```
 
-    === "Windows"
+    **Windows**
 
-        ```powershell
-        .\run_migration.ps1 my_migration_config.json
-        ```
+    ```powershell
+    .\run_migration.ps1 my_migration_config.json
+    ```
 
 6.  The migration performs five phases:
     -   **Phase 1:** Builds a lookup cache by scanning the asset storage table for `assetId` to `databaseId` mappings.
@@ -304,11 +394,16 @@ steps here.
 
 -   The backend API moves from API Gateway HTTP API (v2) to REST API (v1), served under a stage path (default `/api`). The API Gateway identifier and invoke URL change on deployment. **Any client registered directly against the old API Gateway endpoint URL must be re-setup against the new endpoint** — re-run `vamscli setup` for the CLI, and update any external integrations or scripts that stored the API base URL. Clients that reach the API through the CloudFront or ALB front (the web application, and CLIs configured with the front's `/api` URL) continue to work without change. See [API Gateway REST API endpoint change](#api-gateway-rest-api-endpoint-change).
 -   **Externally registered pipelines do not run unchanged.** The workflow, pipeline, and execution overhaul changes three things a pipeline depends on: it reads its inputs from a resolved manifest rather than from the invocation payload, an asynchronous pipeline returns a Step Functions task token for the workflow to advance past it, and it registers its sub-processes and log locations so abort and log retrieval reach them. Registration itself also moves — a definition is declared in a file-based `vamsSchema` bundle imported through the schema importer, and a pipeline is referenced by composite `pipelineDatabaseId:pipelineId`. The migration steps below reshape stored **definitions**; they cannot change a pipeline's **code**. Port every externally maintained pipeline with [Migrating custom pipelines from v2.5 to v2.6](../pipelines/migrating-pipelines-v25-to-v26.md). Deployments running only VAMS built-in pipelines need nothing beyond the steps here.
+    -   **Three API routes are removed, and any direct API client must be repointed.** `PUT /pipelines` (create a pipeline) is replaced by `POST /database/{databaseId}/pipelines`; `PUT /workflows` (create a workflow) by `POST /database/{databaseId}/workflows`; and `POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}` (run a workflow against one asset) by `POST /workflows/{workflowDatabaseId}/{workflowId}/execute`, which is asset-less and takes an input-file array plus an output-target asset instead of a path-bound asset. The bare `/pipelines` and `/workflows` paths serve `GET` only. A removed route is absent from the API's OpenAPI spec, so a call to it is rejected by the authorizer with a **`403`** rather than a `404` — this affects scripts, CI jobs, and home-built clients even when the deployment runs no custom pipeline code.
+-   **Role constraints that reference the `pipeline` criteria field `pipelineType` are no longer enforced as written.** `pipelineType` is not part of the `pipeline` constraint field set in v2.6, and a criterion naming a field VAMS does not recognize is dropped when the permission policy is compiled. For an already-stored constraint the drop is silent: stored constraints are not re-validated, so no error and no warning reaches the administrator. Because a constraint's criteria are combined with AND, dropping the criterion from an **allow** rule removes a restriction and **widens** the pipelines the role can reach. Every stored constraint must be audited and re-authored against `category` before upgrading; no migration step rewrites constraints. See [Permission constraint audit for `pipelineType`](#permission-constraint-audit-for-pipelinetype).
+-   `app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified` is removed, along with the identically named key under `app.pipelines.useSplatToolbox`. Configuration validation ignores an unrecognized key rather than rejecting it, so a stale entry left in `config.json` raises no error at synth or deploy, and the automatic re-run of the Potree point cloud conversion on asset modification simply stops. There is no replacement under the v2.6 trigger model: `fileUpload` is the only trigger type, so a workflow fires when a matching file is uploaded and not when an existing asset is edited.
 -   New OpenSearch index names: `vams-assets-v3` and `vams-files-v3`. The new mapping adds a `geo_MD_location` field of type `geo_shape` that powers the new geospatial search filter and map view. The previous v2 indexes are abandoned and remain in OpenSearch until you delete them manually.
 -   Provisioned OpenSearch domains are upgraded from engine version 2.7 to 3.5. Serverless collections are reworked separately (see below).
 -   OpenSearch Serverless collections are reshaped onto a next-generation collection group with new `app.openSearch.useServerless` settings (`nextGen`, `allowPublic`, `enableStandbyReplicas`, and configurable OCU capacity). The collection cannot be updated in place — it must be removed and re-created, then reindexed. See [OpenSearch Serverless next-gen upgrade](#opensearch-serverless-next-gen-upgrade).
+-   **`app.openSearch.useServerless.allowPublic` is new and defaults to `true`, which fails configuration validation on a fully VPC-isolated deployment.** A `config.json` carrying no `allowPublic` key resolves to a public collection, and a deployment with both `app.useGlobalVpc.enabled` and `app.useGlobalVpc.useForAllLambdas` set to `true` then throws at `cdk synth`, because an all-Lambdas-in-VPC deployment cannot reach a public collection. Set `allowPublic` to `false` — that is the setting which reproduces the v2.5 private-collection behavior for this topology, where the collection was placed behind a VPC endpoint automatically.
 -   The VPC is no longer enabled automatically. If a feature that requires a VPC (ALB, OpenSearch Provisioned, or any container-based pipeline) is enabled while `app.useGlobalVpc.enabled` is `false`, the deployment now fails configuration validation with an error that lists the offending features, rather than silently turning the VPC on. See [VPC is now required for certain features](#vpc-is-now-required-for-certain-features).
 -   Provisioned OpenSearch `availabilityZoneCount` now defaults to `2`, and the VPC is built with exactly that many Availability Zones. Earlier releases always built the VPC across 3 Availability Zones for provisioned OpenSearch even though the domain only used 2, so on upgrade the previously-unused third AZ subnet is removed (a VPC downgrade). See [OpenSearch Provisioned Availability Zone count downgrade](#opensearch-provisioned-availability-zone-count-downgrade).
+-   **AWS WAF changes from count-only monitoring to enforcement on a deployment with `app.useWaf` enabled.** v2.5 ran the AWS Common Rule Set in `count` mode, recording matches without rejecting them. The three rule groups now declared in `infra/config/policy/wafPolicyConfig.json` — Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List — are in block mode. A request that previously only incremented a counter is answered **`403` by AWS WAF before it reaches the authorizer or any Lambda function**, so it produces no VAMS log entry to correlate with the upgrade. Two Common Rule Set rules are already overridden back to `count` because VAMS traffic trips them: `SizeRestrictions_BODY` for multi-part upload bodies, and `SizeRestrictions_QUERYSTRING` for the presigned URL the SuperSplat viewer passes in its `?load=` parameter. Review the AWS WAF blocked-request metrics after upgrading; set `"block": false` on a group in that file to return it to monitor mode, or remove the file to restore count-only behavior.
 -   GPU pipeline AWS Batch compute environments move to the Amazon Linux 2023 NVIDIA-accelerated AMI (`ECS_AL2023_NVIDIA`). AWS Batch blocks creation of new Amazon ECS compute environments that use Batch-provided Amazon Linux 2 AMIs, so earlier image types fail on a new deployment. This affects the Gaussian Splat Toolbox, NVIDIA Cosmos (Predict, Reason, Transfer), Cosmos 3, GR00T, and Isaac Lab pipelines. **Each affected GPU compute environment is replaced on upgrade**, so drain or wait for in-flight GPU pipeline jobs before deploying. All supported GPU instance families (G5, G6, G6E, P4DE, P5, P5E) work with this AMI; the `P3` and `G3` families are not supported by it.
 
 **Required migration steps:**
@@ -337,28 +432,83 @@ steps here.
 
     The reindexer Lambda function name is then resolved automatically from the deployment's SSM Parameter Store resource-name parameters (requires `ssm:GetParametersByPath` on the prefix). To skip or override the lookup, set `reindexer_function_name` explicitly to the value of the CloudFormation output `ReindexerFunctionNameOutput` instead.
 
-5.  Run the migration:
+5.  Do a dry run first. Each step reports the rows it would write without writing them.
 
-    === "Linux / macOS"
+    **Linux / macOS**
 
-        ```bash
-        chmod +x run_migration.sh
-        ./run_migration.sh my_migration_config.json
-        ```
+    ```bash
+    chmod +x run_migration.sh
+    ./run_migration.sh my_migration_config.json --dry-run
+    ```
 
-    === "Windows"
+    **Windows**
 
-        ```powershell
-        .\run_migration.ps1 -ConfigFile my_migration_config.json
-        ```
+    ```powershell
+    .\run_migration.ps1 -ConfigFile my_migration_config.json -DryRun
+    ```
 
-6.  The migration invokes the deployed reindexer Lambda, which:
-    -   Re-publishes every asset record from the asset storage DynamoDB table so the asset indexer writes the asset document (including the new `geo_MD_location` field) into `vams-assets-v3`.
-    -   Lists every asset bucket and re-publishes file events so the file indexer writes file documents into `vams-files-v3`.
-    -   Returns aggregate success/failure counts.
+    A dry run reports zero rows for any step whose source rows are absent or already migrated, so a zero-row result on its own is not evidence that the step is configured correctly. Read the per-step counts against what the deployment actually holds.
+
+6.  Run the migration:
+
+    **Linux / macOS**
+
+    ```bash
+    ./run_migration.sh my_migration_config.json
+    ```
+
+    **Windows**
+
+    ```powershell
+    .\run_migration.ps1 -ConfigFile my_migration_config.json
+    ```
+
+7.  The migration runs seven independent steps in the order below. `--steps` selects a single step; the default (`all`) runs every one.
+
+    | Step                            | `--steps` value               | What it does                                                                                                                                                                                                        |
+    | ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | OpenSearch reindex              | `reindex`                     | Invokes the deployed reindexer Lambda, which re-publishes every asset record so the asset indexer writes into `vams-assets-v3` (including the new `geo_MD_location` field), lists every asset bucket and re-publishes file events into `vams-files-v3`, and returns aggregate success/failure counts. |
+    | Asset history backfill          | `assetHistory`                | Backfills the new asset history table from existing asset and version records — a `create` record from each asset's v0 version, plus `archive`/`unarchive` records inferred from the asset's archive fields.        |
+    | Workflow executions overhaul    | `workflowExecutions`          | Reshapes legacy workflow execution rows into the V2 workflow-keyed tables (main record, workflow inputs, per-pipeline execution records, and input files). The V1 table is never modified.                          |
+    | Auxiliary preview relocation    | `auxPreviewRelocation`        | Moves auxiliary-bucket preview and viewer objects to the database-scoped per-file layout by copying each object to its new key and then deleting the old one. Previews are unavailable between the deploy and this step. |
+    | Pipeline + workflow definitions | `pipelineWorkflowDefinitions` | Migrates user-database pipeline and workflow definitions from the V1 tables to the V2 tables, preserving each pipeline's parameters as a `migrated-default` template. Shipped `GLOBAL` built-ins are skipped.        |
+    | Global-list partition backfill  | `globalListBackfill`          | Stamps the `allListPartition` attribute on V2 pipeline, workflow, and execution rows that predate it, so the cross-database "all pipelines / workflows / executions" lists return them.                             |
+    | Tags namespacing                | `tagsNamespacing`             | Copies every legacy tag and tag type into the V2 composite-key tables under the `GLOBAL` partition. Asset tag lists are unchanged.                                                                                  |
+
+:::danger[Run the pipeline and workflow definition step once per upgrade]
+`pipelineWorkflowDefinitions` is the one step that is not safe to repeat. Its V2 rows are keyed by the same `(databaseId, pipelineId/workflowId)` as the V1 source, and the overwrite is **unconditional**: a second run replaces each migrated pipeline, workflow, and `migrated-default` template with the V1-derived record, discarding every edit made since the first run — renames, archive flags, and template bodies included. Nothing reports the loss.
+
+Run it once as part of the upgrade. If a later run is needed to pick up definitions added afterwards, restrict it to the specific rows you intend to reset, and expect to re-apply any edits to rows it touches. The other six steps are safe to repeat: `reindex` rewrites documents from the live source records, `assetHistory` and `workflowExecutions` use deterministic record IDs and overwrite with the same values, `auxPreviewRelocation` skips objects already in the new layout, and `globalListBackfill` and `tagsNamespacing` write under a condition expression that skips rows already present.
+:::
 
 :::note[`--clear-indexes` defaults to false]
 The v3 indexes are empty after the v2.6 CDK deploy, so the first migration run never needs to clear them. Pass `--clear-indexes` only if a previous run partially populated v3 and you want to start clean.
+:::
+
+:::warning[The reindex is what backfills the record-type discriminator — do not skip it]
+v2.6 renames the OpenSearch record-type discriminator to `str_rectype` and sets it on every document
+write. Because it is set on WRITE, a document indexed before the upgrade does not acquire it just by
+deploying: `app.openSearch.reindexOnCdkDeploy` is `false` by default and a deployment does not replay
+indexing. Any search that filters on the discriminator therefore returns nothing for pre-upgrade
+content until the reindex has run.
+
+The `reindex` step above is the backfill. It repopulates both v3 indexes from DynamoDB and Amazon S3
+through the current indexers, so every live asset and file document is rewritten with the field. No
+separate command is needed — it is part of the default run, and can be run alone:
+
+```bash
+python v2.5_to_v2.6_migration.py --config my_migration_config.json --steps reindex
+```
+
+Two things to expect afterwards:
+
+- **The first search immediately after a large reindex can return a 500.** OpenSearch Serverless is
+  still settling; retry after about 30 seconds. It is not a failed migration.
+- **Documents whose source no longer exists are not rewritten.** A reindex repopulates from live
+  DynamoDB and S3 records, so a stale document left by an asset or file deleted earlier keeps its
+  pre-upgrade shape indefinitely. Those documents are unreachable through any live-entity read. To
+  clear them out as well, re-run the step with `--clear-indexes`, which empties v3 before
+  repopulating.
 :::
 
 :::note[Tag namespacing migration]
@@ -443,7 +593,7 @@ Decide on `availabilityZoneCount` (`2` or `3`) before upgrading. Setting it to `
 
 In v2.6 the backend API is an API Gateway REST API (v1) served under the fixed stage path `/api`, replacing the previous HTTP API (v2). On deployment the API Gateway identifier and invoke URL change.
 
-The `app.api` configuration block is also restructured in v2.6: the per-implementation settings move under a new `app.api.apiGatewayRest` sub-block, and a new `app.api.apiType` field (fixed to `"APIGATEWAY_REST"`) selects the API implementation. Update an existing `config.json` so that `globalRateLimit`, `globalBurstLimit`, and `endpointType` live under `app.api.apiGatewayRest` (see the [API configuration reference](configuration-reference.md#api-configuration-appapi)). The execute-api VPC endpoint id field is now `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` and applies only to a `PRIVATE` endpoint. The REST API stage name is not a configuration option — it is the fixed value `api`.
+The `app.api` configuration block is also restructured in v2.6: the per-implementation settings move under a new `app.api.apiGatewayRest` sub-block, and a new `app.api.apiType` field (fixed to `"APIGATEWAY_REST"`) selects the API implementation. Configuration validation (`getConfig()`) applies that restructuring automatically — `app.api.apiType` is defaulted, and any flat `globalRateLimit`, `globalBurstLimit`, `endpointType`, `apiGatewayTimeoutTime`, and `externalRegionalAPIGatewayVPCEId` values are carried into `app.api.apiGatewayRest`, the last of them as `optionalExternalPrivateApigVPCEId`, which applies only to a `PRIVATE` endpoint. An existing `config.json` therefore deploys unedited (see the [API configuration reference](configuration-reference.md#api-configuration-appapi)). Custom APIs added in a fork outside this project are the exception: those settings are unknown to the configuration loader, so move them under the new `app.api` shape by hand. Declaring `app.api.apiGatewayRest` yourself replaces the carry-over, so a hand-written block must list every field it needs. The REST API stage name is not a configuration option — it is the fixed value `api`.
 
 The web application is unaffected: it reads the API base URL at runtime from `/api/amplify-config`, and the CloudFront `/api/*` behavior (or ALB redirect) absorbs the stage path so browser URLs remain `/api/*`.
 
@@ -460,11 +610,46 @@ In v2.6 every execution read path applies one permission rule: `GET` on the exec
 
 The narrower side of this is worth checking against existing roles before upgrading. A role scoped to a subset of databases loses list visibility of runs that span databases outside its scope, and loses the ability to re-run them, even when it can read some of the assets involved. Runs whose assets all sit inside the role's scope behave as before. To restore the earlier breadth for a role, widen its `asset` and `database` GET constraints to cover the databases those runs span.
 
-An execution has assets only when it read or wrote one. A run with no inputs of either kind is authorized on the asset it wrote to; a results-only run writes no files and has no asset at all, leaving workflow `GET` as its whole gate.
+An execution has assets only when it read or wrote one, and both sides carry the check: a run is authorized on every asset it read **and** on the asset it wrote to. A results-only run writes no files and has no asset at all, leaving workflow `GET` as its whole gate.
+
+The output-asset half narrows access for a deployment that already ran workflows writing into a database outside the reader's scope. A role that could previously list, open, re-run, and abort such a run because it held `GET` on the run's input assets now needs `GET` on the destination asset as well (and `POST` on it to abort or permanently delete, matching the `POST` the launch already required). Review roles that read one database and write to another, and widen their `asset` and `database` constraints to cover the destination where the earlier breadth is still wanted.
 
 Deleting an asset does not delete the executions that ran against it. An asset that has been **permanently deleted** is authorized on the database it lived in, under the same action — a database is never removed, since deleting one archives the record — so the history of runs against a deleted asset stays reachable by whoever can read that database.
 
 **Archiving** an asset is not a deletion and does not change how its executions are authorized. An archived asset's record is retained, so it is still authorized on its own attributes (name, type, tags) exactly as it was before archiving, and any asset-level constraint that applied to it continues to apply.
+
+#### Permission constraint audit for `pipelineType`
+
+In v2.6 the `pipeline` objectType offers the criteria fields `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, and `name`. `pipelineType` is not among them: the value it held moves to `category`, and the migration copies each migrated pipeline's `pipelineType` value into that field. Built-in pipelines carry descriptive category labels instead, such as `Conversion` and `GenAI`.
+
+When the permission policy is compiled, a criterion whose field is not a recognized constraint field is dropped. For a constraint that is already stored the drop is **silent**: stored constraints are not re-validated, the skip is recorded at informational log level only, and no authorization response reports it. The constraint therefore continues to read as authored while enforcing something different from what it states:
+
+-   Criteria within a rule are combined with AND. Dropping one from an **allow** rule removes a restriction, so the role reaches pipelines the constraint was written to exclude. **This widens access.**
+-   A rule whose only criterion was `pipelineType` compiles to no criteria at all and is not emitted, so an allow rule of that shape grants nothing and a deny rule of that shape blocks nothing.
+
+Creating or updating a constraint through the API rejects an unrecognized field, naming it and listing the fields allowed for the objectType, so re-saving one of these constraints fails until the criterion is re-authored. That error is the only signal VAMS gives, and it appears only when someone edits the constraint.
+
+Audit every role constraint that uses the `pipeline` objectType before upgrading, and re-author each `pipelineType` criterion against `category`, using the category value the target pipelines actually carry. Stored constraints are left exactly as authored — no migration step rewrites them — so this audit is the only thing that restores the intended scope. See [Permissions model](../concepts/permissions-model.md) for the constraint criteria structure.
+
+#### Bucket listing route scoped to administrators
+
+`GET /buckets` returns the whole asset-bucket registry — every bucket's name and prefix — and there is
+no `bucket` object type, so the listing cannot be filtered per role at Tier 2. The route grant is the
+only control available, and in v2.6 it is an administrator grant: the `database-admin` template and the
+seeded default administrator role carry it, while the `database-user`, `database-readonly`, and
+`global-readonly` templates and the seeded `basicReadOnly` role do not.
+
+The seeded default constraints are rewritten on every deployment, so the `basicReadOnly` role loses the
+grant when the update runs. **Constraints already stored in the deployment are not reconciled**: a role
+authored by hand or from an earlier copy of a template keeps its `/buckets` grant until that constraint
+is re-authored or the updated template is re-imported. Nothing reports the difference, so review the
+`api` constraints of any non-administrator role that was built from a template and remove the
+`/buckets` criterion to match the shipped scope.
+
+For a role that keeps the route withheld, the only affected surface is the default-bucket selector on
+the database create and edit form, which loads no options. Every other database operation continues to
+work, and a default bucket can still be set by supplying a known `defaultBucketId` on
+`POST /database` or `PUT /database/{databaseId}`.
 
 #### Switching `endpointType` between `PRIVATE` and `REGIONAL`
 
@@ -485,7 +670,12 @@ Use this checklist to determine if additional actions are needed after updating.
 | VPC no longer auto-enabled             | v2.5 to v2.6                               | Set `app.useGlobalVpc.enabled: true` (or disable VPC-requiring features) if validation fails.                                           |
 | OpenSearch AZ count VPC downgrade      | v2.5 to v2.6 (provisioned only)            | Set `availabilityZoneCount: 3` to keep the existing VPC, or follow the drain-and-redeploy teardown to move to 2 AZs.                    |
 | Externally registered pipelines        | v2.5 to v2.6                               | Port each pipeline's input reads, task-token return, and sub-process registration, and declare its definition in a `vamsSchema` bundle. |
+| Three API routes removed               | v2.5 to v2.6                               | Repoint direct API clients: `PUT /pipelines` → `POST /database/{databaseId}/pipelines`, `PUT /workflows` → `POST /database/{databaseId}/workflows`, `POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}` → `POST /workflows/{workflowDatabaseId}/{workflowId}/execute`. A removed route answers `403`, not `404`. |
+| AWS WAF count mode → block mode        | v2.5 to v2.6 (`app.useWaf` enabled)        | Review AWS WAF blocked-request metrics after upgrading. Set `"block": false` on a rule group in `infra/config/policy/wafPolicyConfig.json` to return it to monitor mode. Blocked requests produce no VAMS log entry. |
+| OpenSearch Serverless `allowPublic`    | v2.5 to v2.6 (serverless only)             | Set `app.openSearch.useServerless.allowPublic: false` when `app.useGlobalVpc.useForAllLambdas` is `true`; the new default of `true` fails `cdk synth` on that topology. |
 | API Gateway REST API endpoint change   | v2.5 to v2.6                               | Re-run `vamscli setup`; update any client or script that stored the API Gateway invoke URL.                                             |
+| Pipeline constraint field audit        | v2.5 to v2.6                               | Re-author any role constraint criterion that uses `pipelineType` against `category`; no script rewrites constraints.                    |
+| Bucket listing route scoped to admins  | v2.5 to v2.6                               | Remove the `/buckets` `api` criterion from non-administrator roles built from an earlier template; stored constraints are not reconciled. |
 | Permission constraint migration        | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                                                                            |
 | API Gateway authorizer change          | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                                                                                |
 | Pipeline CDK construct rename          | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                                                                         |
@@ -506,12 +696,12 @@ If an update causes issues, the rollback approach depends on the update method u
     npx cdk deploy --all --require-approval never
     ```
 
-2. If DynamoDB tables were replaced during the update, restore from the backups taken in the pre-update checklist.
+2. If DynamoDB tables were replaced during the update, look for the orphaned tables first. Because the tables use a `RETAIN` removal policy, a replacement leaves the original table (and its data) in the account under its old name, outside the stack. Migrate from the orphaned table where the data is still current, and restore from the backups taken in the pre-update checklist only where it is not.
 
 3. If Amazon OpenSearch Service indexes were modified, trigger a reindex from DynamoDB data.
 
-:::warning[Irreversible changes]
-Some changes (such as DynamoDB table replacements) cannot be rolled back through redeployment alone. Always maintain backups before updating.
+:::warning[Redeployment alone does not restore a replaced table]
+A rollback deployment creates its own tables; it does not reattach the ones a replacement orphaned. Reconnecting the data is a manual step in every case, so maintain backups before updating and record the stack's table names as part of the pre-update checklist.
 :::
 
 ### A/B deployment rollback

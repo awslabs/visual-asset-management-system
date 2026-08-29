@@ -164,12 +164,14 @@ def _run_preview_pipeline(
     relative_subdir = _relative_subdir(stage_input, stage_output, assetId)
     logger.info(f"Input relative subdirectory: '{relative_subdir}'")
 
-    # Parse overwriteExistingPreviewFiles parameter (default: False)
-    overwrite_existing = False
+    # Parse overwriteExistingPreviewFiles parameter (default: True)
+    overwrite_existing = True
     if isinstance(inputParametersObject, dict):
-        overwrite_existing = inputParametersObject.get("overwriteExistingPreviewFiles", False)
+        overwrite_existing = inputParametersObject.get("overwriteExistingPreviewFiles", True)
         if not isinstance(overwrite_existing, bool):
-            overwrite_existing = str(overwrite_existing).lower() in ("true", "1", "yes")
+            # A value supplied as text keeps an existing preview only when it reads as false;
+            # anything else carries the default.
+            overwrite_existing = str(overwrite_existing).strip().lower() not in ("false", "0", "no")
     logger.info(f"overwriteExistingPreviewFiles: {overwrite_existing}")
 
     # Check if a preview file already exists for this input file

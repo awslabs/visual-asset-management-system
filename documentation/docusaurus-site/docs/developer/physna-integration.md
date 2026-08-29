@@ -18,9 +18,9 @@ Physna treats all content as a path-based tree of folders and assets within a te
 
 | VAMS concept         | Physna concept | Path representation                     |
 | -------------------- | -------------- | --------------------------------------- |
-| Database (`dbId`)    | Folder         | `\{dbId\}/`                             |
-| Asset (`assetId`)    | Folder         | `\{dbId\}/\{assetId\}/`                 |
-| File (relative path) | Asset (file)   | `\{dbId\}/\{assetId\}/\{relativePath\}` |
+| Database (`dbId`)    | Folder         | `{dbId}/`                             |
+| Asset (`assetId`)    | Folder         | `{dbId}/{assetId}/`                 |
+| File (relative path) | Asset (file)   | `{dbId}/{assetId}/{relativePath}` |
 
 Folders are created implicitly when VAMS uploads the first file into each path via the `createMissingFolders=true` parameter on the Physna asset upload endpoint.
 
@@ -102,6 +102,26 @@ Documents and images are synced to Physna for search and indexing but are **not*
 
 Extending either list requires a code change. When changing the viewer set, update **both** the backend `VIEWER_SUPPORTED_EXTENSIONS` constant and the frontend `viewerConfig.json` entry so they stay in sync.
 
+### Maximum file size
+
+A file is uploaded to Physna in one multipart request, not in parts, and the sync Lambda holds the whole file while it does so. Three AWS Lambda quotas therefore bound the largest file that can be synced, and the tightest one wins:
+
+| Bound                | Value                                                          | Where it applies                                                    |
+| -------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Function memory      | `LAMBDA_MEMORY_SIZE` (`infra/config/config.ts`)                | Holds the file bytes **twice** while the request is built           |
+| Ephemeral storage    | `PHYSNA_SYNC_EPHEMERAL_STORAGE` (`physnaSyncFunctions.ts`)      | Holds the file once, staged in `/tmp` before the upload             |
+| Function timeout     | 15 minutes                                                     | Must cover the Amazon S3 download plus the upload to Physna         |
+
+**Memory is the binding constraint, at roughly half the configured function memory.** The Lambda downloads the file to `/tmp`, reads it fully into memory, and the HTTP client then builds a second complete copy of those bytes as the multipart request body. Peak memory is therefore about twice the file size, which puts the practical ceiling near **2.4 GB** at the default 5308 MB function memory.
+
+:::warning[Raising ephemeral storage alone does not raise the supported file size]
+The ephemeral storage budget only has to clear the memory ceiling. A file larger than the memory bound stages to `/tmp` successfully and then fails partway through the upload with an out-of-memory error, which surfaces as a `failed` sync-tracking record and a redelivered Amazon SQS message rather than as a clear size rejection. To support genuinely larger files, the upload has to stream the multipart body instead of buffering it — raising the disk budget past the memory bound only changes where the failure happens.
+:::
+
+Both sync Lambdas carry the same ephemeral storage budget, because `physnaAssetSync` repairs drift by calling the same staged-upload path that `physnaFileSync` uses. Sizing only one of them would make the same file succeed or fail depending on which event delivered it.
+
+Sustained throughput also matters at the top of the range: the 15-minute timeout has to cover both transfers, so a multi-gigabyte file needs several MB/s to Physna to complete at all. Files that exceed these bounds are best excluded from the synced extension set rather than retried.
+
 ---
 
 ## Architecture
@@ -123,10 +143,10 @@ flowchart LR
 
 ### Event flow
 
-1. **File upload:** S3 `ObjectCreated` event → `fileIndexerSnsTopic` → file sync Lambda → downloads to `/tmp` → `POST /tenants/\{tenant\}/assets` with merged metadata → cleans up `/tmp`.
-2. **File deletion:** S3 `ObjectRemoved` event → file sync Lambda → `DELETE /tenants/\{tenant\}/assets` → cleans up empty parent folder.
+1. **File upload:** S3 `ObjectCreated` event → `fileIndexerSnsTopic` → file sync Lambda → downloads to `/tmp` → `POST /tenants/{tenant}/assets` with merged metadata → cleans up `/tmp`.
+2. **File deletion:** S3 `ObjectRemoved` event → file sync Lambda → `DELETE /tenants/{tenant}/assets` → cleans up empty parent folder.
 3. **File metadata or attribute change:** DynamoDB stream → file sync Lambda → attempts `PATCH` on Physna asset metadata; if the asset does not exist yet, falls back to the upload flow.
-4. **Asset metadata change:** DynamoDB stream on `assetStorageTable` → asset sync Lambda → lists all Physna assets under `\{dbId\}/\{assetId\}/` and rebuilds their metadata; removes Physna assets that no longer have a matching VAMS file.
+4. **Asset metadata change:** DynamoDB stream on `assetStorageTable` → asset sync Lambda → lists all Physna assets under `{dbId}/{assetId}/` and rebuilds their metadata; removes Physna assets that no longer have a matching VAMS file.
 5. **Asset permanent deletion or archive:** asset sync Lambda deletes every Physna asset under the VAMS asset folder and removes empty folders.
 
 ### Metadata precedence
@@ -145,6 +165,8 @@ VAMS metadata types that Physna does not natively support (such as `geopoint`, `
 
 In addition to Phase 1 sync, VAMS includes an in-app **Physna Viewer** plugin that renders the Physna-hosted 3D viewer directly inside VAMS for files that have been synced. The viewer plugin is enabled automatically whenever the Physna Sync add-on is deployed — the backend sets the `PHYSNA_ADDON` feature flag in `/api/secure-config` when `app.addons.usePhysnaSync.enabled` is true, and the frontend only surfaces Physna add-on features (currently the viewer; more planned) when that flag is present.
 
+Because the viewer loads Physna-hosted content, enabling the add-on widens the application's Content Security Policy by exactly two sources: the Physna origin is added to `frame-src`, so the iframe is not blocked, and to `connect-src`, so any auxiliary request the VAMS frontend makes against Physna passes. No `script-src` source is added. The framed document is cross-origin, so it loads under Physna's own Content Security Policy — only a `blob:` or `srcdoc` document inherits the embedding page's policy — and relaxing `script-src` here would not govern Physna's inline scripts. VAMS therefore keeps the SHA-256 allow-list for its own inline scripts whether or not the add-on is enabled. See [Security Architecture](../architecture/security.md) for the full policy.
+
 ### How the viewer works
 
 The VAMS API exposes a metadata endpoint, `GET /addon/physna/viewer`, implemented by the `physnaViewer` AWS Lambda function inside the Physna nested stack. The endpoint does not proxy any viewer content — it performs authorization and state checks and, for assets that are ready, returns a small JSON envelope telling the frontend exactly what it needs to embed Physna's hosted viewer directly in an `<iframe>`.
@@ -157,7 +179,7 @@ Frontend viewer plugin ── GET /addon/physna/viewer?databaseId=...&assetId=..
   ├─ Physna asset lookup (text-search, returns indexing assets too)
   ├─ Physna state check (finished / indexing / failed / ...)
   └─ Physna /viewer/token mint (only when state == finished)
-     → JSON: \{ status, physnaAssetId, tenantId, viewerToken, physnaApiBase \}
+     → JSON: { status, physnaAssetId, tenantId, viewerToken, physnaApiBase }
 ```
 
 When `status == "ready"`, the frontend uses the returned fields to construct the Physna viewer URL:
@@ -172,8 +194,12 @@ ${physnaApiBase}/tenants/${tenantId}/viewer/asset
 
 and sets that URL as the `src` of a plain `<iframe>`. The iframe loads directly from Physna — VAMS does not proxy the viewer HTML, the hoops/model-viewer JavaScript bundles, or the viewer's internal data fetches.
 
-:::note Security trade-off
-Because the `viewerToken` is returned to the browser, a user could in principle use it to issue direct requests against Physna for the short window until it expires. The first-touch VAMS authorization on the metadata endpoint still gates every page render, and the token is scoped and short-lived by Physna. This is a deliberate simplification: proxying the viewer's HTML and deep JavaScript dependencies through Lambda exceeded the API Gateway response size limit on large assets and broke parts of Physna's script dependency graph when URLs were rewritten. Operators who need stricter isolation should disable the Physna add-on.
+:::warning[The viewer token is not scoped to an asset]
+The `viewerToken` returned with a `ready` response carries no asset scope. `POST /viewer/token` accepts no asset parameter, so the token Physna issues is accepted for any asset in the tenant — and every synced database and asset lives under the single tenant configured in `tenantId`. Because the token is handed to the browser, a caller who can reach the Physna viewer surface for one synced asset can reach it for all of them: **VAMS per-asset and per-database object-tier authorization does not constrain what Physna will render for that token.** With the add-on enabled, treat Physna-hosted viewer access as flat across every synced database. Physna is aware of this limitation; per-asset scoping depends on their API.
+
+Two VAMS checks still constrain the surface. The API-tier check on `GET /addon/physna/viewer` decides who can obtain a viewer token at all, so a role without that route gets none. The object-tier check on the requested asset decides whether VAMS mints a token in that call — a user who cannot see any synced asset never receives one. Physna sets the token's lifetime: VAMS does not read or cache an expiry, and mints a fresh token on every `ready` response.
+
+Returning the token to the browser is a deliberate simplification: proxying the viewer's HTML and deep JavaScript dependencies through Lambda exceeded the API Gateway response size limit on large assets and broke parts of Physna's script dependency graph when URLs were rewritten. Operators who need per-asset or per-database isolation over Physna-hosted content should leave the add-on disabled.
 :::
 
 ### State handling
@@ -216,7 +242,7 @@ The following behaviors are **not yet implemented** in the Physna sync. They are
 
 ### Folder descriptions are not populated from VAMS asset names
 
-Physna folders (the `\{dbId\}/\{assetId\}/` level in the path tree) currently have no description attached. When a file is uploaded or an asset's details change in VAMS, the sync does not push the VAMS asset name onto the corresponding Physna folder as a description. Operators browsing a Physna tenant see only the raw `assetId` UUID on each folder, which is not human-friendly.
+Physna folders (the `{dbId}/{assetId}/` level in the path tree) currently have no description attached. When a file is uploaded or an asset's details change in VAMS, the sync does not push the VAMS asset name onto the corresponding Physna folder as a description. Operators browsing a Physna tenant see only the raw `assetId` UUID on each folder, which is not human-friendly.
 
 Planned behavior once implemented: on every file upload and every asset-metadata change, set the asset folder's description to the current VAMS `assetName`. This requires verifying the Physna folder-metadata endpoint and threading the asset name through the same payload construction the file upload already uses.
 

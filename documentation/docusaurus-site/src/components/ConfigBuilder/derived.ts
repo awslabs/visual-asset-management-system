@@ -4,38 +4,30 @@
  */
 
 /**
- * Auto-toggle (derived-state) engine.
+ * Derived-state engine.
  *
- * Mirrors the single auto-mutation config.ts performs (config.ts:458-479):
- * enabling ALB, OpenSearch Provisioned, or any container/VPC-bound pipeline
- * forces `useGlobalVpc.enabled = true`. This is a warning-grade convenience,
- * not an error — and it only ever turns VPC *on*, so it can never oscillate or
- * stomp unrelated user input.
+ * `getConfig()` does not rewrite the operator's configuration to satisfy a
+ * constraint. Where a feature combination is invalid it rejects the configuration
+ * and names the offending fields, so a change in deployment topology is never made
+ * on the operator's behalf without their seeing it. The builder mirrors that
+ * posture: it derives nothing, and every such constraint surfaces as a validation
+ * error instead (see `validation.ts`).
  *
- * GovCloud's CloudFront/Location constraints are intentionally NOT auto-applied
- * here: config.ts treats them as hard errors, and silently flipping a user's
- * front-end choice would be fighting them. Those surface as validation errors
- * instead, with a user-initiated "Apply GovCloud-safe defaults" action in the UI.
+ * `applyDerived()` is therefore a pass-through. It is kept because
+ * `ConfigBuilder.commitConfig()` funnels every field edit through it, which is the
+ * single place a `getConfig()` auto-mutation would be mirrored if one existed.
+ * Anything added here must correspond to an assignment `getConfig()` actually
+ * performs on the operator's config — see the sync steps in the component README.
+ *
+ * The GovCloud CloudFront/Location constraints are not applied here either: they
+ * are hard errors in `getConfig()`, and flipping the operator's front-end choice
+ * would be fighting them. They surface as validation errors, alongside the
+ * user-initiated "Apply GovCloud-safe defaults" action in the UI, which is
+ * `applyGovCloudSafeDefaults()` below.
  */
 
 import type { ConfigShape, DerivedChange } from "./types";
-import { getByPath, setByPath } from "./pathUtils";
-
-/** Paths whose `enabled` flag implies a VPC is required. */
-const VPC_IMPLYING_PATHS: { path: string; label: string }[] = [
-    { path: "app.useAlb.enabled", label: "ALB" },
-    { path: "app.openSearch.useProvisioned.enabled", label: "OpenSearch Provisioned" },
-    { path: "app.pipelines.usePreviewPcPotreeViewer.enabled", label: "Point Cloud Potree Viewer" },
-    { path: "app.pipelines.useSplatToolbox.enabled", label: "Gaussian Splatting" },
-    { path: "app.pipelines.useGenAiMetadata3dLabeling.enabled", label: "GenAI Metadata Labeling" },
-    { path: "app.pipelines.useRapidPipeline.useEcs.enabled", label: "RapidPipeline (ECS)" },
-    { path: "app.pipelines.useRapidPipeline.useEks.enabled", label: "RapidPipeline (EKS)" },
-    { path: "app.pipelines.useModelOps.enabled", label: "ModelOps" },
-    { path: "app.pipelines.useIsaacLabTraining.enabled", label: "Isaac Lab Training" },
-    { path: "app.pipelines.usePreview3dThumbnail.enabled", label: "3D Preview Thumbnail" },
-    { path: "app.pipelines.useNvidiaCosmos.enabled", label: "NVIDIA Cosmos" },
-    { path: "app.pipelines.useNvidiaGr00t.enabled", label: "NVIDIA Gr00t" },
-];
+import { setByPath } from "./pathUtils";
 
 export interface DerivedResult {
     config: ConfigShape;
@@ -43,24 +35,12 @@ export interface DerivedResult {
 }
 
 /**
- * Apply implied state. Returns a (possibly new) config plus a list of fields
- * that were forced, for visible "auto-adjusted" feedback. Idempotent.
+ * Apply implied state. Returns the config plus the list of fields that were forced,
+ * for visible "auto-adjusted" feedback in the UI. Idempotent, and currently forces
+ * nothing, so `changes` is always empty.
  */
 export function applyDerived(input: ConfigShape): DerivedResult {
-    const changes: DerivedChange[] = [];
-
-    const trigger = VPC_IMPLYING_PATHS.find(({ path }) => getByPath(input, path) === true);
-    if (trigger && getByPath(input, "app.useGlobalVpc.enabled") !== true) {
-        const next = setByPath(input, "app.useGlobalVpc.enabled", true);
-        changes.push({
-            path: "app.useGlobalVpc.enabled",
-            to: true,
-            reason: `Global VPC enabled — required by ${trigger.label}.`,
-        });
-        return { config: next, changes };
-    }
-
-    return { config: input, changes };
+    return { config: input, changes: [] };
 }
 
 /**

@@ -137,6 +137,51 @@ export function buildExecutionServiceFunction(
             resources: ["*"],
         })
     );
+    // Gated the same way the createJob grant is: with the execution type disabled no pipeline can be
+    // registered as DeadlineCloud, so no execution can hold a job to cancel and the grant would be
+    // standing access to every farm in the account for a code path that cannot run.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                // Cancel a Deadline Cloud farm job on abort. The task is
+                // `createJob.waitForTaskToken`, so Step Functions holds the token and NOT the job —
+                // StopExecution on the state machine leaves the job running (and billing) on the
+                // farm, which is why an explicit cancel is required here.
+                //
+                // ListJobs + GetJob are what make a QUEUED job cancellable. The job is otherwise
+                // identified from a registration written by the job-status callback, and that
+                // callback only runs on a status CHANGE — a job sitting queued with no worker never
+                // produces one. Discovery walks the pipeline's queue and matches the reserved
+                // VamsPipelineExecutionId job parameter instead, so it needs no event to have
+                // occurred.
+                actions: ["deadline:UpdateJob", "deadline:ListJobs", "deadline:GetJob"],
+                // Farm and queue ids come from the pipeline record, not from configuration, so they
+                // are not known at deploy time; the abort path only ever passes ids read from the
+                // execution being aborted. Scoped to the account/Region's Deadline resources.
+                resources: [
+                    `arn:${Partition()}:deadline:${config.env.region}:${config.env.account}:farm/*`,
+                ],
+            })
+        );
+        NagSuppressions.addResourceSuppressions(
+            fun,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
+                        "known at deploy time, so the abort path's deadline:UpdateJob/ListJobs/GetJob are scoped to " +
+                        "this account and Region's farm hierarchy. The handler only ever passes a farm/queue read " +
+                        "from the pipeline definition of the execution being aborted, and a job id it either read " +
+                        "from that execution's registration rows or matched by the execution's own id in a reserved " +
+                        "job parameter.",
+                    appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+                },
+            ],
+            true
+        );
+    }
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -641,10 +686,22 @@ export function buildDeadlineCloudJobCallbackFunction(
     });
 
     // Deadline Cloud publishes job status events to the account DEFAULT bus only. Two rules
-    // route job endings to the callback: terminal combined task-run statuses, and lifecycle
+    // route job status to the callback: every combined task-run status change, and lifecycle
     // failure states (a job that fails at CREATE/UPLOAD never reaches a task-run status, so
     // its task token would otherwise only resolve by timing out). The lambda additionally
     // ignores jobs without the reserved VamsTaskToken job parameter.
+    //
+    // The status rule deliberately does NOT filter to terminal statuses. The callback does two
+    // jobs, and they need the events at different times: it resolves the task token only on a
+    // TERMINAL status, but it REGISTERS the Deadline job as the pipeline execution's sub-process on
+    // EVERY status it is handed. Registration is what makes the job abortable — `execution abort`
+    // cancels registered Deadline jobs via UpdateJob, and it can only cancel what has been
+    // registered. Filtering the rule to terminal statuses meant a job was registered exactly when
+    // there was nothing left to cancel: aborting an in-flight execution stopped the state machine
+    // and left the farm job running with a task token nobody would ever resolve. The lambda side of
+    // this was already correct (backend test
+    // `test_non_terminal_status_registers_the_job_and_leaves_the_token_open`, S2-BACKEND-045); the
+    // filter here is what kept it unreachable in practice.
     // The handler re-raises GetJob/SendTask* failures so EventBridge retries delivery. Without a
     // dead-letter queue a persistently failing terminal event is discarded after those retries and
     // the workflow's task token is left to time out with no operator-visible signal.
@@ -668,9 +725,6 @@ export function buildDeadlineCloudJobCallbackFunction(
         eventPattern: {
             source: ["aws.deadline"],
             detailType: ["Job Run Status Change"],
-            detail: {
-                taskRunStatus: ["SUCCEEDED", "FAILED", "CANCELED", "NOT_COMPATIBLE"],
-            },
         },
     });
     deadlineJobStatusRule.addTarget(
@@ -844,11 +898,6 @@ export function buildWorkflowRole(
                     IAMArn(BACKEND_GENERATED_NAME_PATTERN).lambda,
                 ],
             }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["iam:PassRole"],
-                resources: [IAMArn("*" + config.name + "*").role],
-            }),
             // SQS SendMessage permission for SQS pipeline types
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
@@ -1018,9 +1067,6 @@ export function buildWorkflowServiceV2Function(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            // Execution-overhaul lambda names embedded in the generated ASL (interim states between
-            // pipelines; error-handler catch state; end-state process-output), plus the SFN role +
-            // shared workflow log group + partition the deploy uses. Read lazily by workflowAsl.
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
             INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME:
@@ -1035,8 +1081,6 @@ export function buildWorkflowServiceV2Function(
     storageResources.dynamo.workflowStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
-    // Read the workflow-executions table (+ its by-workflow GSI) to compute each workflow's
-    // executionCount on the list response via a bounded COUNT query.
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -1099,12 +1143,10 @@ export function buildWorkflowTriggerServiceFunction(
     });
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowTriggersStorageTable.grantReadWriteData(fun);
-    // Setting a fileUpload trigger validates any default template it names: a headless (auto-)
-    // triggered run cannot supply tag values, so a chosen default template must not have a required
-    // tag without a default. That check reads the template's tag schema (TagSchemaByTemplateGSI),
-    // and rehydrates an S3-offloaded schema from the default asset bucket.
     storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
     // A large tag schema is offloaded to the default asset bucket; the headless-template check
     // rehydrates it, so grant read on the asset buckets (best-effort — skipped if unreadable).
     grantReadPermissionsToAllAssetBuckets(fun);

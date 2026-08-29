@@ -53,15 +53,17 @@ Fill in the required fields on the **Asset Details** step:
 
 3. **Is Distributable?** -- Select **Yes** or **No**.
 
-    !!! info
+    :::info
     The **Is Distributable** setting controls whether file downloads are enabled for this asset. Select **Yes** if users should be able to download files from this asset. Select **No** to restrict the asset to viewing only.
+    :::
 
 4. **Description** -- Enter a description of at least 4 characters. This helps other users understand what the asset contains.
 
 5. **Tags** (optional) -- Select one or more tags from the dropdown to categorize your asset. Tags are defined by your administrator in the **Tags Management** page.
 
-    !!! warning
+    :::warning
     If your administrator has configured required tag types, you must select at least one tag from each required type before proceeding. Required tag types are listed in the constraint text below the Tags field.
+    :::
 
 6. Select **Next** to proceed to the metadata step.
 

@@ -368,7 +368,10 @@ def lambda_handler(event, context: LambdaContext):
     As the ``onEventHandler`` of a custom-resource Provider, the CloudFormation response is written by
     the provider framework: this handler returns the ``{PhysicalResourceId, Data}`` shape on success
     and raises on failure so the framework signals FAILED and the deployment stops."""
-    logger.info(f"Received event: {json.dumps(event, default=str)}")
+    # Logged as the object, not a rendered string: an inlineBundle carries template configBody /
+    # webFormJson / inputInstructions, which safeLogger redacts by key name only while it can still
+    # walk the structure.
+    logger.info(event)
 
     # Direct (non-CloudFormation) invoke: register + return the result inline.
     if "RequestType" not in event:

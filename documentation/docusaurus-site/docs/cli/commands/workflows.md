@@ -297,9 +297,17 @@ A workflow ID is unique only within its database, so pass both when the same ID 
 one. An ID that does not match the ID pattern returns a validation error rather than an empty list,
 so a typo is distinguishable from an asset that never ran that workflow.
 
+A run is listed only when you can read every asset it read and the asset it wrote to, so a run that
+touched this asset can still be withheld on account of another asset it touched.
+
 :::note
 Per-asset execution listing is limited to a page size of 50 due to Step Functions API throttling.
 Use `--auto-paginate` to fetch more across pages.
+
+A page is also bounded by the distinct assets it resolves for permission checks. When it reaches that
+bound it withholds the executions it could not evaluate and names the bound in a `Warnings` block (a
+`warnings` array under `--json-output`), so a short page is a stated bound rather than the end of the
+asset's history.
 :::
 
 ---

@@ -9,3 +9,27 @@
 # the kernel to interpret the shebang as `/bin/bash\r`, which fails with
 # "no such file or directory" at exec time.
 *.sh text eol=lf
+
+# The web entry point must always have LF endings, because its inline <script>
+# blocks are allowed by the Content-Security-Policy through SHA-256 hashes of
+# their exact bytes (infra/lib/helper/cspInlineScriptHashes.ts). A hash covers
+# every byte between the tags, so the same script hashes differently under CRLF
+# than under LF: a checkout whose endings differ from the recorded form serves a
+# page whose inline scripts the browser silently refuses to run, and nothing
+# fails at build or deploy time. Pinning the file removes the platform from the
+# equation.
+#
+# An existing clone keeps whatever endings its working tree already has, because
+# the attribute is applied on checkout. `git add --renormalize` does NOT fix it —
+# that rewrites the index, and the index here is already LF. Nor does `git
+# checkout` on its own: git skips writing a file whose cached stat still matches
+# the index, which is exactly the state a pre-attribute clone is in. The file has
+# to be removed first, from the repository root:
+#
+#     rm web/index.html && git checkout -- web/index.html
+#     (cmd.exe: del web\index.html, then git checkout -- web/index.html)
+#
+# infra/test/cspInlineScriptHashes.test.ts fails until this is done, which is the
+# intended warning: a build from a CRLF checkout serves scripts the browser
+# refuses to run.
+web/index.html text eol=lf

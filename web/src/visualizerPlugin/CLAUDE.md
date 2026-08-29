@@ -28,17 +28,17 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `html-viewer`                      | HTML Viewer                    | document | .html                                                                                                                                    | enabled                                             |
 | `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                                                                          | enabled                                             |
 | `audio-viewer`                     | Audio Player                   | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
-| `columnar-viewer`                  | Columnar Data Viewer           | data     | .rds, .fcs, .csv                                                                                                                         | enabled                                             |
+| `columnar-viewer`                  | Columnar Data Viewer           | data     | .fcs, .csv                                                                                                                               | enabled                                             |
 | `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .parquet (plaintext only), etc.                                                            | enabled                                             |
+| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
 | `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
 | `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
-| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled                                             |
-| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep                                                         | enabled                                             |
+| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
@@ -148,11 +148,39 @@ export const VIEWER_COMPONENTS = {
 
 ## CSP / `unsafe-eval`
 
-Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`:
+Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Three carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
 
 -   Needle USD Viewer
 -   SuperSplat Editor (also iframe-embedded)
--   Three.js CAD-format loaders
 -   ThatOpen IFC BIM Viewer (web-ifc)
 
-These viewers are gated at runtime via `featuresEnabledRestriction` in `viewerConfig.json` and by the CDK CSP configuration (`allowUnsafeEvalFeatures` in the config). When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) need no `eval`, and gating the whole plugin would remove them too. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
+
+`cesium-viewer` carried the gate until this release. The viewer now builds a `CesiumWidget` from the widget-less `@cesium/engine` (`CesiumViewerComponent.tsx`), which drops the `@cesium/widgets` Knockout layer whose `new Function` binding compiler was what required `unsafe-eval`; `'wasm-unsafe-eval'` in the base CSP covers what remains. See `web/customInstalls/cesium/README.md` for the build. KTX2/Basis textures and `.spz` splats are the known content types that still need the broader directive.
+
+When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+
+---
+
+## A Framed Viewer Must Not Receive a Signed URL in the Query String
+
+A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
+expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
+are not treated as containing credentials and are retained for the log group's retention period.
+
+`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
+`?load=<presigned>&filename=…`) and ships as a documented known issue for 2.6.0 — one object, expiring,
+but logged. **Do not copy the pattern into a new viewer.** Use the **URL fragment** instead: browsers do
+not transmit a fragment, so nothing reaches the server or its logs.
+
+For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
+into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
+string with `history.replaceState` before the bundle runs — `replaceState` issues no request, so the
+value stays client-side. Patch the HTML entry rather than the minified bundle: the bundle is regenerated
+from a pinned upstream tag on every `npm install`, so a regex against its internals breaks on the next
+version bump while an injected `<script>` does not.
+
+Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
+value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
+same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
+breaks and S3 returns 400.

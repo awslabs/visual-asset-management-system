@@ -15,6 +15,37 @@
 /** Base path where the customInstall copies the bundle, WASM, and workers. */
 export const THATOPEN_ASSET_PATH = "/viewers/thatopenwebifc/";
 
+/**
+ * Largest IFC payload the browser will attempt, in bytes. Applies to the
+ * downloaded file and to a .ifczip entry's declared uncompressed size. Real
+ * building models reach hundreds of MB, so the ceiling sits above that while
+ * still refusing the sizes that take the tab down instead of loading (a 5 MB
+ * archive declaring gigabytes of output, or a multi-GB model that cannot be
+ * buffered at all).
+ */
+export const MAX_IFC_BYTES = 1024 * 1024 * 1024;
+
+/** "1 GB" / "250 MB" — for messages that have to name a size to a user. */
+export function formatByteSize(bytes: number): string {
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${Number(gb.toFixed(gb < 10 ? 1 : 0))} GB`;
+    return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+/**
+ * Throws when a declared payload size exceeds `MAX_IFC_BYTES`. `what` names the
+ * thing being measured so the message says which limit was hit.
+ */
+export function assertIfcSizeWithinLimit(bytes: number, what: string): void {
+    if (Number.isFinite(bytes) && bytes > MAX_IFC_BYTES) {
+        throw new Error(
+            `${what} is too large to open in the browser (${formatByteSize(
+                bytes
+            )}; the limit is ${formatByteSize(MAX_IFC_BYTES)})`
+        );
+    }
+}
+
 /** Returns true when the file name has a .ifczip extension (case-insensitive). */
 export function isIfcZip(fileName: string): boolean {
     return fileName.toLowerCase().endsWith(".ifczip");
@@ -39,6 +70,12 @@ export function pickIfcEntryName(entryNames: string[]): string | null {
  * - For .ifczip: unzips with fflate (from the bundle) and returns the first
  *   .ifc entry's bytes.
  *
+ * Inflation happens synchronously on the main thread, so the archive's declared
+ * sizes are checked first and an entry over the limit is never inflated:
+ * fflate's `filter` runs against the central-directory header, before any
+ * decompression, and skipping an entry there also means it is not allocated. The
+ * inflated result is re-checked because the declared size is attacker-supplied.
+ *
  * @param bundle window.ThatOpenWebIfcBundle (provides unzipSync)
  * @param arrayBuffer the downloaded file bytes
  * @param fileName the file name (used to detect .ifczip)
@@ -50,15 +87,32 @@ export function extractIfcBytes(
 ): Uint8Array {
     const bytes = new Uint8Array(arrayBuffer);
     if (!isIfcZip(fileName)) {
+        assertIfcSizeWithinLimit(bytes.byteLength, "This IFC model");
         return bytes;
     }
 
     // .ifczip — unzip and pull out the .ifc entry.
-    const unzipped: Record<string, Uint8Array> = bundle.unzipSync(bytes);
+    // fflate's UnzipFileInfo.size is the COMPRESSED size; originalSize is the
+    // inflated size, which is the one a zip bomb inflates far beyond.
+    let skippedOversizedBytes = 0;
+    const unzipped: Record<string, Uint8Array> = bundle.unzipSync(bytes, {
+        filter: (file: { name: string; size: number; originalSize?: number }) => {
+            if (!file || !file.name.toLowerCase().endsWith(".ifc")) return false;
+            const inflatedSize = file.originalSize ?? file.size;
+            if (Number.isFinite(inflatedSize) && inflatedSize > MAX_IFC_BYTES) {
+                skippedOversizedBytes = Math.max(skippedOversizedBytes, inflatedSize);
+                return false;
+            }
+            return true;
+        },
+    });
+
     const entryName = pickIfcEntryName(Object.keys(unzipped));
     if (!entryName) {
+        assertIfcSizeWithinLimit(skippedOversizedBytes, "The IFC model inside this archive");
         throw new Error("No .ifc file found inside the .ifczip archive");
     }
+    assertIfcSizeWithinLimit(unzipped[entryName].byteLength, "The IFC model inside this archive");
     return unzipped[entryName];
 }
 

@@ -47,6 +47,10 @@ from backend.backend.handlers.workflows.sfn import processWorkflowExecutionOutpu
 @pytest.mark.unit
 class TestRecordExecutionOutputs:
     def _dynamo(self):
+        """A dynamo stub whose per-table `puts` collect the items written by EITHER write mode --
+        one-at-a-time put_item or a batch_writer context. The assertions below are about which rows
+        the recording produces, not about how many requests carried them, so switching write mode
+        must not move them."""
         puts, updates = {}, {}
 
         def make_table(name):
@@ -55,6 +59,8 @@ class TestRecordExecutionOutputs:
             updates[name] = []
             t.put_item.side_effect = lambda Item, _n=name: puts[_n].append(Item)
             t.update_item.side_effect = lambda _n=name, **kw: updates[_n].append(kw)
+            t.batch_writer.return_value.__enter__.return_value.put_item.side_effect = (
+                lambda Item, _n=name: puts[_n].append(Item))
             return t
 
         dynamo = MagicMock()

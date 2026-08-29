@@ -857,6 +857,9 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
     --filter-start-date / --filter-end-date to query an explicit date range. The window actually
     applied is reported alongside the results.
 
+    A run is listed only when you can read every asset it read and the asset it wrote to, so a run
+    that touched this asset can still be withheld on account of another asset it touched.
+
     For the global, cross-asset execution list with rich filters, use 'vamscli execution list'.
 
     Examples:
@@ -895,16 +898,28 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
         return f"Window: {applied} to {end}" if end else f"Window: from {applied}"
 
     def _fmt(data: Dict[str, Any]) -> str:
+        def _rendered(lines) -> str:
+            # The cap on distinct assets the page resolves for permission checks. Rendered on the
+            # empty page too, because that is where a bare "No workflow executions found." misreports
+            # a stated bound as an asset with no history.
+            warnings = data.get('warnings')
+            if warnings:
+                lines.append(f"\nWarnings ({len(warnings)}):")
+                lines.extend(f"  - {w}" for w in warnings)
+            return '\n'.join(lines)
+
         items = data.get('Items', [])
         window = _window(data)
         if not items:
             # The backend applies authorization and filters after the candidate cap, so an empty
             # page may still carry a NextToken for later pages that do contain matches.
             if not data.get('autoPaginated') and data.get('NextToken'):
-                return ("No workflow executions on this page; more pages available."
-                        f"\n\nNext token: {data['NextToken']}")
-            empty = "No workflow executions found."
-            return f"{empty}\n{window}" if window else empty
+                return _rendered(["No workflow executions on this page; more pages available.",
+                                  f"\nNext token: {data['NextToken']}"])
+            empty = ["No workflow executions found."]
+            if window:
+                empty.append(window)
+            return _rendered(empty)
         out = []
         if window:
             out.append(window)
@@ -925,7 +940,7 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             out.append(f"\nNext token: {data['NextToken']}")
         if data.get('note'):
             out.append(f"\n{data['note']}")
-        return '\n'.join(out)
+        return _rendered(out)
 
     try:
         if auto_paginate:
@@ -933,6 +948,10 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             output_status(f"Listing executions for asset '{asset_id}' "
                           f"(auto-paginating up to {max_total})...", json_output)
             all_items = []
+            # Collected across pages (deduplicated, in order): the aggregate is rebuilt from the
+            # accumulated items alone, and the external connectors read this command's --json-output,
+            # so a bound dropped here is a bound they can never see.
+            all_warnings = []
             next_token = None
             page_count = 0
             applied_window: Dict[str, Any] = {}
@@ -946,6 +965,9 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
                     workflow_database_id=workflow_database_id, workflow_id=workflow_id, params=params))
                 items = page.get('Items', [])
                 all_items.extend(items)
+                for warning in page.get('warnings') or []:
+                    if warning not in all_warnings:
+                        all_warnings.append(warning)
                 for key in ('filterStartDate', 'filterEndDate'):
                     if page.get(key):
                         applied_window[key] = page[key]
@@ -956,6 +978,8 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count, **applied_window}
+            if all_warnings:
+                result['warnings'] = all_warnings
             if next_token and len(all_items) >= max_total:
                 # The outstanding token is the only way to resume; a bare "more may be available"
                 # would force the caller to re-walk every page already paid for.

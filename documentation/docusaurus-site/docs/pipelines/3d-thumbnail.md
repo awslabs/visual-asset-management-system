@@ -140,19 +140,23 @@ This pipeline is disabled by default because it depends on libraries with LGPL l
 
 ## Input Parameters
 
-When executing the pipeline manually or via API, you can pass the following input parameters:
+Parameters reach the pipeline through the template selected for the run. Deployment registers the `preview-3d-thumbnail-default` template, whose configuration body carries the parameters below and declares one tag that the execute screen prompts for.
 
-| Parameter                       | Type    | Default | Description                                                                                                                                               |
-| :------------------------------ | :------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `overwriteExistingPreviewFiles` | boolean | `true`  | When `true`, regenerates preview files even if they already exist for the input file. When `false`, the pipeline skips files that already have a preview. |
+| Parameter                       | Template tag                        | Type    | Default             | Description                                                                                                                                               |
+| :------------------------------ | :---------------------------------- | :------ | :------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `overwriteExistingPreviewFiles` | `OVERWRITE_EXISTING_PREVIEW_FILES`  | boolean | `true`              | When `true`, regenerates preview files even if they already exist for the input file. When `false`, the pipeline skips files that already have a preview. |
+| `outputType`                    | --                                  | string  | `.gif,.jpg,.png`    | Comma-separated list of preview file types to generate.                                                                                                   |
 
-### Example Input Parameters
+### Template configuration body
 
 ```json
 {
-    "inputParameters": "{\"overwriteExistingPreviewFiles\": true}"
+    "overwriteExistingPreviewFiles": {{OVERWRITE_EXISTING_PREVIEW_FILES}},
+    "outputType": ".gif,.jpg,.png"
 }
 ```
+
+`{{OVERWRITE_EXISTING_PREVIEW_FILES}}` is a template tag: the execute screen presents it as a checkbox and substitutes the value before the pipeline receives the configuration. The template also allows per-run edits, so a single run can supply a replacement body without changing the registered template.
 
 ## Limits and Constraints
 

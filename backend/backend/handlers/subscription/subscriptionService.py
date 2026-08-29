@@ -11,6 +11,7 @@ from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
+from models.common import VAMSGeneralErrorResponse
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id
 from customLogging.logger import safeLogger
@@ -72,22 +73,25 @@ if not (subscription_table_name and asset_table_name and user_table_name):
         {"message": "Failed resolving required table names"})
 
 
-def get_name_for_asset_ids(asset_ids):
-    #TODO: Implement paginiation but should be auto-limited by the amount of records (implementing pagination) returned by the function calling this
-    if not asset_ids:
-        return {}
-    # TODO: Check if we can optimize this further
-    filter_expression = " OR ".join([f"assetId = :id{i}" for i, asset_id in enumerate(asset_ids, 1)])
+def get_asset_object_for_entity(entity_id):
+    """Resolve the asset a subscription row points at, annotated for authorization.
 
-    expression_attribute_values = {f":id{i}": {"S": asset_id} for i, asset_id in enumerate(asset_ids, 1)}
+    Returns None when the assetId resolves to no live asset, or to more than one asset and
+    so cannot be attributed to a single database. Such a row cannot be authorized against
+    an asset and is left out of the listing.
+    """
+    try:
+        asset_object = get_asset_object_from_id(None, entity_id)
+    except VAMSGeneralErrorResponse as e:
+        logger.warning(f"Could not resolve the asset for subscription entity {entity_id}: {e}")
+        return None
 
-    items = dynamodb_client.scan(
-        TableName=asset_table_name,
-        ProjectionExpression='assetId, assetName, databaseId',
-        FilterExpression=filter_expression,
-        ExpressionAttributeValues=expression_attribute_values,
-    )
-    return {item['assetId']['S']: {"assetName": item['assetName']['S'], "databaseId": item['databaseId']['S']} for item in items.get("Items", [])}
+    if asset_object is None:
+        logger.info(f"Subscription entity {entity_id} has no live asset")
+        return None
+
+    asset_object.update({"object__type": "asset"})
+    return asset_object
 
 
 def get_subscriptions(query_params):
@@ -105,7 +109,9 @@ def get_subscriptions(query_params):
     ).build_full_result()
 
     output_objects = []
-    unique_asset_entity_ids = set()
+    #Each distinct entityId is resolved once and reused across every row that references
+    #it, so a page of subscriptions costs one asset lookup per asset rather than per row
+    resolved_assets = {}
     for obj in page_iterator.get('Items', []):
         deserialized_document = {k: deserializer.deserialize(v) for k, v in obj.items()}
         entity_name, entity_id = deserialized_document["entityName_entityId"].split("#")
@@ -117,28 +123,31 @@ def get_subscriptions(query_params):
         }
 
         # Add Casbin Enforcer to check if the user has access to GET subscription of specific Assets
-        asset_object = get_asset_object_from_id(None, entity_id)
-        asset_object.update({"object__type": "asset"})
+        if entity_id not in resolved_assets:
+            resolved_assets[entity_id] = get_asset_object_for_entity(entity_id)
+
+        asset_object = resolved_assets[entity_id]
+        #A row with no asset to authorize against is dropped; the rest of the page still returns
+        if asset_object is None:
+            continue
+
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(asset_object, "GET"):
                 output_objects.append(output_obj)
-                if entity_name == "Asset":
-                    unique_asset_entity_ids.add(entity_id)
 
     result = {
         "Items": []
     }
 
-    assets_with_name = get_name_for_asset_ids(list(unique_asset_entity_ids))
     result["Items"] = [
         {
             "eventName": obj["eventName"],
             "entityName": obj["entityName"],
             "entityId": obj["entityId"],
             "subscribers": obj["subscribers"],
-            "entityValue": assets_with_name[obj["entityId"]]["assetName"] if obj["entityId"] in assets_with_name else None,
-            "databaseId": assets_with_name[obj["entityId"]]["databaseId"] if obj["entityId"] in assets_with_name else None
+            "entityValue": resolved_assets[obj["entityId"]].get("assetName") if obj["entityName"] == "Asset" else None,
+            "databaseId": resolved_assets[obj["entityId"]].get("databaseId") if obj["entityName"] == "Asset" else None
         }
         for obj in output_objects
     ]
@@ -523,6 +532,11 @@ def lambda_handler(event, context):
         if event['body']["entityName"] == "Asset":
             allowed = False
             asset_object = get_asset_object_from_id(None, event['body']["entityId"])
+            if asset_object is None:
+                response['statusCode'] = 404
+                response['body'] = json.dumps({"message": "Asset not found"})
+                return response
+
             asset_object.update({"object__type": "asset"})
 
             if len(claims_and_roles["tokens"]) > 0:
@@ -545,6 +559,11 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "EntityName provided not supported for subscriptions"})
             return response
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(v)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         logger.exception(e)
         response['statusCode'] = 500

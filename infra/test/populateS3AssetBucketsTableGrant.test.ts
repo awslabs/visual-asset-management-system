@@ -9,6 +9,7 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import { Template } from "aws-cdk-lib/assertions";
 import { createPopulateS3AssetBucketsTableCustomResource } from "../lib/nestedStacks/storage/customResources/populateS3AssetBucketsTable";
 import { s3AssetBucketRecords, addS3AssetBucket } from "../lib/helper/s3AssetBuckets";
+import { newTestApp } from "./support/testApp";
 
 // Collects the resource list of every s3:GetBucketVersioning statement in the template.
 const findGetBucketVersioningResources = (template: Template): any[] => {
@@ -20,7 +21,7 @@ const findGetBucketVersioningResources = (template: Template): any[] => {
 };
 
 const buildStack = () => {
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, "TestStack", {
         env: { account: "111111111111", region: "us-east-1" },
     });

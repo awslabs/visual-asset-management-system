@@ -1227,5 +1227,76 @@ class TestSearchGeoSearch:
             mocks['api_client'].search_query.assert_not_called()
 
 
+class TestSearchRecordTypeColumn:
+    """The record-type discriminator reaches the CLI's rendered output.
+
+    The formatters build their columns from the union of `_source` keys across the
+    hits, so `str_rectype` needs no per-field handling — but that also means a
+    backend that stops emitting it removes the column silently. These assertions
+    pin the behaviour that makes a mixed `search simple` result readable.
+    """
+
+    _MIXED_RESULT = {
+        "hits": {
+            "total": {"value": 2},
+            "hits": [
+                {
+                    "_id": "my-db:asset-001",
+                    "_source": {
+                        "str_rectype": "asset",
+                        "str_databaseid": "my-db",
+                        "str_assetid": "asset-001",
+                        "str_assetname": "Pump",
+                    },
+                },
+                {
+                    "_id": "my-db:asset-001:/scans/pump.e57",
+                    "_source": {
+                        "str_rectype": "file",
+                        "str_databaseid": "my-db",
+                        "str_assetid": "asset-001",
+                        "str_key": "/scans/pump.e57",
+                    },
+                },
+            ],
+        }
+    }
+
+    def test_table_output_carries_the_record_type_column(self):
+        from vamscli.commands.search import _format_table_output
+
+        output = _format_table_output(self._MIXED_RESULT, "mixed")
+        header = output.splitlines()[0]
+
+        # Control: the header is really the column list, so a missing column is a
+        # real absence rather than a mis-parsed line.
+        assert "str_assetid" in header
+        assert "str_rectype" in header
+        assert "asset" in output and "file" in output
+
+    def test_csv_output_carries_the_record_type_column(self):
+        import csv
+        from io import StringIO
+        from vamscli.commands.search import _format_csv_output
+
+        rows = list(csv.DictReader(StringIO(_format_csv_output(self._MIXED_RESULT, "mixed"))))
+
+        assert len(rows) == 2
+        assert [row["str_rectype"] for row in rows] == ["asset", "file"]
+
+    def test_only_one_record_type_column_is_rendered(self):
+        """A source carrying both spellings would render two near-identical columns."""
+        import csv
+        from io import StringIO
+        from vamscli.commands.search import _format_csv_output
+
+        reader = csv.DictReader(StringIO(_format_csv_output(self._MIXED_RESULT, "mixed")))
+        columns = reader.fieldnames or []
+
+        # Control: the column list was really parsed.
+        assert "str_databaseid" in columns
+        assert [name for name in columns if "rectype" in name] == ["str_rectype"]
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

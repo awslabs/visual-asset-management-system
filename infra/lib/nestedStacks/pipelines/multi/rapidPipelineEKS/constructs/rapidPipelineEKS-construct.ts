@@ -20,7 +20,10 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
-import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
+import {
+    grantExternalAssetBucketKmsKeys,
+    kmsKeyPolicyStatementGenerator,
+} from "../../../../../helper/security";
 import * as Config from "../../../../../../config/config";
 import * as path from "path";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
@@ -77,7 +80,9 @@ export class RapidPipelineEKSConstruct extends Construct {
 
         // 1. Create EKS cluster with updated configuration for better reliability
         const cluster = new eks.Cluster(this, "EksCluster", {
-            version: eks.KubernetesVersion.V1_31,
+            version: eks.KubernetesVersion.of(
+                props.config.app.pipelines.useRapidPipeline.useEks.eksClusterVersion
+            ),
             clusterName: `rapid-pipeline-eks-${stackIdentifier}`,
             vpc: eksVpc,
             vpcSubnets: [{ subnets: eksPrivateSubnets }], // Always use private subnets for EKS cluster
@@ -457,6 +462,20 @@ export class RapidPipelineEKSConstruct extends Construct {
             })
         );
 
+        // The VAMS-managed CMK, without which the S3 permissions above are unusable.
+        //
+        // The asset and auxiliary buckets are encrypted with this key when
+        // `useKmsCmkEncryption` is enabled, and S3 requires `kms:Decrypt` on the key to serve
+        // GetObject — so the pod's download failed with AccessDenied naming kms:Decrypt while every
+        // s3: action it needed was already granted. The external-bucket grant below covers only
+        // customer-managed keys on buckets VAMS does not own, so the deployment's own key was the one
+        // key the role could not use.
+        if (props.storageResources.encryption.kmsKey) {
+            serviceAccount.role.addToPrincipalPolicy(
+                kmsKeyPolicyStatementGenerator(props.storageResources.encryption.kmsKey)
+            );
+        }
+
         // Grant access to any external asset bucket customer managed KMS keys so the
         // pod can read/write objects in cross-account encrypted buckets
         // (no-op when no external keys are configured)
@@ -515,6 +534,10 @@ export class RapidPipelineEKSConstruct extends Construct {
                 ),
                 externalSfnTaskToken: sfn.JsonPath.stringAt("$.externalSfnTaskToken"),
                 outputFileType: sfn.JsonPath.stringAt("$.outputFileType"),
+                // The asset id resolved for this run. CONSTRUCT_PIPELINE locates the input file's
+                // subdirectory within the asset with it, so the converted file is written beside its
+                // source rather than at the asset root.
+                assetId: sfn.JsonPath.stringAt("$.assetId"),
             }),
             resultPath: "$.ConstructPipelineResult",
             outputPath: "$",

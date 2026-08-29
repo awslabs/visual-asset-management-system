@@ -111,7 +111,7 @@ const COSMOS3_DEFAULT = {
             enabled: false,
             autoRegisterWithVAMS: true,
             autoTriggerOnFileExtensionsUpload: "",
-            instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
+            instanceTypes: ["g6e.12xlarge", "g6e.24xlarge", "g6e.48xlarge"],
             maxVCpus: 192,
         },
         super64B: {

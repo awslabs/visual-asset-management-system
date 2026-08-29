@@ -1005,10 +1005,76 @@ class TestTagUtilityFunctions:
         ]
         
         result = format_tags_list_output(tags_data, json_output=True)
-        
+
         # Should be valid JSON
         parsed = json.loads(result)
         assert parsed == tags_data
+
+
+class TestTagListFilterAppliesInBothOutputModes:
+    """`--tag-type` must narrow the PAYLOAD, not only the table.
+
+    S6-TOOLS-010. The filter lived inside `format_tags_result`, a `cli_formatter`, and
+    `output_result` never calls the formatter in JSON mode — it echoes the untouched result. So
+    `vamscli tag list --tag-type priority --json-output` returned EVERY tag in the deployment, exit 0,
+    no warning, while the identical command without `--json-output` correctly showed only the priority
+    ones. The discrepancy was invisible during manual verification, and a script or connector that
+    trusted the flag applied priority-only logic to the whole tag set.
+
+    `APIClient.get_tags` has no tagType parameter and the `/tags` handler accepts no such query
+    parameter (`handle_get_request` reads maxItems / pageSize / startingToken / databaseId / scope
+    only), so the filter has to be applied client-side — in the command body, before `output_result`.
+    """
+
+    RESPONSE = {
+        'message': {
+            'Items': [
+                {'tagName': 'p1', 'description': 'high', 'tagTypeName': 'priority'},
+                {'tagName': 'p2', 'description': 'low', 'tagTypeName': 'priority [R]'},
+                {'tagName': 'o1', 'description': 'other', 'tagTypeName': 'status'},
+            ]
+        }
+    }
+
+    def _response(self):
+        # A fresh copy per call: the filter narrows the payload in place, so a shared dict would let
+        # one test's filtering leak into the next.
+        return json.loads(json.dumps(self.RESPONSE))
+
+    def test_json_output_is_filtered(self, cli_runner, tag_command_mocks):
+        with tag_command_mocks as mocks:
+            mocks['api_client'].get_tags.return_value = self._response()
+            result = cli_runner.invoke(cli, ['tag', 'list', '--tag-type', 'priority',
+                                             '--json-output'])
+            assert result.exit_code == 0, result.output
+            items = json.loads(result.output)['message']['Items']
+            # The `[R]` required-type marker is presentation, so p2 matches 'priority' too.
+            assert sorted(tag['tagName'] for tag in items) == ['p1', 'p2']
+
+    def test_cli_output_is_filtered_the_same_way(self, cli_runner, tag_command_mocks):
+        """Control: both modes must see the SAME set, which is the whole point of the fix."""
+        with tag_command_mocks as mocks:
+            mocks['api_client'].get_tags.return_value = self._response()
+            result = cli_runner.invoke(cli, ['tag', 'list', '--tag-type', 'priority'])
+            assert result.exit_code == 0
+            assert 'p1' in result.output and 'p2' in result.output
+            assert 'o1' not in result.output
+
+    def test_json_output_without_the_filter_is_unchanged(self, cli_runner, tag_command_mocks):
+        """Negative control: no `--tag-type` means no narrowing at all."""
+        with tag_command_mocks as mocks:
+            mocks['api_client'].get_tags.return_value = self._response()
+            result = cli_runner.invoke(cli, ['tag', 'list', '--json-output'])
+            assert result.exit_code == 0
+            assert len(json.loads(result.output)['message']['Items']) == 3
+
+    def test_filter_matching_nothing_yields_an_empty_list_in_json(self, cli_runner,
+                                                                  tag_command_mocks):
+        with tag_command_mocks as mocks:
+            mocks['api_client'].get_tags.return_value = self._response()
+            result = cli_runner.invoke(cli, ['tag', 'list', '--tag-type', 'nope', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['message']['Items'] == []
 
 
 if __name__ == '__main__':

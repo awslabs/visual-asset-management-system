@@ -466,3 +466,212 @@ describe("PipelineForm", () => {
         expect(screen.queryByText(/saved with warnings/)).not.toBeInTheDocument();
     });
 });
+
+/**
+ * A pipeline's assetScope is a PARTIAL declaration by design: the execute-time check evaluates only
+ * the keys a scope declares and defers the rest to the workflow gate, so an omitted key and an
+ * explicit `false` mean different things. Registration bundles ship partial maps
+ * (`{"wholeAsset": true}`), so a save that resolves all four turns an unrelated edit into three new
+ * pipeline-level denials and breaks every multi-asset workflow using it.
+ */
+describe("PipelineForm assetScope fidelity", () => {
+    const basePipeline = (assetScope: Record<string, any>) => ({
+        // At least three characters: pipelineSchema enforces ^[-_a-zA-Z0-9]{3,63}$, so a shorter id
+        // fails validation and onSubmit returns before the mutation — a fixture that never saves,
+        // which reads as a broken assertion rather than an invalid id.
+        pipelineId: "stored-pipe",
+        pipelineName: "Existing Pipe",
+        databaseId: "db1",
+        executionConfig: { executionType: "Lambda" as const, waitForCallback: "Disabled" as const },
+        systemConfig: {
+            inputFileArity: "one" as const,
+            assetScope,
+            metadataInputs: {},
+            requireTemplate: false,
+            allowCustomTemplateOverride: false,
+            inputFileFilters: { allow: [], exclude: [] },
+        },
+    });
+
+    /** Renders the edit form and returns the update mutation the save goes through. */
+    const renderEdit = (assetScope: Record<string, any>) => {
+        const { useUpdatePipeline } = require("../api/queries");
+        const mutateAsync = jest.fn().mockResolvedValue({});
+        useUpdatePipeline.mockReturnValue({ mutateAsync });
+        render(
+            <PipelineForm
+                mode="edit"
+                databaseId="db1"
+                initial={basePipeline(assetScope) as any}
+                onDone={jest.fn()}
+            />,
+            { wrapper: createWrapper() }
+        );
+        return mutateAsync;
+    };
+
+    /**
+     * Submit, and if the form refused the save say WHY.
+     *
+     * onSubmit returns silently when validatePipeline rejects, so a fixture with one invalid field
+     * fails as a bare "expect(mutateAsync).toHaveBeenCalled() -> 0 calls" that reads like a broken
+     * assertion. Surfacing the rendered message names the offending field instead.
+     */
+    const save = async (mutateAsync: jest.Mock) => {
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+        await waitFor(
+            () => {
+                const refusal = screen.queryByText(
+                    /must match pattern|is required|cannot exceed|Must be an integer between/
+                );
+                if (refusal) {
+                    throw new Error(`the form refused the save: ${refusal.textContent}`);
+                }
+                expect(mutateAsync).toHaveBeenCalled();
+            },
+            { timeout: 2000 }
+        );
+    };
+
+    const savedAssetScope = (mutateAsync: jest.Mock) =>
+        mutateAsync.mock.calls[0][0].body.systemConfig.assetScope;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({ featuresEnabled: [] });
+    });
+
+    it("leaves an undeclared rule undeclared when nothing about it was changed", async () => {
+        // The `wholeAsset` shorthand is what the CDK registration bundles emit.
+        const mutateAsync = renderEdit({ wholeAsset: true });
+
+        await save(mutateAsync);
+
+        const scope = savedAssetScope(mutateAsync);
+        // The shorthand is folded to the canonical key, which IS declared...
+        expect(scope.wholeAssetAllowed).toBe(true);
+        // ...and nothing else is invented. An explicit false here denies at the pipeline.
+        expect(scope).not.toHaveProperty("crossAssetAllowed");
+        expect(scope).not.toHaveProperty("singleAssetOnly");
+        expect(scope).not.toHaveProperty("folderAllowed");
+    });
+
+    it("still writes every rule a stored scope already declared", async () => {
+        // Control: only UNDECLARED keys are withheld, so a fully declared scope round-trips whole.
+        const mutateAsync = renderEdit({
+            crossAssetAllowed: true,
+            singleAssetOnly: false,
+            wholeAssetAllowed: false,
+            folderAllowed: true,
+        });
+
+        await save(mutateAsync);
+
+        expect(savedAssetScope(mutateAsync)).toEqual({
+            crossAssetAllowed: true,
+            singleAssetOnly: false,
+            wholeAssetAllowed: false,
+            folderAllowed: true,
+        });
+    });
+
+    it("declares a rule once the admin changes it", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = renderEdit({ wholeAsset: true });
+
+        await user.selectOptions(screen.getByLabelText("Asset span"), "multiple");
+        await save(mutateAsync);
+
+        const scope = savedAssetScope(mutateAsync);
+        expect(scope.crossAssetAllowed).toBe(true);
+        expect(scope.singleAssetOnly).toBe(false);
+        // Untouched, so still undeclared.
+        expect(scope).not.toHaveProperty("folderAllowed");
+    });
+
+    it("resolves all four rules for a pipeline being created", async () => {
+        // A create declares every rule: the author is choosing them from nothing, and there is no
+        // prior record whose silence could be narrowed.
+        const { useCreatePipeline } = require("../api/queries");
+        const mutateAsync = jest.fn().mockResolvedValue({});
+        useCreatePipeline.mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+        await userEvent.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        await save(mutateAsync);
+
+        expect(mutateAsync.mock.calls[0][0].systemConfig.assetScope).toEqual({
+            crossAssetAllowed: false,
+            singleAssetOnly: true,
+            wholeAssetAllowed: false,
+            folderAllowed: false,
+        });
+    });
+
+    it("names the rules the pipeline does not declare", () => {
+        // The three controls have no third state, so they show the effective default. Which rules are
+        // actually undeclared has to be said, or the screen reads as a set of rules the record holds.
+        renderEdit({ wholeAsset: true });
+
+        const note = screen.getByText(/Not declared on this pipeline/);
+        expect(note).toHaveTextContent("cross-asset input");
+        expect(note).toHaveTextContent("single-asset-only");
+        expect(note).toHaveTextContent("folder selection");
+        expect(note).not.toHaveTextContent("whole-asset selection");
+    });
+
+    it("says nothing when every rule is declared", () => {
+        // Control: the note must not appear for a fully declared scope, or it says nothing at all.
+        renderEdit({
+            crossAssetAllowed: true,
+            singleAssetOnly: false,
+            wholeAssetAllowed: true,
+            folderAllowed: true,
+        });
+
+        expect(screen.queryByText(/Not declared on this pipeline/)).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * Four controls on the admin form carried no programmatic label: the visible text sat in a plain div,
+ * or in a label with no htmlFor against an input with no id, so the name was never announced and
+ * clicking the text did not focus the field.
+ */
+describe("PipelineForm control labels", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({ featuresEnabled: [] });
+    });
+
+    it("labels the input-file-count select, both timeouts and the preview suffix", () => {
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        expect(screen.getByLabelText("Input file count").tagName.toLowerCase()).toBe("select");
+        expect(screen.getByLabelText("Task Timeout (seconds)").tagName.toLowerCase()).toBe("input");
+        expect(
+            screen.getByLabelText("Task Heartbeat Timeout (seconds)").tagName.toLowerCase()
+        ).toBe("input");
+        expect(screen.getByLabelText("Aux Preview Pipeline Suffix").tagName.toLowerCase()).toBe(
+            "input"
+        );
+    });
+
+    it("resolves each label to a DISTINCT control", () => {
+        // Control: the two timeouts share a placeholder, so a label resolving to the same node for
+        // both would satisfy the assertions above while naming only one field.
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        expect(screen.getByLabelText("Task Timeout (seconds)")).not.toBe(
+            screen.getByLabelText("Task Heartbeat Timeout (seconds)")
+        );
+    });
+});

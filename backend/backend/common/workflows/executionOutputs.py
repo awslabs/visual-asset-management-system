@@ -18,11 +18,21 @@ This module centralizes the parts those three lambdas must do identically:
   - Building the resolved per-pipeline input manifest (original asset file, or the latest
     output-files version when a prior pipeline shadowed that relative path).
 
-Callers inject their boto3 dynamo resource + s3 client and the resolved table names so this
-module stays free of os.environ / client construction (mirrors common.workflows.executionRecords).
+  - The terminal-status write guard (`not_terminal_condition` / `is_conditional_check_failure`),
+    which every writer of a terminal status on a main or pipeline row shares so the condition
+    cannot drift between them. The abort path in handlers.workflows.executionService uses it too.
+
+Callers inject their boto3 dynamo resource + s3 client and the resolved table names, so no AWS
+client is constructed here and no resource name is read from the environment (mirrors
+common.workflows.executionRecords). The module-level logger is the one exception: safeLogger
+resolves the Powertools log level from the environment at import.
 """
 
+from customLogging.logger import safeLogger
+
 from common.workflows import executionRecords as er
+
+logger = safeLogger(service_name="ExecutionOutputs")
 
 # Terminal statuses: a pipeline/main row already in one of these is finished and is not
 # re-stamped by the error handler (only in-flight rows are marked terminal).
@@ -262,22 +272,31 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
 
 def record_pipeline_output_files(dynamo, output_files_table, pipeline_execution_id, bucket,
                                  produced_files):
-    """Write one PipelineExecutionOutputFiles row per produced file (with s3VersionId)."""
+    """Write one PipelineExecutionOutputFiles row per produced file (with s3VersionId).
+
+    Batched, so the write time of a step that produced thousands of files scales with the number of
+    batches rather than the number of rows. The row count is deliberately NOT capped: these rows are
+    the baseline the end-state handler diffs against to attribute output files to the step that
+    produced them, so a dropped row would mis-attribute a file rather than merely omit provenance.
+    `overwrite_by_pkeys` keeps the last write for a repeated key, as put_item did -- a duplicate key
+    inside one batch is rejected by DynamoDB and would lose the whole batch."""
     if not produced_files:
         return
     table = dynamo.Table(output_files_table)
-    for f in produced_files:
-        table.put_item(Item=er.build_output_file_record(
-            pipeline_execution_id=pipeline_execution_id,
-            file_type=f.get("fileType", "file"),
-            relative_file_path=f.get("relativePath", "").lstrip("/"),
-            s3_bucket=bucket, s3_key=f.get("key", ""),
-            file_size=f.get("fileSize", 0), content_type=f.get("contentType", ""),
-            s3_version_id=f.get("versionId", ""),
-        ))
+    with table.batch_writer(
+            overwrite_by_pkeys=["pipelineExecutionId", "fileType:relativeFilePath"]) as batch:
+        for f in produced_files:
+            batch.put_item(Item=er.build_output_file_record(
+                pipeline_execution_id=pipeline_execution_id,
+                file_type=f.get("fileType", "file"),
+                relative_file_path=f.get("relativePath", "").lstrip("/"),
+                s3_bucket=bucket, s3_key=f.get("key", ""),
+                file_size=f.get("fileSize", 0), content_type=f.get("contentType", ""),
+                s3_version_id=f.get("versionId", ""),
+            ))
 
 
-def _is_conditional_check_failure(error):
+def is_conditional_check_failure(error):
     """Whether a DynamoDB write error is a ConditionalCheckFailedException (the row already holds a
     terminal status), as opposed to a real failure that must surface."""
     response = getattr(error, "response", None)
@@ -286,6 +305,20 @@ def _is_conditional_check_failure(error):
         if code:
             return code == "ConditionalCheckFailedException"
     return "ConditionalCheckFailed" in str(error)
+
+
+def not_terminal_condition(values):
+    """The status-write guard shared by every terminal status write on an execution row: the row carries
+    no status yet, or a status that is not terminal. Adds the terminal-status placeholders to `values`
+    and returns the ConditionExpression, so the writers cannot drift apart. Also used by the abort
+    path's main-row write in `handlers.workflows.executionService`."""
+    terminal_names = {}
+    for index, terminal in enumerate(TERMINAL_STATUSES):
+        placeholder = f":term{index}"
+        terminal_names[placeholder] = terminal
+    values.update(terminal_names)
+    return ("attribute_not_exists(executionStatus) OR NOT executionStatus IN ("
+            + ", ".join(terminal_names) + ")")
 
 
 def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id,
@@ -299,13 +332,7 @@ def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id
     if stop_date:
         expr += ", executionStopDate = :s"
         values[":s"] = stop_date
-    terminal_names = {}
-    for index, terminal in enumerate(TERMINAL_STATUSES):
-        placeholder = f":term{index}"
-        terminal_names[placeholder] = terminal
-    values.update(terminal_names)
-    condition = ("attribute_not_exists(executionStatus) OR NOT executionStatus IN ("
-                 + ", ".join(terminal_names) + ")")
+    condition = not_terminal_condition(values)
     try:
         table.update_item(
             Key={"pipelineExecutionId": pipeline_execution_id,
@@ -315,7 +342,7 @@ def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id
             ExpressionAttributeValues=values,
         )
     except Exception as e:
-        if not _is_conditional_check_failure(e):
+        if not is_conditional_check_failure(e):
             raise
 
 
@@ -355,7 +382,10 @@ def set_pipeline_status_running(dynamo, pipeline_executions_table, pipeline_exec
 
 def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
                       workflow_id, status, stop_date, execution_log="", execution_error=None):
-    """Set terminal status + stop date (+ optional log/error) on the V2 main execution row."""
+    """Set terminal status + stop date (+ optional log/error) on the V2 main execution row, under the
+    same terminal guard the pipeline rows use: a row another writer already finished keeps its status.
+    Losing that race is the expected outcome for the second writer, not a failure, so the
+    ConditionalCheckFailed is logged and swallowed while any other write error surfaces."""
     table = dynamo.Table(main_table_name)
     expr = "SET executionStopDate = :s, executionStatus = :st, lastSfnSyncCheckDate = :s"
     values = {":s": stop_date, ":st": status}
@@ -365,12 +395,20 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     if execution_error is not None:
         expr += ", executionError = :er"
         values[":er"] = execution_error or ""
-    table.update_item(
-        Key={"workflowExecutionId": workflow_execution_id,
-             "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
-        UpdateExpression=expr,
-        ExpressionAttributeValues=values,
-    )
+    condition = not_terminal_condition(values)
+    try:
+        table.update_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
+            UpdateExpression=expr,
+            ConditionExpression=condition,
+            ExpressionAttributeValues=values,
+        )
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Main execution row {workflow_execution_id} already holds a terminal status; "
+                    f"the {status} finalization write was skipped")
 
 
 def stop_registered_sub_process(sub, sfn_client=None, batch_client=None):

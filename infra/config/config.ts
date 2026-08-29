@@ -62,6 +62,97 @@ export const API_GATEWAY_STAGE_NAME = "api";
 export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 
+// GPUs each NVIDIA Cosmos 3 job reserves, and therefore the minimum its tier's instance types must
+// carry. The container shards the checkpoint's parameters across the devices the job holds, so the
+// reservation is what makes a multi-GPU instance's memory usable; a tier pointed at a smaller
+// instance leaves the job RUNNABLE indefinitely, because AWS Batch has nowhere to place it and
+// reports no error. The construct reads these rather than repeating the numbers.
+export const COSMOS3_NANO_GPU_COUNT = 4;
+export const COSMOS3_SUPER_GPU_COUNT = 8;
+
+// GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
+// on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
+// smaller g6e.12xlarge carries four, so the mapping is explicit. An instance type absent from this
+// table is not rejected — it is reported as unverified, because a new accelerated family should not
+// be blocked by a table that has not caught up with it.
+export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
+    "g4dn.xlarge": 1,
+    "g4dn.2xlarge": 1,
+    "g4dn.4xlarge": 1,
+    "g4dn.8xlarge": 1,
+    "g4dn.16xlarge": 1,
+    "g4dn.12xlarge": 4,
+    "g4dn.metal": 8,
+    "g5.xlarge": 1,
+    "g5.2xlarge": 1,
+    "g5.4xlarge": 1,
+    "g5.8xlarge": 1,
+    "g5.16xlarge": 1,
+    "g5.12xlarge": 4,
+    "g5.24xlarge": 4,
+    "g5.48xlarge": 8,
+    "g6.xlarge": 1,
+    "g6.2xlarge": 1,
+    "g6.4xlarge": 1,
+    "g6.8xlarge": 1,
+    "g6.16xlarge": 1,
+    "g6.12xlarge": 4,
+    "g6.24xlarge": 4,
+    "g6.48xlarge": 8,
+    "g6e.xlarge": 1,
+    "g6e.2xlarge": 1,
+    "g6e.4xlarge": 1,
+    "g6e.8xlarge": 1,
+    "g6e.16xlarge": 1,
+    "g6e.12xlarge": 4,
+    "g6e.24xlarge": 4,
+    "g6e.48xlarge": 8,
+    "p3.2xlarge": 1,
+    "p3.8xlarge": 4,
+    "p3.16xlarge": 8,
+    "p3dn.24xlarge": 8,
+    "p4d.24xlarge": 8,
+    "p4de.24xlarge": 8,
+    "p5.48xlarge": 8,
+    "p5e.48xlarge": 8,
+    "p5en.48xlarge": 8,
+};
+
+/**
+ * Rejects instance types that are known to carry fewer GPUs than a job reserves.
+ *
+ * Throws for a type present in `GPU_COUNT_BY_INSTANCE_TYPE` with too few GPUs — the case worth
+ * failing at synth, since AWS Batch would otherwise accept the configuration and leave every job
+ * RUNNABLE with no error. Warns, rather than throwing, for a type the table does not know, so a
+ * newly released accelerated family can still be used.
+ */
+function validateInstanceTypeGpuCount(
+    instanceTypes: string[] | undefined,
+    requiredGpus: number,
+    configPath: string
+) {
+    for (const instanceType of instanceTypes || []) {
+        const gpus = GPU_COUNT_BY_INSTANCE_TYPE[instanceType];
+        if (gpus === undefined) {
+            console.warn(
+                `Configuration Warning: ${configPath} includes ${instanceType}, whose GPU count ` +
+                    `VAMS cannot verify. This tier's jobs reserve ${requiredGpus} GPUs and AWS Batch ` +
+                    `cannot place them on a smaller instance; confirm the type carries at least ` +
+                    `${requiredGpus}.`
+            );
+            continue;
+        }
+        if (gpus < requiredGpus) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${gpus} ` +
+                    `GPU(s). This tier's jobs reserve ${requiredGpus} GPUs, so AWS Batch can never ` +
+                    `place them on it and they stay RUNNABLE without reporting an error. Use an ` +
+                    `instance type with at least ${requiredGpus} GPUs (for example g6e.12xlarge).`
+            );
+        }
+    }
+}
+
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
         encoding: "utf8",
@@ -396,7 +487,7 @@ export function getConfig(app: cdk.App): Config {
                     enabled: false,
                     autoRegisterWithVAMS: true,
                     autoTriggerOnFileExtensionsUpload: "",
-                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
+                    instanceTypes: ["g6e.12xlarge", "g6e.24xlarge", "g6e.48xlarge"],
                     maxVCpus: 192,
                 },
                 super64B: {
@@ -1121,6 +1212,35 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array."
             );
         }
+        // Every tier's instance types must be able to hold the GPUs its jobs reserve.
+        if (c3?.nano16B?.enabled) {
+            validateInstanceTypeGpuCount(
+                c3.nano16B.instanceTypes,
+                COSMOS3_NANO_GPU_COUNT,
+                "useNvidiaCosmos3.modelsOmni.nano16B.instanceTypes"
+            );
+        }
+        if (c3?.super64B?.enabled) {
+            validateInstanceTypeGpuCount(
+                c3.super64B.instanceTypes,
+                COSMOS3_SUPER_GPU_COUNT,
+                "useNvidiaCosmos3.modelsOmni.super64B.instanceTypes"
+            );
+        }
+        if (c3?.superText2Image64B?.enabled) {
+            validateInstanceTypeGpuCount(
+                c3.superText2Image64B.instanceTypes,
+                COSMOS3_SUPER_GPU_COUNT,
+                "useNvidiaCosmos3.modelsOmni.superText2Image64B.instanceTypes"
+            );
+        }
+        if (c3?.superImage2Video64B?.enabled) {
+            validateInstanceTypeGpuCount(
+                c3.superImage2Video64B.instanceTypes,
+                COSMOS3_SUPER_GPU_COUNT,
+                "useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes"
+            );
+        }
     }
 
     // Gr00t Fine-Tuning validation
@@ -1156,6 +1276,21 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //RapidPipeline EKS cluster version. eks.KubernetesVersion.of() accepts any string, so a malformed
+    //value synthesizes cleanly and then fails partway through creating the EKS control plane. Only the
+    //shape is checked: pinning a list of known minors here would block adopting a newly released
+    //Kubernetes version without a code change.
+    if (config.app.pipelines.useRapidPipeline.useEks.enabled) {
+        const eksClusterVersion = config.app.pipelines.useRapidPipeline.useEks.eksClusterVersion;
+        if (typeof eksClusterVersion !== "string" || !/^1\.\d{2,}$/.test(eksClusterVersion)) {
+            throw new Error(
+                "Configuration Error: pipelines.useRapidPipeline.useEks.eksClusterVersion must be an " +
+                    'Amazon EKS Kubernetes minor version of the form "1.NN" (for example "1.31"). ' +
+                    `Received: ${JSON.stringify(eksClusterVersion)}`
+            );
+        }
+    }
+
     //Any configuration warnings/errors checks
     if (
         config.app.assetBuckets.createNewBucket &&
@@ -1183,7 +1318,8 @@ export function getConfig(app: cdk.App): Config {
         validateExternalAssetBuckets(
             config.app.assetBuckets.externalAssetBuckets,
             config.env.partition,
-            config.env.account
+            config.env.account,
+            config.env.region
         );
     }
 
@@ -2141,7 +2277,8 @@ export function validatePresignedUrlRestrictions(
 export function validateExternalAssetBuckets(
     externalAssetBuckets: ConfigPublicAssetS3Buckets[],
     deploymentPartition: string,
-    deploymentAccount?: string
+    deploymentAccount?: string,
+    deploymentRegion?: string
 ): void {
     // Normalizes a baseAssetsPrefix to a comparable form. "", "/", and undefined all
     // represent the bucket root (matches everything); any other value is returned
@@ -2202,6 +2339,17 @@ export function validateExternalAssetBuckets(
                     `Configuration Warning: external bucket ${bucketConfig.bucketArn} bucketAccountId matches the deployment account; the bucket is not actually cross-account.`
                 );
             }
+        }
+
+        // The bucket must be in the deployment region. Amazon S3 requires a notification
+        // destination (the SNS topic VAMS creates) to be in the same region as the bucket,
+        // and VAMS creates its topics in the deployment region. A mismatch is rejected here
+        // because otherwise it surfaces only as a PutBucketNotificationConfiguration
+        // InvalidArgument failure from a custom resource, deep into the deploy.
+        if (region && deploymentRegion && region != deploymentRegion) {
+            throw new Error(
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketRegion '${region}' does not match the deployment region '${deploymentRegion}'. Amazon S3 requires an event-notification destination to be in the same region as the bucket, and VAMS creates its notification topics in the deployment region. Register a bucket in '${deploymentRegion}', or deploy VAMS into '${region}'.`
+            );
         }
 
         const prefix = normalizePrefix(bucketConfig.baseAssetsPrefix);

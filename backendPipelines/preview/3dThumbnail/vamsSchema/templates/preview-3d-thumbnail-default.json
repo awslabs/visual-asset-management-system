@@ -3,7 +3,18 @@
     "templateName": "GIF/JPG/PNG thumbnails",
     "description": "Generate GIF, JPG, and PNG preview thumbnails, overwriting any existing preview files.",
     "configFormat": "json",
-    "configBody": "{\"overwriteExistingPreviewFiles\":true,\"outputType\":\".gif,.jpg,.png\"}",
+    "configBody": "{\"overwriteExistingPreviewFiles\":{{OVERWRITE_EXISTING_PREVIEW_FILES}},\"outputType\":\".gif,.jpg,.png\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "overwriteExistingPreviewFiles (true/false) controls whether existing .previewFile.* thumbnails are replaced. outputType is a comma-separated list of thumbnail formats to emit (.gif, .jpg, .png)."
+    "inputInstructions": "overwriteExistingPreviewFiles (true/false) controls whether existing .previewFile.* thumbnails are replaced, and is set by the \"Overwrite existing preview files\" field. outputType is a comma-separated list of thumbnail formats to emit (.gif, .jpg, .png).",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "OVERWRITE_EXISTING_PREVIEW_FILES",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Overwrite existing preview files",
+            "description": "Replace an existing .previewFile.* thumbnail for the input file. Clear it to leave an existing thumbnail in place, which reports the run successful without regenerating."
+        }
+    ]
 }

@@ -111,7 +111,7 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                 "_id": "my-database:asset-001",
                 "_score": 8.5,
                 "_source": {
-                    "_rectype": "asset",
+                    "str_rectype": "asset",
                     "str_databaseid": "my-database",
                     "str_assetid": "asset-001",
                     "str_assetname": "Building Model",
@@ -131,7 +131,7 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                 "_id": "my-database:asset-001:/models/building.ifc",
                 "_score": 7.2,
                 "_source": {
-                    "_rectype": "file",
+                    "str_rectype": "file",
                     "str_databaseid": "my-database",
                     "str_assetid": "asset-001",
                     "str_key": "/models/building.ifc",
@@ -270,7 +270,7 @@ The response returns the mappings for both indexes, keyed by `asset_index` and `
         "asset_index": {
             "mappings": {
                 "properties": {
-                    "_rectype": { "type": "keyword" },
+                    "str_rectype": { "type": "keyword" },
                     "str_databaseid": { "type": "keyword" },
                     "str_assetid": { "type": "keyword" },
                     "str_assetname": { "type": "keyword" },
@@ -285,7 +285,7 @@ The response returns the mappings for both indexes, keyed by `asset_index` and `
         "file_index": {
             "mappings": {
                 "properties": {
-                    "_rectype": { "type": "keyword" },
+                    "str_rectype": { "type": "keyword" },
                     "str_databaseid": { "type": "keyword" },
                     "str_assetid": { "type": "keyword" },
                     "str_key": { "type": "keyword" },
@@ -486,7 +486,7 @@ Documents indexed before the introduction of `geo_MD_location` will not match ge
 
 | Field                  | Type      | Description                                                                       |
 | ---------------------- | --------- | --------------------------------------------------------------------------------- |
-| `_rectype`             | keyword   | Always `"asset"`.                                                                 |
+| `str_rectype`          | keyword   | Always `"asset"`.                                                                 |
 | `str_databaseid`       | keyword   | Database identifier.                                                              |
 | `str_assetid`          | keyword   | Asset identifier.                                                                 |
 | `str_assetname`        | keyword   | Asset display name.                                                               |
@@ -502,7 +502,7 @@ Documents indexed before the introduction of `geo_MD_location` will not match ge
 
 | Field               | Type      | Description                                                                       |
 | ------------------- | --------- | --------------------------------------------------------------------------------- |
-| `_rectype`          | keyword   | Always `"file"`.                                                                  |
+| `str_rectype`       | keyword   | Always `"file"`.                                                                  |
 | `str_databaseid`    | keyword   | Database identifier.                                                              |
 | `str_assetid`       | keyword   | Parent asset identifier.                                                          |
 | `str_assetname`     | keyword   | Parent asset name.                                                                |

@@ -9,6 +9,8 @@ servers:
       variables:
           apiGatewayUrl:
               default: ""
+security:
+    - DefaultCognitoAuthorizer: []
 paths:
     /api/amplify-config:
         get:
@@ -98,6 +100,7 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+            security: []
     /secure-config:
         get:
             summary: "Get secure runtime configuration."
@@ -160,6 +163,7 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+            security: []
     /assets:
             put:
                 summary: "Create or update an asset."
@@ -954,6 +958,7 @@ paths:
     /auth/routes:
         post:
             summary: "Authorized routes."
+            description: "Return the subset of the submitted web routes the requesting user is allowed to access. Each submitted route is enforced individually, so a route the user cannot reach is omitted from allowedRoutes rather than failing the request."
             requestBody:
                 required: true
                 content:
@@ -963,6 +968,10 @@ paths:
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/auth_response'
                 "400":
                     description: Invalid parameters.
                     content:
@@ -1418,7 +1427,7 @@ paths:
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
-    /comments/assets/{assetId}/assetVersionId/{assetVersionId}/assets:
+    /comments/assets/{assetId}/assetVersionId/{assetVersionId}:
         get:
             summary: "List all comments for the given version of an asset."
             responses:
@@ -1452,7 +1461,7 @@ paths:
                     type: boolean
             security:
               - DefaultCognitoAuthorizer: []
-    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}/:
+    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}:
         get:
             summary: "Get specified comment."
             responses:
@@ -1710,6 +1719,36 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete a database (soft-delete)."
+            responses:
+                "200":
+                    description: Database deleted.
+                "400":
+                    description: Database contains an active workflow, pipeline, or assets.
+                "403":
+                    description: Action not allowed or not authorized.
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
     /buckets:
         get:
             summary: "List all S3 bucket configurations."
@@ -1738,34 +1777,6 @@ paths:
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
-        delete:
-            summary: "Delete a database."
-            responses:
-                "200":
-                    description: Database deleted.
-                "400":
-                    description: Database contains an active workflow, pipeline, or assets. 
-                "403":
-                    description: Action not allowed or not authorized. 
-                "404":
-                    description: Database not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database."
-              required: true
-              schema:
-                  $ref: '#/components/schemas/id_regex'
     /database/{databaseId}/assets:
         get:
             summary: "List all assets in a database."
@@ -2070,7 +2081,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/export:
         post:
             summary: "Export comprehensive asset data including child tree, metadata, files, and relationships"
-            description: "Exports a complete asset hierarchy starting from the specified root asset, including all child assets, their files, metadata, versions, and relationships. Supports pagination for large asset trees and optional response compression (100KB threshold). The export includes configurable filters for files, metadata, and relationship fetching. Uses POST method to support request body with filter options and optional presigned URL generation."
+            description: "Exports a complete asset hierarchy starting from the specified root asset, including all child assets, their files, metadata, versions, and relationships. Supports pagination for large asset trees. The export includes configurable filters for files, metadata, and relationship fetching. Uses POST method to support request body with filter options and optional presigned URL generation. A payload of 100KB or less is returned inline with status 200; a larger payload is staged in the VAMS auxiliary Amazon S3 bucket and delivered as a 303 redirect to a presigned URL, so clients must follow redirects."
             requestBody:
                 required: false
                 content:
@@ -2134,13 +2145,7 @@ paths:
                                     description: "Pagination token from previous response for retrieving next page"
             responses:
                 "200":
-                    description: Asset export data retrieved successfully. Response may be gzip compressed if size exceeds 100KB.
-                    headers:
-                        Content-Encoding:
-                            schema:
-                                type: string
-                                enum: [gzip]
-                            description: "Present when response is compressed"
+                    description: "Asset export data retrieved successfully, returned inline. Applies when the serialized payload is 100KB or less; above that threshold the endpoint responds with 303 instead."
                     content:
                         application/json:
                             schema:
@@ -2234,6 +2239,29 @@ paths:
                                     assetsInThisPage:
                                         type: integer
                                         description: "Number of assets returned in this page"
+                "303":
+                    description: "Export payload exceeds the 100KB inline response limit. The payload is staged as a JSON object in the VAMS auxiliary Amazon S3 bucket and the response redirects to a presigned URL for it. The redirect target expects a GET, which is why 303 is used rather than 307; a client that preserves the POST method is rejected by Amazon S3. The presigned URL carries its own authorization in the query string, so do not send the VAMS Authorization header to it. Standard HTTP clients that follow redirects by default (including the VAMS CLI) retrieve the payload transparently and observe the same response body as the 200 case."
+                    headers:
+                        Location:
+                            schema:
+                                type: string
+                                format: uri
+                            description: "Presigned Amazon S3 URL for the staged export payload"
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        description: "Explains that the payload is available at the redirect target"
+                                    presignedExportPayloadUrl:
+                                        type: string
+                                        format: uri
+                                        description: "Presigned Amazon S3 URL for the staged export payload, identical to the Location header. Provided in the body for clients that do not follow redirects automatically."
+                                    presignedExportPayloadExpiresIn:
+                                        type: integer
+                                        description: "Lifetime of the presigned URL in seconds, from the deployment's PRESIGNED_URL_TIMEOUT_SECONDS setting"
                 "400":
                     description: Invalid parameters or pagination token.
                     content:
@@ -4479,6 +4507,17 @@ paths:
                                             filterStartDate:
                                                 type: string
                                                 description: "The lower bound that was applied, so the response is self-describing."
+                                            filterEndDate:
+                                                type: string
+                                                description: "The upper bound that was applied, present only when one was supplied."
+                                            warnings:
+                                                type: array
+                                                items:
+                                                    type: string
+                                                description: >-
+                                                    Present only when this page reached its limit on distinct assets resolved
+                                                    for permission checks, so executions it could not evaluate were withheld
+                                                    rather than listed unchecked. The withheld rows are deferred, not lost.
                                             NextToken:
                                                 type: string
                                                 nullable: true
@@ -4590,6 +4629,17 @@ paths:
                                             filterStartDate:
                                                 type: string
                                                 description: "The lower bound that was applied, so the response is self-describing."
+                                            filterEndDate:
+                                                type: string
+                                                description: "The upper bound that was applied, present only when one was supplied."
+                                            warnings:
+                                                type: array
+                                                items:
+                                                    type: string
+                                                description: >-
+                                                    Present only when this page reached its limit on distinct assets resolved
+                                                    for permission checks, so executions it could not evaluate were withheld
+                                                    rather than listed unchecked. The withheld rows are deferred, not lost.
                                             NextToken:
                                                 type: string
                                                 nullable: true
@@ -4668,8 +4718,20 @@ paths:
                                 properties:
                                     message:
                                         $ref: '#/components/schemas/pipelineV2'
+                "400":
+                    description: Invalid path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to read the pipeline.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Pipeline not found.
+                    description: Pipeline not found.
                     content:
                         application/json:
                             schema:
@@ -4911,8 +4973,20 @@ paths:
                                 properties:
                                     message:
                                         $ref: "#/components/schemas/workflowV2"
+                "400":
+                    description: Invalid path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to read the workflow.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Workflow not found.
+                    description: Workflow not found.
                     content:
                         application/json:
                             schema:
@@ -5006,8 +5080,20 @@ paths:
             responses:
                 "200":
                     description: Workflow archived (archived set to true).
+                "400":
+                    description: Invalid path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to archive the workflow.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Workflow not found.
+                    description: Workflow not found.
                     content:
                         application/json:
                             schema:
@@ -5157,7 +5243,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/workflowTrigger'
                 "400":
-                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one."
+                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; a pipeline of the parent workflow that sets requireTemplate in its own pipeline systemConfig (a pipeline field, not one of the workflow systemConfig keys) for which no template is set by the trigger's defaultTemplateIds, the workflow reference's defaultTemplateId, or the pipeline's own default template (reported in the same triggerTemplateErrors list, naming the pipeline; any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them, so this rejection is limited to the combination a triggered execution could never run); an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one. The require-template check is best-effort: a step whose pipeline record or default template cannot be read is skipped rather than rejected, so the trigger saves with the missing template undetected - and nothing user-visible records the consequence. Template resolution runs BEFORE the execution record is written, so each triggered launch is rejected with a 400 carrying templateResolutionErrors and no execution is created: the workflow's execution list stays empty and the only trace is in CloudWatch (a trigger-dispatcher warning naming the workflow and the status it received, plus the rejected launch's own templateResolutionErrors entry naming the pipeline, which also reaches the audit errors log group)."
                     content:
                         application/json:
                             schema:
@@ -5253,7 +5339,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     example: "fileUpload#nightly"
     /ingest-asset:
         post:
-            summary: "Ingest a new asset into the database."
+            summary: "Ingest an asset and its files into a database."
+            description: "Create an asset and upload its files in one call, combining POST /assets with the upload endpoints. An asset that already exists has the files added to it. The endpoint runs in two stages against the same path, selected by the presence of uploadId in the request body: initialize returns an uploadId and presigned part-upload URLs, and complete supplies each file's uploaded part ETags. Both stages require asset PUT permission in addition to route access."
             requestBody:
                 required: true
                 content:
@@ -5262,9 +5349,21 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             $ref: "#/components/schemas/ingest_asset"
             responses:
                 "200":
-                    description: OK
+                    description: "Initialize returns ingestAssetInitializeResponse; complete returns ingestAssetCompleteResponse."
+                    content:
+                        application/json:
+                            schema:
+                                oneOf:
+                                    - $ref: '#/components/schemas/ingestAssetInitializeResponse'
+                                    - $ref: '#/components/schemas/ingestAssetCompleteResponse'
                 "400":
                     description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to write this asset.
                     content:
                         application/json:
                             schema:
@@ -6295,8 +6394,29 @@ Several triggers of one type are supported: address each with its own key ('<typ
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/pipelineV2"
+                                            NextToken:
+                                                type: string
+                                                nullable: true
                 "400":
                     description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list pipelines.
                     content:
                         application/json:
                             schema:
@@ -6311,6 +6431,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: includeArchived
+                in: query
+                description: "Include archived pipelines. Archived pipelines are hidden by default."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
     /database/{databaseId}/pipelines:
         get:
             summary: "List all pipelines in a database."
@@ -6332,8 +6459,14 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                             NextToken:
                                                 type: string
                                                 nullable: true
-                "404":
-                    description: Database not found.
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list pipelines.
                     content:
                         application/json:
                             schema:
@@ -6581,6 +6714,18 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 properties:
                                     message:
                                         $ref: '#/components/schemas/pipelineTemplate'
+                "400":
+                    description: Invalid path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
                     description: Database, Pipeline, OR Template not found.
                     content:
@@ -6734,6 +6879,18 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 properties:
                                     message:
                                         $ref: '#/components/schemas/pipelineTagSchemaResponse'
+                "400":
+                    description: Invalid path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
                     description: Database, Pipeline, OR Template not found.
                     content:
@@ -7791,6 +7948,18 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                             NextToken:
                                                 type: string
                                                 nullable: true
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to list workflows.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -7811,11 +7980,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions:
         get:
             summary: "List workflow executions across all assets (global)."
-            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), or on the asset it wrote to for a run with no inputs; a permanently deleted asset defers to GET on the database it lived in. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files."
+            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow, GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), and GET on the asset it wrote to whenever the run wrote to one; a permanently deleted asset defers to GET on the database it lived in. A results-only run names no output asset and reads nothing, so workflow GET is its whole gate. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files. A page shorter than pageSize is a stated bound rather than an absence of matches: warnings names the bound that stopped it."
             parameters:
               - name: pageSize
                 in: query
-                description: "Rows read per page. A value above the maximum is served at the maximum, and an unparseable or non-positive value falls back to the default. The page is read before the per-execution visibility check, so a page may return fewer rows than pageSize while still carrying a NextToken; page until the token is absent."
+                description: "Rows requested per page. A value above the maximum is served at the maximum, and an unparseable or non-positive value falls back to the default. Both the equality filters and the per-execution visibility check drop rows after a query's limit is spent, so the endpoint WALKS its query — repeating from its own continuation — until the page is full or the index is exhausted. A walk that spans several queries can therefore return slightly MORE rows than pageSize. A page that comes back short was stopped by a bound: either the per-request work budget or the per-page limit on distinct assets resolved for permission checks, and warnings names which. Page until the token is absent."
                 required: false
                 schema:
                     type: integer
@@ -7908,6 +8077,17 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                             filterEndDate:
                                                 type: string
                                                 description: "The upper bound that was applied, present only when one was supplied."
+                                            warnings:
+                                                type: array
+                                                items:
+                                                    type: string
+                                                description: >-
+                                                    Present only when a bound shortened this page, with one entry per bound
+                                                    that fired: the per-page limit on distinct assets resolved for permission
+                                                    checks (listed first when both apply), and the per-request work budget
+                                                    spent while walking the query to fill the page. Rows a bound withheld are
+                                                    deferred rather than lost — a NextToken accompanies the warning whenever
+                                                    the walk can continue.
                                             NextToken:
                                                 type: string
                                                 nullable: true
@@ -7932,7 +8112,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}:
         delete:
             summary: "Abort a running workflow execution (or a whole group)."
-            description: "Stops any still-running inner pipeline executions first, then the outer Step Functions execution, and marks the unfinished pipeline records and the overall execution as ABORTED. Requires GET on the execution's workflow and POST on every input-file asset tied to the execution. With the optional ?groupId= query parameter, aborts every active execution in the group the caller is authorized on (inaccessible members are skipped)."
+            description: "Stops any still-running inner pipeline executions first, then the outer Step Functions execution, and marks the unfinished pipeline records and the overall execution as ABORTED. Requires GET on the execution's workflow, POST on every input-file asset tied to the execution, and POST on the asset the run wrote to whenever it wrote to one. With the optional ?groupId= query parameter, aborts every active execution in the group the caller is authorized on (inaccessible members are skipped)."
             parameters:
               - in: path
                 name: executionId
@@ -7982,7 +8162,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results' -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results' -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -8056,9 +8236,9 @@ Several triggers of one type are supported: address each with its own key ('<typ
 
                 Authorization is the same rule the details view enforces, evaluated for GET: GET on
                 the execution's workflow, GET on every input-file asset tied to the execution, GET on
-                every asset named as a metadata source, and GET on every database in
-                metadataSourceDatabases. Exactly the callers who can open the details view can page
-                its metadata.
+                every asset named as a metadata source, GET on the asset the run wrote to whenever it
+                wrote to one, and GET on every database in metadataSourceDatabases. Exactly the
+                callers who can open the details view can page its metadata.
             parameters:
               - in: path
                 name: executionId
@@ -8143,7 +8323,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
-            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges three sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges three sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -8303,8 +8483,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 progress (abort it first), and a non-terminal row is confirmed against Step Functions
                 before the delete proceeds. Requires confirmDelete=true in the body. Admin-only
                 (granted only to admin permission templates), and additionally requires GET on the
-                execution's workflow and POST on every asset the run read, the same rule an abort
-                enforces.
+                execution's workflow, POST on every asset the run read, and POST on the asset it wrote
+                to whenever it wrote to one — the same rule an abort enforces.
             parameters:
               - in: path
                 name: executionId
@@ -8469,8 +8649,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
     /auth/api-keys:
         get:
-            summary: "List all API keys."
-            description: "Retrieve a list of all API keys. Returns metadata only; key hashes are never exposed."
+            summary: "List all API keys (administrative)."
+            description: "Retrieve a list of every user's API keys. Administrative route, reserved for administrator roles; regular users list their own keys through /auth/user/api-keys. Returns metadata only; key hashes are never exposed."
             responses:
                 "200":
                     description: API keys retrieved successfully.
@@ -8498,8 +8678,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
             security:
                 - DefaultCognitoAuthorizer: []
         post:
-            summary: "Create a new API key."
-            description: "Create a new API key for programmatic access. The plaintext API key is returned exactly once in the response and cannot be retrieved again."
+            summary: "Create a new API key for any user (administrative)."
+            description: "Create an API key bound to the userId supplied in the request body. The key acts as that user and carries that user's roles, so access to this route is equivalent to full administrative access and is reserved for administrator roles; regular users create their own keys through /auth/user/api-keys. The plaintext API key is returned exactly once in the response and cannot be retrieved again."
             requestBody:
                 required: true
                 content:
@@ -8512,10 +8692,10 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     description: "User-assigned name for the API key (immutable after creation)"
                                 userId:
                                     type: string
-                                    description: "VAMS user ID this key acts as"
+                                    description: "VAMS user ID this key acts as. Any user with at least one role assigned may be named, including an administrator."
                                 description:
                                     type: string
-                                    description: "Optional description of the API key"
+                                    description: "Description of the API key (1-256 characters)"
                                 expiresAt:
                                     type: string
                                     format: date-time
@@ -8523,6 +8703,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             required:
                                 - apiKeyName
                                 - userId
+                                - description
             responses:
                 "200":
                     description: API key created successfully. The apiKey field contains the plaintext key shown only once.
@@ -8552,8 +8733,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
     /auth/api-keys/{apiKeyId}:
         get:
-            summary: "Get a specific API key."
-            description: "Retrieve metadata for a specific API key by its ID."
+            summary: "Get a specific API key (administrative)."
+            description: "Retrieve metadata for any user's API key by its ID. Administrative route, reserved for administrator roles; regular users read their own keys through /auth/user/api-keys/{apiKeyId}."
             parameters:
                 - name: apiKeyId
                   in: path
@@ -8589,8 +8770,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
             security:
                 - DefaultCognitoAuthorizer: []
         put:
-            summary: "Update an API key."
-            description: "Update the description, expiration date, and/or active status of an existing API key. The key name and userId cannot be changed. At least one field must be provided."
+            summary: "Update an API key (administrative)."
+            description: "Update the description, expiration date, and/or active status of any user's API key. The key name and userId cannot be changed. At least one field must be provided. Administrative route, reserved for administrator roles; regular users update their own keys through /auth/user/api-keys/{apiKeyId}."
             parameters:
                 - name: apiKeyId
                   in: path
@@ -8650,8 +8831,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
             security:
                 - DefaultCognitoAuthorizer: []
         delete:
-            summary: "Delete an API key."
-            description: "Permanently delete an API key. This action cannot be undone."
+            summary: "Delete an API key (administrative)."
+            description: "Permanently delete any user's API key. This action cannot be undone. Administrative route, reserved for administrator roles; regular users delete their own keys through /auth/user/api-keys/{apiKeyId}."
             parameters:
                 - name: apiKeyId
                   in: path
@@ -8961,7 +9142,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     physnaState:
                                         type: string
                 "400":
-                    description: "Unsupported file extension or invalid query parameters. JSON envelope with `status: unsupported` or `invalid_request`."
+                    description: "Unsupported file extension, invalid query parameters, or a request that could not be completed against Physna. JSON envelope with `status: unsupported`, `invalid_request`, or `request_failed`."
                     content:
                         application/json:
                             schema:
@@ -8999,6 +9180,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
             security:
                 - DefaultCognitoAuthorizer: []
 components:
+    securitySchemes:
+        DefaultCognitoAuthorizer:
+            type: apiKey
+            name: Authorization
+            in: header
+            description: "Custom Amazon API Gateway Lambda authorizer. Supply an Amazon Cognito or external OAuth ID token as 'Bearer {idToken}', or a VAMS-issued API key as the raw header value. The authorizer validates the credential, applies any configured IP restrictions, and passes the resolved identity to the handler for two-tier ABAC/RBAC authorization. Applies to every operation except those declaring 'security: []'."
+            x-amazon-apigateway-authtype: custom
     schemas:
         apiKeyMetadata:
             type: object
@@ -9105,8 +9293,25 @@ components:
             properties:
               routes:
                 type: array
+                description: "Web routes to check, 1-500 entries."
+                minItems: 1
+                maxItems: 500
                 items:
                     $ref: "#/components/schemas/route"
+        auth_response:
+            type: object
+            required:
+                - allowedRoutes
+                - email
+            properties:
+              allowedRoutes:
+                type: array
+                description: "The submitted routes the requesting user is allowed to access."
+                items:
+                    $ref: "#/components/schemas/allowedRoute"
+              email:
+                type: string
+                description: "Requesting user's identity; empty when no identity could be resolved."
         auth_routes:
             type: object
             properties:
@@ -9520,7 +9725,7 @@ components:
                 - message
         triggerTemplateError:
             type: object
-            description: "A 400 error body for a headless-runnability rejection. Returned when a trigger's chosen default template, or a template referenced by a trigger as a default, has a required tag with no default value. The message object carries a triggerTemplateErrors list of human-readable strings, each naming the offending template, its pipeline (or the workflow(s) using it), and the tag keys at fault."
+            description: "A 400 error body for a headless-runnability rejection. The message object carries a triggerTemplateErrors list of human-readable strings. Common to every operation that returns this body: a template chosen as a trigger default, or referenced by a trigger as a default, has a required tag with no default value - the string names the offending template, its pipeline (or the workflow(s) using it), and the tag keys at fault. Setting a workflow trigger reports one further rejection in the same list, naming a pipeline of the trigger's parent workflow that requires a template for which no default is set from any source; see that operation's own 400 description. That rejection does not apply to the template create and update operations, which reach this body only through the required-tag check."
             properties:
                 message:
                     type: object
@@ -9673,15 +9878,137 @@ components:
         asset_id_regex:
             type: string
             pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
-        ingest_asset: 
+        ingest_asset:
+            description: "Asset ingest request. The presence of uploadId selects the complete stage; its absence selects the initialize stage."
+            oneOf:
+                - $ref: '#/components/schemas/ingestAssetInitializeRequest'
+                - $ref: '#/components/schemas/ingestAssetCompleteRequest'
+        ingestAssetInitializeRequest:
+            type: object
+            description: "Stage 1. Describes the asset and the files to upload; the response returns an uploadId and presigned part-upload URLs."
+            properties:
+                databaseId:
+                    type: string
+                    description: "Target database identifier"
+                    minLength: 4
+                    maxLength: 256
+                assetId:
+                    type: string
+                    description: "Asset identifier. Every file relativeKey must begin with '{assetId}/'."
+                    minLength: 1
+                    maxLength: 256
+                assetName:
+                    type: string
+                    description: "Display name for the asset"
+                    minLength: 1
+                    maxLength: 256
+                description:
+                    type: string
+                    description: "Asset description"
+                    minLength: 4
+                    maxLength: 256
+                isDistributable:
+                    type: boolean
+                    description: "Whether the asset can be downloaded"
+                    default: true
+                tags:
+                    type: array
+                    description: "Tags applied when the asset is created"
+                    items:
+                        type: string
+                files:
+                    type: array
+                    description: "Files to upload; at least one entry, each with a unique relativeKey"
+                    minItems: 1
+                    items:
+                        $ref: '#/components/schemas/uploadFile'
+            required:
+                - databaseId
+                - assetId
+                - assetName
+                - description
+                - files
+        ingestAssetCompleteRequest:
+            type: object
+            description: "Stage 2. Repeats the asset fields and supplies the uploadId plus each file's uploaded part ETags."
+            properties:
+                databaseId:
+                    type: string
+                    minLength: 4
+                    maxLength: 256
+                assetId:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                assetName:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                description:
+                    type: string
+                    minLength: 4
+                    maxLength: 256
+                isDistributable:
+                    type: boolean
+                    default: true
+                tags:
+                    type: array
+                    items:
+                        type: string
+                uploadId:
+                    type: string
+                    description: "Identifier returned by the initialize stage"
+                files:
+                    type: array
+                    description: "Completed files, each carrying at least one uploaded part"
+                    minItems: 1
+                    items:
+                        $ref: '#/components/schemas/uploadFileCompletion'
+            required:
+                - databaseId
+                - assetId
+                - assetName
+                - description
+                - uploadId
+                - files
+        ingestAssetInitializeResponse:
             type: object
             properties:
-                assetName:
-                    $ref: '#/components/schemas/object_name_pattern_regex'
-                key:
+                message:
                     type: string
+                uploadId:
+                    type: string
+                files:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/uploadFileResponse'
             required:
-                - assetName
+                - message
+                - uploadId
+                - files
+        ingestAssetCompleteResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                uploadId:
+                    type: string
+                assetId:
+                    type: string
+                fileResults:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/fileCompletionResult'
+                overallSuccess:
+                    type: boolean
+                    default: true
+                largeFileAsynchronousHandling:
+                    type: boolean
+                    default: false
+            required:
+                - message
+                - uploadId
+                - assetId
         location:
             type: object
             properties:
@@ -10618,7 +10945,7 @@ components:
                 allowWorkflowTriggerChaining:
                     type: boolean
                     default: false
-                    description: "Whether a file written by ANOTHER workflow's execution may fire this workflow's triggers, for example generating a preview or metadata from a conversion pipeline's output. A workflow never fires on output it wrote itself, whatever this is set to, so a workflow cannot re-trigger itself in a loop. A chained file must still match the trigger's input-file filters. Defaults to false."
+                    description: "Whether a file written by ANOTHER workflow's execution may fire this workflow's triggers, for example generating a preview or metadata from a conversion pipeline's output. A file whose recorded provenance names this workflow never re-triggers it, whatever this is set to, so a workflow does not loop directly on output attributed to itself. That check is narrower than it reads: it compares a file only against the workflow recorded as writing it, never against the chain of runs that led to it, and there is no depth limit and no cycle detection - two workflows that each enable chaining and each write a file the other accepts trigger one another indefinitely. It also depends on what the file records: a workflow-written file whose provenance does not name the workflow that produced it counts as another workflow's output, so a workflow with chaining enabled can fire on a file it wrote itself. Keeping a chain finite is an authoring responsibility. A chained file must still match the trigger's input-file filters. Defaults to false."
                 defaultOutputFileBaseExecutionPathExtension:
                     type: string
                     maxLength: 1024
@@ -10998,14 +11325,39 @@ components:
                 - timestamp
         route:
             type: object
+            description: "One web route to check the requesting user's access against."
             properties:
-                routeId:
-                    $ref: '#/components/schemas/id_regex'
-                description:
-                    $ref: "#/components/schemas/string256Param"
+                method:
+                    type: string
+                    description: "HTTP method to check. The value becomes the Casbin action."
+                    enum:
+                        - GET
+                        - PUT
+                        - POST
+                        - DELETE
+                route__path:
+                    type: string
+                    description: "Web route path, 1-512 characters. Newline characters are rejected."
+                    minLength: 1
+                    maxLength: 512
             required:
-                - routeId
-                - description
+                - method
+                - route__path
+        allowedRoute:
+            type: object
+            description: "A web route the requesting user is allowed to access."
+            properties:
+                method:
+                    type: string
+                route__path:
+                    type: string
+                object__type:
+                    type: string
+                    default: web
+            required:
+                - method
+                - route__path
+                - object__type
         s3_access:
             type: object
             properties:
@@ -12714,9 +13066,13 @@ components:
                     description: "Metadata key (1-256 characters)"
                 metadataValue:
                     type: string
-                    description: "Metadata value as string"
+                    nullable: true
+                    description: "Metadata value as string. Null is read as the field not being supplied and stores an empty value, so an item taken from a GET response can be submitted back unchanged."
                 metadataValueType:
-                    $ref: "#/components/schemas/metadataValueType"
+                    allOf:
+                        - $ref: "#/components/schemas/metadataValueType"
+                    nullable: true
+                    description: "Null is read as the field not being supplied and takes the default type."
             required:
                 - metadataKey
                 - metadataValue
@@ -12731,9 +13087,13 @@ components:
                     description: "Metadata key (1-256 characters) - used directly as primary key"
                 metadataValue:
                     type: string
-                    description: "Metadata value as string"
+                    nullable: true
+                    description: "Metadata value as string. Null is read as the field not being supplied and stores an empty value, so an item taken from a GET response can be submitted back unchanged."
                 metadataValueType:
-                    $ref: "#/components/schemas/metadataValueType"
+                    allOf:
+                        - $ref: "#/components/schemas/metadataValueType"
+                    nullable: true
+                    description: "Null is read as the field not being supplied and takes the default type."
             required:
                 - metadataKey
                 - metadataValue
@@ -12859,9 +13219,13 @@ components:
                     description: "Metadata key"
                 metadataValue:
                     type: string
-                    description: "Metadata value"
+                    nullable: true
+                    description: "Metadata value. Null when the record carries no stored value."
                 metadataValueType:
-                    $ref: "#/components/schemas/metadataValueType"
+                    allOf:
+                        - $ref: "#/components/schemas/metadataValueType"
+                    nullable: true
+                    description: "Data type of the value. Null when the record carries no stored value type; submit the item back on a write to complete the record."
                 metadataSchemaField:
                     type: boolean
                     description: "Is this field defined in a schema?"
@@ -12990,9 +13354,13 @@ components:
                     description: "Metadata key (used as primary key)"
                 metadataValue:
                     type: string
-                    description: "Metadata value"
+                    nullable: true
+                    description: "Metadata value. Null when the record carries no stored value."
                 metadataValueType:
-                    $ref: "#/components/schemas/metadataValueType"
+                    allOf:
+                        - $ref: "#/components/schemas/metadataValueType"
+                    nullable: true
+                    description: "Data type of the value. Null when the record carries no stored value type; submit the item back on a write to complete the record."
                 metadataSchemaField:
                     type: boolean
                     description: "Is this field defined in a schema?"
@@ -13158,9 +13526,13 @@ components:
                     description: "Metadata key (or attributeKey for attributes) - used as primary key"
                 metadataValue:
                     type: string
-                    description: "Metadata value (or attributeValue for attributes)"
+                    nullable: true
+                    description: "Metadata value (or attributeValue for attributes). Null when the record carries no stored value."
                 metadataValueType:
-                    $ref: "#/components/schemas/metadataValueType"
+                    allOf:
+                        - $ref: "#/components/schemas/metadataValueType"
+                    nullable: true
+                    description: "Data type of the value. Null when the record carries no stored value type; submit the item back on a write to complete the record."
                 metadataSchemaField:
                     type: boolean
                     description: "Is this field defined in a schema?"
@@ -13288,9 +13660,13 @@ components:
                     description: "Metadata key (used as primary key)"
                 metadataValue:
                     type: string
-                    description: "Metadata value"
+                    nullable: true
+                    description: "Metadata value. Null when the record carries no stored value."
                 metadataValueType:
-                    $ref: "#/components/schemas/metadataValueType"
+                    allOf:
+                        - $ref: "#/components/schemas/metadataValueType"
+                    nullable: true
+                    description: "Data type of the value. Null when the record carries no stored value type; submit the item back on a write to complete the record."
                 metadataSchemaField:
                     type: boolean
                     description: "Is this field defined in a schema?"
@@ -13702,7 +14078,7 @@ components:
         searchHitSource:
             type: object
             properties:
-                _rectype:
+                str_rectype:
                     type: string
                     enum: [asset, file]
                     description: "Record type"
@@ -13783,7 +14159,7 @@ components:
                     description: "Whether asset has related asset links (asset index only)"
             additionalProperties: true
             required:
-                - _rectype
+                - str_rectype
         
         searchHitExplanation:
             type: object

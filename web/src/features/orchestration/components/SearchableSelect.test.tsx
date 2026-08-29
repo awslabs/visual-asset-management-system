@@ -5,7 +5,7 @@
 
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import SearchableSelect from "./SearchableSelect";
+import SearchableSelect, { QUERY_REPORT_DEBOUNCE_MS } from "./SearchableSelect";
 
 const OPTIONS = [
     { value: "a1", label: "Building model", detail: "a1" },
@@ -98,5 +98,95 @@ describe("SearchableSelect", () => {
         fireEvent.click(screen.getByLabelText("File"));
         // Appears both in the trigger (selected) and the open list.
         expect(screen.getAllByText("Whole asset (all files)").length).toBeGreaterThan(0);
+    });
+});
+
+/**
+ * Server-query mode reports the typed term to the caller, which feeds it straight into a TanStack query
+ * key — so one report is one search request. Reporting per keystroke made request volume a function of
+ * characters typed, with every intermediate response discarded, on the wizard's hottest path.
+ */
+describe("SearchableSelect server-query reporting", () => {
+    beforeEach(() => {
+        jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+        jest.runOnlyPendingTimers();
+        jest.useRealTimers();
+    });
+
+    const openWithQueryReporting = (onQueryChange: jest.Mock) => {
+        render(
+            <SearchableSelect
+                options={[]}
+                value=""
+                onChange={jest.fn()}
+                ariaLabel="Asset"
+                onQueryChange={onQueryChange}
+            />
+        );
+        fireEvent.click(screen.getByLabelText("Asset"));
+        return screen.getByPlaceholderText("Type to search, Enter to refresh…");
+    };
+
+    it("reports one term for a typing burst rather than one per character", () => {
+        const onQueryChange = jest.fn();
+        const input = openWithQueryReporting(onQueryChange);
+
+        "pump".split("").forEach((_c, idx) => {
+            fireEvent.change(input, { target: { value: "pump".slice(0, idx + 1) } });
+            jest.advanceTimersByTime(50);
+        });
+
+        // Control: the field itself is not debounced — the text is on screen immediately.
+        expect(input).toHaveValue("pump");
+        expect(onQueryChange).not.toHaveBeenCalled();
+
+        jest.advanceTimersByTime(QUERY_REPORT_DEBOUNCE_MS);
+
+        expect(onQueryChange).toHaveBeenCalledTimes(1);
+        expect(onQueryChange).toHaveBeenCalledWith("pump");
+    });
+
+    it("reports immediately on Enter, as the placeholder advertises", () => {
+        const onQueryChange = jest.fn();
+        const input = openWithQueryReporting(onQueryChange);
+
+        fireEvent.change(input, { target: { value: "pump" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        expect(onQueryChange).toHaveBeenCalledTimes(1);
+        expect(onQueryChange).toHaveBeenCalledWith("pump");
+
+        // The settled report must not fire a second, identical search behind it.
+        jest.advanceTimersByTime(QUERY_REPORT_DEBOUNCE_MS * 2);
+        expect(onQueryChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a pending report when the picker closes", () => {
+        const onQueryChange = jest.fn();
+        const input = openWithQueryReporting(onQueryChange);
+
+        fireEvent.change(input, { target: { value: "pump" } });
+        fireEvent.keyDown(input, { key: "Escape" });
+        jest.advanceTimersByTime(QUERY_REPORT_DEBOUNCE_MS * 2);
+
+        expect(onQueryChange).not.toHaveBeenCalled();
+    });
+
+    it("still filters locally per keystroke when the caller resolves nothing", () => {
+        // Control: only the REPORT is deferred. With no onQueryChange the component owns the matching,
+        // and that must stay immediate.
+        render(
+            <SearchableSelect options={OPTIONS} value="" onChange={jest.fn()} ariaLabel="Asset" />
+        );
+        fireEvent.click(screen.getByLabelText("Asset"));
+        fireEvent.change(screen.getByPlaceholderText("Type to search…"), {
+            target: { value: "terrain" },
+        });
+
+        expect(screen.queryByText("Building model")).not.toBeInTheDocument();
+        expect(screen.getByText("Terrain scan")).toBeInTheDocument();
     });
 });

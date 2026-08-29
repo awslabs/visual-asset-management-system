@@ -21,9 +21,9 @@ export interface VamsSchemaRegistrationProps {
     /** Artefacts bucket the vamsSchema files are uploaded to (same bucket the import lambda reads). */
     artefactsBucket: s3.IBucket;
     /**
-     * Absolute path to the pipeline's `vamsSchema/` directory. Must contain `pipeline.json` and
-     * `workflow.json` (a pipeline is only launchable through its workflow); `templates/*.json` are
-     * optional.
+     * Absolute path to the pipeline's `vamsSchema/` directory. Must contain `pipeline.json`;
+     * `workflow.json` and `templates/*.json` are optional. A bundle without a workflow registers the
+     * pipeline alone, for use as a step in an operator-authored workflow.
      */
     vamsSchemaDir: string;
     /**
@@ -50,8 +50,9 @@ export interface VamsSchemaRegistrationProps {
  * VamsSchemaRegistration
  *
  * Uploads a pipeline's `vamsSchema/` directory to the artefacts bucket and wires a CloudFormation
- * custom resource that registers the built-in pipeline + workflow into the V2 tables at deploy
- * (via the V2 import lambda). Redeploys upsert (unarchive + overwrite); teardown archives.
+ * custom resource that registers the built-in pipeline, its templates and its workflow into the V2
+ * tables at deploy (via the V2 import lambda). Redeploys upsert (unarchive + overwrite); teardown
+ * archives.
  *
  * The upload is seamless — the developer only points at the `vamsSchema/` dir; no manual S3 steps.
  */
@@ -60,10 +61,8 @@ export class VamsSchemaRegistration extends Construct {
         super(scope, id);
 
         const dir = props.vamsSchemaDir;
-        for (const required of ["pipeline.json", "workflow.json"]) {
-            if (!fs.existsSync(path.join(dir, required))) {
-                throw new Error(`VamsSchemaRegistration: required ${required} not found in ${dir}`);
-            }
+        if (!fs.existsSync(path.join(dir, "pipeline.json"))) {
+            throw new Error(`VamsSchemaRegistration: required pipeline.json not found in ${dir}`);
         }
 
         // Deterministic per-registration prefix so redeploys overwrite the same keys and distinct
@@ -85,11 +84,17 @@ export class VamsSchemaRegistration extends Construct {
             prune: false,
         });
 
-        // Compute the S3 keys present, mirroring the on-disk layout (templates/*.json are optional).
+        // Compute the S3 keys present, mirroring the on-disk layout (workflow.json and
+        // templates/*.json are optional). A key must be emitted only when the file exists: the import
+        // lambda treats every key it receives as mandatory and fails the custom resource when the
+        // object is missing, so an unconditional workflow key turns an absent workflow.json from a
+        // synth error into a mid-deploy one.
         const bundleS3Keys: { pipeline: string; workflow?: string; templates?: string[] } = {
             pipeline: `${prefix}/pipeline.json`,
-            workflow: `${prefix}/workflow.json`,
         };
+        if (fs.existsSync(path.join(dir, "workflow.json"))) {
+            bundleS3Keys.workflow = `${prefix}/workflow.json`;
+        }
         const templatesDir = path.join(dir, "templates");
         if (fs.existsSync(templatesDir) && fs.statSync(templatesDir).isDirectory()) {
             const templateFiles = fs

@@ -22,7 +22,6 @@ jest.mock("../api/queries", () => ({
     // WizardInputStage's cascading selectors call these; default to idle/empty so the wizard
     // renders. Individual tests can override if they exercise the input selectors.
     useDatabases: jest.fn(() => ({ data: [], isLoading: false, error: null })),
-    useAssets: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     // The wizard resolves assets SERVER-side per search term (useAssetSearch), so the mock returns
     // the paged shape: { items, total, listFallback }.
     useAssetSearch: jest.fn(() => ({
@@ -30,7 +29,6 @@ jest.mock("../api/queries", () => ({
         isFetching: false,
         error: null,
     })),
-    useAssetFiles: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     // File matches are ALSO resolved server-side per row (an asset can hold thousands of files), so
     // this returns the same paged shape. Absent from this factory, any test that reaches a
     // multi-arity input row threw `useAssetFileSearch is not a function`.
@@ -1057,7 +1055,6 @@ describe("validateInputSelection", () => {
 /** The cascading selectors' hooks, set to idle/empty paged shapes. */
 function primeSelectorHooks(q: any) {
     q.useDatabases.mockReturnValue({ data: [], isLoading: false, error: null });
-    q.useAssets.mockReturnValue({ data: [], isLoading: false, error: null });
     q.useAssetSearch.mockReturnValue({
         data: { items: [], total: 0, listFallback: false },
         isFetching: false,
@@ -1066,7 +1063,6 @@ function primeSelectorHooks(q: any) {
         data: { items: [], total: 0, listFallback: false },
         isFetching: false,
     });
-    q.useAssetFiles.mockReturnValue({ data: [], isLoading: false, error: null });
     q.useFileVersions.mockReturnValue({ data: [], isFetching: false });
 }
 

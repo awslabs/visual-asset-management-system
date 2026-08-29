@@ -25,7 +25,6 @@
  * a chosen template (see configPartitionValidation.test.ts for the same harness and its caveats).
  */
 
-import * as cdk from "aws-cdk-lib";
 import * as fs from "fs";
 import * as Config from "../config/config";
 import commercialTemplate from "../config/config.template.commercial.json";
@@ -57,6 +56,7 @@ jest.mock("../config/oidc-config", () => ({
 }));
 
 import { oidcSettings } from "../config/oidc-config";
+import { newTestApp } from "./support/testApp";
 
 const serveConfig = (configJson: unknown) => {
     (fs.readFileSync as unknown as jest.Mock).mockImplementation(
@@ -111,7 +111,7 @@ const loadConfig = (base: unknown, region: string, mutate?: (c: any) => void) =>
     const config = templateFor(base, region);
     mutate?.(config);
     serveConfig(config);
-    return () => Config.getConfig(new cdk.App());
+    return () => Config.getConfig(newTestApp());
 };
 
 const BOTH_MESSAGE = /useCognito.useSaml and useCognito.useOidc cannot both be enabled/;

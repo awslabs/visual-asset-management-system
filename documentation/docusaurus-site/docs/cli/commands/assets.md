@@ -221,6 +221,8 @@ vamscli assets download -d my-db -a my-asset --shareable-links-only
 vamscli assets download /local/path -d my-db -a my-asset --asset-link-children-tree-depth 2
 ```
 
+The command exits non-zero when any file did not arrive, so a partial transfer is distinguishable from a complete one. The report still goes to stdout: `overall_success` gives the outcome, and each entry in `failed_downloads` names a file in `relative_key` with the reason in `error`. A file the service declines to issue a download URL for is counted as a failure like any other — an asset that is not distributable, for example, lists its files but permits none of them to be fetched, and that reads as `failed_downloads` entries rather than an empty success. When nothing at all could be prepared, the error message names the reason.
+
 ---
 
 ## assets export
@@ -249,6 +251,14 @@ vamscli assets export [OPTIONS]
 | `--no-file-metadata`                     | Flag    | No       | Exclude file metadata                                  |
 | `--no-asset-link-metadata`               | Flag    | No       | Exclude asset link metadata                            |
 | `--no-asset-metadata`                    | Flag    | No       | Exclude asset metadata                                 |
+| `--download-files`                       | Flag    | No       | Download files to a local directory                    |
+| `--local-path`                           | PATH    | No       | Local directory (required with `--download-files`)     |
+| `--organize-by-asset`                    | Flag    | No       | Save files flat within a per-asset subdirectory        |
+| `--flatten-downloads`                    | Flag    | No       | Save all files flat in `--local-path`                  |
+| `--parallel-downloads`                   | INTEGER | No       | Max parallel downloads (default: 5)                    |
+| `--download-timeout`                     | INTEGER | No       | Download timeout per file in seconds (default: 300)    |
+| `--hide-download-progress`               | Flag    | No       | Hide download progress display                         |
+| `--json-input`                           | TEXT    | No       | JSON input file path or JSON string with all options   |
 | `--json-output`                          | Flag    | No       | Output raw JSON response                               |
 
 ```bash
@@ -256,7 +266,18 @@ vamscli assets export -d my-database -a my-asset
 vamscli assets export -d my-database -a my-asset --fetch-entire-subtrees --json-output > export.json
 vamscli assets export -d my-database -a my-asset --file-extensions .gltf --file-extensions .bin --generate-presigned-urls
 vamscli assets export -d my-database -a my-asset --no-fetch-relationships
+vamscli assets export -d my-database -a my-asset --download-files --local-path ./export --organize-by-asset
 ```
+
+:::note[Downloading files as part of an export]
+`--download-files` exports the asset data and retrieves the files in a single command, using the same parallel download manager as `assets download`. It requires `--local-path`, and it enables `--generate-presigned-urls` automatically.
+
+The two organization flags require `--download-files`, are mutually exclusive, and control the local layout:
+
+-   Default — files are written to `LOCAL_PATH/ASSET_ID/` with their asset folder structure preserved.
+-   `--organize-by-asset` — files are written flat into `LOCAL_PATH/ASSET_ID/`.
+-   `--flatten-downloads` — files from every exported asset are written flat into `LOCAL_PATH/`.
+    :::
 
 ---
 

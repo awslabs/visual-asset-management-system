@@ -14,7 +14,7 @@ VAMS supports the **Cosmos-Transfer2.5-2B** model for video transformation using
 | **Pipeline ID**             | `cosmos-transfer2-edge-2b`                                                                                    |
 | **Configuration flag**      | `app.pipelines.useNvidiaCosmos.modelsTransfer.transfer2B.enabled`                                             |
 | **Execution type**          | Lambda (asynchronous with callback)                                                                           |
-| **Supported input formats** | `.mp4`, `.mov` (source video); control signal (optional, auto-computed or provided)                           |
+| **Supported input formats** | `.mp4`, `.mov`, `.avi` (source video); control signal (optional, auto-computed or provided)                           |
 | **Output**                  | MP4 video file stored at `outputS3AssetFilesPath`                                                             |
 | **Timeout**                 | 8 hours (AWS Batch job), 8 hours (VAMS workflow task token)                                                   |
 | **GPU Requirements**        | 65.4GB VRAM minimum across 8 GPUs. Default: g6e.48xlarge (8x L40S 48GB), fallback: p5.48xlarge (8x H100 80GB) |
@@ -231,9 +231,9 @@ The control signal type is set via the `COSMOS_TRANSFER_CONTROL_TYPE` file metad
 
 ### Input Prompt
 
-The text prompt controls the style and transformation applied to the video. The prompt can be set via the `COSMOS_TRANSFER_PROMPT` file metadata key or passed in the workflow `inputParameters` as `{"prompt": "your prompt text"}`.
+The text prompt controls the style and transformation applied to the video. The prompt can be set as the selected template's `PROMPT` tag on the execute screen, or as the `COSMOS_TRANSFER_PROMPT` metadata key on the file or the asset. The `CONTROL_TYPE` and `CONTROL_PATH` tags resolve the same way against `COSMOS_TRANSFER_CONTROL_TYPE` and `COSMOS_TRANSFER_CONTROL_PATH`.
 
-**Prompt Priority:** `COSMOS_TRANSFER_PROMPT` file metadata > `inputParameters` prompt > default prompt ("Transform the video")
+**Prompt Priority:** template `PROMPT` tag > `COSMOS_TRANSFER_PROMPT` file metadata > `COSMOS_TRANSFER_PROMPT` asset metadata > default prompt ("Transform the video")
 
 **Default Prompt:** If no prompt is provided, the pipeline uses: _"Transform the video"_
 
@@ -386,11 +386,11 @@ Consider pre-computing control signals offline and providing them via `COSMOS_TR
 
 ### Invalidating model cache (force re-download)
 
-If a model has been updated on HuggingFace or the cached version on Amazon EFS is corrupted, you can force the pipeline to re-download all models by adding `INVALIDATE_COSMOS_MODELS` to the pipeline's input parameters:
+If a model has been updated on HuggingFace or the cached version on Amazon EFS is corrupted, you can force the pipeline to re-download all models by setting `INVALIDATE_COSMOS_MODELS` to `"true"` in the template configuration the run uses:
 
-1. In the VAMS UI, edit the pipeline's input parameters to include `{"INVALIDATE_COSMOS_MODELS": "true"}`.
+1. Set the value for one run only -- on the execute screen, choose the template and edit its configuration body so it reads `"INVALIDATE_COSMOS_MODELS": "true"`. Alternatively, edit the template itself under Pipeline Templates to change the value for every subsequent run.
 2. Run the pipeline. All cached models on Amazon EFS and Amazon S3 will be deleted and re-downloaded from HuggingFace.
-3. After the run completes successfully, remove the `INVALIDATE_COSMOS_MODELS` parameter to resume using the fast EFS cache path.
+3. If you changed the template rather than overriding it for one run, set the value back to `"false"` afterwards to resume using the fast EFS cache path.
 
 :::warning
 Invalidating the model cache triggers a full re-download of ~27GB of model weights from HuggingFace. This significantly increases the pipeline execution time (30+ minutes for the download alone).

@@ -40,6 +40,7 @@ import { CosmosReasonConstruct } from "../lib/nestedStacks/pipelines/genAi/nvidi
 import { CosmosTransferConstruct } from "../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosTransfer-construct";
 import { Gr00tFinetuneConstruct } from "../lib/nestedStacks/pipelines/genAi/nvidia/gr00t/constructs/gr00tFinetune-construct";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
@@ -77,7 +78,7 @@ const makeHarness = (id: string, mutate?: (c: Config.Config) => void): Harness =
     mutate?.(config);
     Service.SetConfig(config);
 
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, id, { env: { account: ACCOUNT, region: REGION } });
 
     const vpc = new ec2.Vpc(stack, "Vpc", { maxAzs: 2 });

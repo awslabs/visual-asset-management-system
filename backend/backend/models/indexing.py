@@ -167,7 +167,14 @@ class FileDocumentModel(BaseModel, extra='allow'):
     geo_MD_location: Optional[Dict[str, Any]] = Field(None, description="GeoJSON shape derived from metadata")
 
     # Record type identifier
-    _rectype: str = Field("file", description="Record type identifier")
+    str_rectype: str = Field("file", description="Record type identifier")
+
+    @root_validator(pre=True, allow_reuse=True)
+    def set_record_type(cls, values):
+        """Stamp the record type on every document so it survives exclude_unset serialization."""
+        if isinstance(values, dict):
+            values["str_rectype"] = "file"
+        return values
 
     def add_metadata_fields(self, metadata: Dict[str, Any]) -> None:
         """
@@ -278,8 +285,15 @@ class AssetDocumentModel(BaseModel, extra='allow'):
     geo_MD_location: Optional[Dict[str, Any]] = Field(None, description="GeoJSON shape derived from metadata")
 
     # Record type identifier
-    _rectype: str = Field("asset", description="Record type identifier")
-    
+    str_rectype: str = Field("asset", description="Record type identifier")
+
+    @root_validator(pre=True, allow_reuse=True)
+    def set_record_type(cls, values):
+        """Stamp the record type on every document so it survives exclude_unset serialization."""
+        if isinstance(values, dict):
+            values["str_rectype"] = "asset"
+        return values
+
     def add_metadata_fields(self, metadata: Dict[str, Any]) -> None:
         """
         Add metadata as a single flat object field.
@@ -403,7 +417,7 @@ class FileIndexMapping(BaseModel, extra='ignore'):
                     "list_tags": {"type": "keyword"},
                     
                     # Record type
-                    "_rectype": {"type": "keyword"},
+                    "str_rectype": {"type": "keyword"},
                     
                     # Dynamic templates for metadata fields (MD_ prefix)
                     "MD_str_*": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
@@ -479,7 +493,7 @@ class AssetIndexMapping(BaseModel, extra='ignore'):
                     "bool_archived": {"type": "boolean"},
                     
                     # Record type
-                    "_rectype": {"type": "keyword"},
+                    "str_rectype": {"type": "keyword"},
                     
                     # Dynamic templates for metadata fields (MD_ prefix)
                     "MD_str_*": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},

@@ -20,6 +20,7 @@ import {
     Alert,
 } from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
+import { escapeRegExp } from "../../common/utils/escapeRegExp";
 import ListDefinition from "./list-definitions/types/ListDefinition";
 
 export default function TableList(props: any) {
@@ -80,9 +81,17 @@ export default function TableList(props: any) {
     const highlightMatches = (text: any, match: any = ""): any => {
         let newText = text + "";
         if (match !== "") {
-            match = match.split(" ").map((word: any) => word.toLowerCase());
+            // The filter text is raw user input read out of the live DOM on every cell render, so it
+            // must be escaped before it becomes a pattern: `new RegExp("(")` THROWS rather than
+            // failing to match, and a throw in a cell renderer blanks the whole page. Empty tokens are
+            // dropped as well — consecutive spaces yield "", whose regex matches at every position and
+            // would wrap every character in the highlight markers.
+            match = match
+                .split(" ")
+                .map((word: any) => word.toLowerCase())
+                .filter((word: string) => word !== "");
             for (let i = 0; i < match.length; i++) {
-                const regEx = new RegExp(match[i], "ig");
+                const regEx = new RegExp(escapeRegExp(match[i]), "ig");
                 newText = newText.replaceAll(regEx, ($replace: any) => `||${$replace}||`);
             }
             return newText.split("||").map((segment: any, i: number) => {

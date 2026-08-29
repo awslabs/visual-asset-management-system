@@ -251,10 +251,14 @@ export function storageResourcesBuilder(
             );
         } else {
             vamsGeneratedKmsKey = true;
+            // RETAIN so the key outlives a stack teardown and the RETAINed tables and buckets it
+            // encrypts stay decryptable. The key carries no kms.Alias and is addressed only by its
+            // generated key id/ARN, so a retained key never collides with the one a redeploy creates.
+            // Deleting it is a deliberate operator step once the retained data is no longer needed.
             kmsEncryptionKey = new kms.Key(scope, "VAMSEncryptionKMSKey", {
                 description: "VAMS Generated KMS Encryption key",
                 enableKeyRotation: true,
-                removalPolicy: cdk.RemovalPolicy.DESTROY,
+                removalPolicy: cdk.RemovalPolicy.RETAIN,
             });
 
             //Add policy
@@ -645,7 +649,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthentication",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -658,7 +662,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthorization",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -671,7 +675,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileUpload",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -684,7 +688,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileDownload",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -697,7 +701,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileDownloadStreamed",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -710,7 +714,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthOther",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -723,7 +727,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthChanges",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -736,7 +740,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditActions",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -749,7 +753,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditErrors",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -789,7 +793,7 @@ export function storageResourcesBuilder(
                     "VAMSOrchestrationBusAudit",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }

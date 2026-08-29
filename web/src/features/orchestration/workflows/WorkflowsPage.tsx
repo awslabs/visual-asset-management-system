@@ -363,6 +363,11 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                             ? w.databaseId || "Unknown database"
                             : w.category || "Uncategorized"
                     }
+                    // Stable identity per card (matching PipelinesPage). Each card owns an
+                    // uncontrolled actions menu, so with index keys a refetch that removes or reorders
+                    // a workflow inside its category re-points an OPEN menu at whichever workflow
+                    // lands on that index.
+                    getKey={(w) => `${w.databaseId}:${w.workflowId}`}
                     renderItem={renderWorkflowCard}
                 />
             )}

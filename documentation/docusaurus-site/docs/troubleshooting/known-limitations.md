@@ -93,12 +93,20 @@ Metadata GET endpoints (asset, file, database, and asset link metadata) return r
 
 ## Pipeline Limitations
 
-### Amazon ECS Pipeline Metadata Input Size Limit
+### Pipeline Metadata Input Size Limits
 
-Pipeline metadata inputs sent to Amazon ECS containers have an **8,000 character JSON input limit**. Assets or files with extensive metadata may exceed this limit, causing pipeline execution failures.
+Workflow execution captures the metadata of every input entity into a single metadata file in Amazon S3, and each pipeline receives a manifest pointing at that file rather than the metadata itself. Three bounds apply to the captured content:
 
-:::warning
-This limitation applies to metadata passed as JSON input to the container environment. A future pipeline overhaul will convert metadata input to a file-based approach to remove this constraint.
+| Bound               | Limit             | Scope                                                                       |
+| ------------------- | ----------------- | --------------------------------------------------------------------------- |
+| Entries per entity  | **1,000 entries** | One asset, one file's metadata, or one file's attributes                    |
+| Bytes per entity    | **300 KB**        | The same single entity row                                                  |
+| Bytes per execution | **128 MB**        | Every entity's metadata plus the asset data of every asset in the execution |
+
+Exceeding a bound does not fail the execution. When one entity passes a per-entity bound, its keys are retained in sorted order until the budget is used and the remainder are dropped, so the same input always yields the same subset. When the whole execution passes the total bound, entire entity rows are omitted.
+
+:::warning[Truncated metadata is reported only at launch]
+Each truncation is reported as a warning in the response to the execute request. The VamsCLI prints these under `Warnings` after `vamscli workflow execute`, and the web execute wizard displays them in place when the run starts. The warnings are not stored on the execution record, so a pipeline whose logic depends on a specific metadata key can receive an incomplete metadata file and produce incorrect output with no later indication. Review the launch warnings for executions over heavily annotated assets.
 :::
 
 ### 3D Preview Thumbnail Pipeline File Size Limit
@@ -154,13 +162,19 @@ The web application file selector for asset uploads supports folder selection in
 
 ### AWS GovCloud and EU Sovereign Cloud Restrictions
 
-When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud, the following services are not available:
+When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud, the following services are not available. Configuration validation rejects a deployment that enables any of them, naming the field.
 
-| Feature                          | Restriction                                 |
-| -------------------------------- | ------------------------------------------- |
-| Amazon CloudFront                | Not available; use ALB deployment mode      |
-| Amazon Location Service          | Not available; map features are disabled    |
-| Amazon Cognito Advanced Security | Not available; security check is suppressed |
+| Feature                                    | Restriction                                                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Amazon CloudFront                          | Not available; use ALB deployment mode                                                                               |
+| Amazon Location Service                    | Not available; map features are disabled                                                                             |
+| AWS Deadline Cloud                         | Not available; `app.pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                      |
+| Amazon Cognito SAML and OIDC federation    | Not available (both use the Cognito hosted UI); use the external OAuth identity provider option                       |
+| OpenSearch Serverless (next-generation)    | Not available; `app.openSearch.useServerless.nextGen` must be `false`                                                 |
+| OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there                             |
+| Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                                          |
+
+A VPC is also required in these partitions (`app.useGlobalVpc.enabled` must be `true`). See [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints) for the authoritative per-field list.
 
 ### Simultaneous CloudFront and ALB Deployment
 

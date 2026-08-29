@@ -9,6 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 import os
 import boto3
 import json
+import hashlib
 import time
 import random
 from datetime import datetime
@@ -31,7 +32,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
-from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse
+from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
@@ -292,6 +293,126 @@ def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> An
 # Utility Functions
 #######################
 
+def query_all_pages(table, **query_kwargs) -> List[Dict[str, Any]]:
+    """Query a table, following LastEvaluatedKey, and return every matching item.
+
+    A single DynamoDB query returns at most 1 MB of items, so a caller that reads
+    only the first page silently truncates the result set.
+    """
+    items: List[Dict[str, Any]] = []
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get('Items', []))
+
+        # DynamoDB omits LastEvaluatedKey on the last page, so the end of the walk is the key's
+        # ABSENCE. Reading its value instead never terminates against an under-stubbed reader,
+        # whose every ``get`` answers truthily.
+        if 'LastEvaluatedKey' not in response:
+            return items
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+def normalize_bucket_prefix(prefix: Optional[str]) -> Optional[str]:
+    """Normalize a bucket prefix to the form stored on a file document.
+
+    ``get_bucket_details`` stores ``baseAssetsPrefix`` with a trailing slash and no
+    leading slash, so a bucket rooted at ``/`` is indexed as an empty string.
+    Returns None when the prefix is unknown.
+    """
+    if prefix is None:
+        return None
+    if not prefix.endswith('/'):
+        prefix += '/'
+    if prefix.startswith('/'):
+        prefix = prefix[1:]
+    return prefix
+
+
+# Registered prefixes per bucket name, cached for the container's lifetime with a TTL.
+# The records are written by a CDK custom resource at deploy time, so they are stable
+# within a Lambda container.
+_registered_prefix_cache: Dict[str, Tuple[float, List[str]]] = {}
+_REGISTERED_PREFIX_CACHE_TTL_SECONDS = 300
+
+
+def get_registered_bucket_prefixes(bucket_name: str) -> List[str]:
+    """Normalized ``baseAssetsPrefix`` values registered for a bucket name.
+
+    Read from the bucketNameGSI rather than from an asset record, so it still resolves
+    once the asset it belonged to has been permanently deleted.
+    """
+    cached = _registered_prefix_cache.get(bucket_name)
+    if cached and cached[0] > time.time():
+        return cached[1]
+
+    records = query_all_pages(
+        s3_asset_buckets_table,
+        IndexName='bucketNameGSI',
+        KeyConditionExpression=Key('bucketName').eq(bucket_name)
+    )
+    prefixes = []
+    for record in records:
+        normalized = normalize_bucket_prefix(record.get('baseAssetsPrefix'))
+        if normalized is not None:
+            prefixes.append(normalized)
+
+    _registered_prefix_cache[bucket_name] = (
+        time.time() + _REGISTERED_PREFIX_CACHE_TTL_SECONDS, prefixes)
+    return prefixes
+
+
+def resolve_registered_bucket_prefix(
+    bucket_name: str, s3_key: str, event_prefix: Optional[str]
+) -> Optional[str]:
+    """Resolve which registered prefix an object key sits under, normalized to the form
+    stored on a file document (``prefix-a/``, or ``''`` for a bucket rooted at ``/``).
+
+    Object keys are ``{baseAssetsPrefix}{assetId}/{filePath}`` — the same
+    ``asset_base_key`` shape the indexing path builds — so the registered prefix has to
+    be removed before the first remaining component is the asset ID.
+
+    A non-root ``event_prefix`` that fits the key is authoritative and is taken as-is:
+    each bucket registration gets its own sync Lambda carrying that one prefix in its
+    environment. The root prefix is NOT taken on faith, because it is also what an
+    absent value defaults to everywhere this field is read — and treating a non-root
+    bucket as root reads the prefix's first path segment as the asset ID. In that case,
+    and whenever the key does not fit, fall back to the bucket's own registration
+    records. Registered prefixes for one bucket cannot overlap (``getConfig`` rejects
+    that, and the root overlaps every prefix), so at most one record can match a key.
+    """
+    normalized_event_prefix = normalize_bucket_prefix(event_prefix)
+    if normalized_event_prefix and s3_key.startswith(normalized_event_prefix):
+        return normalized_event_prefix
+
+    try:
+        for candidate in get_registered_bucket_prefixes(bucket_name):
+            if s3_key.startswith(candidate):
+                return candidate
+    except Exception as e:
+        logger.exception(
+            f"Error resolving registered prefixes for bucket {bucket_name}: {e}")
+
+    return normalized_event_prefix
+
+
+def split_asset_key(s3_key: str, base_prefix: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Split an object key into (assetId, asset-relative path) for a bucket registered
+    at ``base_prefix``.
+
+    Returns ``(None, None)`` when the key carries no path below the asset folder.
+    Splitting the raw key instead of the prefix-relative remainder yields the prefix's
+    first segment as the asset ID and leaves the asset ID inside the relative path —
+    neither of which matches a document, which is indexed with the asset-relative
+    ``str_key`` and the bare asset ID.
+    """
+    normalized = normalize_bucket_prefix(base_prefix) or ''
+    remainder = s3_key[len(normalized):] if normalized and s3_key.startswith(normalized) else s3_key
+    parts = remainder.lstrip('/').split('/')
+    if len(parts) < 2 or not parts[0]:
+        return None, None
+    return parts[0], '/' + '/'.join(parts[1:])
+
+
 def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
     """Get S3 bucket details from database"""
     try:
@@ -397,12 +518,11 @@ def lookup_database_id_for_permanent_delete(
         # Step 1: Query assetIdGSI with just asset_id
         logger.info(f"Looking up database_id for permanently deleted file with asset_id: {asset_id}")
         
-        response = asset_storage_table.query(
+        items = query_all_pages(
+            asset_storage_table,
             IndexName='assetIdGSI',
             KeyConditionExpression=Key('assetId').eq(asset_id)
         )
-        
-        items = response.get('Items', [])
 
         if len(items) == 0:
             logger.warning(f"No assets found with asset_id: {asset_id}")
@@ -498,11 +618,11 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[
 
     # --- Metadata table ---
     try:
-        response = asset_file_metadata_table.query(
+        items = query_all_pages(
+            asset_file_metadata_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        items = response.get('Items', [])
         for item in items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
@@ -532,11 +652,11 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[
 
     # --- Attribute table ---
     try:
-        response = file_attribute_table.query(
+        items = query_all_pages(
+            file_attribute_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        items = response.get('Items', [])
         for item in items:
             # Field-name fallback matches handlers.metadata.metadataService — records
             # in the attribute table may have been written with either the
@@ -677,8 +797,13 @@ def extract_file_extension(file_path: str) -> Optional[str]:
     return None
 
 def is_folder_path(file_path: str) -> bool:
-    """Check if path represents a folder"""
-    return file_path.endswith('/') or '.' not in os.path.basename(file_path)
+    """Check if path represents a folder.
+
+    Folder-ness is decided from the key shape alone. A missing filename extension
+    does not mean a folder: `LICENSE`, `Dockerfile`, `Makefile` and extension-less
+    data exports are ordinary files, and upload validation accepts them.
+    """
+    return file_path.endswith('/')
 
 def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any], 
                        bucket_details: Dict[str, Any], file_metadata: Dict[str, Any],
@@ -744,6 +869,30 @@ def build_file_document(request: FileIndexRequest, asset_details: Dict[str, Any]
 # OpenSearch Operations
 #######################
 
+# OpenSearch refuses a document _id longer than 512 bytes.
+MAX_OPENSEARCH_DOCUMENT_ID_BYTES = 512
+
+
+def build_file_document_id(database_id: str, asset_id: str, file_path: str) -> str:
+    """Build the OpenSearch _id of a file document.
+
+    The id is ``{databaseId}#{assetId}#{filePath}``. S3 allows an object key of
+    up to 1024 bytes while OpenSearch refuses an _id over 512 bytes, so an id
+    that does not fit is shortened to a byte-truncated prefix plus a digest of
+    the full id. The digest is derived from the three components alone, so the
+    index and delete paths address the same document for any path length.
+    """
+    doc_id = f"{database_id}#{asset_id}#{file_path}"
+    encoded = doc_id.encode('utf-8')
+    if len(encoded) <= MAX_OPENSEARCH_DOCUMENT_ID_BYTES:
+        return doc_id
+
+    digest = hashlib.sha256(encoded).hexdigest()
+    prefix_budget = MAX_OPENSEARCH_DOCUMENT_ID_BYTES - len(digest) - 1
+    prefix = encoded[:prefix_budget].decode('utf-8', errors='ignore')
+    return f"{prefix}#{digest}"
+
+
 def _is_invalid_geo_shape_error(error: Exception) -> bool:
     """Detect OpenSearch's mapper_parsing_exception for an invalid geo_shape.
 
@@ -775,7 +924,7 @@ def index_file_document(document: FileDocumentModel) -> bool:
         client = opensearch_manager.get_client()
 
         # Create document ID from key components
-        doc_id = f"{document.str_databaseid}#{document.str_assetid}#{document.str_key}"
+        doc_id = build_file_document_id(document.str_databaseid, document.str_assetid, document.str_key)
 
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)
@@ -835,7 +984,7 @@ def delete_file_document(database_id: str, asset_id: str, file_path: str) -> boo
         client = opensearch_manager.get_client()
         
         # Create document ID
-        doc_id = f"{database_id}#{asset_id}#{file_path}"
+        doc_id = build_file_document_id(database_id, asset_id, file_path)
         
         # Delete the document with retry logic
         response = opensearch_operation_with_retry(
@@ -856,19 +1005,36 @@ def delete_file_document(database_id: str, asset_id: str, file_path: str) -> boo
 
 
 def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
-                                            bucket_name: str) -> int:
+                                            bucket_name: str,
+                                            bucket_prefix: Optional[str]) -> int:
     """Delete file documents matched by asset ID + file path when the database
     ID cannot be resolved.
 
     Once an asset record is permanently deleted from DynamoDB, the trailing S3
     version-delete events can no longer resolve the database_id, so documents
     cannot be addressed by exact _id. Search the file index for documents with
-    the matching asset ID, path, and bucket, and delete them by their _id.
+    the matching asset ID, path, bucket and bucket prefix, and delete them by
+    their _id.
+
+    ``str_key`` is the asset-relative path, so asset ID + path + bucket name alone
+    also matches a live document belonging to a different database backed by the
+    same bucket under a different ``baseAssetsPrefix``. The prefix is therefore
+    part of the filter, and the cleanup is skipped when it is unknown rather than
+    run unscoped.
 
     Returns:
-        Number of documents deleted (0 if none matched).
+        Number of documents deleted (0 if none matched or the prefix is unknown).
     """
     try:
+        normalized_prefix = normalize_bucket_prefix(bucket_prefix)
+        if normalized_prefix is None:
+            logger.warning(
+                f"Skipping orphan file-document cleanup for {asset_id}{file_path}: "
+                "the event carries no bucket prefix, so the match cannot be scoped "
+                "to one database"
+            )
+            return 0
+
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
 
@@ -882,6 +1048,7 @@ def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
                         {"term": {"str_assetid.keyword": asset_id}},
                         {"term": {"str_key.keyword": file_path}},
                         {"term": {"str_bucketname.keyword": bucket_name}},
+                        {"term": {"str_bucketprefix.keyword": normalized_prefix}},
                     ]
                 }
             }
@@ -931,6 +1098,20 @@ def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
 # Business Logic Functions
 #######################
 
+def validate_s3_key(name: str, value: str) -> Tuple[bool, str]:
+    """Bound an S3 object key at the limit S3 itself enforces.
+
+    S3's 1024 limit applies to the UTF-8 encoding of the key, so the bound is
+    measured in bytes: a path built from multi-byte characters can satisfy a
+    character count and still be refused by S3.
+    """
+    if not isinstance(value, str) or not value:
+        return (False, name + " is a required field.")
+    if len(value.encode('utf-8')) > MAX_S3_KEY_LENGTH:
+        return (False, name + " must be at most " + str(MAX_S3_KEY_LENGTH) + " bytes")
+    return (True, '')
+
+
 def process_file_index_request(request: FileIndexRequest) -> IndexOperationResponse:
     """Process a file index request with full data lookup"""
     
@@ -952,12 +1133,11 @@ def process_file_index_request(request: FileIndexRequest) -> IndexOperationRespo
             'bucketName': {
                 'value': request.bucketName,
                 'validator': 'STRING_256'
-            },
-            's3Key': {
-                'value': request.s3Key,
-                'validator': 'STRING_256'
             }
         })
+        # s3Key carries the full object key, bounded by S3's own key limit.
+        if valid:
+            (valid, message) = validate_s3_key('s3Key', request.s3Key)
         if not valid:
             logger.error(f"Validation error in file index request: {message}")
             return IndexOperationResponse(
@@ -984,7 +1164,7 @@ def process_file_index_request(request: FileIndexRequest) -> IndexOperationRespo
             return IndexOperationResponse(
                 success=success,
                 message="File document deleted" if success else "Failed to delete file document",
-                documentId=f"{request.databaseId}#{request.assetId}#{request.filePath}",
+                documentId=build_file_document_id(request.databaseId, request.assetId, request.filePath),
                 indexName=opensearch_file_index,
                 operation="delete"
             )
@@ -1036,8 +1216,8 @@ def process_file_index_request(request: FileIndexRequest) -> IndexOperationRespo
             # Index the document
             success = index_file_document(document)
             
-            doc_id = f"{request.databaseId}#{request.assetId}#{request.filePath}"
-            
+            doc_id = build_file_document_id(request.databaseId, request.assetId, request.filePath)
+
             return IndexOperationResponse(
                 success=success,
                 message="File document indexed" if success else "Failed to index file document",
@@ -1287,7 +1467,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                 return IndexOperationResponse(
                                     success=success,
                                     message="Archived file indexed" if success else "Failed to index archived file",
-                                    documentId=f"{database_id}#{asset_id}#{relative_path}",
+                                    documentId=build_file_document_id(database_id, asset_id, relative_path),
                                     indexName=opensearch_file_index,
                                     operation="index"
                                 )
@@ -1376,82 +1556,62 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                     # File is permanently deleted (no versions remain)
                     logger.info(f"File is permanently deleted: {s3_key}")
 
-                    # Try to parse asset ID from S3 key path
-                    # Typical structure: {basePrefix}{assetId}/{filePath}
-                    # Asset ID is typically a UUID or identifier before the first slash after prefix
+                    # Object keys are {baseAssetsPrefix}{assetId}/{filePath}, the same
+                    # asset_base_key shape the indexing path builds, so the registered
+                    # prefix comes off before the first remaining component is the asset
+                    # ID. Splitting the raw key reads a non-root bucket's prefix segment
+                    # as the asset ID and leaves the asset ID inside the relative path,
+                    # matching no document.
+                    event_bucket_name = event_record.get('ASSET_BUCKET_NAME') or bucket_name
+                    event_bucket_prefix = resolve_registered_bucket_prefix(
+                        event_bucket_name, s3_key, event_record.get('ASSET_BUCKET_PREFIX')
+                    )
+                    potential_asset_id, relative_path = split_asset_key(s3_key, event_bucket_prefix)
 
-                    # Split the key and try to find the asset ID
-                    # This is a heuristic approach - asset ID is usually the first path component
-                    key_parts = s3_key.split('/')
-                    if len(key_parts) >= 2:
-                        # Assume asset ID is the first component (or second if first is empty/prefix)
-                        potential_asset_id = key_parts[0] if key_parts[0] else (key_parts[1] if len(key_parts) > 1 else None)
-                        
-                        if potential_asset_id:
-                            # Get bucket info from event record (passed from lambda_handler)
-                            # These are stored at the top level of the event
-                            event_bucket_name = event_record.get('ASSET_BUCKET_NAME', bucket_name)
-                            event_bucket_prefix = event_record.get('ASSET_BUCKET_PREFIX', '/')
-                            
-                            # Lookup database_id using the new helper function
-                            database_id, lookup_success = lookup_database_id_for_permanent_delete(
-                                potential_asset_id,
-                                event_bucket_name,
+                    if potential_asset_id:
+                        database_id, lookup_success = lookup_database_id_for_permanent_delete(
+                            potential_asset_id,
+                            event_bucket_name,
+                            event_bucket_prefix if event_bucket_prefix is not None else '/'
+                        )
+
+                        if lookup_success and database_id:
+                            logger.info(f"Successfully looked up database_id {database_id} for permanently deleted file")
+                            asset_id = potential_asset_id
+
+                            # For permanent deletes, directly delete from OpenSearch
+                            success = delete_file_document(database_id, asset_id, relative_path)
+
+                            return IndexOperationResponse(
+                                success=success,
+                                message="Permanently deleted file removed from index" if success else "Failed to delete file document",
+                                documentId=build_file_document_id(database_id, asset_id, relative_path),
+                                indexName=opensearch_file_index,
+                                operation="delete"
+                            )
+                        else:
+                            # Asset record already gone (e.g. asset permanent delete
+                            # removed DynamoDB before the trailing S3 version-delete
+                            # events processed). Fall back to matching documents by
+                            # asset ID + path so no orphaned documents remain in the
+                            # index. The prefix scopes that match to one database; a
+                            # None here means no registration for this bucket could be
+                            # resolved at all, and delete_file_documents_by_asset_and_path
+                            # declines rather than searching unscoped.
+                            deleted_count = delete_file_documents_by_asset_and_path(
+                                potential_asset_id, relative_path, event_bucket_name,
                                 event_bucket_prefix
                             )
-                            
-                            if lookup_success and database_id:
-                                logger.info(f"Successfully looked up database_id {database_id} for permanently deleted file")
-                                asset_id = potential_asset_id
-                                
-                                # Calculate relative path from S3 key
-                                # S3 key format: {assetId}/{filePath}
-                                if len(key_parts) > 1:
-                                    relative_path = '/' + '/'.join(key_parts[1:])
-                                else:
-                                    relative_path = '/' + s3_key
-                                
-                                # For permanent deletes, directly delete from OpenSearch
-                                success = delete_file_document(database_id, asset_id, relative_path)
-                                
-                                return IndexOperationResponse(
-                                    success=success,
-                                    message="Permanently deleted file removed from index" if success else "Failed to delete file document",
-                                    documentId=f"{database_id}#{asset_id}#{relative_path}",
-                                    indexName=opensearch_file_index,
-                                    operation="delete"
-                                )
-                            else:
-                                # Asset record already gone (e.g. asset permanent
-                                # delete removed DynamoDB before the trailing S3
-                                # version-delete events processed). Fall back to
-                                # matching documents by asset ID + path so no
-                                # orphaned documents remain in the index.
-                                if len(key_parts) > 1:
-                                    relative_path = '/' + '/'.join(key_parts[1:])
-                                else:
-                                    relative_path = '/' + s3_key
-                                deleted_count = delete_file_documents_by_asset_and_path(
-                                    potential_asset_id, relative_path, bucket_name
-                                )
-                                logger.warning(
-                                    f"Cannot determine database_id for permanently deleted file: {s3_key}; "
-                                    f"removed {deleted_count} orphaned document(s) by asset/path match"
-                                )
-                                return IndexOperationResponse(
-                                    success=True,
-                                    message=f"Removed {deleted_count} orphaned document(s) for unresolvable file" if deleted_count
-                                            else "Cannot identify permanently deleted file, skipping",
-                                    indexName=opensearch_file_index,
-                                    operation="delete" if deleted_count else "skip"
-                                )
-                        else:
-                            logger.warning(f"Cannot parse asset ID from S3 key: {s3_key}")
+                            logger.warning(
+                                f"Cannot determine database_id for permanently deleted file: {s3_key}; "
+                                f"removed {deleted_count} orphaned document(s) by asset/path match"
+                            )
                             return IndexOperationResponse(
                                 success=True,
-                                message="Cannot parse asset ID from S3 key",
+                                message=f"Removed {deleted_count} orphaned document(s) for unresolvable file" if deleted_count
+                                        else "Cannot identify permanently deleted file, skipping",
                                 indexName=opensearch_file_index,
-                                operation="skip"
+                                operation="delete" if deleted_count else "skip"
                             )
                     else:
                         logger.warning(f"Cannot parse asset ID from S3 key: {s3_key}")
@@ -1816,24 +1976,76 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
 # Lambda Handler
 #######################
 
+def batch_item_identifier(record: Dict[str, Any]) -> Optional[str]:
+    """Return the partial-batch identifier for an event-source record.
+
+    An SQS record is identified by its messageId, a DynamoDB stream record by the
+    shard record's SequenceNumber. Returns None for a record that carries neither
+    (a hand-built or direct invocation), where partial-batch reporting does not
+    apply.
+    """
+    message_id = record.get('messageId')
+    if message_id:
+        return message_id
+
+    sequence_number = (record.get('dynamodb') or {}).get('SequenceNumber')
+    if sequence_number:
+        return sequence_number
+
+    return None
+
+
+def all_batch_item_failures(event) -> List[Dict[str, str]]:
+    """Identify every record in the event, for reporting a whole batch as failed.
+
+    Used when the failure is not attributable to one record. Re-processing an
+    already-indexed record is harmless (indexing is an upsert keyed by the
+    document id), so redriving the whole batch is the safe direction.
+    """
+    failures = []
+    if not isinstance(event, dict):
+        return failures
+    for record in (event.get('Records') or []):
+        identifier = batch_item_identifier(record)
+        if identifier:
+            failures.append({'itemIdentifier': identifier})
+    return failures
+
+
+def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
+    """Attach the partial-batch failure report to an event-source response.
+
+    A response that carries no `batchItemFailures` is a whole-batch SUCCESS to the
+    event-source mapping, so every exit path of an event-source invocation must
+    report, including the error ones.
+    """
+    if isinstance(event, dict) and 'Records' in event:
+        if failures:
+            logger.warning(f"Reporting {len(failures)} failed record(s) for redrive")
+        response['batchItemFailures'] = failures
+    return response
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for file indexing operations"""
     global claims_and_roles
-    
+
     try:
         logger.info(f"Processing file indexing event: {json.dumps(event, default=str)}")
-        
+
         results = []
-        
+        batch_item_failures: List[Dict[str, str]] = []
+
         # Extract bucket info from top-level event (if present)
         asset_bucket_name = event.get('ASSET_BUCKET_NAME')
         asset_bucket_prefix = event.get('ASSET_BUCKET_PREFIX', '/')
-        
+
         # Handle different event sources
         if 'Records' in event:
             for record in event['Records']:
+                record_results_start = len(results)
                 event_source = record.get('eventSource', '')
-                
+
                 if event_source == 'aws:s3':
                     # Direct S3 bucket notification
                     # Pass bucket info to the record for permanent delete lookups
@@ -1868,14 +2080,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                             
                             # Check if SNS message contains Records array (nested structure from sqsBucketSync)
                             elif 'Records' in sns_message:
+                                # sqsBucketSync stamps the bucket identity onto the SNS
+                                # payload, not onto the SQS envelope, so read it from the
+                                # message and fall back to the top-level event.
+                                sns_bucket_name = sns_message.get('ASSET_BUCKET_NAME') or asset_bucket_name
+                                sns_bucket_prefix = sns_message.get('ASSET_BUCKET_PREFIX')
+                                if sns_bucket_prefix is None:
+                                    sns_bucket_prefix = asset_bucket_prefix
                                 for inner_record in sns_message['Records']:
                                     inner_event_source = inner_record.get('eventSource', '')
-                                    
+
                                     if inner_event_source == 'aws:s3':
                                         # Direct S3 record in SNS message
-                                        if asset_bucket_name:
-                                            inner_record['ASSET_BUCKET_NAME'] = asset_bucket_name
-                                            inner_record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
+                                        if sns_bucket_name:
+                                            inner_record['ASSET_BUCKET_NAME'] = sns_bucket_name
+                                            inner_record['ASSET_BUCKET_PREFIX'] = sns_bucket_prefix
                                         result = handle_s3_notification(inner_record)
                                         results.append(result)
                                     
@@ -1939,7 +2158,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
-        
+
+                if any(not r.success for r in results[record_results_start:]):
+                    identifier = batch_item_identifier(record)
+                    if identifier:
+                        batch_item_failures.append({'itemIdentifier': identifier})
+                    else:
+                        logger.warning(
+                            "File indexing failed for a record that carries no messageId or "
+                            "SequenceNumber; the failure cannot be reported for redrive"
+                        )
+
         else:
             # Direct invocation with FileIndexRequest
             try:
@@ -1949,24 +2178,36 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             except ValidationError as v:
                 logger.exception(f"Validation error: {v}")
                 return validation_error(body={'message': validation_error_message(v)}, event=event)
-        
+
         # Summarize results
         successful = sum(1 for r in results if r.success)
         total = len(results)
-        
+
         response_body = {
             'message': f"Processed {successful}/{total} file indexing operations successfully",
             'results': [r.dict() for r in results]
         }
-        
-        return success(body=response_body)
-        
+
+        # Partial-batch failure report. The event-source mapping redrives only the
+        # records whose indexing failed; without it a failed index write is deleted
+        # from the queue as if it had been processed.
+        return with_batch_item_failures(
+            success(body=response_body), event, batch_item_failures)
+
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': validation_error_message(v)}, event=event)
+        return with_batch_item_failures(
+            validation_error(body={'message': validation_error_message(v)}, event=event),
+            event, all_batch_item_failures(event))
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return with_batch_item_failures(
+            general_error(body={'message': str(v)}, event=event),
+            event, all_batch_item_failures(event))
     except Exception as e:
         logger.exception(f"Internal error in file indexer: {e}")
-        return internal_error(event=event)
+        # The failure is not attributable to one record, so the whole batch is
+        # reported: an error response without a failure report deletes every
+        # message in it.
+        return with_batch_item_failures(
+            internal_error(event=event), event, all_batch_item_failures(event))

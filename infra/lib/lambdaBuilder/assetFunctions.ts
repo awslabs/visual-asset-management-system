@@ -33,6 +33,14 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
+/**
+ * Auxiliary-bucket prefix the asset export service stages an over-size export payload under
+ * before handing back a presigned URL for it. Mirrors EXPORT_STAGING_PREFIX in
+ * backend/backend/handlers/assets/assetExportService.py — the export function's S3 grant is
+ * scoped to this prefix, so the two values move together.
+ */
+export const ASSET_EXPORT_STAGING_PREFIX = "assetExports/";
+
 export function buildCreateAssetFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -587,6 +595,20 @@ export function buildAssetExportService(
 
     // Grant read permissions to all asset buckets for file listing and presigned URLs
     grantReadPermissionsToAllAssetBuckets(fun);
+
+    // An export payload above the inline response size is written to the auxiliary bucket under
+    // the staging prefix and returned as a presigned GET. A query-string presigned URL is
+    // authorized as the signing role, so the same object needs s3:GetObject alongside
+    // s3:PutObject. KMS Decrypt/GenerateDataKey for a CMK-encrypted bucket come from
+    // kmsKeyLambdaPermissionAddToResourcePolicy below.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["s3:PutObject", "s3:GetObject"],
+            resources: [
+                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${ASSET_EXPORT_STAGING_PREFIX}*`,
+            ],
+        })
+    );
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

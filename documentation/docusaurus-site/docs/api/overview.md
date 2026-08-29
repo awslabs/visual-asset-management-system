@@ -193,12 +193,20 @@ Version information can be retrieved from the `GET /api/version` endpoint:
 
 The VAMS API is organized into the following functional groups:
 
-| Category           | Description                                                 | Documentation                       |
-| ------------------ | ----------------------------------------------------------- | ----------------------------------- |
-| **Authentication** | Auth configuration, route authorization, user management    | [Authentication](authentication.md) |
-| **Assets**         | Asset CRUD, archive/unarchive, download                     | [Assets](assets.md)                 |
-| **Files**          | File listing, operations, upload, streaming                 | [Files](files.md)                   |
-| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links | [Metadata](metadata.md)             |
-| **Search**         | Full-text and structured search across assets and files     | [Search](search.md)                 |
-
-Additional endpoint groups not covered in detail here include databases, pipelines, workflows, tags, tag types, roles, user roles, comments, subscriptions, and asset links.
+| Category           | Description                                                                                  | Documentation                       |
+| ------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Authentication** | Authentication providers, runtime configuration, web route authorization, login profiles      | [Authentication](authentication.md) |
+| **Databases**      | Database CRUD and the bucket configurations a database is created against                    | [Databases](databases.md)           |
+| **Assets**         | Asset CRUD, archive/unarchive, download, export, history, single-call ingest                  | [Assets](assets.md)                 |
+| **Asset Versions** | Asset version creation, retrieval, revert, archive/unarchive                                 | [Asset Versions](asset-versions.md) |
+| **Files**          | File listing, operations, upload, streaming, preview management                               | [Files](files.md)                   |
+| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links, plus metadata schemas            | [Metadata](metadata.md)             |
+| **Search**         | Full-text and structured search across assets and files                                      | [Search](search.md)                 |
+| **Pipelines**      | Pipeline CRUD, configuration templates, and template tag schemas                              | [Pipelines](pipelines.md)           |
+| **Workflows**      | Workflow CRUD, triggers, and execution launch, listing, detail, logs, re-run, and abort        | [Workflows](workflows.md)           |
+| **Asset Links**    | Relationships between assets, with optional tags and tree views                               | [Asset Links](asset-links.md)       |
+| **Comments**       | Review comments attached to an asset version                                                 | [Comments](comments.md)             |
+| **Tags**           | Tags and tag types, global or scoped to a database                                           | [Tags](tags.md)                     |
+| **Subscriptions**  | Event subscriptions and notification opt-in                                                  | [Subscriptions](subscriptions.md)   |
+| **Authorization**  | Permission constraints, API route listings, roles, user-role assignments, Cognito users, API keys | [Authorization](auth.md)         |
+| **Add-ons**        | Endpoints contributed by optional add-ons                                                    | [Add-ons](addon.md)                 |

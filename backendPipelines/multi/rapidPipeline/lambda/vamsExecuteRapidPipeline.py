@@ -20,9 +20,16 @@ sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGIO
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, output_file_type, orchestration_event_prefix=""):
+                                        , executing_userName, executing_requestContext, output_file_type, orchestration_event_prefix=""
+                                        , input_manifest_s3_location="", asset_id=""):
 
     # Create the object message to be sent
+    #
+    # inputManifestS3Location and assetId locate the input file WITHIN its asset. The
+    # constructPipeline state reads them to keep the converted file under the same subdirectory
+    # within the output-files prefix as its source file sits within the asset, so both are part of
+    # this payload: openPipeline forwards only the keys named here into the state machine input,
+    # and a key absent here cannot be recovered by any later state.
     messagePayload = {
         "inputS3AssetFilePath": input_s3_asset_file_path,
         "outputS3AssetFilesPath": output_s3_asset_files_path,
@@ -31,6 +38,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        "inputManifestS3Location": input_manifest_s3_location,
+        "assetId": asset_id,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -125,11 +134,15 @@ def lambda_handler(event, context):
         manifestHelper.enforce_single_input_file(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
-        # Starts excution of pipeline
+        # Starts excution of pipeline. The manifest pointer travels from the payload body (it locates
+        # the manifest this handler just read) and the assetId from the resolved manifest, which is
+        # the only carrier of asset identity.
         execute_pipeline(resolved['inputS3AssetFilePath'], resolved['outputS3AssetFilesPath'], resolved['outputS3AssetPreviewPath']
                                             , resolved['outputS3AssetMetadataPath'], resolved['inputOutputS3AssetAuxiliaryFilesPath']
                                             , resolved['inputMetadataS3Location'], resolved['inputConfigurationS3Location'], external_task_token, executing_userName,
-                                            executing_requestContext, output_file_type, resolved['orchestrationEventPrefix'])
+                                            executing_requestContext, output_file_type, resolved['orchestrationEventPrefix'],
+                                            input_manifest_s3_location=manifestHelper.manifest_location(data),
+                                            asset_id=resolved['assetId'])
 
         return {
             'statusCode': 200,

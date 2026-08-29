@@ -112,7 +112,8 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                 }
 
                 if (urls.length > 0) {
-                    console.log(`Successfully loaded ${urls.length} model URLs:`, urls);
+                    // Presigned URLs — log the count, not the signed URLs.
+                    console.log(`Successfully loaded ${urls.length} model URLs`);
                     setModelUrls(urls);
                     setMainFileName(fileName);
 

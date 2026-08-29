@@ -451,7 +451,9 @@ class TestSyncPushFailureAggregation:
                     'sync', 'file', 'push', str(tmp_path), '-d', 'db1', '-a', 'asset1',
                     '--version-comment', 'Should not be created', '--json-output'
                 ])
-            assert result.exit_code == 0
+            # A sync that did not fully apply exits non-zero (FIX for S6-TOOLS-009). The payload is
+            # still the only thing on stdout, so it must remain parseable.
+            assert result.exit_code != 0
             data = json.loads(result.output)
             assert data['overall_success'] is False
             # Version creation must be skipped after a failed push
@@ -466,7 +468,7 @@ class TestSyncPushFailureAggregation:
                 'sync', 'file', 'push', str(tmp_path), '-d', 'db1', '-a', 'asset1',
                 '--allow-delete', '--json-output'
             ])
-            assert result.exit_code == 0
+            assert result.exit_code != 0
             data = json.loads(result.output)
             assert data['overall_success'] is False
             failed = data['execution']['deletes']['failed']
@@ -476,7 +478,18 @@ class TestSyncPushFailureAggregation:
 
 
 class TestSyncPullProducerPaths:
-    """Pull tests that run the real producer/consumer wiring (unmocked asyncio.run)."""
+    """Pull tests that run the real producer/consumer wiring (unmocked asyncio.run).
+
+    Both cases below are DELIBERATELY partial-failure scenarios, so both exit 1 and both assert the
+    payload too. The contract (FIX for S6-TOOLS-009): a sync that did not fully apply exits non-zero
+    **and** keeps the full detail on stdout. Exit code alone is not enough — a script needs to know
+    which files to retry — and payload alone is not enough, because `vamscli sync file pull ... &&
+    <next step>` and any `set -e` job branch on the exit code and never inspect `overall_success`.
+
+    These two tests previously asserted `exit_code == 0`. That expectation encoded the defect: a pull
+    that dropped a file for a failed presigned URL, or refused a path-traversal entry, reported
+    success to the shell. Do not "fix" them back to 0 — assert both halves.
+    """
 
     def _mock_download_manager(self):
         """DownloadManager stand-in whose streamed download drains the queue."""
@@ -533,7 +546,10 @@ class TestSyncPullProducerPaths:
                     'sync', 'file', 'pull', str(tmp_path), '-d', 'db1', '-a', 'asset1',
                     '--json-output'
                 ])
-            assert result.exit_code == 0
+            # One of two files could not be given a presigned URL, so the pull did not fully apply.
+            assert result.exit_code == 1
+            # ...and the exit code is ADDED to the payload, not substituted for it: a caller still
+            # needs to know WHICH file to retry, so the detail below must survive alongside the code.
             data = json.loads(result.output)
             downloads = data['execution']['downloads']
             assert data['overall_success'] is False
@@ -561,12 +577,17 @@ class TestSyncPullProducerPaths:
                     'sync', 'file', 'pull', str(tmp_path), '-d', 'db1', '-a', 'asset1',
                     '--json-output'
                 ])
-            assert result.exit_code == 0
+            # The traversal entry is recorded as a FAILURE, so the pull did not fully apply — a
+            # caller must not read "refused a malicious path" as a clean sync.
+            assert result.exit_code == 1
             data = json.loads(result.output)
             downloads = data['execution']['downloads']
+            assert data['overall_success'] is False
+            assert downloads['overall_success'] is False
             assert downloads['successful_files'] == 1
             failed_keys = [f['relative_key'] for f in downloads['failed_downloads']]
             assert failed_keys == ['/../evil.txt']
+            # The load-bearing assertion of this test, unchanged: nothing escaped the sync root.
             assert not (tmp_path.parent / 'evil.txt').exists()
 
 

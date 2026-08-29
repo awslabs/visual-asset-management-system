@@ -57,6 +57,11 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
                 { "field": "route__path", "operator": "starts_with", "value": "/asset-links" },
                 { "field": "route__path", "operator": "starts_with", "value": "/assets" },
                 { "field": "route__path", "operator": "starts_with", "value": "/comments" },
@@ -73,8 +78,7 @@
                 },
                 { "field": "route__path", "operator": "starts_with", "value": "/tags" },
                 { "field": "route__path", "operator": "starts_with", "value": "/tag-types" },
-                { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
-                { "field": "route__path", "operator": "starts_with", "value": "/buckets" }
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
@@ -99,6 +103,11 @@
             "criteriaAnd": [],
             "criteriaOr": [
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
                 {
                     "field": "route__path",

@@ -30,13 +30,7 @@ import type {
 } from "../types";
 import type { DatabaseSummary } from "./databases";
 import type { DetailMetadataCollection, DetailMetadataPage } from "./executions";
-import type {
-    AssetSummary,
-    AssetFileSummary,
-    AssetFileVersionSummary,
-    AssetSearchPage,
-    AssetFilePage,
-} from "./assets";
+import type { AssetFileVersionSummary, AssetSearchPage, AssetFilePage } from "./assets";
 
 // Query key factory for stable, structured keys
 export const qk = {
@@ -61,11 +55,8 @@ export const qk = {
         ["executionDetailMetadata", executionId, collection] as const,
     allowedRoutes: () => ["allowedRoutes"] as const,
     databases: () => ["databases"] as const,
-    assets: (databaseId?: string) => ["assets", databaseId ?? null] as const,
     assetSearch: (databaseId: string | undefined, query: string) =>
         ["assetSearch", databaseId ?? null, query] as const,
-    assetFiles: (databaseId: string, assetId: string) =>
-        ["assetFiles", databaseId, assetId] as const,
     assetFileSearch: (databaseId: string, assetId: string, query: string) =>
         ["assetFileSearch", databaseId, assetId, query] as const,
     fileVersions: (databaseId: string, assetId: string, relativeFileKey: string) =>
@@ -81,22 +72,12 @@ export function useDatabases(enabled = true) {
     });
 }
 
-/** Assets for the execute-wizard asset selector — scoped to a database, or all when none given. */
-export function useAssets(databaseId?: string, enabled = true) {
-    return useQuery({
-        queryKey: qk.assets(databaseId),
-        queryFn: () => callService<AssetSummary[]>(() => assetService.listAssets(databaseId)),
-        enabled,
-    });
-}
-
 /**
  * One SERVER-resolved page of assets matching `query`, for the execute wizard's asset pickers.
  *
- * Unlike `useAssets` (which loads a database's assets for client-side filtering) this re-queries per
- * search term, so a database holding thousands of assets does not have to be pulled into the browser.
- * `keepPreviousData` holds the previous page on screen while the next one loads, so the list does not
- * flash empty on every keystroke.
+ * The term is re-queried per search rather than filtered in the browser, so a database holding
+ * thousands of assets does not have to be pulled down to pick one from it. `keepPreviousData` holds the
+ * previous page on screen while the next one loads, so the list does not flash empty between searches.
  */
 export function useAssetSearch(query: string, databaseId?: string, enabled = true) {
     return useQuery({
@@ -105,18 +86,6 @@ export function useAssetSearch(query: string, databaseId?: string, enabled = tru
             callService<AssetSearchPage>(() => assetService.searchAssetsPaged(query, databaseId)),
         enabled,
         placeholderData: (previous: any) => previous,
-    });
-}
-
-/** Non-folder files for an asset — for the wizard file selector. Disabled until an asset is chosen. */
-export function useAssetFiles(databaseId?: string, assetId?: string) {
-    return useQuery({
-        queryKey: qk.assetFiles(databaseId || "", assetId || ""),
-        queryFn: () =>
-            callService<AssetFileSummary[]>(() =>
-                assetService.listAssetFiles(databaseId as string, assetId as string)
-            ),
-        enabled: !!databaseId && !!assetId,
     });
 }
 

@@ -6,7 +6,11 @@
 Execute-time validation reads the WORKFLOW record's assetScope, so a pipeline that operates on the
 whole asset only runs when its workflow bundle declares the matching scope. Training and evaluation
 share one vamsExecute lambda and one state machine, discriminated solely by ``trainingConfig.mode``
-from the template config body, so the evaluation pipeline must require a template."""
+from the template config body, so the evaluation pipeline must require a template.
+
+Both pipelines are launched manually, so neither bundle declares a trigger: a trigger a bundle ships is
+registered as a workflow-triggers row at deploy time, and the deployment has no configuration that
+suppresses one."""
 
 import os
 import json
@@ -15,6 +19,7 @@ import pytest
 
 _SCHEMA_ROOT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "vamsSchema"))
+_BUNDLE_NAMES = ("training", "evaluation")
 
 
 def _load(*parts):
@@ -47,14 +52,22 @@ class TestEvaluationBundle:
         config_body = json.loads(template["configBody"])
         assert config_body["trainingConfig"]["mode"] == "evaluate"
 
-    def test_evaluation_trigger_defaults_to_the_evaluation_template(self):
-        trigger = _load("evaluation", "workflow.json")["triggers"][0]
-        assert trigger["defaultTemplateIds"]["GLOBAL:isaaclab-evaluation"] == \
-            "isaaclab-evaluation-cartpole"
 
-    def test_evaluation_trigger_filter_matches_the_pipeline_filter(self):
-        # A trigger-launched execution is validated against the pipeline's inputFileFilters, so a
-        # trigger allowing an extension the pipeline excludes can never produce a running execution.
-        trigger_allow = _load("evaluation", "workflow.json")["triggers"][0]["inputFileFilters"]["allow"]
-        pipeline_allow = _load("evaluation", "pipeline.json")["systemConfig"]["inputFileFilters"]["allow"]
-        assert sorted(trigger_allow) == sorted(pipeline_allow)
+@pytest.mark.unit
+class TestManualExecutionOnly:
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_neither_bundle_declares_a_trigger(self, bundle):
+        assert "triggers" not in _load(bundle, "workflow.json")
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_the_loader_reads_the_workflow_it_is_asserting_on(self, bundle):
+        # Positive control: a path that resolved to nothing would raise here rather than let the
+        # absence check above pass against an empty document.
+        workflow = _load(bundle, "workflow.json")
+        assert workflow["workflowName"].startswith("Isaac Lab")
+        assert workflow["systemConfig"]
+
+    def test_both_bundles_are_present(self):
+        found = sorted(name for name in os.listdir(_SCHEMA_ROOT)
+                       if os.path.isfile(os.path.join(_SCHEMA_ROOT, name, "workflow.json")))
+        assert found == sorted(_BUNDLE_NAMES)

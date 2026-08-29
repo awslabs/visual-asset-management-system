@@ -118,9 +118,13 @@ class ResetPasswordRequestModel(BaseModel, extra='ignore'):
     """Request model for resetting a Cognito user's password"""
     confirmReset: bool = Field(default=False)
 
-    @validator('confirmReset')
+    @validator('confirmReset', always=True)
     def validate_confirmation(cls, v):
-        """Ensure confirmation is provided for password reset"""
+        """Ensure confirmation is provided for password reset
+
+        always=True is required: a plain v1 validator does not run when the field is absent from
+        the body, so the default would satisfy the interlock it exists to enforce.
+        """
         if not v:
             raise ValueError("confirmReset must be true to reset password")
         return v

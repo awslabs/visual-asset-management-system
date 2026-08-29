@@ -144,10 +144,9 @@ def _execution_count(database_id, workflow_id):
         while True:
             resp = table.query(**kwargs)
             total += resp.get("Count", 0)
-            lek = resp.get("LastEvaluatedKey")
-            if not lek:
+            if "LastEvaluatedKey" not in resp:
                 break
-            kwargs["ExclusiveStartKey"] = lek
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
         return total
     except Exception as e:
         logger.warning(f"Execution count failed for {composite}: {e}")
@@ -215,12 +214,16 @@ def _resolve_referenced_pipelines(workflow_database_id, specified_pipelines, cla
                 "message": "A referenced pipeline is archived and cannot be added to a workflow."}), None
 
         # Tier-2 GET on the pipeline object (surface the flat pipelineExecutionType ABAC field).
-        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-            pobj = dict(record)
-            pobj["object__type"] = OBJECT_TYPE_PIPELINE
-            pr.apply_pipeline_constraint_fields(pobj, record)
-            if not CasbinEnforcer(claims_and_roles).enforce(pobj, "GET"):
-                return authorization_error(), None
+        # Absent claims or an empty token list deny: there is no identity to evaluate, and skipping
+        # the check would let a workflow reference a pipeline the caller cannot read
+        # (backend/CLAUDE.md Rule 4).
+        if not claims_and_roles or len(claims_and_roles["tokens"]) == 0:
+            return authorization_error(), None
+        pobj = dict(record)
+        pobj["object__type"] = OBJECT_TYPE_PIPELINE
+        pr.apply_pipeline_constraint_fields(pobj, record)
+        if not CasbinEnforcer(claims_and_roles).enforce(pobj, "GET"):
+            return authorization_error(), None
 
         records.append((ref, record))
     return None, records
@@ -298,10 +301,9 @@ def find_workflow_id_owner(workflow_id, excluding_database_id=None):
             if not owner or owner == excluding_database_id:
                 continue
             return owner
-        last_key = response.get("LastEvaluatedKey")
-        if not isinstance(last_key, dict) or not last_key:
+        if "LastEvaluatedKey" not in response:
             return None
-        query_kwargs["ExclusiveStartKey"] = last_key
+        query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
     logger.warning(
         f"Workflow id uniqueness lookup stopped after {MAX_ID_LOOKUP_PAGES} pages; "
         "treating the id as free.")

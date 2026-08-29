@@ -250,13 +250,6 @@ export class Cosmos3Construct extends Construct {
          * Batch Compute Environment
          * Shared across all Cosmos model types for GPU-accelerated inference
          */
-        const batchServiceRole = new iam.Role(this, "BatchServiceRole", {
-            assumedBy: new iam.ServicePrincipal("batch.amazonaws.com"),
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBatchServiceRole"),
-            ],
-        });
-
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
             assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
             managedPolicies: [
@@ -285,12 +278,14 @@ export class Cosmos3Construct extends Construct {
             "Allow NFS from Cosmos 3 Batch compute to EFS"
         );
 
-        // Determine single-GPU tier instance types from the Nano model config (or default)
+        // Determine small-tier instance types from the Nano model config (or default). Every entry
+        // must carry at least four GPUs: the Nano job reserves four so the container can shard the
+        // checkpoint's parameters, and Batch cannot place it on a smaller instance.
         const instanceTypes = cosmosConfig.modelsOmni.nano16B?.enabled
             ? cosmosConfig.modelsOmni.nano16B.instanceTypes
-            : ["g6e.4xlarge", "g6e.12xlarge"];
+            : ["g6e.12xlarge", "g6e.24xlarge", "g6e.48xlarge"];
 
-        // Max vCPUs for the single-GPU (Nano) tier
+        // Max vCPUs for the small (Nano) tier
         const maxVCpus = Math.max(
             cosmosConfig.modelsOmni.nano16B?.enabled ? cosmosConfig.modelsOmni.nano16B.maxVCpus : 0,
             48
@@ -331,7 +326,15 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         },
                     },
                 ],
-                userData: Buffer.from(userData).toString("base64"),
+                // Encoded by CloudFormation, not here: this string carries CDK tokens -- the EFS file
+                // system id among them -- and Buffer.from() freezes a token as its DEBUG TEXT, because a
+                // base64 blob is opaque to the resolver that runs afterwards. The deployed template read
+                // "mount -t efs -o tls ${Token[TOKEN.NNNN]}:/ /mnt/efs/cosmos-models", which bash parses as
+                // an array subscript ("invalid arithmetic operator") and which aborts the whole
+                // scripts-user module, skipping every later line too. So the model cache was never mounted
+                // and every run restored its weights from S3 on billed GPU time. Fn.base64 emits
+                // Fn::Base64, so the encoding happens after token resolution.
+                userData: cdk.Fn.base64(userData),
                 tagSpecifications: [
                     {
                         resourceType: "instance",
@@ -346,15 +349,32 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             },
         });
 
-        const batchEnvironment = new batch.CfnComputeEnvironment(this, "CosmosOnDemandComputeEnv", {
+        const batchEnvironment = new batch.CfnComputeEnvironment(this, "Cosmos3GpuComputeEnv", {
             // No explicit name - let CDK auto-generate to allow CloudFormation replacements
             // when instance types change (custom-named resources can't be replaced in-place)
             type: "MANAGED",
             state: "ENABLED",
-            serviceRole: batchServiceRole.roleArn,
+            // No serviceRole, so this environment uses the Batch service-linked role
+            // (AWSServiceRoleForBatch). Naming a role instead is what forbids an in-place update of the
+            // launch template, instance types, subnets or security groups -- Batch allows those fields to
+            // be updated "only for ... Compute Environment having a Batch Service Linked Role" -- which
+            // left this environment unable to take a change to its instance start-up script at all.
+            //
+            // Safe to ship to an existing deployment only because the construct id changed in the same
+            // release: that makes the upgrade a CREATE of this resource and a DELETE of the old one rather
+            // than an update, so replaceComputeEnvironment does not have to permit the one replacement the
+            // upgrade needs. An environment still naming a service role can be neither updated in place nor
+            // migrated to the service-linked role, so this property without the rename fails the upgrade.
+            replaceComputeEnvironment: false,
             computeResources: {
                 type: "EC2",
                 allocationStrategy: "BEST_FIT_PROGRESSIVE",
+                // Each infrastructure update takes the current ECS-optimised AMI rather than staying on
+                // the one that was current when this environment was created, which matters on a GPU image
+                // carrying drivers. It is also the fourth condition CloudFormation names for updating a
+                // compute environment in place, alongside no serviceRole, a progressive allocation strategy
+                // and replaceComputeEnvironment.
+                updateToLatestImageVersion: true,
                 minvCpus: minVCpus,
                 maxvCpus: maxVCpus * 2, // Allow headroom for concurrent jobs
                 desiredvCpus: minVCpus,
@@ -369,7 +389,13 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 instanceRole: instanceProfile.attrArn,
                 launchTemplate: {
                     launchTemplateId: launchTemplate.ref,
-                    version: "$Latest",
+                    // Pinned to this template's own latest version, not "$Latest". Batch does not read
+                    // the launch template when an instance launches: it MERGES it with its own bootstrap
+                    // into a Batch-managed copy when the compute environment is created or updated.
+                    // "$Latest" is a constant, so a new template version is not a change to the
+                    // environment -- CloudFormation updates nothing and Batch goes on handing instances a
+                    // stale merge, which is how the encoding fix above reached no instance at all.
+                    version: launchTemplate.attrLatestVersionNumber,
                 },
             },
         });
@@ -451,7 +477,15 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                                 },
                             },
                         ],
-                        userData: Buffer.from(userDataSuper).toString("base64"),
+                        // Encoded by CloudFormation, not here: this string carries CDK tokens -- the EFS file
+                        // system id among them -- and Buffer.from() freezes a token as its DEBUG TEXT, because a
+                        // base64 blob is opaque to the resolver that runs afterwards. The deployed template read
+                        // "mount -t efs -o tls ${Token[TOKEN.NNNN]}:/ /mnt/efs/cosmos-models", which bash parses as
+                        // an array subscript ("invalid arithmetic operator") and which aborts the whole
+                        // scripts-user module, skipping every later line too. So the model cache was never mounted
+                        // and every run restored its weights from S3 on billed GPU time. Fn.base64 emits
+                        // Fn::Base64, so the encoding happens after token resolution.
+                        userData: cdk.Fn.base64(userDataSuper),
                         tagSpecifications: [
                             {
                                 resourceType: "instance",
@@ -469,14 +503,31 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
 
             batchEnvironmentSuper = new batch.CfnComputeEnvironment(
                 this,
-                "CosmosOnDemandComputeEnvSuper",
+                "Cosmos3GpuComputeEnvSuper",
                 {
                     type: "MANAGED",
                     state: "ENABLED",
-                    serviceRole: batchServiceRole.roleArn,
+                    // No serviceRole, so this environment uses the Batch service-linked role
+                    // (AWSServiceRoleForBatch). Naming a role instead is what forbids an in-place update of the
+                    // launch template, instance types, subnets or security groups -- Batch allows those fields to
+                    // be updated "only for ... Compute Environment having a Batch Service Linked Role" -- which
+                    // left this environment unable to take a change to its instance start-up script at all.
+                    //
+                    // Safe to ship to an existing deployment only because the construct id changed in the same
+                    // release: that makes the upgrade a CREATE of this resource and a DELETE of the old one rather
+                    // than an update, so replaceComputeEnvironment does not have to permit the one replacement the
+                    // upgrade needs. An environment still naming a service role can be neither updated in place nor
+                    // migrated to the service-linked role, so this property without the rename fails the upgrade.
+                    replaceComputeEnvironment: false,
                     computeResources: {
                         type: "EC2",
                         allocationStrategy: "BEST_FIT_PROGRESSIVE",
+                        // Each infrastructure update takes the current ECS-optimised AMI rather than staying on
+                        // the one that was current when this environment was created, which matters on a GPU image
+                        // carrying drivers. It is also the fourth condition CloudFormation names for updating a
+                        // compute environment in place, alongside no serviceRole, a progressive allocation strategy
+                        // and replaceComputeEnvironment.
+                        updateToLatestImageVersion: true,
                         minvCpus: 0,
                         maxvCpus: maxVCpusSuper * 2,
                         desiredvCpus: 0,
@@ -491,7 +542,13 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         instanceRole: instanceProfile.attrArn,
                         launchTemplate: {
                             launchTemplateId: launchTemplateSuper.ref,
-                            version: "$Latest",
+                            // Pinned to this template's own latest version, not "$Latest". Batch does not read
+                            // the launch template when an instance launches: it MERGES it with its own bootstrap
+                            // into a Batch-managed copy when the compute environment is created or updated.
+                            // "$Latest" is a constant, so a new template version is not a change to the
+                            // environment -- CloudFormation updates nothing and Batch goes on handing instances a
+                            // stale merge, which is how the encoding fix above reached no instance at all.
+                            version: launchTemplateSuper.attrLatestVersionNumber,
                         },
                     },
                 }
@@ -759,7 +816,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         `Cosmos3-${modelKey}-StateMachineLogGroup`,
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: RemovalPolicy.DESTROY,
             });
 
@@ -858,7 +915,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
         };
 
         /**
-         * Per-Model Resources: Nano 16B (single-GPU tier)
+         * Per-Model Resources: Nano 16B (small tier)
          */
         if (cosmosConfig.modelsOmni.nano16B?.enabled) {
             const nano = createModelResources(
@@ -873,9 +930,17 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 containerImageName!,
                 batchEnvironment,
                 batchJobQueue,
-                1,
-                110000,
-                16
+                // Four GPUs, so the container shards the 16B checkpoint's parameters across them.
+                // On one L40S the weights leave too little of its 44.4 GiB for the activations of a
+                // full-length sequence, and every g6e size carries the same 48 GB GPU — a larger
+                // instance adds devices, not device memory, so the reservation is what unlocks them.
+                // vCPU and memory follow the Super tier's share of its host (half the vCPUs, under
+                // two thirds of the RAM) rather than the whole instance, leaving room for the ECS
+                // agent. This is why the tier's instance types must all carry at least four GPUs,
+                // which getConfig() validates against the same constant.
+                Config.COSMOS3_NANO_GPU_COUNT,
+                240000,
+                32
             );
 
             this.pipelineCosmos3Nano16BVamsLambdaFunctionName =
@@ -1087,17 +1152,6 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 {
                     id: "AwsSolutions-IAM5",
                     reason: "ECS Containers require access to objects in asset buckets, model cache, and EFS for Cosmos model weights",
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            batchServiceRole,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Service uses AWSBatchServiceRole managed policy which is required for batch operations",
                 },
             ],
             true

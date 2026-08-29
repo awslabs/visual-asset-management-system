@@ -46,6 +46,14 @@ logger = safeLogger(service_name="DualIndexSearch")
 # Global variables for claims and roles
 claims_and_roles = {}
 
+# Both search endpoints fetch from offset 0 and page in Python, because the requested
+# page is cut only after per-hit Casbin filtering and after the two indexes' hits are
+# merged into one order. Asking for (from + size) * multiplier records leaves enough
+# behind the filter to fill the page. OpenSearch refuses from + size beyond its default
+# max_result_window, which is also the ceiling the request models validate against.
+AUTH_FILTER_BUFFER_MULTIPLIER = 2.0
+OPENSEARCH_MAX_RESULT_WINDOW = 10000
+
 # Load environment variables with error handling
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -126,59 +134,100 @@ class DualIndexSearchManager:
         """Check if OpenSearch is available"""
         return self.client is not None
     
+    @staticmethod
+    def _sort_entry(sort_item: Any) -> Tuple[Optional[str], bool]:
+        """Resolve one OpenSearch sort entry to (source field name, descending).
+
+        Mirrors OpenSearch's own defaults: `_score` sorts descending, a bare field name
+        ascending, and an explicit `{"order": "desc"}` wins. The `.keyword` subfield the
+        query builder appends exists only in the index mapping, so it is stripped to
+        reach the value stored in `_source`.
+        """
+        field = None
+        order = None
+        if isinstance(sort_item, str):
+            field = sort_item
+        elif isinstance(sort_item, dict) and sort_item:
+            field = next(iter(sort_item))
+            config = sort_item[field]
+            if isinstance(config, dict):
+                order = config.get("order")
+            elif isinstance(config, str):
+                order = config
+        if not isinstance(field, str) or not field:
+            return None, False
+
+        if order in ("asc", "desc"):
+            descending = order == "desc"
+        else:
+            descending = field == "_score"
+
+        if field.endswith(".keyword"):
+            field = field[: -len(".keyword")]
+        return field, descending
+
+    @staticmethod
+    def _sort_value(value: Any) -> Tuple[int, Any]:
+        """Map a hit value onto a totally ordered key.
+
+        Hits merged from two indexes can carry different types (or nothing) for the same
+        sort field, and comparing those directly raises TypeError, which would discard the
+        ordering entirely. The leading rank groups missing / numeric / textual values so
+        every pair is comparable.
+        """
+        if value is None:
+            return (0, "")
+        if isinstance(value, bool):
+            return (1, int(value))
+        if isinstance(value, (int, float)):
+            return (1, value)
+        if isinstance(value, (list, tuple)):
+            return DualIndexSearchManager._sort_value(value[0]) if value else (0, "")
+        return (2, str(value))
+
     def _sort_combined_results(self, hits: List[Dict], sort_config: List) -> List[Dict]:
-        """Sort combined results from multiple indexes according to sort configuration
-        
+        """Order hits merged from the asset and file indexes into one sequence.
+
+        Each index answers its own query already sorted, so a plain concatenation leaves
+        every asset hit ahead of every file hit -- and the caller's page, sliced off the
+        head, then contains asset hits only. Sorting is applied least-significant key
+        first; Python's sort is stable, so the passes compose into the multi-key order
+        while letting each key keep its own direction.
+
         Args:
             hits: List of search hits to sort
             sort_config: Sort configuration from OpenSearch query
-            
+
         Returns:
             Sorted list of hits
         """
         if not sort_config or not hits:
             return hits
-        
+
         logger.info(f"[Sort] Sorting {len(hits)} combined results with config: {sort_config}")
-        
-        # Build sort key function based on configuration
-        def get_sort_key(hit):
-            keys = []
-            for sort_item in sort_config:
-                if isinstance(sort_item, str):
-                    if sort_item == "_score":
-                        keys.append(hit.get("_score", 0))
-                    else:
-                        # Get value from _source
-                        keys.append(hit.get("_source", {}).get(sort_item, ""))
-                elif isinstance(sort_item, dict):
-                    # Extract field name and get value
-                    for field, config in sort_item.items():
-                        value = hit.get("_source", {}).get(field, "")
-                        # Handle None values
-                        if value is None:
-                            value = ""
-                        keys.append(value)
-            return tuple(keys) if len(keys) > 1 else (keys[0] if keys else "")
-        
-        # Determine sort order (check first sort item for direction)
-        reverse = False
-        if sort_config and isinstance(sort_config[0], dict):
-            first_sort = sort_config[0]
-            for field, config in first_sort.items():
-                if isinstance(config, dict) and config.get("order") == "desc":
-                    reverse = True
-                    break
-        
-        # Sort the hits
+
         try:
-            sorted_hits = sorted(hits, key=get_sort_key, reverse=reverse)
-            logger.info(f"[Sort] Successfully sorted {len(sorted_hits)} hits (reverse={reverse})")
-            return sorted_hits
+            ordered = list(hits)
+            applied = 0
+            for sort_item in reversed(list(sort_config)):
+                field, descending = self._sort_entry(sort_item)
+                if field is None:
+                    continue
+                if field == "_score":
+                    ordered.sort(key=lambda hit: self._sort_value(hit.get("_score", 0)),
+                                 reverse=descending)
+                else:
+                    ordered.sort(
+                        key=lambda hit: self._sort_value(hit.get("_source", {}).get(field)),
+                        reverse=descending,
+                    )
+                applied += 1
+            logger.info(f"[Sort] Applied {applied} sort keys to {len(ordered)} hits")
+            return ordered
         except Exception as e:
             logger.warning(f"[Sort] Error sorting combined results: {e}, returning unsorted")
             return hits
-    
+
     def get_index_mappings(self) -> Dict[str, Any]:
         """Get mappings for both indexes"""
         if not self.is_available():
@@ -211,11 +260,15 @@ class DualIndexSearchManager:
                 "aggregations": {}
             }
             
+            # Tracks whether both indexes contributed hits, which is what makes the merge
+            # sort below necessary; a single index answers already sorted.
+            indexes_with_hits = 0
+
             # Search asset index if requested
             if not entity_types or "asset" in entity_types:
                 logger.info("Searching asset index")
                 asset_response = self.client.search(body=asset_query, index=self.asset_index)
-                
+
                 # Update timing and shard info
                 results["took"] += asset_response.get("took", 0)
                 results["timed_out"] = results["timed_out"] or asset_response.get("timed_out", False)
@@ -226,10 +279,13 @@ class DualIndexSearchManager:
                 results["_shards"]["failed"] += asset_shards.get("failed", 0)
                 
                 # Add hits with index identifier
-                for hit in asset_response.get("hits", {}).get("hits", []):
+                asset_hits = asset_response.get("hits", {}).get("hits", [])
+                if asset_hits:
+                    indexes_with_hits += 1
+                for hit in asset_hits:
                     hit["_index_type"] = "asset"
                     results["hits"]["hits"].append(hit)
-                
+
                 # Merge aggregations
                 if "aggregations" in asset_response:
                     results["aggregations"].update(asset_response["aggregations"])
@@ -253,10 +309,13 @@ class DualIndexSearchManager:
                 results["_shards"]["failed"] += file_shards.get("failed", 0)
                 
                 # Add hits with index identifier
-                for hit in file_response.get("hits", {}).get("hits", []):
+                file_hits = file_response.get("hits", {}).get("hits", [])
+                if file_hits:
+                    indexes_with_hits += 1
+                for hit in file_hits:
                     hit["_index_type"] = "file"
                     results["hits"]["hits"].append(hit)
-                
+
                 # Merge aggregations (combine with asset aggregations)
                 if "aggregations" in file_response:
                     for agg_name, agg_data in file_response["aggregations"].items():
@@ -282,15 +341,15 @@ class DualIndexSearchManager:
                 file_total = file_response.get("hits", {}).get("total", {}).get("value", 0)
                 results["hits"]["total"]["value"] += file_total
             
-            # Re-sort combined results according to the sort configuration
-            # This is necessary because we're merging results from two indexes
-            # and need to maintain global sort order
-            # sort_config = asset_query.get("sort", file_query.get("sort", ["_score"]))
-            # results["hits"]["hits"] = self._sort_combined_results(results["hits"]["hits"], sort_config)
-            
-            # # Store sort config in results for use in response processing
-            # results["_sort_config"] = sort_config
-            
+            # Merge-sort the two indexes' hits into one global order. Appending the file
+            # hits after the asset hits puts every asset ahead of every file, so the page
+            # the response processor slices off the head would carry asset hits only.
+            sort_config = asset_query.get("sort") or file_query.get("sort") or ["_score"]
+            if indexes_with_hits > 1:
+                results["hits"]["hits"] = self._sort_combined_results(
+                    results["hits"]["hits"], sort_config
+                )
+
             return results
             
         except Exception as e:
@@ -316,8 +375,9 @@ class DatabaseAccessManager:
             if not database:
                 return None
             
-            # Add Casbin enforcement
-            database.update({"object__type": "asset"})
+            # Casbin enforcement of the database record against database constraints; asset
+            # constraints are enforced per search hit in DualIndexResponseProcessor
+            database.update({"object__type": "database"})
             if len(claims_and_roles.get("tokens", [])) > 0:
                 casbin_enforcer = CasbinEnforcer(claims_and_roles)
                 if casbin_enforcer.enforce(database, "GET"):
@@ -368,8 +428,9 @@ class DatabaseAccessManager:
                     try:
                         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
                         
-                        # Add Casbin enforcement
-                        deserialized_document.update({"object__type": "asset"})
+                        # Casbin enforcement of the database record against database constraints;
+                        # asset constraints are enforced per search hit in DualIndexResponseProcessor
+                        deserialized_document.update({"object__type": "database"})
                         if len(claims_and_roles.get("tokens", [])) > 0:
                             casbin_enforcer = CasbinEnforcer(claims_and_roles)
                             if casbin_enforcer.enforce(deserialized_document, "GET"):
@@ -415,7 +476,7 @@ class FieldClassifier:
         'bool_isdistributable', 'list_tags', 'str_asset_version_id',
         'date_asset_version_createdate', 'str_asset_version_comment',
         'bool_has_asset_children', 'bool_has_asset_parents', 'bool_has_assets_related',
-        'bool_archived', '_rectype', '_id', '_score'
+        'bool_archived', 'str_rectype', '_id', '_score'
     }
     
     # Core fields for file index
@@ -423,7 +484,7 @@ class FieldClassifier:
         'str_key', 'str_databaseid', 'str_assetid', 'str_bucketid', 'str_assetname',
         'str_bucketname', 'str_bucketprefix', 'str_fileext', 'date_lastmodified',
         'num_filesize', 'str_etag', 'str_s3_version_id', 'bool_archived',
-        'list_tags', '_rectype', '_id', '_score'
+        'list_tags', 'str_rectype', '_id', '_score'
     }
     
     EXCLUDED_PREFIXES = ['VAMS_', '_']  # Skip these entirely
@@ -592,11 +653,65 @@ def _unwrap_geojson_geometry(value: Any) -> Optional[Dict[str, Any]]:
 
 class SimpleSearchQueryBuilder:
     """Builds OpenSearch queries for simple search requests"""
-    
+
+    # The criteria a simple-search request can carry, mirroring the set
+    # SimpleSearchRequestModel.validate_simple_search_request checks for. geoSearch is
+    # deliberately absent: it filters on geo_MD_location, which both indexes carry, so it
+    # is never foreign to either one.
+    SIMPLE_SEARCH_CRITERIA = (
+        'query', 'assetName', 'assetId', 'assetType', 'fileKey', 'fileExtension',
+        'databaseId', 'tags', 'metadataKey', 'metadataValue',
+    )
+
+    # Criteria that only one of the two indexes can answer. An asset document carries no
+    # str_key or str_fileext; a file document carries no str_assettype.
+    ASSET_ONLY_CRITERIA = ('assetType',)
+    FILE_ONLY_CRITERIA = ('fileKey', 'fileExtension')
+
+    # Criteria applied as a bool filter rather than as a search clause. Both indexes carry
+    # str_databaseid, so this is native to neither and foreign to neither -- but a filter can
+    # only narrow a selection, never make one, so supplying one contributes no match to either
+    # index. Kept separate from the two ONLY lists for that reason.
+    FILTER_ONLY_CRITERIA = ('databaseId',)
+
     def __init__(self, database_access_manager: DatabaseAccessManager):
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
-    
+
+    def _matching_criteria_for_index(self, index_type: str) -> tuple:
+        """The criteria that can produce a match clause on `index_type`."""
+        foreign = self.FILE_ONLY_CRITERIA if index_type == "asset" else self.ASSET_ONLY_CRITERIA
+        return tuple(
+            name for name in self.SIMPLE_SEARCH_CRITERIA
+            if name not in foreign and name not in self.FILTER_ONLY_CRITERIA
+        )
+
+    def _only_foreign_criteria(self, request: SimpleSearchRequestModel, index_type: str) -> bool:
+        """True when nothing the caller supplied can MATCH on `index_type`.
+
+        A criterion reaches an index in one of two ways: as a search clause that selects
+        records (`fileKey` -> str_key) or as a bool filter that narrows a selection already
+        made (`databaseId` -> str_databaseid). Only a search clause can select, so the
+        question is not whether a criterion was supplied, it is whether any criterion
+        supplied can produce a match on the index being built. When none can, the builder is
+        left with filters alone and falls back to match_all -- so a {fileKey, databaseId}
+        lookup answers with every accessible asset in that database, which is the case a
+        "was any shared criterion supplied?" test lets through. Reporting it here keeps the
+        caller's page to records that match what they asked for.
+
+        A request whose only criteria are filter-only ones (`databaseId` by itself) is a
+        browse within that database and legitimately matches everything, so it is foreign to
+        neither index.
+        """
+        supplied = [name for name in self.SIMPLE_SEARCH_CRITERIA if getattr(request, name, None)]
+        selecting = [name for name in supplied if name not in self.FILTER_ONLY_CRITERIA]
+        if not selecting:
+            # No criteria at all, or filters only: the browse case, which legitimately
+            # matches everything the filters admit.
+            return False
+        native = self._matching_criteria_for_index(index_type)
+        return not any(name in native for name in selecting)
+
     def _extract_metadata_field_name(self, field_with_prefix: str) -> tuple[str, str]:
         """
         Extract field name and determine if it's MD_ or AB_.
@@ -703,10 +818,19 @@ class SimpleSearchQueryBuilder:
             
             # Log the generated query for debugging
             logger.info(f"[SimpleSearch] Generated {index_type} query clause: {json.dumps(query_clause, indent=2)}")
-            
+
+            # Fetch from offset 0 with a buffer and page in Python, matching the complex
+            # path. Applying the offset here as well would skip the requested page twice.
+            requested_from = request.from_ or 0
+            requested_size = request.size or 100
+            opensearch_size = min(
+                int((requested_from + requested_size) * AUTH_FILTER_BUFFER_MULTIPLIER),
+                OPENSEARCH_MAX_RESULT_WINDOW,
+            )
+
             query = {
-                "from": request.from_ or 0,
-                "size": request.size or 100,
+                "from": 0,
+                "size": opensearch_size,
                 "sort": ["_score"],
                 "query": query_clause,
                 "highlight": self._build_simple_highlight_config(index_type),
@@ -721,6 +845,13 @@ class SimpleSearchQueryBuilder:
     
     def _build_simple_query_clause(self, request: SimpleSearchRequestModel, accessible_databases: List[str], index_type: str) -> Dict[str, Any]:
         """Build the main query clause for simple search"""
+        if self._only_foreign_criteria(request, index_type):
+            logger.info(
+                f"[SimpleSearch] every supplied criterion is foreign to the {index_type} "
+                "index; it contributes no hits"
+            )
+            return {"match_none": {}}
+
         must_clauses = []
         must_not_clauses = []
         should_clauses = []
@@ -1011,6 +1142,10 @@ class SimpleSearchQueryBuilder:
 # Query Building
 #######################
 
+# Matches a bare `_rectype` field reference in a query_string. Anchored so that the live
+# `str_rectype` field, which contains the same substring, is not matched.
+LEGACY_RECTYPE_FIELD = re.compile(r'(?<![A-Za-z0-9_])_rectype\s*:')
+
 class DualIndexQueryBuilder:
     """Builds OpenSearch queries for dual-index system"""
     
@@ -1080,9 +1215,11 @@ class DualIndexQueryBuilder:
             # with a buffer multiplier to account for records removed by auth filtering.
             requested_from = request.from_ or 0
             requested_size = request.size or 100
-            buffer_multiplier = 2.0
-            opensearch_size = min(int((requested_from + requested_size) * buffer_multiplier), 10000)
-            
+            opensearch_size = min(
+                int((requested_from + requested_size) * AUTH_FILTER_BUFFER_MULTIPLIER),
+                OPENSEARCH_MAX_RESULT_WINDOW,
+            )
+
             # Build base query structure
             query = {
                 "from": 0,
@@ -1115,7 +1252,6 @@ class DualIndexQueryBuilder:
         filter_clauses = []
         
         # Add filters from request (e.g., boolean relationship filters)
-        # Skip _rectype filter as it's handled by entityTypes
         if request.filters:
             for filter_item in request.filters:
                 # Convert Pydantic model to dict if needed
@@ -1127,11 +1263,11 @@ class DualIndexQueryBuilder:
                 else:
                     filter_dict = dict(filter_item)
                 
-                # Skip _rectype filter - it's redundant with entityTypes
+                # Drop a legacy `_rectype` field filter - no document carries that key and
+                # the record type is selected by entityTypes
                 if filter_dict and 'query_string' in filter_dict:
                     query_str = filter_dict['query_string'].get('query', '')
-                    if '_rectype' not in query_str:
-                        # Only add non-rectype filters
+                    if not LEGACY_RECTYPE_FIELD.search(query_str):
                         filter_clauses.append(filter_dict)
         
         # Add general text search (AND with other filters)
@@ -1270,7 +1406,7 @@ class DualIndexQueryBuilder:
                     # Extract field name with backward compatibility
                     prefix, field_name = self._extract_metadata_field_name(field_part)
 
-                    # Escape the field name too — it is user-controlled and interpolated
+                    # Escape the field name too -- it is user-controlled and interpolated
                     # into the query_string text, so an unescaped special character could
                     # otherwise alter the parsed query. Wildcards are never meaningful in a
                     # field name, so do not preserve them here.
@@ -1966,7 +2102,9 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
             opensearch_response, request_model, claims_and_roles
         )
         
-        return success(body=processed_response.dict())
+        # by_alias so `_shards` serializes under the OpenSearch key rather than the
+        # pydantic-legal field name it has to be declared with.
+        return success(body=processed_response.dict(by_alias=True))
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -2019,22 +2157,26 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
         )
         
         # Create a compatible SearchRequestModel for response processing
-        # This allows us to reuse the existing response processor
-        compatible_request = SearchRequestModel(
-            from_=request_model.from_,
-            size=request_model.size,
-            entityTypes=request_model.entityTypes,
-            includeArchived=request_model.includeArchived,
-            explainResults=False,  # Simple search doesn't include explanations
-            aggregations=False     # Simple search doesn't include aggregations
-        )
+        # This allows us to reuse the existing response processor.
+        # `from_` carries alias "from" and must be populated under that alias -- passing
+        # from_= drops the offset silently, and the page is then always sliced off the head.
+        compatible_request = SearchRequestModel(**{
+            'from': request_model.from_,
+            'size': request_model.size,
+            'entityTypes': request_model.entityTypes,
+            'includeArchived': request_model.includeArchived,
+            'explainResults': False,  # Simple search doesn't include explanations
+            'aggregations': False,    # Simple search doesn't include aggregations
+        })
         
         # Process response with authorization filtering
         processed_response = response_processor.process_dual_search_response(
             opensearch_response, compatible_request, claims_and_roles
         )
         
-        return success(body=processed_response.dict())
+        # by_alias so `_shards` serializes under the OpenSearch key rather than the
+        # pydantic-legal field name it has to be declared with.
+        return success(body=processed_response.dict(by_alias=True))
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")

@@ -8,11 +8,27 @@ import { MetadataRowState, MetadataValueType, ValidationResult } from "../types/
 /**
  * Validate a metadata value based on its type
  */
-export const validateMetadataValue = (value: string, type: MetadataValueType): ValidationResult => {
+export const validateMetadataValue = (
+    value: string,
+    // Nullable in the signature because it is nullable in the data, and because this function
+    // already answers for the null case below. It previously took a non-nullable type while callers
+    // handed it nulls through a cast, which is what let the null reach the type switch's `default`
+    // branch and report "Unknown metadata value type: null" on a field nobody had touched.
+    type: MetadataValueType | null
+): ValidationResult => {
     const errors: string[] = [];
 
     // Empty values are allowed (required check is separate)
     if (!value || value.trim() === "") {
+        return { isValid: true, errors: [] };
+    }
+
+    // A row stored before the type was recorded carries a value and no type. There is nothing to
+    // check the value against, and refusing the row is what makes it unrepairable: the editor blocks
+    // the save on a field the operator never touched, so the write that would supply the missing type
+    // can never be submitted. An absent type is therefore not an error, while an UNRECOGNISED one
+    // still is — the `default` branch below keeps catching a typo such as "strng".
+    if (!type) {
         return { isValid: true, errors: [] };
     }
 
@@ -211,7 +227,7 @@ export const validateMetadataRow = (
 
     // Use editKey for validation (supports always-editable workflow)
     const keyToValidate = row.editKey || row.metadataKey;
-    const valueToValidate = row.editValue || row.metadataValue;
+    const valueToValidate = row.editValue || row.metadataValue || "";
     const typeToValidate = row.editType || row.metadataValueType;
 
     // Validate key

@@ -117,6 +117,122 @@ class TestExecutionList:
             assert result.exit_code != 0
 
 
+# The two bounds the service reports when a page comes back shorter than pageSize. Both are the
+# service's own wording, kept verbatim so a test double is the same shape the endpoint returns.
+_ENTITY_BOUND_WARNING = (
+    "This page reached the limit of 500 distinct assets resolved for permission checks, so some "
+    "executions were not evaluated and are not listed. Narrow the filters or continue with "
+    "NextToken to see the rest.")
+_WORK_BUDGET_WARNING = (
+    "This page stopped at its per-request work budget after reading 20 pages of the execution "
+    "index, so executions that match may not be listed. Narrow the filters or continue with "
+    "NextToken to see the rest.")
+
+
+class TestExecutionListWarnings:
+    """A short page is a stated bound, not an absence of matches.
+
+    The service fills a page by walking its query and stops on either of two bounds — the cap on
+    distinct assets resolved for permission checks, or the per-request work budget — naming whichever
+    fired in `warnings`. Human-readable output printed neither, so both bounds were invisible outside
+    --json-output and a short page read as "that is all there is".
+    """
+
+    def test_both_bounds_are_rendered(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}],
+                            'warnings': [_ENTITY_BOUND_WARNING, _WORK_BUDGET_WARNING]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'Warnings (2)' in result.output
+            assert 'distinct assets resolved for permission checks' in result.output
+            assert 'per-request work budget' in result.output
+
+    def test_an_empty_page_with_a_token_still_renders_the_bound(self, cli_runner,
+                                                                generic_command_mocks):
+        """The case the CLI most needed it: 0 rows plus a continuation. Without the block the output
+        is "No executions on this page", which reads as a filter that matched nothing."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [], 'NextToken': 'tok-abc',
+                            'warnings': [_WORK_BUDGET_WARNING]}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--status', 'ABORTED'])
+            assert result.exit_code == 0
+            assert 'No executions on this page' in result.output
+            assert 'tok-abc' in result.output
+            assert 'per-request work budget' in result.output
+
+    def test_an_empty_page_with_no_token_still_renders_the_bound(self, cli_runner,
+                                                                 generic_command_mocks):
+        # A bound can fire on a query the index reported as exhausted, so there is no token to hint
+        # that the listing is incomplete — the warning is then the only signal.
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [], 'warnings': [_ENTITY_BOUND_WARNING]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'No executions found.' in result.output
+            assert 'distinct assets resolved for permission checks' in result.output
+
+    def test_a_clean_page_prints_no_warnings_header(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'Warnings' not in result.output
+
+    def test_json_output_carries_both_bounds_in_order(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [], 'NextToken': 'tok',
+                            'warnings': [_ENTITY_BOUND_WARNING, _WORK_BUDGET_WARNING]}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            # The entity bound stays at index 0: it is the pre-existing message and callers index it.
+            assert data['warnings'] == [_ENTITY_BOUND_WARNING, _WORK_BUDGET_WARNING]
+
+    def test_auto_paginate_accumulates_every_page_deduplicated(self, cli_runner,
+                                                               generic_command_mocks):
+        """The aggregate is rebuilt from the accumulated items alone, so each page's warnings have to
+        be collected explicitly or a 200-page walk loses every bound that fired."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.side_effect = [
+                {'message': {'Items': [{'workflowExecutionId': 'e1'}], 'NextToken': 't1',
+                             'warnings': [_ENTITY_BOUND_WARNING]}},
+                {'message': {'Items': [{'workflowExecutionId': 'e2'}],
+                             'warnings': [_ENTITY_BOUND_WARNING, _WORK_BUDGET_WARNING]}},
+            ]
+            result = cli_runner.invoke(cli, ['execution', 'list', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['totalItems'] == 2
+            # Reported once each, in the order first seen.
+            assert data['warnings'] == [_ENTITY_BOUND_WARNING, _WORK_BUDGET_WARNING]
+
+    def test_auto_paginate_renders_the_accumulated_bounds(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}],
+                            'warnings': [_WORK_BUDGET_WARNING]}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--auto-paginate'])
+            assert result.exit_code == 0
+            assert 'Warnings (1)' in result.output
+            assert 'per-request work budget' in result.output
+
+    def test_auto_paginate_clean_walk_adds_no_warnings_key(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0
+            assert 'warnings' not in json.loads(result.output)
+
+
 class TestExecutionDetails:
     def test_details_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
@@ -476,6 +592,73 @@ class TestExecutionLogs:
             result = cli_runner.invoke(cli, ['execution', 'logs', 'bad'])
             assert result.exit_code != 0
 
+    @pytest.mark.parametrize("option,value", [
+        ('--filter-pattern', 'ERROR'),
+        ('--limit', '500'),
+        ('--start-time', '1'),
+        ('--end-time', '2'),
+        ('--next-token', 'tok'),
+    ])
+    def test_logs_rejects_a_full_mode_option_in_truncated_mode(self, cli_runner,
+                                                               generic_command_mocks, option, value):
+        """S6-TOOLS-017. `--mode` defaults to truncated, and these five were dropped there with no
+        diagnostic. An operator typing `execution logs abc --limit 500 --filter-pattern ERROR` got the
+        short stored log with no ERROR filtering, exit 0, and no mention that both options were
+        discarded — so "no matching error events" was the conclusion.
+
+        Rejected rather than warned: `output_warning` is suppressed under `--json-output`, which is
+        exactly where an unfiltered log read as an empty result.
+        """
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'logs', 'e1', option, value])
+            assert result.exit_code != 0
+            mocks['api_client'].get_execution_logs.assert_not_called()
+            assert option in result.output
+            assert '--mode full' in result.output
+
+    def test_logs_accepts_the_full_mode_options_with_full_mode(self, cli_runner,
+                                                               generic_command_mocks):
+        """Positive control for the rejection above: with --mode full every option reaches the API."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {'mode': 'full'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'logs', 'e1', '--mode', 'full', '--filter-pattern', 'ERROR',
+                '--limit', '500', '--start-time', '1', '--end-time', '2', '--next-token', 'tok'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].get_execution_logs.call_args.kwargs['params']
+            assert params == {'mode': 'full', 'filterPattern': 'ERROR', 'limit': 500,
+                              'startTime': 1, 'endTime': 2, 'nextToken': 'tok'}
+
+    def test_logs_truncated_mode_still_takes_the_pipeline_scope(self, cli_runner,
+                                                               generic_command_mocks):
+        """--pipeline-execution-id applies in BOTH modes, so it must not be swept into the rejection."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {'mode': 'truncated'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'logs', 'e1', '--pipeline-execution-id', 'pe1'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].get_execution_logs.call_args.kwargs['params']
+            assert params == {'mode': 'truncated', 'pipelineExecutionId': 'pe1'}
+
+    def test_logs_rejects_a_zero_limit(self, cli_runner, generic_command_mocks):
+        """`if limit:` dropped `--limit 0` rather than rejecting it, so the request silently used the
+        server default."""
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, [
+                'execution', 'logs', 'e1', '--mode', 'full', '--limit', '0'])
+            assert result.exit_code != 0
+            mocks['api_client'].get_execution_logs.assert_not_called()
+
+    def test_logs_start_time_zero_is_sent(self, cli_runner, generic_command_mocks):
+        """Epoch 0 is a legal window bound; `if start_time:` dropped it."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {'mode': 'full'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'logs', 'e1', '--mode', 'full', '--start-time', '0'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].get_execution_logs.call_args.kwargs['params']
+            assert params['startTime'] == 0
+
     def test_logs_full_mode_renders_the_per_step_and_history_logs(self, cli_runner,
                                                                   generic_command_mocks):
         """subProcessEvents and sfnHistoryEvents must reach the human-readable output.
@@ -570,6 +753,33 @@ class TestExecutionAbort:
             result = cli_runner.invoke(cli, ['execution', 'abort', 'bad'])
             assert result.exit_code != 0
 
+    def test_abort_group_json_without_yes_refuses(self, cli_runner, generic_command_mocks):
+        """S6-TOOLS-001 / S6-TOOLS-015. The guard was `if group_id and not yes and not json_output:`,
+        so `--json-output` short-circuited the whole confirmation and the group abort ran unconfirmed
+        — in exactly the non-interactive mode automation uses, and against the command's own
+        docstring, which says `--yes` is required there.
+
+        Every destructive-path test in this class previously supplied `--yes`, so the combination
+        whose behaviour contradicted the contract was the one combination untested.
+        """
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, [
+                'execution', 'abort', 'e1', '--group-id', 'grp1', '--json-output'])
+            assert result.exit_code != 0
+            mocks['api_client'].abort_execution.assert_not_called()
+            payload = json.loads(result.output)
+            assert payload['error'] == 'Confirmation required'
+            assert payload['groupId'] == 'grp1'
+
+    def test_abort_single_json_without_yes_still_works(self, cli_runner, generic_command_mocks):
+        """Negative control: only the group fan-out is confirmed. Aborting one named execution must
+        not start demanding a flag it never needed, or every existing caller breaks."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {'message': 'Execution aborted'}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            mocks['api_client'].abort_execution.assert_called_once()
+
 
 class TestExecutionRerun:
     def test_rerun_success(self, cli_runner, generic_command_mocks):
@@ -640,3 +850,67 @@ class TestExecutionPermanentDelete:
             mocks['api_client'].permanent_delete_execution.side_effect = ExecutionNotFoundError("nope")
             result = cli_runner.invoke(cli, ['execution', 'permanent-delete', 'bad', '--yes'])
             assert result.exit_code != 0
+
+    def test_permanent_delete_json_without_yes_refuses(self, cli_runner, generic_command_mocks):
+        """S6-TOOLS-001 / S6-TOOLS-015. `if not yes and not json_output:` meant
+        `vamscli execution permanent-delete e1 --json-output` irreversibly deleted the execution's
+        DynamoDB records with no confirmation and exited 0 — the guard could have been removed
+        entirely without a single test failing.
+        """
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'permanent-delete', 'e1', '--json-output'])
+            assert result.exit_code != 0
+            mocks['api_client'].permanent_delete_execution.assert_not_called()
+            payload = json.loads(result.output)
+            assert payload['error'] == 'Confirmation required'
+            assert payload['executionId'] == 'e1'
+
+    def test_permanent_delete_interactive_without_yes_prompts(self, cli_runner,
+                                                              generic_command_mocks):
+        """The interactive path must still prompt rather than refuse outright."""
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'permanent-delete', 'e1'], input='n\n')
+            assert result.exit_code != 0
+            mocks['api_client'].permanent_delete_execution.assert_not_called()
+            assert 'Permanently delete' in result.output
+
+
+class TestDestructiveGuardsHoldInJsonMode:
+    """Every command that gates an irreversible action behind `--yes` must refuse under
+    `--json-output` when the flag is missing, rather than skipping the gate.
+
+    S6-TOOLS-015 asked for a parametrized guard rather than one test per command, because the failure
+    was a shape — `not json_output` inside the guard — and it can reappear on the next such command.
+    """
+
+    ARGV_WITHOUT_YES = [
+        pytest.param(
+            ['execution', 'permanent-delete', 'e1', '--json-output'],
+            'permanent_delete_execution', id='execution-permanent-delete'),
+        pytest.param(
+            ['execution', 'abort', 'e1', '--group-id', 'grp1', '--json-output'],
+            'abort_execution', id='execution-abort-group'),
+        pytest.param(
+            ['pipeline', 'template', 'delete', '-d', 'db1', '-p', 'p1', '-t', 't1', '--json-output'],
+            'delete_pipeline_template', id='pipeline-template-delete'),
+    ]
+
+    @pytest.mark.parametrize("argv,api_method", ARGV_WITHOUT_YES)
+    def test_refuses_and_calls_nothing(self, cli_runner, generic_command_mocks, argv, api_method):
+        module = argv[0]  # the commands/ module name matches the top-level group here
+        with generic_command_mocks(module) as mocks:
+            result = cli_runner.invoke(cli, argv)
+            assert result.exit_code != 0, f"{argv} proceeded without --yes"
+            getattr(mocks['api_client'], api_method).assert_not_called()
+            assert json.loads(result.output)['error'] == 'Confirmation required'
+
+    @pytest.mark.parametrize("argv,api_method", ARGV_WITHOUT_YES)
+    def test_proceeds_with_yes(self, cli_runner, generic_command_mocks, argv, api_method):
+        """Positive control: the refusal above must be caused by the missing flag, not by the command
+        being broken in JSON mode altogether."""
+        module = argv[0]  # the commands/ module name matches the top-level group here
+        with generic_command_mocks(module) as mocks:
+            getattr(mocks['api_client'], api_method).return_value = {'message': 'ok'}
+            result = cli_runner.invoke(cli, argv + ['--yes'])
+            assert result.exit_code == 0, result.output
+            getattr(mocks['api_client'], api_method).assert_called_once()

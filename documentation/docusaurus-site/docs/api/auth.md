@@ -596,7 +596,17 @@ These endpoints return an error if Cognito is not enabled in the deployment conf
 GET /user/cognito
 ```
 
+#### Query parameters
+
+| Parameter       | Type    | Required | Default | Description                                                        |
+| --------------- | ------- | -------- | ------- | ------------------------------------------------------------------ |
+| `maxItems`      | number  | No       | `60`    | Maximum number of users to return (1-60).                          |
+| `pageSize`      | number  | No       | `60`    | Number of users per page (1-60). Takes precedence over `maxItems`. |
+| `startingToken` | string  | No       | `null`  | Pagination token from a previous response's `NextToken`.           |
+
 #### Response
+
+`NextToken` is present only when more users remain; page until it is absent.
 
 ```json
 {
@@ -611,7 +621,8 @@ GET /user/cognito
             "userLastModifiedDate": "2026-03-15T10:30:00",
             "mfaEnabled": false
         }
-    ]
+    ],
+    "NextToken": "eyJ..."
 }
 ```
 
@@ -718,7 +729,13 @@ The request body is optional. When a body is supplied, it must set `confirmReset
 
 ## API keys
 
-API keys provide programmatic access to VAMS without requiring interactive authentication.
+API keys provide programmatic access to VAMS without requiring interactive authentication. A request that presents an API key acts as the VAMS user the key is bound to and carries the roles assigned to that user.
+
+The `/auth/api-keys` routes are the administrative variant of these endpoints. They operate across every user's keys, and `POST /auth/api-keys` binds the new key to the `userId` supplied in the request body. Of the default roles, only `admin` reaches them; `basicReadOnly` is granted the self-service [`/auth/user/api-keys`](#user-self-service-api-keys) routes instead.
+
+:::warning[Administrative routes]
+Because `POST /auth/api-keys` accepts any `userId`, including an administrator's, a role that can call it can issue a credential that acts as any user in the deployment. Access to the `/auth/api-keys` routes is therefore equivalent to full administrative access. Grant them only to administrator roles, and give other users the self-service `/auth/user/api-keys` routes for managing their own keys.
+:::
 
 ### List API keys
 
@@ -768,18 +785,20 @@ GET /auth/api-keys/{apiKeyId}
 
 ### Create an API key
 
+Creates an API key bound to the `userId` in the request body. The key acts as that user and carries that user's roles, which makes this an administrative route.
+
 ```
 POST /auth/api-keys
 ```
 
 #### Request body
 
-| Field         | Type   | Required | Description                    |
-| ------------- | ------ | -------- | ------------------------------ |
-| `apiKeyName`  | string | Yes      | Display name for the API key   |
-| `userId`      | string | Yes      | User to associate the key with |
-| `description` | string | Yes      | Description of the API key     |
-| `expiresAt`   | string | No       | Expiration date (ISO 8601)     |
+| Field         | Type   | Required | Description                                           |
+| ------------- | ------ | -------- | ----------------------------------------------------- |
+| `apiKeyName`  | string | Yes      | Display name for the API key                          |
+| `userId`      | string | Yes      | User the key acts as; any user with a role assignment |
+| `description` | string | Yes      | Description of the API key                            |
+| `expiresAt`   | string | No       | Expiration date (ISO 8601)                            |
 
 #### Request body example
 
@@ -870,7 +889,7 @@ The `/auth/user/api-keys` routes are the self-service variant of the API key end
 -   An **expiration date is required** on creation and may be at most **365 days** from creation.
 -   Updates cannot clear the expiration and cannot set it beyond 365 days from the key's **original creation date**. After the window elapses, the user must create a new key (rotation).
 
-The admin routes (`/auth/api-keys`) are unchanged: administrators can manage keys across all users without expiration requirements.
+The administrative routes ([`/auth/api-keys`](#api-keys)) cover every user's keys, accept a `userId` on creation, and treat the expiration date as optional. They are reserved for administrator roles.
 
 ### List your API keys
 

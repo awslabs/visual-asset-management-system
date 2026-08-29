@@ -361,6 +361,78 @@ def lambda_handler(event, context):
             }
         }
 
+def relative_subdir_from_asset_id(input_s3_asset_file_key, asset_id):
+    """The input file's subdirectory within the asset, located by the threaded assetId within the
+    file's full S3 key ('base/xidM/parts/housing/pump.glb' + 'xidM' -> 'parts/housing'). Yields ''
+    when the assetId names no segment of the key, so an asset whose base location key does not
+    contain it writes at the output root rather than at a guessed depth.
+
+    The asset-relative part of a key is not recoverable from the key alone: an asset's root prefix
+    within its bucket is configurable per bucket (baseAssetsPrefix) and per asset (assetLocation).
+    The assetId is a workflow state variable, threaded from the manifest through vamsExecute and
+    openPipeline, and is empty for a direct invoke that carries no workflow context.
+    """
+    if not asset_id:
+        return ""
+    segments = (input_s3_asset_file_key or "").split("/")
+    if asset_id not in segments:
+        return ""
+    return "/".join(segments[segments.index(asset_id) + 1:-1])
+
+
+# The folder a converted file is written under when the conversion does not change the file
+# extension, so an optimize-in-place run is a sibling of its source rather than a new version of it.
+SAME_FORMAT_OUTPUT_SUBDIR = "optimized"
+
+
+def output_relative_subdir(relative_subdir, input_extension, output_extension):
+    """The subdirectory the converted file is written under, relative to the output-files prefix:
+    the input file's own subdirectory within the asset, plus a trailing `optimized` folder when the
+    output cannot be told apart from the input by name.
+
+    rpdx optimizes as well as converts, so the output extension can equal the input's — a template
+    that targets the input's own format, or a run that names no output type and falls back to it.
+    The output then keeps both the input's subdirectory and its file name, so its ASSET-RELATIVE
+    path equals the input's; the workflow's process-output step writes each staged output back to
+    the output asset at exactly that relative path, so the write-back would land a new version of
+    the operator's source object rather than a sibling file. The extra folder is what keeps the two
+    apart, and it is a folder rather than a changed file name because the name is what identifies
+    the converted model.
+
+    An `.all` run takes the folder unconditionally: it produces every supported format, one of which
+    is the input's own, and its upload loop globs the working directory — which also holds the
+    downloaded input file — so the uploaded set always contains an object at the input's own name.
+
+    A format-changing conversion still lands directly beside its source, and the folder is constant
+    per format, so it separates the output from the input rather than separating runs from each other
+    (the workflow's own output path extension does that).
+    """
+    subdir = (relative_subdir or "").strip("/")
+    # Both comparisons run on the extension without its leading dot and case-folded, because the
+    # input's extension is derived from the S3 key while the output's is whatever `outputType`
+    # carries - caller data, which the shipped templates write as ".glb" and a caller may write as
+    # "glb". Compared raw, those read as a format CHANGE, the folder is skipped, and the write-back
+    # resolves onto the operator's own source object. The same applies to the all-formats value: a
+    # dotless "all" would otherwise miss the unconditional-folder branch.
+    normalized_output = (output_extension or "").lstrip(".").lower()
+    if (normalized_output != "all"
+            and (input_extension or "").lstrip(".").lower() != normalized_output):
+        return subdir
+    return f"{subdir}/{SAME_FORMAT_OUTPUT_SUBDIR}" if subdir else SAME_FORMAT_OUTPUT_SUBDIR
+
+
+def output_object_prefix(output_s3_asset_files_key, relative_subdir):
+    """The output destination prefix: the workflow's output-files prefix followed by the output
+    file's own subdirectory within the asset, so a converted file lands beside its source instead of
+    at the asset root. Exactly one separator joins the two parts, so a prefix that already ends in
+    '/' and a file at the asset root both compose without an empty segment."""
+    prefix = output_s3_asset_files_key or ""
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+    subdir = (relative_subdir or "").strip("/")
+    return f"{prefix}{subdir}/" if subdir else prefix
+
+
 def handle_construct_pipeline(event):
     """
     Handler for constructing pipeline definition
@@ -418,6 +490,12 @@ def handle_construct_pipeline(event):
         input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(input_s3_asset_file_key)
         input_s3_asset_file_filename = os.path.basename(input_s3_asset_file_root)
 
+        # The converted file keeps the input file's subdirectory within the asset, so the workflow's
+        # process-output step places it beside its source rather than at the asset root - where two
+        # sources sharing a basename in different folders would overwrite each other.
+        input_relative_subdir = relative_subdir_from_asset_id(
+            input_s3_asset_file_key, event.get('assetId', ''))
+
         # Get auxiliary bucket information with validation
         inputOutput_s3_assetAuxiliary_files_uri = event.get('inputOutputS3AssetAuxiliaryFilesPath', '')
         if inputOutput_s3_assetAuxiliary_files_uri:
@@ -452,20 +530,30 @@ def handle_construct_pipeline(event):
         # Handle .all format to generate all supported output formats
         is_all_formats = (output_s3_asset_extension == '.all')
 
+        # A conversion that does not change the file extension gains one further folder, so the
+        # write-back cannot resolve to the input's own key. The workflow's own output path extension
+        # is inserted immediately before the file name at write-back, giving {subdir}/{extension}/
+        # {name}.
+        relative_subdir = output_relative_subdir(
+            input_relative_subdir, input_s3_asset_extension, output_s3_asset_extension)
+
         # Determine output filename
         if is_all_formats:
             output_s3_asset_file_filename = input_s3_asset_file_filename + '*'
-            output_path_base = output_s3_asset_files_key.rstrip('/')
+            output_path_base = output_object_prefix(output_s3_asset_files_key,
+                                                    relative_subdir)
         elif input_s3_asset_extension == output_s3_asset_extension:
             output_s3_asset_file_filename = input_s3_asset_file_filename + output_s3_asset_extension
         else:
             output_s3_asset_file_filename = input_s3_asset_file_filename + '-' + output_s3_asset_extension.replace(".", "") + output_s3_asset_extension
 
-        # Build container command with output path
+        # Build container command with output path. A prefix destination takes the output
+        # subdirectory and the output file name; a destination that is already a full object key is
+        # used verbatim.
         if not is_all_formats:
-            output_path = output_s3_asset_files_key
-            if output_path.endswith('/'):
-                output_path = output_path + output_s3_asset_file_filename
+            if output_s3_asset_files_key.endswith('/'):
+                output_path = (output_object_prefix(output_s3_asset_files_key, relative_subdir)
+                               + output_s3_asset_file_filename)
             else:
                 output_path = output_s3_asset_files_key
 
@@ -482,7 +570,7 @@ def handle_construct_pipeline(event):
             # Generate all formats and upload using shell globbing. The filename stem is quoted and
             # the '*' left outside the quotes so it still expands as a glob.
             q_output_stem = shlex.quote(input_s3_asset_file_filename)
-            q_output_prefix = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path_base}/")
+            q_output_prefix = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path_base}")
             standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
             standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
         else:

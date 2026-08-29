@@ -102,10 +102,8 @@ const DEADLINE_TEMPLATE_TYPE_OPTIONS: { value: string; label: string }[] = [
     ...DEADLINE_TEMPLATE_TYPES.map((type) => ({ value: type, label: type })),
 ];
 
-// The four canonical asset-scope booleans. The backend's pipeline-level check only evaluates the keys
-// a scope DECLARES (executionValidation._scope_errors with declared_only), so an omitted key defers to
-// the workflow gate rather than denying — a partial map is a narrower rule than the control displays.
-// Resolving all four from the control's own reader keeps what is stored identical to what is shown.
+// The four canonical asset-scope booleans, every one resolved. Used to seed a CREATE, where the author
+// is choosing all four rules from nothing and the record should say so explicitly.
 const completeAssetScope = (scope: AssetScope | undefined): Record<string, boolean> => {
     const normalized = normalizeAssetScope(scope);
     return {
@@ -114,6 +112,48 @@ const completeAssetScope = (scope: AssetScope | undefined): Record<string, boole
         wholeAssetAllowed: !!normalized.wholeAssetAllowed,
         folderAllowed: !!normalized.folderAllowed,
     };
+};
+
+const ASSET_SCOPE_KEYS = [
+    "crossAssetAllowed",
+    "singleAssetOnly",
+    "wholeAssetAllowed",
+    "folderAllowed",
+] as const;
+
+// Which rules a stored scope says nothing about, for the note beside the control.
+const ASSET_SCOPE_RULE_LABELS: Record<(typeof ASSET_SCOPE_KEYS)[number], string> = {
+    crossAssetAllowed: "cross-asset input",
+    singleAssetOnly: "single-asset-only",
+    wholeAssetAllowed: "whole-asset selection",
+    folderAllowed: "folder selection",
+};
+
+const undeclaredAssetScopeRules = (scope: AssetScope | undefined): string[] => {
+    const normalized = normalizeAssetScope(scope);
+    return ASSET_SCOPE_KEYS.filter((key) => normalized[key] === undefined).map(
+        (key) => ASSET_SCOPE_RULE_LABELS[key]
+    );
+};
+
+/**
+ * The scope to persist: exactly the rules the record declares, plus whichever ones this session set.
+ *
+ * The backend's pipeline-level check evaluates only the keys a scope DECLARES
+ * (executionValidation._scope_errors with declared_only), so an omitted key defers to the workflow
+ * gate while an explicit `false` denies at the pipeline. Resolving all four on save therefore turns a
+ * registration that declares `{"wholeAsset": true}` into three additional pipeline-level denials —
+ * breaking every multi-asset workflow that used it, from an edit to some unrelated field.
+ * `AssetSpanControl` carries the incoming keys through and adds only the rule the admin changed, so
+ * what it hands back is already the declared set.
+ */
+const declaredAssetScope = (scope: AssetScope | undefined): Record<string, boolean> => {
+    const normalized = normalizeAssetScope(scope);
+    const declared: Record<string, boolean> = {};
+    ASSET_SCOPE_KEYS.forEach((key) => {
+        if (normalized[key] !== undefined) declared[key] = !!normalized[key];
+    });
+    return declared;
 };
 
 // Page-wizard steps, in order. Module scope so onSubmit can gate on the final step.
@@ -210,6 +250,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     const executionType = watch("executionConfig.executionType");
     const waitForCallback = watch("executionConfig.waitForCallback");
     const inputFileArity = watch("systemConfig.inputFileArity") || "one";
+    const undeclaredRules = undeclaredAssetScopeRules(watch("systemConfig.assetScope"));
     // Each toggle's effective value: a key the stored map omits reads ON, matching the record builders,
     // so a pipeline saved with a partial map is not shown as having opted out of what it still gets.
     const storedMetadataInputs = watch("systemConfig.metadataInputs");
@@ -293,7 +334,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
             executionConfig: executionConfig as PipelineCreateRequest["executionConfig"],
             systemConfig: {
                 ...data.systemConfig,
-                assetScope: completeAssetScope(data.systemConfig?.assetScope),
+                assetScope: declaredAssetScope(data.systemConfig?.assetScope),
                 inputFileFilters: { allow, exclude },
             },
         };
@@ -930,10 +971,11 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">
+                        <label htmlFor="taskTimeout" className="block text-sm font-medium mb-1">
                             Task Timeout (seconds)
                         </label>
                         <input
+                            id="taskTimeout"
                             {...register("executionConfig.taskTimeout")}
                             disabled={isDeadlineCloudDisabled}
                             className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
@@ -947,10 +989,14 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">
+                        <label
+                            htmlFor="taskHeartbeatTimeout"
+                            className="block text-sm font-medium mb-1"
+                        >
                             Task Heartbeat Timeout (seconds)
                         </label>
                         <input
+                            id="taskHeartbeatTimeout"
                             {...register("executionConfig.taskHeartbeatTimeout")}
                             disabled={isDeadlineCloudDisabled}
                             className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
@@ -971,11 +1017,14 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     description="Admin controls: input-file count, asset selection rules, metadata inputs, templates, and filters."
                 >
                     <div>
+                        {/* The visible text is a <label htmlFor> inside the flex row rather than the
+                            row itself, so the tooltip can sit beside it without joining the name. */}
                         <div className="flex items-center gap-1.5 text-sm font-medium mb-1">
-                            Input file count
+                            <label htmlFor="inputFileArity">Input file count</label>
                             <InfoTooltip text="How many input files an execution of this pipeline takes: 'None' (no input file), 'One file', or 'Multiple files'." />
                         </div>
                         <select
+                            id="inputFileArity"
                             value={inputFileArity}
                             onChange={(e) => {
                                 const value = e.target.value;
@@ -1001,6 +1050,18 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             Asset selection rules
                             <InfoTooltip text="Constrains which input-file selections an execution of this pipeline may make. Each rule is enforced at execute time." />
                         </div>
+                        {/* A rule this pipeline does not declare is not the same as one it forbids: the
+                            execute-time check skips it and the workflow's own rule decides. The
+                            controls below have no third state, so they show the effective default —
+                            which rules are actually undeclared is stated here instead, and a save
+                            leaves them undeclared until one is changed. */}
+                        {undeclaredRules.length > 0 && (
+                            <p className="text-xs text-text-secondary mb-2">
+                                Not declared on this pipeline: {undeclaredRules.join(", ")}. An
+                                undeclared rule defers to the workflow&apos;s own rule; changing it
+                                below declares it here.
+                            </p>
+                        )}
                         <AssetSpanControl
                             scope={watch("systemConfig.assetScope") || {}}
                             disabled={isDeadlineCloudDisabled}
@@ -1100,10 +1161,14 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">
+                        <label
+                            htmlFor="auxPreviewPipelineSuffix"
+                            className="block text-sm font-medium mb-1"
+                        >
                             Aux Preview Pipeline Suffix
                         </label>
                         <input
+                            id="auxPreviewPipelineSuffix"
                             {...register("systemConfig.auxPreviewPipelineSuffix")}
                             disabled={isDeadlineCloudDisabled}
                             className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"

@@ -6,7 +6,7 @@
         {
             "triggerType": "fileUpload",
             "inputFileFilters": {
-                "allow": ["*.mp4", "*.mov", "*.jpg", "*.jpeg", "*.png", "*.webp"],
+                "allow": ["*.mp4", "*.mov"],
                 "exclude": []
             },
             "defaultTemplateIds": {

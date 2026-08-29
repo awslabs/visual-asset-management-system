@@ -93,10 +93,10 @@ VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda a
 
 ### API Access Patterns
 
--   **Streaming downloads** via `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` with optional `?versionId=` and `?assetVersionId=` query parameters
+-   **Streaming downloads** with HTTP range-request support, optionally pinned to a specific file or asset version through the `versionId`, `assetVersionId`, and `assetVersionIdAlias` query parameters -- see [Files API](../api/files.md#stream-asset-file)
 -   **Presigned URL downloads** for large file transfers
--   **Pagination** using `NextToken`-based continuation for list endpoints
--   **Bulk constraint import** via `POST /auth/constraintsTemplateImport` with JSON templates and server-side variable substitution
+-   **Pagination** using `NextToken`-based continuation for list endpoints -- see [API Overview](../api/overview.md#pagination)
+-   **Bulk constraint import** from JSON templates with server-side variable substitution -- see [Import constraint template](../api/auth.md#import-constraint-template) and [Permission templates](../developer/permissions.md#permission-templates)
 
 ---
 
@@ -104,28 +104,11 @@ VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda a
 
 The VamsCLI is a Python-based command line tool built on the Click framework. It supports profile-based multi-environment configuration and machine-readable JSON output.
 
-### Command Groups
+### Coverage
 
-| Command Group     | Commands                                      | Description                                  |
-| ----------------- | --------------------------------------------- | -------------------------------------------- |
-| `assets`          | list, get, create, delete, download           | Asset lifecycle operations                   |
-| `asset-links`     | list, create, delete                          | Cross-database asset relationship management |
-| `asset-version`   | list, get, create, update, archive, unarchive | Asset version management                     |
-| `database`        | list, get, create, delete                     | Database lifecycle operations                |
-| `file`            | list, upload, download, delete, copy, move    | File operations with chunked upload          |
-| `metadata`        | get, update                                   | Metadata read and write                      |
-| `metadata-schema` | list, get, create, update, delete             | Metadata schema management                   |
-| `search`          | assets, files                                 | Search assets and files                      |
-| `tag`             | list, create, delete                          | Tag management                               |
-| `tag-type`        | list, create, delete                          | Tag type management                          |
-| `pipeline`        | list, get                                     | Pipeline information                         |
-| `workflow`        | list, get, execute                            | Workflow management and execution            |
-| `role-constraint` | list, create, delete, template import         | Permission constraint management             |
-| `user`            | list, add, update, remove, reset-password     | Amazon Cognito user management               |
-| `auth`            | features                                      | Authentication feature queries               |
-| `apikey`          | list, create, update, delete                  | API key management                           |
-| `profile`         | list, create, delete, use                     | Multi-environment profile management         |
-| `setup`           | configure                                     | Initial CLI configuration                    |
+The CLI covers the same ground as the web interface: setup and authentication, profiles, feature queries, databases, assets, asset versions, asset links, files, directory synchronization, tags and tag types, metadata and metadata schemas, search, pipelines and their configuration templates, workflows and triggers, executions, roles and permission constraints, Amazon Cognito users, API keys, and a set of industry-specific commands for bill-of-materials assembly, PLM XML import, and spatial GLB combination.
+
+For the full list of command groups and every command in each, see the [Command Reference](../cli/command-reference.md).
 
 ### CLI Capabilities
 
@@ -133,7 +116,7 @@ The VamsCLI is a Python-based command line tool built on the Click framework. It
 -   **JSON output mode** -- Use `--json-output` flag for machine-readable output in automation scripts
 -   **Chunked file upload** -- Large file uploads with progress monitoring and retry logic
 -   **Bulk operations** -- Efficient batch processing of assets, files, and metadata
--   **Permission template import** -- Import JSON constraint templates with `vamscli role-constraint template import`
+-   **Permission template import** -- Import JSON constraint templates to provision a role's full constraint matrix in one step
 -   **CI/CD integration** -- Headless operation mode for build pipeline integration
 
 ---
@@ -205,8 +188,8 @@ VAMS includes twenty-four built-in processing pipelines, each deployable through
 | NVIDIA Cosmos Text-to-World 14B v2      | `useNvidiaCosmos.modelsPredict.text2world14B_v2`  | High-quality video generation from text prompts using Cosmos-Predict2.5 14B                                              | Disabled |
 | NVIDIA Cosmos Video-to-World 2B v2      | `useNvidiaCosmos.modelsPredict.video2world2B_v2`  | Video generation from video and text input using Cosmos-Predict2.5 2B                                                    | Disabled |
 | NVIDIA Cosmos Video-to-World 14B v2     | `useNvidiaCosmos.modelsPredict.video2world14B_v2` | High-quality video generation from video and text input using Cosmos-Predict2.5 14B                                      | Disabled |
-| NVIDIA Cosmos Reason 2B                 | `useNvidiaCosmos.modelsReason.reason2B`           | Vision Language Model for video and image analysis and captioning using Cosmos-Reason2 2B                                | Disabled |
-| NVIDIA Cosmos Reason 8B                 | `useNvidiaCosmos.modelsReason.reason8B`           | Vision Language Model for video and image analysis and reasoning using Cosmos-Reason2 8B                                 | Disabled |
+| NVIDIA Cosmos Reason 2B                 | `useNvidiaCosmos.modelsReason.reason2B`           | Vision Language Model for video analysis and captioning using Cosmos-Reason2 2B                                | Disabled |
+| NVIDIA Cosmos Reason 8B                 | `useNvidiaCosmos.modelsReason.reason8B`           | Vision Language Model for video analysis and reasoning using Cosmos-Reason2 8B                                 | Disabled |
 | NVIDIA Cosmos Transfer 2B               | `useNvidiaCosmos.modelsTransfer.transfer2B`       | Style and content transfer with control signal conditioning using Cosmos-Transfer2.5 2B                                  | Disabled |
 | NVIDIA Cosmos 3 Nano (16B)              | `useNvidiaCosmos3.modelsOmni.nano16B`             | Omnimodal world-model generation using Cosmos3-Nano 16B                                                                  | Disabled |
 | NVIDIA Cosmos 3 Super (64B)             | `useNvidiaCosmos3.modelsOmni.super64B`            | Omnimodal world-model generation using Cosmos3-Super 64B                                                                 | Disabled |

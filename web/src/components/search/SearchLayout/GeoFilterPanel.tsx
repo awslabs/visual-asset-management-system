@@ -4,20 +4,24 @@
  */
 
 import React, { useEffect, useState } from "react";
-import {
-    Box,
-    Button,
-    ExpandableSection,
-    FormField,
-    Grid,
-    Input,
-    Select,
-    SpaceBetween,
-    Textarea,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import FormField from "@cloudscape-design/components/form-field";
+import Grid from "@cloudscape-design/components/grid";
+import Input from "@cloudscape-design/components/input";
+import Select from "@cloudscape-design/components/select";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Textarea from "@cloudscape-design/components/textarea";
 import { GeoSearchFilter, SearchFilters } from "../types";
 import { appCache } from "../../../services/appCache";
 import { featuresEnabled } from "../../../common/constants/featuresEnabled";
+import {
+    MAX_GEOJSON_POSITIONS,
+    countGeoJsonPositions,
+    parseCoordinate,
+    parseLatLon,
+} from "../../../common/constants/geoSearch";
 import GeoFilterMapSelector from "./GeoFilterMapSelector";
 
 interface GeoFilterPanelProps {
@@ -99,42 +103,50 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
         ]
     );
 
+    // Every branch mirrors a constraint the search API enforces (see common/constants/geoSearch.ts).
+    // The filter travels as `geoSearch` on the whole search request, so a value the backend rejects
+    // fails the entire search rather than just the geo clause — and the 400 it returns names no field.
     const apply = () => {
         const result: GeoSearchFilter = { relation: relation as GeoSearchFilter["relation"] };
         if (mode === "point") {
-            const lat = parseFloat(pointLat);
-            const lon = parseFloat(pointLon);
-            if (Number.isNaN(lat) || Number.isNaN(lon)) {
-                setError("Latitude and longitude are required.");
+            const point = parseLatLon(pointLat, pointLon);
+            if (point.error || !point.point) {
+                setError(point.error || "Latitude and longitude are required.");
                 return;
             }
-            result.point = { lat, lon };
+            result.point = point.point;
             if (pointRadius.trim() !== "") {
-                const radius = parseFloat(pointRadius);
-                if (Number.isNaN(radius) || radius <= 0) {
+                const radius = parseCoordinate(pointRadius);
+                if (radius === null || radius <= 0) {
                     setError("Radius must be a positive number of meters.");
                     return;
                 }
                 result.point.radiusMeters = radius;
             }
         } else if (mode === "bbox") {
-            const tlLat = parseFloat(bboxTopLat);
-            const tlLon = parseFloat(bboxTopLon);
-            const brLat = parseFloat(bboxBotLat);
-            const brLon = parseFloat(bboxBotLon);
-            if ([tlLat, tlLon, brLat, brLon].some((n) => Number.isNaN(n))) {
-                setError("All four bounding box corners are required.");
+            const topLeft = parseLatLon(bboxTopLat, bboxTopLon, "Top-left");
+            if (topLeft.error || !topLeft.point) {
+                setError(topLeft.error || "All four bounding box corners are required.");
                 return;
             }
-            result.bbox = {
-                topLeft: { lat: tlLat, lon: tlLon },
-                bottomRight: { lat: brLat, lon: brLon },
-            };
+            const bottomRight = parseLatLon(bboxBotLat, bboxBotLon, "Bottom-right");
+            if (bottomRight.error || !bottomRight.point) {
+                setError(bottomRight.error || "All four bounding box corners are required.");
+                return;
+            }
+            result.bbox = { topLeft: topLeft.point, bottomRight: bottomRight.point };
         } else {
             try {
                 const parsed = JSON.parse(geoJsonText);
                 if (!parsed || typeof parsed !== "object" || !parsed.type) {
                     setError("GeoJSON must be a Geometry, Feature, or FeatureCollection.");
+                    return;
+                }
+                const positions = countGeoJsonPositions(parsed);
+                if (positions > MAX_GEOJSON_POSITIONS) {
+                    setError(
+                        `GeoJSON has ${positions} coordinate positions; the maximum is ${MAX_GEOJSON_POSITIONS}.`
+                    );
                     return;
                 }
                 result.geoJson = parsed;

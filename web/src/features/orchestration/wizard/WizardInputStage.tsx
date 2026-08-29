@@ -162,9 +162,14 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         () =>
             resolveRestrictions(
                 workflow.systemConfig,
+                // `templateKnown` is carried through, not dropped: without it every step reads as
+                // resolved and the summary presents an indicative resolution — one a template still
+                // to be chosen can narrow — as the final answer on the very step where files are
+                // picked.
                 pipelineConstraints.map((c) => ({
                     systemConfig: c.systemConfig,
                     templateOverrides: c.templateOverrides,
+                    templateKnown: c.templateKnown,
                 }))
             ),
         [workflow.systemConfig, pipelineConstraints]

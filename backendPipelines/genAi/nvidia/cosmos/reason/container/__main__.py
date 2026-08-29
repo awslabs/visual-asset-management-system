@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 import manifest_io
 from inference import run_inference
-from model_manager import ensure_models_cached
+from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -37,7 +37,16 @@ logging.basicConfig(
 # Directories
 INPUT_DIR = Path("/tmp/input")
 OUTPUT_DIR = Path("/tmp/output")
-HF_CACHE_BASE = "/mnt/efs/cosmos-models/hf_cache"
+# One EFS filesystem is mounted at one path by ALL FOUR Cosmos pipelines, so a cache directory
+# that does not name the pipeline is shared by all of them -- and the cache check asks only
+# whether the directory holds any weights at all. The first pipeline to run would populate it
+# and every other one would read a hit, skip its own S3 restore, and download its weights during
+# inference instead, while the backup uploaded the combined directory to each pipeline's own
+# prefix. This lay dormant only because the mount never worked -- an unmounted path is an empty
+# local directory, so the check was correctly a miss -- so fixing the mount is what activates it.
+# The segment comes from the S3 prefix that already identifies this pipeline, so the filesystem
+# layout and the backup layout cannot drift apart.
+HF_CACHE_BASE = f"/mnt/efs/cosmos-models/hf_cache/{S3_HF_CACHE_PREFIX.split('/')[0]}"
 
 
 def load_pipeline_definition() -> Dict:

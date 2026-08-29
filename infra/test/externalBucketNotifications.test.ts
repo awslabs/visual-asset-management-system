@@ -8,6 +8,7 @@ import { Template, Match } from "aws-cdk-lib/assertions";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as sns from "aws-cdk-lib/aws-sns";
+import { newTestApp } from "./support/testApp";
 
 /**
  * These tests lock in the CDK behavior that the multi-prefix external-bucket feature
@@ -19,7 +20,7 @@ import * as sns from "aws-cdk-lib/aws-sns";
  */
 describe("external bucket notification merging", () => {
     test("one imported bucket + two prefixes => single notification config with all entries", () => {
-        const app = new cdk.App();
+        const app = newTestApp();
         const stack = new cdk.Stack(app, "TestStack", {
             env: { account: "111111111111", region: "us-east-1" },
         });
@@ -88,7 +89,7 @@ describe("external bucket notification merging", () => {
     test("cross-account SNS topic policy can be scoped to the external source", () => {
         // Mirrors the topic resource policy storageBuilder adds for cross-account
         // buckets so S3 in the bucket's account may publish to the VAMS topic.
-        const app = new cdk.App();
+        const app = newTestApp();
         const stack = new cdk.Stack(app, "TopicPolicyStack", {
             env: { account: "111111111111", region: "us-east-1" },
         });

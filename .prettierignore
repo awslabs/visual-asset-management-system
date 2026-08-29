@@ -1,6 +1,10 @@
 build
 node_modules
 cdk.out
+# `cdk synth -o <dir>` / `cdk deploy -o <dir>` write assemblies to a suffixed directory, which
+# .gitignore already covers as cdk.out.* . Without the same pattern here, one such directory
+# makes prettier-check report ~1900 generated CloudFormation templates as unformatted.
+cdk.out.*
 .mypy_cache
 .pytest_cache
 ash_cf2cdk_output
@@ -21,3 +25,5 @@ web/e2e/.auth
 web/e2e/.report
 *.yaml
 *.patch
+# Gitignored local scratch that prettier would otherwise report forever (it never ships).
+backendPipelines/3dRecon/splatToolbox/container/LOCAL_DEBUG_README.md

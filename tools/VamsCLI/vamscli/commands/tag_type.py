@@ -424,34 +424,37 @@ def list(ctx: click.Context, show_tags: bool, database_id: Optional[str],
 
     # Get the tag types
     result = api_client.get_tag_types(database_id=database_id, scope=scope)
-    
+
     def format_tag_types_result(data):
         """Format tag types result for CLI display."""
-        # Extract tag types from the response
-        tag_types_list = data.get('message', {}).get('Items', [])
-        
+        message = data.get('message', {})
+        tag_types_list = message.get('Items', [])
+
         # Format for CLI display
         if show_tags:
             # Show detailed view with tags
             if not tag_types_list:
                 return "No tag types found."
-            
+
             output_lines = []
             for i, tag_type in enumerate(tag_types_list):
                 if i > 0:
                     output_lines.append("")  # Add spacing between tag types
                 output_lines.append(format_tag_type_output(tag_type, json_output))
-            
+
             output = '\n'.join(output_lines)
         else:
             # Show table view
             output = format_tag_types_list_output(tag_types_list, json_output)
-        
-        # Show pagination info if available
-        if data.get('message', {}).get('NextToken'):
-            output += "\n\nMore results available. Use pagination to see additional tag types."
-        
+
+        # A NextToken means the listing reached the service's own item bound. There is no
+        # continuation option to spend it on, and the two scoped forms drain their partition fully.
+        if message.get('NextToken'):
+            output += ("\n\nMore results available: this listing reached the service's item limit. "
+                       "Narrow it with --database <id> or --scope global, which return the whole "
+                       "scope.")
+
         return output
-    
+
     output_result(result, json_output, cli_formatter=format_tag_types_result)
     return result

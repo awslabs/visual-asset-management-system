@@ -37,8 +37,12 @@ VARIANT_DEFAULT_MODE = {
     "super-text2image": "text2image",
     "super-image2video": "image2video",
 }
-# Variants that require a single-GPU launch (python) vs multi-GPU (torchrun)
-SINGLE_GPU_VARIANTS = {"nano"}
+# The launch mode follows the RESERVED GPU count, not the variant. A variant name says nothing about
+# how many GPUs the job was given, and pinning one to a single GPU capped it at a single device's
+# memory: a 16B checkpoint in bf16 is roughly 32 GiB of weights, which leaves little of an L40S's
+# 44.4 GiB usable capacity for activations, so a long enough sequence cannot fit however large the
+# instance is. Sharding the parameters across the devices the job already holds is what makes the
+# remaining capacity available.
 
 # Only the general-purpose omni checkpoints can perform control-signal transfer.
 # The task-specialized Super checkpoints (text2image, image2video) do not.
@@ -158,7 +162,7 @@ def run_inference(
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    is_single_gpu = variant in SINGLE_GPU_VARIANTS or num_gpus <= 1
+    is_single_gpu = num_gpus <= 1
 
     if is_single_gpu:
         cmd = [

@@ -396,7 +396,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         }
     };
 
-    const columns: ColumnDef<Execution>[] = useMemo(
+    // The generic is on useMemo, not just the variable: with only the variable annotated TS infers
+    // the array literal's own union type first and then reports it unassignable, because some
+    // members carry `sortingFn` and others do not. Supplying it here gives the literal a
+    // contextual type so each member is checked against ColumnDef directly.
+    const columns = useMemo<ColumnDef<Execution>[]>(
         () => [
             {
                 accessorKey: "executionStatus",
@@ -406,6 +410,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             {
                 accessorKey: "workflowExecutionId",
                 header: "Execution ID",
+                // Sort as opaque TEXT. The table's default is react-table's `auto`, which picks its
+                // `alphanumeric` function for strings — that splits a value into text and number chunks
+                // and compares the number chunks numerically, which is what makes "item2" precede
+                // "item10". Applied to a 32-hex-character id it is meaningless: the header showed
+                // "sorted ascending" while the rows came out in an order matching no column at all.
+                sortingFn: "text",
                 cell: ({ row }) => (
                     <span className="font-mono text-sm">{row.original.workflowExecutionId}</span>
                 ),
@@ -443,8 +453,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             // output target lives on, so on the asset tab these would be permanently blank. Adding
             // them there would cost one extra read per row, which is the N+1 the global list is
             // deliberately shaped to avoid.
+            // The inner array carries its own annotation: members of a conditional spread get no
+            // contextual type from the outer literal, so `accessorKey` and `sortingFn` widen to
+            // `string` and stop satisfying ColumnDef.
             ...(isGlobalScope
-                ? [
+                ? ([
                       {
                           accessorKey: "outputLocationType",
                           header: "Output Type",
@@ -466,13 +479,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                       {
                           accessorKey: "outputAssetId",
                           header: "Output Asset ID",
+                          // Opaque id, so text ordering for the same reason as Execution ID above.
+                          sortingFn: "text",
                           cell: ({ row }: { row: { original: Execution } }) => (
                               <span className="font-mono text-xs">
                                   {row.original.outputAssetId || "—"}
                               </span>
                           ),
                       },
-                  ]
+                  ] as ColumnDef<Execution>[])
                 : []),
             {
                 accessorKey: "executionStartDate",
@@ -776,18 +791,44 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 </div>
             )}
 
+            {/* The search runs over the loaded pages only, so an unqualified "not found" would report
+                absence for an execution that exists on a page nobody has fetched. The message says
+                what was actually searched, and the "Load more" control below stays reachable. */}
             {!isLoading && !loadError && visibleExecutions.length === 0 && (
-                <div className="text-text-secondary">No executions found.</div>
+                <div className="text-text-secondary">
+                    {!searchText.trim()
+                        ? "No executions found."
+                        : hasNextPage
+                        ? `No matches among the ${executions.length} execution${
+                              executions.length === 1 ? "" : "s"
+                          } loaded — load more to search further.`
+                        : `No executions match "${searchText.trim()}".`}
+                </div>
             )}
 
             {!isLoading && visibleExecutions.length > 0 && (
                 <DataTable
                     columns={columns}
                     rows={visibleExecutions}
+                    ariaLabel="Executions"
                     paginate={false}
                     // The board owns the search box (in the filter row); the table's own search
                     // is disabled so it doesn't render a second, redundant search bar.
                     filtering={false}
+                    // Stable identity per row. The list re-sorts non-terminal-first on every 5s poll,
+                    // so without it react-table keys rows by position and React hands a row's open
+                    // action menu — and the closures behind Abort / Permanent delete — to whichever
+                    // execution lands on that index next.
+                    getRowId={(row) => row.workflowExecutionId}
+                    // A sort only reaches the pages already fetched, against a server order fixed
+                    // newest-first, so it is qualified while more remain.
+                    sortScopeNote={
+                        hasNextPage
+                            ? `Sorted within the ${executions.length} execution${
+                                  executions.length === 1 ? "" : "s"
+                              } loaded so far. Load more to sort over the rest.`
+                            : undefined
+                    }
                     onRowClick={(row) => setQuickViewExecutionId(row.workflowExecutionId)}
                 />
             )}

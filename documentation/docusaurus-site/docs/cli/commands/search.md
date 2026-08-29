@@ -265,6 +265,8 @@ Field names follow type-prefixed conventions. Use `search mapping` to enumerate 
 
 Metadata stored as `{"product": "Training"}` is indexed as `MD_str_product`. Asset-only fields such as `str_description` and `bool_isdistributable` live in the asset index; file-only fields such as `str_key`, `str_fileext`, and `num_filesize` live in the file index.
 
+Every document carries `str_rectype`, which is `asset` or `file`. It appears as a column in the table and CSV output, and distinguishes the two record types in a `search simple` result that covers both indexes.
+
 ## Related Pages
 
 -   [Asset Commands](assets.md)

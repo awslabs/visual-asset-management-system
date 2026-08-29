@@ -79,7 +79,7 @@ You must enable access to the configured Amazon Bedrock model in your deployment
 
 ### Input parameters
 
-The pipeline accepts optional `inputParameters` in JSON format when triggered:
+Parameters reach the pipeline through the template selected for the run. Deployment registers the `metadata-3d-labeling-default` template, whose configuration body sets both parameters to `"True"`:
 
 ```json
 {
@@ -88,10 +88,12 @@ The pipeline accepts optional `inputParameters` in JSON format when triggered:
 }
 ```
 
-| Parameter                                 | Default   | Description                                                                                                                                               |
-| ----------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `includeAllAssetFileHierarchyFiles`       | `"False"` | When `"True"`, downloads all files in the asset directory hierarchy (useful for models with separate texture or material files).                          |
-| `seedMetadataGenerationWithInputMetadata` | `"False"` | When `"True"`, passes existing asset metadata, file metadata, and file attributes to the LLM to help refine label generation and reduce outlier keywords. |
+| Parameter                                 | Value when absent | Description                                                                                                                                               |
+| ----------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `includeAllAssetFileHierarchyFiles`       | `"False"`         | When `"True"`, downloads all files in the asset directory hierarchy (useful for models with separate texture or material files).                          |
+| `seedMetadataGenerationWithInputMetadata` | `"False"`         | When `"True"`, passes existing asset metadata, file metadata, and file attributes to the LLM to help refine label generation and reduce outlier keywords. |
+
+The template allows per-run edits, so a run can supply a replacement configuration body without changing the registered template.
 
 ### Rendering stage
 

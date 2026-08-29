@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Select, SelectProps } from "@cloudscape-design/components";
+import Select, { SelectProps } from "@cloudscape-design/components/select";
 import { ViewerPlugin } from "../core/PluginRegistry";
 
 interface ViewerSelectorProps {
@@ -62,6 +62,7 @@ export const ViewerSelector: React.FC<ViewerSelectorProps> = ({
             triggerVariant="option"
             invalid={isSelectionRequired}
             controlId="viewer-selector"
+            ariaLabel="Select viewer"
         />
     );
 };

@@ -80,4 +80,13 @@ describe("ExecutionQuickView", () => {
         renderPanel({ inputFiles: [{ assetId: "a-1", inputAssetFileKey: "/a-1" }] });
         expect(screen.getByText("/")).toBeInTheDocument();
     });
+
+    it("names the panel's close control", () => {
+        // Every row click on the executions board opens this panel, and its close button is the only
+        // control in it — with the glyph as the whole accessible name it announces as "multiplication
+        // sign, button".
+        renderPanel();
+        expect(screen.getByRole("button", { name: /close panel/i })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "×" })).not.toBeInTheDocument();
+    });
 });

@@ -8,6 +8,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from customConfigCommon.customAuthLoginProfile import customAuthProfileLoginWriteOverride
 from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -59,8 +60,8 @@ def create_update_user(userId, email, lambdaRequestEvent):
 def get_user(userId):
     """Return the stored profile for userId, or an identity-only profile when none exists."""
     response = user_table.get_item(Key={'userId': userId})
-    # A user with no stored profile (e.g. not yet assigned any roles) has no item;
-    # return the identity so login can still proceed.
+    # A profile row that has not been written yet (a first sign-in reaches the GET before
+    # the POST) has no item; return the identity so the caller still receives its userId.
     return response.get("Item") or {'userId': userId}
 
 
@@ -78,6 +79,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         method = event['requestContext']['http']['method']
 
+        # Tier 1 (API-level) authorization. An empty token list carries no authenticated
+        # identity, so the flag stays False and the request is denied.
+        method_allowed_on_api = False
+        if len(claims_and_roles["tokens"]) > 0:
+            if CasbinEnforcer(claims_and_roles).enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
+
         # Validate the path userId
         (valid, message) = validate({
             'userId': {
@@ -88,8 +98,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message}, event=event)
 
-        # SELF-USER ROUTE: when the path userId matches the caller, auto-authorize.
-        # Users may not be in the roles system yet but must still read/update their profile.
+        # SELF-USER ROUTE: the path userId must equal the caller's own identity. No
+        # object-level (Tier 2) constraint applies -- a profile is only ever read or
+        # written for the authenticated caller.
         if pathUserId and method in ("POST", "GET") and authorizerUserId == pathUserId:
             if method == "POST":
                 email = ""

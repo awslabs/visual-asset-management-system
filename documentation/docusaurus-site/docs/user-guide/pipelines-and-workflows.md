@@ -45,7 +45,7 @@ permissions allow appear in the menu, so a read-only user sees **Templates** alo
 
 ## Creating a custom pipeline
 
-Navigate to **Pipelines** and click **Create Pipeline**. The form is a three-step wizard — **Basic**, **Execution**, then **Settings** — and the pipeline is created when you finish the last step.
+Navigate to **Pipelines** and choose **Create Pipeline**. The form is a three-step wizard — **Basic**, **Execution**, then **Settings** — and the pipeline is created when you finish the last step.
 
 ![Pipeline wizard showing the Basic step and the three-step progress indicator](/img/pipeline_wizard_20260803_v2.6.png)
 
@@ -103,8 +103,8 @@ When one pipeline supports several modes that consume different inputs, set the 
 
 **Archive** in a pipeline's actions menu withdraws it from use: it is disabled, it stops appearing in the
 lists unless **Include Archived** is selected, and it cannot be chosen for a new workflow step. The pipeline
-record is kept, so archiving is reversible — an archived pipeline is restored with
-[`vamscli pipeline unarchive`](../cli/commands/pipelines.md).
+record is kept, so archiving is reversible. Restoring one is a command-line operation — the web interface
+has no restore action — using [`vamscli pipeline unarchive`](../cli/commands/pipelines.md).
 
 :::warning[Check which workflows use a pipeline before archiving it]
 Archiving succeeds even while workflows still reference the pipeline, and those workflows keep their
@@ -132,7 +132,7 @@ Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions
 
 ## Creating a workflow
 
-Navigate to **Workflows** and click **Create Workflow**. If you are not already viewing a specific database, select the database for this workflow, or **GLOBAL** for a cross-database workflow.
+Navigate to **Workflows** and choose **Create Workflow**. If you are not already viewing a specific database, select the database for this workflow, or **GLOBAL** for a cross-database workflow.
 
 The editor is a step-by-step wizard: **Basic information**, **Execution settings**, **Pipelines**, then **Review**. Editing an existing workflow adds a **Triggers (optional)** step — triggers are attached to a saved workflow, so they cannot be set while creating one.
 
@@ -156,14 +156,14 @@ The workflow's own gate. Every execution is checked against these before any pip
 | **Metadata provided to pipelines**     | Database metadata, asset metadata, file metadata, and file attributes.                                                                                                     |
 | **Output destination**                 | **Write to an asset**, or **Results only** for a workflow that records results text and logs and writes no asset output.                                                   |
 | **Allow choosing the output asset**    | Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.                                    |
-| **Default output path prefix**         | The prefix an execution is pre-filled with. It supports tags resolved per run, so `/\{\{executionId\}\}/` gives every run its own folder. Leave it blank to add no prefix. |
-| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A workflow never fires on output it wrote itself, so it cannot loop on its own files.        |
+| **Default output path prefix**         | The prefix an execution is pre-filled with. It supports tags resolved per run, so `/{{executionId}}/` gives every run its own folder. Leave it blank to add no prefix. |
+| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A file recorded as written by this workflow does not re-fire it — see the warning below.     |
 | **Concurrency restriction**            | `None`, `One per asset`, or `One per input file` — whether a new execution waits while a conflicting one is still running.                                                 |
 
 These are **authored, not inherited** from the workflow's pipelines. Set the input file count to the **highest** value any pipeline and template combination in the workflow can require — a lower value rejects a selection a template would have accepted. The input file filters are applied **before** the pipelines' own, so a filter here that excludes a type one of its pipelines needs makes that pipeline unsatisfiable; the [Validation](#saving-the-workflow) panel warns when that happens.
 
 :::warning[Chained triggering can run in a loop]
-Two workflows that each write a file the other accepts trigger each other indefinitely. Check the input file filters of every workflow in the chain before turning chaining on.
+Two workflows that each write a file the other accepts trigger each other indefinitely. VAMS applies no depth limit and looks for no cycles: a file is compared only against the workflow recorded as writing it, never against the chain of runs that led to it. That check also depends on what the file records — a workflow-written file that does not name the workflow that produced it counts as another workflow's output, so a workflow with chaining on can fire on a file it wrote itself. Check the input file filters of every workflow in the chain before turning chaining on.
 :::
 
 ### Triggers (optional)
@@ -184,12 +184,12 @@ The **Trigger name** field is what separates them. Leave it empty for the workfl
 :::tip
 Triggers are how processing chains together. A workflow that generates preview thumbnails or extracts metadata can be set to fire on `.e57` point cloud uploads, so the work happens on ingest with no one starting it.
 
-For a trigger to fire on files that **another workflow produced**, that workflow must also permit trigger chaining. A workflow never fires on output it wrote itself, so it cannot loop on its own files.
+For a trigger to fire on files that **another workflow produced**, that workflow must also permit trigger chaining. A file recorded as written by this workflow does not re-fire it, which is narrower than a loop guard — see [Chained triggering can run in a loop](#execution-settings).
 :::
 
 ### Pipelines
 
-Click **Add Pipeline** to add a step, then choose its pipeline. The available pipelines are those in the workflow's own database plus all GLOBAL pipelines.
+Choose **Add Pipeline** to add a step, then choose its pipeline. The available pipelines are those in the workflow's own database plus all GLOBAL pipelines.
 
 The steps form an ordered list and execute top to bottom. Drag a step by its handle to reorder it, or use **Remove** to drop it. Each step may also set:
 
@@ -358,7 +358,7 @@ Execution progress can be monitored from the **Executions** page or from the ass
 -   Start and end timestamps
 -   Error details for failed executions
 
-The **Executions** page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow and every asset it read — each selected file's asset plus each asset named as a metadata source — or, for a run that read nothing, the asset it wrote to. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
+The **Executions** page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow, every asset it read — each selected file's asset plus each asset named as a metadata source — and the asset it wrote to. A run that wrote its output into an asset you cannot open is therefore not listed, even when you can open every asset it read; ask an administrator for read access to the destination asset if you expect to see such a run. A run that produced results only, writing no files, has no destination asset, so being able to view its workflow is enough. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
@@ -431,7 +431,7 @@ GLOBAL pipelines are typically built-in processing pipelines deployed with VAMS 
 
 VAMS may include built-in pipelines depending on your deployment configuration. These are created during deployment and registered as GLOBAL pipelines. Common built-in pipelines include:
 
--   **3D Conversion** -- Converts 3D file formats (for example, IFC to glTF).
+-   **3D Conversion** -- Converts 3D mesh file formats (for example, OBJ to glTF).
 -   **Preview Generation** -- Creates thumbnail preview images for assets and files.
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
 -   **Metadata Extraction** -- Extracts metadata from file headers and content.

@@ -106,12 +106,14 @@ graph LR
 
 2. **Asset Download** -- The container downloads all asset files from S3 to a local working directory, excluding any previous training output folders (`gr00tOutput_*`). Previous outputs are never deleted from S3 -- they are only excluded from the local download.
 
-3. **Configuration Resolution** -- The container resolves training configuration using a 3-tier priority system:
+3. **Configuration Resolution** -- Training configuration resolves through a 3-tier priority system:
 
     - **Priority 1 (highest):** `gr00t_config.json` file in the asset root
-    - **Priority 2:** Asset metadata keys (e.g., `GROOT_MAX_STEPS`, `GROOT_LORA_RANK`)
-    - **Priority 3:** Pipeline `inputParameters` (set at pipeline registration or runtime)
+    - **Priority 2:** The configuration body of the pipeline template the run uses
+    - **Priority 3:** Asset metadata keys (e.g., `GROOT_MAX_STEPS`, `GROOT_LORA_RANK`)
     - **Default:** Built-in defaults for all parameters
+
+    The template body takes precedence over asset metadata because it is what the operator supplies on the execute screen, while the metadata keys are a standing default saved on the asset. A field left blank in the template falls through to the metadata value. The `gr00t_config.json` file is merged last, inside the container, so it overrides both.
 
 4. **Fine-Tuning (AWS Batch on GPU Instances)** -- The container loads the base model from Amazon EFS, resolves the user-provided dataset (in LeRobot v2.1 format) from the asset, and runs fine-tuning using the gr00t training framework. Supports single-GPU and multi-GPU (torchrun) execution, LoRA and full fine-tuning, and configurable training hyperparameters.
 
@@ -207,9 +209,9 @@ Place the dataset contents (in LeRobot v2.1 format) inside a `dataset/` subfolde
 1. Navigate to the asset in VAMS
 2. Open the Pipelines/Workflows panel
 3. Select **"NVIDIA Gr00t N1.5 3B Fine-Tuning"**
-4. Run with default `inputParameters` -- no metadata or configuration overrides needed
+4. Select the `gr00t-finetune-default` template and run it unchanged -- no metadata or configuration overrides needed
 
-The default parameters are already configured for the SO-100/SO-101 dual-camera dataset format:
+The template's configuration body is already set up for the SO-100/SO-101 dual-camera dataset format:
 
 | Parameter       | Default          | Description                                          |
 | --------------- | ---------------- | ---------------------------------------------------- |
@@ -220,7 +222,7 @@ The default parameters are already configured for the SO-100/SO-101 dual-camera 
 
 ### 5. Quick smoke test (faster)
 
-For a faster smoke test, override these `inputParameters` when triggering the pipeline:
+For a faster smoke test, edit the template configuration body on the execute screen to override these values:
 
 ```json
 {
@@ -286,6 +288,10 @@ You must accept the NVIDIA GR00T model license on HuggingFace before using this 
 -   **GPU Instance Availability** -- The pipeline uses `BEST_FIT_PROGRESSIVE` allocation with multiple fallback instance types (default: `g6e.4xlarge`, `g6e.12xlarge`, `g5.12xlarge`). Ensure your AWS Region has capacity for at least one of these types. Multiple instance types are listed for regional capacity flexibility.
 -   **VPC Configuration** -- The pipeline deploys into private subnets with NAT Gateway for internet access (required for HuggingFace model downloads on first run). Ensure VPC endpoints are configured for Amazon S3, Amazon EFS, Amazon ECR, and Amazon Batch.
 -   **Amazon EFS** -- The pipeline creates a shared Amazon EFS file system for model caching across AWS Batch instances.
+
+:::warning[Availability outside the commercial partition]
+The shipped `instanceTypes` values target commercial AWS Regions. Deployment configuration validation checks only that an enabled model variant names a non-empty `instanceTypes` array -- it does not check that those GPU instance families are offered in the deployment Region, or that the HuggingFace model download path is reachable from the partition. For AWS GovCloud and the AWS European Sovereign Cloud, compare the configured instance types against the GPU instances the target Region offers, adjust them where they differ, and evaluate the pipeline in a non-production deployment before enabling it.
+:::
 
 ## Configuration
 
@@ -359,8 +365,8 @@ asset/
 By default, the pipeline looks for training data in a `dataset/` subfolder within the asset. The dataset must be in **LeRobot v2.1 format** (containing `meta/`, `data/`, and `videos/` directories). This can be overridden:
 
 -   **`gr00t_config.json`:** Set `"datasetPath": "my-custom-folder"` (Priority 1)
--   **Asset metadata:** Set `GROOT_DATASET_PATH` key (Priority 2)
--   **inputParameters:** Set `"datasetPath": "my-custom-folder"` (Priority 3)
+-   **Template configuration body:** Set `"datasetPath": "my-custom-folder"` (Priority 2)
+-   **Asset metadata:** Set the `GROOT_DATASET_PATH` key (Priority 3)
 
 ### gr00t_config.json
 
@@ -392,7 +398,7 @@ Place a `gr00t_config.json` file in the asset root to override all training para
 
 ## Training Parameters
 
-All training parameters can be set via `gr00t_config.json` (Priority 1), asset metadata (Priority 2), or pipeline `inputParameters` (Priority 3). If not specified anywhere, built-in defaults are used.
+All training parameters can be set via `gr00t_config.json` (Priority 1), the template configuration body (Priority 2), or asset metadata (Priority 3). If not specified anywhere, built-in defaults are used.
 
 | Parameter            | Default                | Asset Metadata Key           | Description                                                                                                                                                         |
 | -------------------- | ---------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -418,7 +424,7 @@ All training parameters can be set via `gr00t_config.json` (Priority 1), asset m
 
 ### Model Invalidation
 
-To force re-download of the base model from HuggingFace (clearing both EFS and S3 caches), set `INVALIDATE_GROOT_MODELS` to `"true"` in the pipeline `inputParameters`.
+To force re-download of the base model from HuggingFace (clearing both EFS and S3 caches), set `INVALIDATE_GROOT_MODELS` to `"true"` in the template configuration body the run uses.
 
 ## Fine-Tuning Modes
 

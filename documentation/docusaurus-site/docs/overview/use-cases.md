@@ -142,7 +142,7 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
--   18+ viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
+-   20 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
 -   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
 -   Comment system with rich text for collaborative asset review
 -   Permission templates for external collaborator access (database-readonly, database-user)
@@ -210,7 +210,7 @@ VAMS provides structured dataset management with metadata schemas, versioning, a
 -   GenAI Metadata Labeling pipeline for automated asset tagging via Amazon Bedrock
 -   Metadata schemas with typed fields for structured dataset annotation
 -   Asset versioning for tracking dataset iterations
--   OpenSearch-powered search for dataset discovery and curation
+-   Amazon OpenSearch Service search for dataset discovery and curation
 -   VamsCLI for bulk dataset ingestion and metadata export
 -   REST API for integration with training pipelines
 
@@ -236,5 +236,5 @@ VAMS centralizes both design models and as-built scan data in a versioned, searc
 -   Tag-based organization for tracking construction phases and zones
 
 :::tip[Pipeline Extensibility]
-If your use case requires processing capabilities beyond the built-in pipelines, VAMS supports custom pipelines using AWS Lambda, Amazon SQS, or Amazon EventBridge execution types. See the [Developer Guide](../developer/setup.md) for instructions on writing custom pipelines.
+If your use case requires processing capabilities beyond the built-in pipelines, VAMS supports custom pipelines using the AWS Lambda, Amazon SQS, Amazon EventBridge, and AWS Deadline Cloud execution types. See [Custom Pipelines](../pipelines/custom-pipelines.md) for instructions on writing one.
 :::

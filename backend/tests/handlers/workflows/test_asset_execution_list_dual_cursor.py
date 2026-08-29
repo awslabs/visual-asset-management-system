@@ -68,14 +68,39 @@ def _cfg_rows(count, start=0):
     } for i in range(start, start + count)]
 
 
-def _run(input_pages, cfg_pages, query_params=None):
+def _run(input_pages, cfg_pages, query_params=None, probe_hits=None, echo_items=False):
     """Run the asset listing over canned query pages; returns (message dict, inputs_table, cfg_table).
 
     Each page is a full DynamoDB query response, so a page carrying 'LastEvaluatedKey' drives the
-    walk on and one without it reports that query exhausted."""
+    walk on and one without it reports that query exhausted.
+
+    `probe_hits`, when given, is the set of execution ids that have an input row for this asset. It
+    switches the inputs table onto a callable that answers BOTH kinds of read the listing makes of it:
+    a by-asset GSI page (served from `input_pages` in order) and the per-candidate
+    "did the input direction already serve this execution?" probe, which the base table answers.
+
+    `echo_items` makes build_execution_items report the candidates it was handed, so a test can assert
+    WHICH executions a page served rather than only how the walk ended.
+    """
     le.claims_and_roles = {"tokens": ["u1"]}
     inputs_table, cfg_table, main_table = MagicMock(), MagicMock(), MagicMock()
-    inputs_table.query.side_effect = list(input_pages)
+    if probe_hits is None:
+        inputs_table.query.side_effect = list(input_pages)
+    else:
+        pages = list(input_pages)
+
+        def _inputs_query(**kwargs):
+            if kwargs.get("IndexName"):
+                assert pages, "the by-asset walk asked for more pages than the test supplied"
+                return pages.pop(0)
+            # A probe: the execution id is the only condition value carrying no ':' (the other is the
+            # 'db:asset:/' sort-key prefix).
+            values = _condition_values(kwargs["KeyConditionExpression"])
+            execution_id = next((v for v in values if ":" not in v), "")
+            return {"Items": [{"workflowExecutionId": execution_id}]
+                    if execution_id in probe_hits else []}
+
+        inputs_table.query.side_effect = _inputs_query
     cfg_table.query.side_effect = list(cfg_pages)
     main_table.query.return_value = {"Items": []}
 
@@ -84,6 +109,12 @@ def _run(input_pages, cfg_pages, query_params=None):
                 le.workflow_execution_database_v2: main_table,
                 le.workflow_execution_configuration_table: cfg_table}.get(name, MagicMock())
 
+    def _echo(**kwargs):
+        return [{"workflowExecutionId": i.get("workflowExecutionId", "")}
+                for i in kwargs["input_items"]]
+
+    build_patch = (patch(f"{MOD}.build_execution_items", side_effect=_echo) if echo_items
+                   else patch(f"{MOD}.build_execution_items", return_value=[]))
     # The shared logger mock takes no %-style args, which the cap warning uses.
     with patch(f"{MOD}.dynamodb") as ddb, \
          patch.object(le.logger, "warning", MagicMock()), \
@@ -91,7 +122,7 @@ def _run(input_pages, cfg_pages, query_params=None):
          patch(f"{MOD}.get_asset_details",
                side_effect=lambda d, a: {"databaseId": d, "assetId": a}), \
          patch(f"{MOD}._execution_access_check", return_value=(True, "")), \
-         patch(f"{MOD}.build_execution_items", return_value=[]), \
+         build_patch, \
          patch(f"{MOD}.sfn"):
         ddb.Table.side_effect = _table
         resp = le.get_executions({}, DB, ASSET, "", "", query_params or {})
@@ -148,7 +179,13 @@ class TestOutputDirectionCapIsContinuable:
         message, inputs_table, cfg_table = _run(
             [{"Items": []}], [{"Items": _cfg_rows(5, start=cap)}],
             query_params={"startingToken": first["NextToken"]})
-        inputs_table.query.assert_not_called()
+        # The inputs GSI is not WALKED again — that walk is what `inputsDone` reports finished. The
+        # per-candidate "did the input direction already serve this execution?" read is a different
+        # thing: it is keyed on one execution and one asset prefix against the BASE table, never the
+        # by-asset index, so it cannot re-serve or re-page the input direction.
+        for call in inputs_table.query.call_args_list:
+            assert call.kwargs.get("IndexName") != "WorkflowExecInputsByAssetGSI", (
+                f"the input direction must not be re-walked: {call.kwargs}")
         # Resumes at the point the first page stopped serving, not at that query page's end.
         assert cfg_table.query.call_args.kwargs["ExclusiveStartKey"] == expected
         assert "NextToken" not in message
@@ -381,7 +418,6 @@ class TestTheOutputWalkAdvancesAcrossPages:
         assert not message.get("warnings"), message.get("warnings")
 
 
-
 def _condition_values(condition):
     """Every literal value inside a boto3 DynamoDB condition tree.
 
@@ -448,3 +484,171 @@ class TestADualRoleExecutionIsNotServedTwiceAcrossPages:
         # A first page uses gte(start) only; a narrowed one would carry a second date operand.
         dates = [v for v in _condition_values(cond) if v.endswith("Z")]
         assert len(dates) <= 1, f"an unbounded first page must not narrow the output range: {dates}"
+
+
+@pytest.mark.unit
+class TestAnExhaustedInputWalkStillRecordsWhatItServed:
+    """S2-BACKEND-043: the high-water mark was recorded only when the input walk CAPPED.
+
+    A page whose inputs drain and whose output walk then caps served the input direction in full and
+    said nothing about it: the token carried `inputsDone` + `outputKey` and no `servedThrough`, so the
+    next page's guard was inert and every dual-role execution below the output cursor was served a
+    second time.
+
+    The mark alone cannot fix it. Once the inputs are drained the mark is the OLDEST date served, and
+    the rows below it are a MIX of already-served dual-role executions and never-served output-only
+    ones — so bounding the output query there would trade the duplicate for a row no page ever
+    returns. Such a page therefore asks the inputs table per candidate instead, and both halves are
+    asserted below.
+    """
+
+    def _first_page(self, input_count=8):
+        """A page whose input walk drains and whose output walk then caps."""
+        cap = le.MAX_EXECUTIONS_INSPECTED
+        inputs = _input_rows(input_count)
+        message, _i, _c = _run(
+            [{"Items": inputs}],
+            [{"Items": _cfg_rows(cap + 10), "LastEvaluatedKey": {"k": "srv"}}])
+        return message, inputs
+
+    def test_the_token_records_the_mark_even_though_the_inputs_exhausted(self):
+        message, inputs = self._first_page()
+        token = _decode(message["NextToken"])
+        assert token["inputsDone"] is True
+        assert "outputKey" in token
+        assert token.get("servedThrough") == inputs[-1]["executionStartDate"], (
+            f"the oldest input row served must be recorded: {token}")
+        assert token.get("servedThroughId") == inputs[-1]["workflowExecutionId"]
+
+    def test_a_dual_role_execution_is_not_served_again_on_the_next_page(self):
+        first, inputs = self._first_page()
+        dual_role = inputs[0]["workflowExecutionId"]
+        # Page 2 continues the output walk. The dual-role execution sits below the output cursor, so
+        # only the "already served" test can keep it out.
+        rows = _cfg_rows(2, start=le.MAX_EXECUTIONS_INSPECTED)
+        rows.append({**rows[0], "workflowExecutionId": dual_role})
+        message, _i, _c = _run([{"Items": []}], [{"Items": rows}],
+                               query_params={"startingToken": first["NextToken"]},
+                               probe_hits={dual_role}, echo_items=True)
+        served = [i["workflowExecutionId"] for i in message["Items"]]
+        assert dual_role not in served, f"page 1 already served it as an input row: {served}"
+
+    def test_an_output_only_execution_at_or_above_the_mark_is_still_served(self):
+        # The CENTRAL behaviour of the per-candidate probe, and the only case where the fixed and the
+        # unfixed code disagree. Once the input side is drained the mark is the OLDEST date served, so
+        # the rows AT and ABOVE it are a MIX: already-served dual-role executions and never-served
+        # output-only ones. The probe is what tells them apart. A date comparison alone - which is what
+        # runs when the probe branch is skipped - drops every output-only row in that range for good.
+        #
+        # Both halves are asserted from ONE page, with `probe_hits` naming only the dual-role id, so the
+        # claim is that the PROBE decides and not that the page served nothing (which the withholding
+        # half alone is equally satisfied by).
+        first, inputs = self._first_page()
+        mark = _decode(first["NextToken"])["servedThrough"]
+        dual_role = inputs[0]["workflowExecutionId"]
+        above = _cfg_rows(2, start=le.MAX_EXECUTIONS_INSPECTED)
+        assert all(r["executionStartDate"] > mark for r in above), (
+            f"fixture: these rows must sit above the mark {mark} or the test proves nothing")
+        at_mark = {**above[0], "workflowExecutionId": "o" + "7" * 32, "executionStartDate": mark}
+        rows = above + [at_mark, {**above[0], "workflowExecutionId": dual_role}]
+        message, _i, _c = _run([{"Items": []}], [{"Items": rows}],
+                               query_params={"startingToken": first["NextToken"]},
+                               probe_hits={dual_role}, echo_items=True)
+        served = [i["workflowExecutionId"] for i in message["Items"]]
+        for row in above + [at_mark]:
+            assert row["workflowExecutionId"] in served, (
+                f"an output-only execution at or above the mark {mark} was withheld: {served}")
+        assert dual_role not in served, (
+            f"the dual-role execution page 1 served as an input row must stay out: {served}")
+
+    def test_an_output_only_execution_below_the_mark_is_still_served(self):
+        # The control that rules out the naive fix: an execution with no input row for this asset was
+        # never served by the input direction, so it must appear even though its date is inside the
+        # range the mark covers. Bounding the output query by the mark would drop it silently.
+        first, inputs = self._first_page()
+        rows = _cfg_rows(2, start=le.MAX_EXECUTIONS_INSPECTED)
+        # Same date as an input row this page's mark covers, but a different execution.
+        rows.append({**rows[0], "workflowExecutionId": "o" + "9" * 32,
+                     "executionStartDate": inputs[0]["executionStartDate"]})
+        message, _i, _c = _run([{"Items": []}], [{"Items": rows}],
+                               query_params={"startingToken": first["NextToken"]},
+                               probe_hits=set(), echo_items=True)
+        served = [i["workflowExecutionId"] for i in message["Items"]]
+        assert "o" + "9" * 32 in served, (
+            f"an output-only execution must not be withheld by the mark: {served}")
+
+    def test_the_output_query_is_not_bounded_once_the_inputs_are_drained(self):
+        # The mechanism behind the test above, asserted where it lives: with the input side exhausted
+        # the mark no longer means "everything newer was served", so it must not narrow the range.
+        first, _inputs = self._first_page()
+        _m, _i, cfg_table = _run([{"Items": []}],
+                                 [{"Items": _cfg_rows(2, start=le.MAX_EXECUTIONS_INSPECTED)}],
+                                 query_params={"startingToken": first["NextToken"]},
+                                 probe_hits=set())
+        cond = cfg_table.query.call_args.kwargs["KeyConditionExpression"]
+        dates = [v for v in _condition_values(cond) if v.endswith("Z")]
+        assert len(dates) <= 1, f"the output range must not be narrowed by the mark here: {dates}"
+
+    def test_a_long_run_of_already_served_rows_stops_with_a_continuation(self):
+        # The probes are reads, so a stretch of already-served rows must not walk the whole index one
+        # read at a time. The page stops at its probe budget and hands back a cursor BELOW the rows it
+        # read, so the next request makes progress rather than repeating the stretch.
+        first, _inputs = self._first_page()
+        probes = le.MAX_ASSET_LIST_INPUT_ROW_PROBES
+        rows = _cfg_rows(probes + 20, start=le.MAX_EXECUTIONS_INSPECTED)
+        message, _i, _c = _run([{"Items": []}], [{"Items": rows}],
+                               query_params={"startingToken": first["NextToken"]},
+                               probe_hits={r["workflowExecutionId"] for r in rows},
+                               echo_items=True)
+        assert message["Items"] == [], "every row here was already served"
+        token = _decode(message["NextToken"])
+        assert token["outputKey"]["workflowExecutionId"] == rows[probes - 1]["workflowExecutionId"], (
+            f"the cursor must advance over the rows the page read: {token}")
+
+    def test_the_probe_budget_names_its_own_limit(self):
+        # The probe budget and the executions-inspected budget are different limits with different
+        # numbers. A page cut short by the probes but reporting the inspected budget quotes a bound
+        # that did not bind it, so a caller narrowing the date range or the page against that number is
+        # working from the wrong figure.
+        first, _inputs = self._first_page()
+        probes = le.MAX_ASSET_LIST_INPUT_ROW_PROBES
+        rows = _cfg_rows(probes + 20, start=le.MAX_EXECUTIONS_INSPECTED)
+        message, _i, _c = _run([{"Items": []}], [{"Items": rows}],
+                               query_params={"startingToken": first["NextToken"]},
+                               probe_hits={r["workflowExecutionId"] for r in rows},
+                               echo_items=True)
+        warning = " ".join(message.get("warnings") or [])
+        assert str(probes) in warning, f"the probe budget must be the bound named: {warning!r}"
+        assert str(le.MAX_EXECUTIONS_INSPECTED) not in warning, (
+            f"this page never reached the executions-inspected budget: {warning!r}")
+
+    def test_a_probe_bounded_page_warns_even_when_page_size_is_small(self):
+        # The probe budget is a SERVER-side bound: it cuts the page short whatever pageSize the caller
+        # asked for. Reusing the inspected-budget condition suppressed the warning entirely here, so a
+        # page that withheld rows for a reason the caller did not choose looked like an ordinary one.
+        first, _inputs = self._first_page()
+        probes = le.MAX_ASSET_LIST_INPUT_ROW_PROBES
+        rows = _cfg_rows(probes + 20, start=le.MAX_EXECUTIONS_INSPECTED)
+        message, _i, _c = _run([{"Items": []}], [{"Items": rows}],
+                               query_params={"startingToken": first["NextToken"], "pageSize": "5"},
+                               probe_hits={r["workflowExecutionId"] for r in rows},
+                               echo_items=True)
+        warning = " ".join(message.get("warnings") or [])
+        assert str(probes) in warning, f"a probe-bounded page must report it: {warning!r}"
+
+    def test_the_executions_inspected_budget_still_names_its_own_limit(self):
+        # Control: the probe arm must not have taken over the message for a page that really did reach
+        # the executions-inspected budget, which would swap one wrong number for another.
+        message, _inputs = self._first_page()
+        warning = " ".join(message.get("warnings") or [])
+        assert str(le.MAX_EXECUTIONS_INSPECTED) in warning, warning
+        assert str(le.MAX_ASSET_LIST_INPUT_ROW_PROBES) not in warning, warning
+
+    def test_a_page_with_no_continuation_token_probes_nothing(self):
+        # Control on the cost: probes are spent only where an earlier page served the input direction.
+        # A first page dedupes within itself, so it must not pay for a single read.
+        _m, inputs_table, _c = _run([{"Items": _input_rows(3)}], [{"Items": _cfg_rows(2)}],
+                                    probe_hits={"anything"})
+        base_table_reads = [c for c in inputs_table.query.call_args_list
+                            if not c.kwargs.get("IndexName")]
+        assert base_table_reads == [], f"a first page must not probe: {base_table_reads}"

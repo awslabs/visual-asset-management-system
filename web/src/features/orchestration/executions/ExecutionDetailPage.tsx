@@ -84,6 +84,8 @@ interface MetadataSectionProps {
     collectionName: string;
     /** Section heading, given the number of rows currently rendered. */
     title: (count: number) => string;
+    /** The table's accessible name. Fixed, unlike the heading, which carries a live row count. */
+    tableLabel: string;
     columns: ColumnDef<any, any>[];
     /** The rows the details response embedded, already in render shape. */
     inlineRows: any[];
@@ -114,6 +116,7 @@ const MetadataSection: React.FC<MetadataSectionProps> = ({
     executionId,
     collectionName,
     title,
+    tableLabel,
     columns,
     inlineRows,
     mapPagedRows,
@@ -166,7 +169,13 @@ const MetadataSection: React.FC<MetadataSectionProps> = ({
                 </p>
             )}
             {rows.length > 0 ? (
-                <DataTable columns={columns} rows={rows} pageSize={TABLE_PAGE_SIZE} flush />
+                <DataTable
+                    columns={columns}
+                    rows={rows}
+                    ariaLabel={tableLabel}
+                    pageSize={TABLE_PAGE_SIZE}
+                    flush
+                />
             ) : (
                 !(escalated && paged.isLoading) && (
                     <p className="text-text-secondary">{emptyText}</p>
@@ -502,6 +511,29 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
             : "inputs";
     }, [location.search]);
     const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
+    // Tab/panel wiring. The ids are instance-scoped so a second detail view on one document does not
+    // point both strips at the same panel.
+    const tabDomIdPrefix = React.useId();
+    const tabDomId = (key: TabKey) => `${tabDomIdPrefix}tab-${key}`;
+    const tabPanelDomId = `${tabDomIdPrefix}panel`;
+    const visibleTabs = React.useMemo(() => TABS.filter((t) => !t.hidden), []);
+    // Arrow/Home/End move between tabs, which is the interaction a tablist announces. Selection
+    // follows focus (automatic activation), so the panel is already the one being read from.
+    const stepTab = (target: 1 | -1 | "first" | "last") => {
+        const keys = visibleTabs.map((t) => t.key);
+        const current = keys.indexOf(activeTab);
+        const index =
+            target === "first"
+                ? 0
+                : target === "last"
+                ? keys.length - 1
+                : (current + target + keys.length) % keys.length;
+        const nextKey = keys[index];
+        if (!nextKey || nextKey === activeTab) return;
+        setActiveTab(nextKey);
+        // Every tab button is already mounted; only its tabIndex changes, so focus can move now.
+        document.getElementById(tabDomId(nextKey))?.focus();
+    };
 
     const canViewLogs = can("GET", "/workflows/executions/{executionId}/logs");
     // The paged metadata read carries the same Tier-2 rule as details, but is its own Tier-1 route — a
@@ -715,12 +747,36 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 bottom divider, the selected tab is lifted onto that surface with an accent underline,
                 and unselected tabs shade on hover — otherwise the buttons read as floating text. */}
             <div className="orch-outline border-b border-border-default">
-                <nav className="flex gap-1" role="tablist">
-                    {TABS.filter((t) => !t.hidden).map((t) => (
+                <nav
+                    className="flex gap-1"
+                    role="tablist"
+                    aria-label="Execution details"
+                    onKeyDown={(e) => {
+                        const move =
+                            e.key === "ArrowRight"
+                                ? (1 as const)
+                                : e.key === "ArrowLeft"
+                                ? (-1 as const)
+                                : e.key === "Home"
+                                ? ("first" as const)
+                                : e.key === "End"
+                                ? ("last" as const)
+                                : null;
+                        if (!move) return;
+                        e.preventDefault();
+                        stepTab(move);
+                    }}
+                >
+                    {visibleTabs.map((t) => (
                         <button
                             key={t.key}
+                            id={tabDomId(t.key)}
                             role="tab"
                             aria-selected={activeTab === t.key}
+                            aria-controls={tabPanelDomId}
+                            // Roving tab stop: the strip is one stop, and the arrow keys move inside
+                            // it, so Tab reaches the panel instead of every tab in turn.
+                            tabIndex={activeTab === t.key ? 0 : -1}
                             onClick={() => setActiveTab(t.key)}
                             className={`orch-outline px-3 py-2 -mb-px border-b-2 font-bold text-sm rounded-t transition-colors ${
                                 activeTab === t.key
@@ -738,7 +794,14 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 gap Cloudscape's Tabs uses (padding-block: 16px) — so this wrapper adds NOTHING. The
                 previous `-mt-4 pt-4` cancelled that margin and then re-added it as padding, which is
                 why the gap never shrank. */}
-            <div>
+            <div
+                id={tabPanelDomId}
+                role="tabpanel"
+                aria-labelledby={tabDomId(activeTab)}
+                // The panel is the strip's next tab stop, so a keyboard reader lands on the content
+                // the selected tab names rather than passing it by.
+                tabIndex={0}
+            >
                 {activeTab === "inputs" && (
                     <div className="space-y-4">
                         <Card
@@ -752,6 +815,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                 <DataTable
                                     columns={inputFileColumns}
                                     rows={execution.inputFiles}
+                                    ariaLabel="Input files"
                                     pageSize={TABLE_PAGE_SIZE}
                                     flush
                                 />
@@ -767,6 +831,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             executionId={executionId}
                             collectionName="inputDatabaseMetadata"
                             title={(n) => `Input Database Metadata (${n})`}
+                            tableLabel="Input database metadata"
                             columns={databaseMetadataColumns}
                             inlineRows={databaseMetadataRows}
                             mapPagedRows={flattenInputMetadata}
@@ -778,6 +843,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             executionId={executionId}
                             collectionName="inputMetadata"
                             title={(n) => `Input Asset and File Metadata (${n})`}
+                            tableLabel="Input asset and file metadata"
                             columns={metadataColumns}
                             inlineRows={inputMetadataRows}
                             mapPagedRows={flattenInputMetadata}
@@ -1010,6 +1076,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                 <DataTable
                                     columns={outputFileColumns}
                                     rows={execution.outputs.files}
+                                    ariaLabel="Output files"
                                     pageSize={TABLE_PAGE_SIZE}
                                     flush
                                 />
@@ -1023,6 +1090,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                 executionId={executionId}
                                 collectionName="outputs.metadata"
                                 title={(n) => `Output Metadata (${n})`}
+                                tableLabel="Output metadata"
                                 columns={outputMetadataColumns}
                                 inlineRows={execution.outputs?.metadata || []}
                                 mapPagedRows={identityRows}

@@ -10,6 +10,7 @@ from asset metadata and invoking the openPipeline Lambda.
 Operates at the asset level (not file level). Downloads the entire asset for training.
 """
 import os
+import re
 import boto3
 import json
 from customLogging.logger import safeLogger
@@ -21,6 +22,66 @@ lambda_client = boto3.client('lambda')
 s3_client = boto3.client('s3')
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
+
+# The HuggingFace owners a base model may be pulled from. The container hands baseModelPath to
+# from_pretrained, which downloads the named repository into the shared EFS HuggingFace cache that
+# every later run restores from, so the owner set is the trust boundary: NVIDIA's own GR00T releases.
+# A deployment with its own mirror or internal base adds owners through
+# GR00T_ADDITIONAL_BASE_MODEL_OWNERS (comma-separated); the list is additive, so 'nvidia' and locally
+# available models are always usable.
+ALLOWED_BASE_MODEL_OWNERS = ("nvidia",)
+ADDITIONAL_BASE_MODEL_OWNERS_ENV = "GR00T_ADDITIONAL_BASE_MODEL_OWNERS"
+
+# One segment of a repository id or of a local model path, matched in full: '..', an empty segment,
+# whitespace and URL/shell punctuation are all outside it, so a value cannot traverse out of the path
+# it names.
+_MODEL_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
+
+
+def allowed_base_model_owners():
+    """The allowlisted HuggingFace owners, lowercased, including any the deployment adds by
+    environment. Malformed entries are ignored rather than widening the list to an unusable value."""
+    owners = [owner.lower() for owner in ALLOWED_BASE_MODEL_OWNERS]
+    for entry in os.environ.get(ADDITIONAL_BASE_MODEL_OWNERS_ENV, "").split(","):
+        owner = entry.strip().lower()
+        if owner and _MODEL_PATH_SEGMENT.fullmatch(owner) and owner not in owners:
+            owners.append(owner)
+    return tuple(owners)
+
+
+def validate_base_model_path(base_model_path):
+    """The base model this run may load, normalized; "" when the run names none.
+
+    Two shapes are usable. An ``owner/name`` HuggingFace repository id is fetched from HuggingFace,
+    so its owner must be allowlisted. An absolute path is read from the container's own filesystem —
+    the EFS cache, or a checkpoint a previous run wrote — and needs no allowlist, but every segment
+    must be a plain name so the value cannot traverse elsewhere. Anything else raises: the value also
+    names the output folder the run writes, and an unallowlisted repository would be downloaded into
+    the shared cache.
+    """
+    value = "" if base_model_path is None else str(base_model_path).strip()
+    if not value:
+        return ""
+
+    if value.startswith("/"):
+        segments = value.rstrip("/").split("/")[1:]
+        if segments and all(_MODEL_PATH_SEGMENT.fullmatch(segment) for segment in segments):
+            return value
+        raise Exception(
+            f"Gr00t baseModelPath '{value}' is not a usable local model path. An absolute path may "
+            "not contain empty or relative segments.")
+
+    owners = allowed_base_model_owners()
+    segments = value.split("/")
+    if (len(segments) == 2
+            and all(_MODEL_PATH_SEGMENT.fullmatch(segment) for segment in segments)
+            and segments[0].lower() in owners):
+        return value
+
+    raise Exception(
+        f"Gr00t baseModelPath '{value}' is not an allowed base model. Supply a HuggingFace "
+        f"repository owned by one of: {', '.join(owners)} (for example 'nvidia/GR00T-N1.5-3B'), or "
+        "an absolute path to a model already available to the container.")
 
 
 def resolve_input_asset_prefix(resolved):
@@ -223,6 +284,18 @@ def lambda_handler(event, context):
             raise Exception(
                 f"Gr00t pipeline mode must be 'finetune' or 'evaluate', got '{mode}'.")
         logger.info(f"Gr00t pipeline mode: {mode}")
+
+        # The MERGED baseModelPath is what the container loads, whichever source supplied it, so the
+        # allowlist check runs here — inside the guarded region, so a rejection reaches
+        # send_task_failure below rather than leaving the workflow task waiting on its token. A blank
+        # value is dropped so the container applies its own default instead of an empty path.
+        if "baseModelPath" in groot_config:
+            base_model_path = validate_base_model_path(groot_config["baseModelPath"])
+            if base_model_path:
+                groot_config["baseModelPath"] = base_model_path
+                logger.info(f"Gr00t base model: {base_model_path}")
+            else:
+                groot_config.pop("baseModelPath")
 
         executing_userName = data.get('executingUserName', '')
         executing_requestContext = data.get('executingRequestContext', '')

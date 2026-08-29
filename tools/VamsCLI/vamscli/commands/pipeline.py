@@ -27,6 +27,12 @@ from ..utils.exceptions import (
 )
 
 
+# Page bound on a `pipeline list --auto-paginate` walk. The no-database form crosses every database
+# through the constant-partition ByDate index and re-pays the per-page authorization fan-out, so the
+# walk stops here and hands back the outstanding token instead of running unbounded.
+MAX_PIPELINE_AUTO_PAGINATE_PAGES = 200
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -168,50 +174,110 @@ def pipeline():
 @click.option('-d', '--database-id', help='Database ID to list pipelines from (omit to list all accessible pipelines)')
 @click.option('--include-archived', is_flag=True, help='Include archived pipelines')
 @click.option('--page-size', type=int, help='Number of items per page')
-@click.option('--starting-token', help='Token for pagination')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list_pipelines(ctx: click.Context, database_id: Optional[str], include_archived: bool,
-                   page_size: Optional[int], starting_token: Optional[str], json_output: bool):
+                   page_size: Optional[int], max_items: Optional[int],
+                   starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """List pipelines in a database, or all accessible pipelines.
 
     Examples:
         vamscli pipeline list
         vamscli pipeline list -d my-database
+        vamscli pipeline list -d my-database --include-archived --auto-paginate
         vamscli pipeline list -d my-database --include-archived --json-output
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
-    params = {}
-    if page_size:
-        params['pageSize'] = page_size
-    if starting_token:
-        params['startingToken'] = starting_token
+    if auto_paginate and starting_token:
+        raise click.ClickException("Cannot use --auto-paginate with --starting-token.")
+    if max_items and not auto_paginate:
+        output_warning("--max-items only applies with --auto-paginate. Ignoring.", json_output)
+        max_items = None
 
-    output_status("Listing pipelines...", json_output)
+    def _base_params() -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if page_size:
+            params['pageSize'] = page_size
+        return params
+
+    def _fmt(data: Dict[str, Any]) -> str:
+        items = data.get('Items', [])
+        if not items:
+            # The backend filters archived + unauthorized rows after the DynamoDB page limit, so
+            # an empty page may still carry a NextToken for later pages that do contain matches.
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                return ("No pipelines on this page; more pages available."
+                        f"\n\nNext token: {data['NextToken']}")
+            if data.get('note'):
+                return f"No pipelines found.\n\n{data['note']}"
+            return "No pipelines found."
+        out = []
+        if data.get('autoPaginated'):
+            out.append(f"Auto-paginated: {data.get('totalItems', 0)} item(s) in "
+                       f"{data.get('pageCount', 0)} page(s)")
+        out.append(f"Found {len(items)} pipeline(s):")
+        out.append("-" * 80)
+        for item in items:
+            out.append(format_pipeline(item))
+            out.append("-" * 80)
+        if not data.get('autoPaginated') and data.get('NextToken'):
+            out.append(f"\nNext token: {data['NextToken']}")
+        if data.get('note'):
+            out.append(f"\n{data['note']}")
+        return '\n'.join(out)
+
     try:
+        if auto_paginate:
+            max_total = max_items or 10000
+            output_status(f"Listing pipelines (auto-paginating up to {max_total})...", json_output)
+            all_items = []
+            next_token = None
+            page_count = 0
+            while True:
+                page_count += 1
+                params = _base_params()
+                if next_token:
+                    params['startingToken'] = next_token
+                page = _message(api_client.list_pipelines(
+                    database_id=database_id, include_archived=include_archived, params=params))
+                # A page may come back empty and still carry a NextToken, so the walk continues on
+                # the token alone rather than on whether this page produced rows.
+                all_items.extend(page.get('Items', []))
+                if not json_output:
+                    output_status(f"Fetched {len(all_items)} pipelines (page {page_count})...", False)
+                next_token = page.get('NextToken')
+                if (not next_token or len(all_items) >= max_total
+                        or page_count >= MAX_PIPELINE_AUTO_PAGINATE_PAGES):
+                    break
+            result = {'Items': all_items, 'totalItems': len(all_items),
+                      'autoPaginated': True, 'pageCount': page_count}
+            # Both stop conditions carry the outstanding token: it is the only way to continue, and
+            # without it a caller chunking a large deployment has to re-walk every page already paid
+            # for (each of which re-pays the per-page authorization fan-out).
+            if next_token and len(all_items) >= max_total:
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Reached maximum of {max_total} items. More may be available — resume with "
+                    f"--starting-token {next_token}")
+            elif next_token and page_count >= MAX_PIPELINE_AUTO_PAGINATE_PAGES:
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Stopped after {page_count} pages. More may be available — narrow to a single "
+                    f"database, or resume with --starting-token {next_token}")
+            output_result(result, json_output, cli_formatter=_fmt)
+            return result
+
+        output_status("Listing pipelines...", json_output)
+        params = _base_params()
+        if starting_token:
+            params['startingToken'] = starting_token
         result = api_client.list_pipelines(
             database_id=database_id, include_archived=include_archived, params=params)
-        message = _message(result)
-
-        def _fmt(_r):
-            items = message.get('Items', [])
-            if not items:
-                # The backend filters archived + unauthorized rows after the DynamoDB page limit, so
-                # an empty page may still carry a NextToken for later pages that do contain matches.
-                if message.get('NextToken'):
-                    return ("No pipelines on this page; more pages available."
-                            f"\n\nNext token: {message['NextToken']}")
-                return "No pipelines found."
-            out = [f"Found {len(items)} pipeline(s):", "-" * 80]
-            for item in items:
-                out.append(format_pipeline(item))
-                out.append("-" * 80)
-            if message.get('NextToken'):
-                out.append(f"\nNext token: {message['NextToken']}")
-            return '\n'.join(out)
-
         output_result(_message(result), json_output, cli_formatter=_fmt)
         return result
     except DatabaseNotFoundError as e:

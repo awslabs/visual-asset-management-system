@@ -77,10 +77,9 @@ def query_all_items(table, **query_kwargs) -> List[Dict]:
     while True:
         response = table.query(**query_kwargs)
         items.extend(response.get('Items', []))
-        last_key = response.get('LastEvaluatedKey')
-        if not last_key:
+        if 'LastEvaluatedKey' not in response:
             break
-        query_kwargs['ExclusiveStartKey'] = last_key
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
     return items
 
 def get_asset_details(asset_id: str, database_id: str) -> Optional[Dict]:

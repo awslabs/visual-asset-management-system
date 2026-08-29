@@ -38,7 +38,7 @@ infra/
     core-stack.ts               # CoreVAMSStack -- root stack orchestrator
     cf-waf-stack.ts             # WAF (regional ACL for API GW/ALB; CLOUDFRONT ACL in us-east-1 when CloudFront on); rules built from config/policy/wafPolicyConfig.json
     aspects/                    # iam-role-transform.aspect.ts, log-retention.aspect.ts (1-year retention)
-    constructs/wafv2-basic-construct.ts  # Builds the WAF Web ACL from wafPolicyConfig.json: managed rule groups (block or count-only per `block`) + per-rule `ruleActionOverrides` (e.g. SizeRestrictions_BODY -> count) + rate-based rules (FORWARDED_IP aggregation + `forwardedIPConfig`, and a 429 custom-response body); count-only Common Rule Set fallback when no policy supplied
+    constructs/wafv2-basic-construct.ts  # Builds the WAF Web ACL from wafPolicyConfig.json: managed rule groups (block or count-only per `block`) + per-rule `ruleActionOverrides` (e.g. SizeRestrictions_BODY -> count) + rate-based rules (always keyed on the connection `IP`; a `FORWARDED_IP` override is accepted but not emitted and raises a synth warning, and a 429 custom-response body); count-only Common Rule Set fallback when no policy supplied
     helper/
       const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso, aws-eusc)
       iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring
@@ -93,6 +93,11 @@ infra/
   test/                          # Jest suites: route registry, OpenAPI spec, config-builder drift, WAF,
                                  # lambda grants, presigned-URL policy, migration tooling, plus the legacy
                                  # infra.test.ts snapshot (uses the outdated @aws-cdk/assert)
+    apiStackCeilings.test.ts     # Grounds the API-stack-split figures + app-wide log retention
+                                 # against the synthesized templates
+    support/templateSynth.ts     # T1 harness: synthesizes the whole app from each shipped config
+                                 # template with no Docker daemon; exposes every nested template
+    t1PartitionPortability.test.ts  # T1 assertions across commercial/govcloud/eusovereign
   deploymentDataMigration/
     tools/ssm_resource_lookup.py                 # Resolves resource names from the SSM parameters
     v2.4_to_v2.5/upgrade/                        # Backfills databaseId + databaseId:assetId on asset versions
@@ -170,7 +175,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase)
 -   `app.govCloud` (enabled, il6Compliant); `app.iamRoleConfig` (useCustomBootstrapRoles, useCustomVamsStackRoles — mappings in `config/policy/iamRoleConfig.json`); `app.webUi` (optionalBannerHtmlMessage, allowUnsafeEvalFeatures)
--   `app.useWaf` (boolean): when true, the Web ACL rules load from `config/policy/wafPolicyConfig.json` — `managedRuleGroups` (block or count-only per `block`, plus optional per-rule `ruleActionOverrides` such as `SizeRestrictions_BODY -> count` so large upload bodies up to the API Gateway REST 10 MB limit are not blocked, and `SizeRestrictions_QUERYSTRING -> count` so the SuperSplat viewer's presigned-URL `?load=` parameter is not blocked above 2048 bytes) and `rateBasedRules` (per-entry `limit`, `aggregateKeyType` `IP`/`FORWARDED_IP` with optional `forwardedIPConfig`, and `blockResponseCode` default 429). `getConfig()` loads the file into `config.wafPolicyJSON` (undefined = legacy count-only Common Rule Set). Not part of `config.json`/ConfigPublic beyond the boolean, so it is outside ConfigBuilder + the config templates.
+-   `app.useWaf` (boolean): when true, the Web ACL rules load from `config/policy/wafPolicyConfig.json` — `managedRuleGroups` (block or count-only per `block`, plus optional per-rule `ruleActionOverrides` such as `SizeRestrictions_BODY -> count` so large upload bodies up to the API Gateway REST 10 MB limit are not blocked, and `SizeRestrictions_QUERYSTRING -> count` so the SuperSplat viewer's presigned-URL `?load=` parameter is not blocked above 2048 bytes) and `rateBasedRules` (per-entry `limit` and `blockResponseCode` default 429; `aggregateKeyType`/`forwardedIPConfig` are accepted for compatibility but every rule is emitted with `IP`). `getConfig()` loads the file into `config.wafPolicyJSON` (undefined = legacy count-only Common Rule Set). Not part of `config.json`/ConfigPublic beyond the boolean, so it is outside ConfigBuilder + the config templates.
 
 `Config` extends `ConfigPublic` internally with `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `iamRoleCustomizationJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, and SSM parameter paths.
 
@@ -250,6 +255,23 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 
 Routes are registered across nested stacks (`apiBuilder-nestedStack.ts`, `apiBuilder2-nestedStack.ts`) via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })`. The pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. For each route this (1) grants the REST API's execution role invoke permission on the Lambda, and (2) adds a descriptor (path, method, function ARN, allow-anonymous flag) to `RouteRegistry`. The REST API builder then renders all descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`.
 
+### API Stack Ceilings
+
+The two API builder stacks stay split, and consolidating them would remove headroom rather than tidy anything up. Three limits govern how many endpoints a deployment can carry, and they are not the same limit:
+
+| Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
+| ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
+| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 106, `apiBuilder2` 69                             |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.40 MB, `apiBuilder2` ~0.24 MB                  |
+| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
+
+Two consequences worth holding onto:
+
+-   **Resource count understates how full an API stack is.** `apiBuilder` sits at about a fifth of the resource ceiling but two fifths of the template-body ceiling — the Lambda functions there carry long inline IAM policies and CDK Nag metadata. Both ceilings are per-template, so both are what the split buys headroom against.
+-   **Splitting the CDK stacks does not relieve the API Gateway quota.** Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. API Gateway builds it from the inline OpenAPI document, which is why no `AWS::ApiGateway::Resource` appears in any template and no per-stack ceiling applies to it. That quota is the adjustable one of the three; the CloudFormation ceilings are not.
+
+The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `test/apiStackCeilings.test.ts` asserts every figure above against the synthesized templates, so this table cannot silently go stale.
+
 ### RESTful Route Convention
 
 Routes use path parameters: `/database/{databaseId}/assets/{assetId}`. Asset version subresource routes include `PUT .../assetversions/{assetVersionId}` (update alias/comment), `POST .../{assetVersionId}/archive`, and `POST .../{assetVersionId}/unarchive`. Unauthenticated paths (no authorizer): `/api/amplify-config`, `/api/version`.
@@ -289,9 +311,13 @@ Partition(): string  // Returns current partition
 
 **Content Security Policy.** `generateContentSecurityPolicy()` in `security.ts` builds CSP headers: base sources (self, blob, data, API URL, S3 endpoint); conditional sources (Cognito IDP/Identity, Location Service, unsafe-eval); extensible via `config/csp/cspAdditionalConfig.json`.
 
+`script-src` allows the inline `<script>` blocks in `web/index.html` by **SHA-256 hash**, from the generated `INDEX_HTML_INLINE_SCRIPT_HASHES` in `lib/helper/cspInlineScriptHashes.ts`. **That file is generated — do not hand-edit it.** A hash covers the exact text content of the element, indentation included, so any edit to an inline block (a reformat is enough) invalidates it, and the browser then silently refuses to run the script. Regenerate with `cd web && npm run build && node scripts/cspInlineScriptHashes.js --ts`; `test/cspInlineScriptHashes.test.ts` recomputes from `web/index.html` and fails on drift. The full workflow lives in `web/CLAUDE.md` Rule 9.
+
+A CSP may allow inline script by hash **or** by `'unsafe-inline'`, never both — a hash source makes browsers ignore the keyword. `'unsafe-inline'` is therefore added only when the Physna add-on is enabled (its viewer renders Physna-hosted HTML in a `blob:` iframe, which inherits this policy and whose inline scripts VAMS cannot hash), which scopes the trade-off to deployments that opt in. A new viewer needing inline script widens that condition; it does not go back into the base list.
+
 **WAF rule policy.** When `config.app.useWaf` is true, `Wafv2BasicConstruct` (`constructs/wafv2-basic-construct.ts`) builds the Web ACL rules from `config/policy/wafPolicyConfig.json` via `buildRulesFromPolicy()`: managed rule groups (`overrideAction` count vs none per `block`), optional per-rule `ruleActionOverrides` mapped to `managedRuleGroupStatement.ruleActionOverrides` (`actionToUse` count/block/allow), and rate-based rules. The shipped policy overrides two Common Rule Set rules to `count`. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking (the remaining body-inspecting rules use `oversizeHandling: CONTINUE`, matching on attack signatures, not size). No `AssociationConfig` body-inspection override is needed for the 10 MB guarantee. `SizeRestrictions_QUERYSTRING` is likewise overridden to `count`: it blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter. A presigned URL carrying a session security token already approaches that limit, and the viewer requires the value double-encoded to survive its own two decode passes, which roughly doubles it again — so the iframe request for the static viewer page was blocked with a 403 before it ever reached S3.
 
-**WAF rate-based rules.** Each `rateBasedRules` entry sets `limit` (per 5-min window) and `aggregateKeyType`. The shipped `VAMS-RateLimit` uses `FORWARDED_IP` (with `forwardedIPConfig.headerName` = `X-Forwarded-For`, `fallbackBehavior` = `NO_MATCH`) so it counts the real client IP behind CloudFront/ALB/NAT rather than a shared upstream address; the same policy applies to both the CloudFront-scoped and regional ACLs. Rate blocks return a `429` (via `blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`, `APPLICATION_JSON`) registered on the ACL when any rate rule exists — distinct from the `403` used for auth denials. The web `apiClient` and the VAMS CLI both treat `429` as retryable (honor `Retry-After`, back off) rather than an auth failure. Managed-group blocks keep the WAF default 403. Test: `test/wafRateLimit.test.ts`.
+**WAF rate-based rules.** Each `rateBasedRules` entry sets `limit` (per 5-min window). Every rule is built with `aggregateKeyType: "IP"`, the address WAF observes on the connection, for both the CloudFront-scoped and the regional ACL. A `FORWARDED_IP` key is **accepted in the policy file but not emitted**, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and WAF omits a request carrying no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. Rate blocks return a `429` (via `blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`, `APPLICATION_JSON`) registered on the ACL when any rate rule exists — distinct from the `403` used for auth denials. The web `apiClient` and the VAMS CLI both treat `429` as retryable (honor `Retry-After`, back off) rather than an auth failure. Managed-group blocks keep the WAF default 403. Test: `test/wafRateLimit.test.ts`.
 
 **IAM aspects.** `IamRoleTransform` applies role name prefixes and permission boundaries (from `cdk.json` "aws" environment settings). `LogRetentionAspect` forces `RetentionDays.ONE_YEAR` on all `CfnLogGroup` resources.
 
@@ -414,11 +440,19 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 7. Mirror the **field** into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — `schema.ts` (the field) and `defaults.ts` (the presets); see its `README.md`. Then run the `infra/test/configBuilderSync.test.ts` drift check (part of `npm test`), which covers these two files.
 8. **Mirror every `getConfig()` VALIDATION rule into `ConfigBuilder/validation.ts` — by hand, in the same change.** This is the step the tooling cannot catch: the drift check verifies `schema.ts` and `defaults.ts` only, so a `throw new Error(...)` added to `getConfig()` without a matching `validation.ts` rule leaves the ConfigBuilder silently approving a configuration that fails at `cdk synth`. That is worse than no validation, because the operator has been told the config is valid.
 
-    Each rule is a `Rule` entry carrying `id`, `severity` (`error` | `warning`), `fieldPaths` (so the UI can highlight the offending fields), an `appliesWhen` predicate that returns **true when the rule is VIOLATED**, and a `message`. Keep the `// ----- Section (config.ts:NNN-NNN) -----` comment with the source line range — it is what makes the two files diffable later. Port a `console.warn` as `severity: "warning"`.
+    Each rule is a `Rule` entry carrying `id`, `severity` (`error` | `warning`), `fieldPaths` (so the UI can highlight the offending fields), an `appliesWhen` predicate that returns **true when the rule is VIOLATED**, and a `message`. Keep the `// ----- Section (config.ts: "quoted anchor") -----` comment, which names the `getConfig()` block the section mirrors by quoting that block's leading comment or error-message text — it is what makes the two files diffable later. Anchor by quoted text, not by line number: a line number goes stale silently, since a wrong one reads exactly like a right one until the file is opened. Port a `console.warn` as `severity: "warning"`.
 
     Two exclusions, so the mirror is not chased pointlessly: rules that read a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`, a file the ConfigBuilder never loads. Everything derivable from `config.json` itself belongs in `validation.ts`.
 
     Verify the port by reading both sides rather than trusting a text search: `getConfig()` and `validation.ts` word the same rule differently, so matching on message text under-reports. Compare the config field paths each rule references.
+
+9. **Keep `ConfigBuilder/derived.ts` limited to what `getConfig()` actually assigns — by hand, in the same change.** `derived.ts` is the only file in the component that can rewrite the operator's config rather than describing or validating it, and it is outside the drift check as well. An auto-mutation is any assignment in `getConfig()` that changes a value the operator supplied. Three directions to keep in step:
+
+    - **Added or changed** auto-mutation → add or adjust the matching entry in `derived.ts`.
+    - **Removed** auto-mutation (replaced by a `throw`) → **delete** it from `derived.ts`. Leaving it behind means the builder keeps silently rewriting the downloaded `config.json` in a way the deployment does not — exactly the silent topology change the `throw` exists to prevent.
+    - **A `getConfig()` constraint LIST that gains a feature** — the VPC-requiring set is the worked example → extend the matching table in `validation.ts` (`VPC_REQUIRING_FEATURES`). `getConfig()` rejects rather than assigns for these, so the mirror is an error rule, not a derivation; omitting the feature means the builder approves a config that then fails at `cdk synth`.
+
+    `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Keep the function and its `DerivedResult` contract regardless — `ConfigBuilder.commitConfig()` routes every field edit through it, and it is where a future mutation would be mirrored.
 
 ### 2. Adding a New Lambda Function
 
@@ -426,7 +460,7 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 2. Follow the standard pattern exactly (see [Lambda Builder Pattern](#lambda-builder-pattern)): `lambda.Code.fromAsset(path.join(__dirname, '../../../backend/backend'))`, `handler: handlers.{category}.${name}.lambda_handler`, `LAMBDA_PYTHON_RUNTIME`, `Duration.minutes(15)`, `Config.LAMBDA_MEMORY_SIZE`, VPC conditional on `config.app.useGlobalVpc.enabled && useForAllLambdas`
 3. Grant DynamoDB table permissions (grantReadData or grantReadWriteData)
 4. Apply the 5 security calls: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions`, `suppressCdkNagLambda`, and `suppressCdkNagErrorsByGrantReadWrite` (last only if using `grantRead*`)
-5. Wire the function via `attachFunctionToApi()`. Prefer `apiBuilder2-nestedStack.ts` for new endpoints (primary `apiBuilder-nestedStack.ts` is near the CFN per-stack resource limit). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there.
+5. Wire the function via `attachFunctionToApi()`. Prefer `apiBuilder2-nestedStack.ts` for new endpoints (see [API stack ceilings](#api-stack-ceilings) for why the two stacks stay split). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there.
 
 ### 3. Adding a New Nested Stack
 
@@ -456,6 +490,8 @@ Whenever you **add or change** an S3 bucket, DynamoDB table, or CloudWatch log g
 2. **Custom name (redeploy-collision flag)** — whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can collide on a redeploy into the same account/configuration.
 
 These axes are independent. **Retained + auto-named** resources (asset, auxiliary, artefacts, access logs buckets; all DynamoDB tables) survive teardown but do **not** block redeploy. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
+
+**The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 
 **SSM String parameters** (64 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
@@ -517,6 +553,28 @@ npx cdk destroy      # Tear down stack
 ```
 
 Note: `test/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock config. Tests may need updates when adding features.
+
+### The T1 tier: synth assertions across all three config templates
+
+`test/support/templateSynth.ts` synthesizes the entire app from `config.template.{commercial,govcloud,eusovereign}.json` and exposes every emitted nested template for assertion. This is the **only** validation GovCloud and EU Sovereign get, because no environment exists for either — so a partition defect otherwise ships and surfaces as a `CREATE_FAILED` mid-deploy.
+
+```typescript
+const s = synthTemplate("govcloud");
+const withTags = s.ofType("AWS::Lambda::EventSourceMapping").filter((m) => "Tags" in m.properties);
+expectAbsent("EventSourceMapping with Tags", withTags, {
+    description: "govcloud emits mappings at all",
+    count: s.ofType("AWS::Lambda::EventSourceMapping").length,
+});
+```
+
+Four things to know before writing one:
+
+-   **`expectAbsent()` requires a positive control.** A negative assertion on a restricted partition is satisfied equally by correct behaviour and by a template that emitted nothing. The control is a required argument so it cannot be forgotten.
+-   **Docker is not required, but avoiding it takes two steps.** `lambdaLayersBuilder-nestedStack.ts:36` calls `cdk.DockerImage.fromBuild()` as an _eager argument_ to `bundling.image`, so it runs before CDK consults its bundling-skip logic. `aws:cdk:bundling-stacks: []` alone does **not** avoid the docker build; the harness also stubs the static. (`infra.test.ts` and `genAiPipelineConstructs.test.ts` do neither, which is why they fail whenever Docker Desktop is not running — finding `S17-TEST-001`.)
+-   **Assertions must run over the assembly, not one stack.** VAMS puts nearly everything in nested stacks, so `Template.fromStack(root)` sees ~17 resources out of ~600.
+-   **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix and then a token boundary, so an assertion written that way passes while checking nothing. Use `SynthResult.flatten()`.
+
+The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
 
 ### Platform-Specific Native Bindings in the Lockfile
 

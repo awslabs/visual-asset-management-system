@@ -20,7 +20,7 @@ sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGIO
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, orchestration_event_prefix=""):
+                                        , executing_userName, executing_requestContext, orchestration_event_prefix="", asset_id=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -34,7 +34,11 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
-        "orchestrationEventPrefix": orchestration_event_prefix
+        "orchestrationEventPrefix": orchestration_event_prefix,
+        # The asset the run's input file belongs to. constructPipeline locates the file's
+        # subdirectory within the asset with it, so the converted file is described - and written -
+        # beside its source rather than at the asset root.
+        "assetId": asset_id
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -130,7 +134,7 @@ def lambda_handler(event, context):
         execute_pipeline(resolved['inputS3AssetFilePath'], resolved['outputS3AssetFilesPath'], resolved['outputS3AssetPreviewPath']
                                             , resolved['outputS3AssetMetadataPath'], resolved['inputOutputS3AssetAuxiliaryFilesPath']
                                             , resolved['inputMetadataS3Location'], resolved['inputConfigurationS3Location'], external_task_token, executing_userName,
-                                            executing_requestContext, resolved['orchestrationEventPrefix'])
+                                            executing_requestContext, resolved['orchestrationEventPrefix'], resolved['assetId'])
 
         return {
             'statusCode': 200,

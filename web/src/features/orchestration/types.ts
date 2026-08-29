@@ -17,7 +17,9 @@ export type ExecutionStatus =
     | "FAILED"
     | "ABORTED"
     | "TIMED_OUT"
-    // Legacy terminal value carried by migrated execution rows; treated as a success.
+    // Legacy terminal value. No row this module reads carries it — the v2.5 upgrade rewrites a stored
+    // COMPLETE to SUCCEEDED before the row is written — so it is accepted and rendered as a success
+    // only so an unmapped value from an older record cannot fall through as a blank status.
     | "COMPLETE";
 
 export interface PipelineExecutionConfig {

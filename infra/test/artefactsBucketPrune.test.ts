@@ -25,6 +25,7 @@ import * as Service from "../lib/helper/service-helper";
 import commercialTemplate from "../config/config.template.commercial.json";
 import { storageResourcesBuilder } from "../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import { ResourceNameRegistry } from "../lib/nestedStacks/resourceNames/resourceNameRegistry";
+import { newTestApp } from "./support/testApp";
 
 const mockConfig = (): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
@@ -45,7 +46,7 @@ describe("artefacts bucket deployment", () => {
         const config = mockConfig();
         Service.SetConfig(config);
 
-        const app = new cdk.App();
+        const app = newTestApp();
         const stack = new cdk.Stack(app, "S", {
             env: { account: config.env.account, region: config.env.region },
         });

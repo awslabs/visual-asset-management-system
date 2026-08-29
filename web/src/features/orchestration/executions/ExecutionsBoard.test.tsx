@@ -1144,3 +1144,104 @@ describe("ExecutionsBoard asset-scope workflow filter", () => {
         expect(screen.queryByLabelText("Filter by workflow")).not.toBeInTheDocument();
     });
 });
+
+/**
+ * What the board tells the reader about the SCOPE of a search or a sort.
+ *
+ * Both run over the pages fetched so far, against a server order fixed newest-first, so an
+ * unqualified "not found" reports absence for an execution that exists on a page nobody has loaded.
+ *
+ * The row-identity half of this concern lives in ExecutionsBoard.rowIdentity.test.tsx, which asserts
+ * the `getRowId` the board supplies rather than depending on a Radix menu surviving a jsdom rerender.
+ */
+describe("ExecutionsBoard loaded-page scope", () => {
+    let queryClient: QueryClient;
+    const actions = {
+        abortExecution: { mutateAsync: jest.fn() },
+        rerunExecution: { mutateAsync: jest.fn() },
+        permanentDeleteExecution: { mutateAsync: jest.fn() },
+    };
+
+    const row = (id: string, status: string, start: string): Execution =>
+        ({
+            workflowExecutionId: id,
+            workflowId: "wf-1",
+            workflowDatabaseId: "db-1",
+            executionStatus: status,
+            triggeredByUserId: "user-1",
+            triggerType: "manual",
+            executionStartDate: start,
+        } as Execution);
+
+    const show = (rows: Execution[], hasNextPage = false) => {
+        const { useExecutions } = require("../api/queries");
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: rows }], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage,
+            isFetchingNextPage: false,
+            refetch: jest.fn(),
+        });
+    };
+
+    const board = (
+        <MemoryRouter>
+            <ExecutionsBoard scope={{ kind: "global" }} />
+        </MemoryRouter>
+    );
+
+    beforeEach(() => {
+        cleanup();
+        jest.clearAllMocks();
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const { useExecutionActions } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionActions.mockReturnValue(actions);
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+    });
+
+    it("says the search covered only the loaded pages rather than reporting absence", async () => {
+        show([row("exec-1", "SUCCEEDED", "2026-08-01T09:00:00Z")], true);
+        render(<QueryClientProvider client={queryClient}>{board}</QueryClientProvider>);
+
+        // Control: with no term there is nothing to qualify.
+        expect(screen.queryByText(/No matches among/)).not.toBeInTheDocument();
+
+        await userEvent.type(screen.getByLabelText("Search"), "exec-on-a-later-page");
+
+        expect(screen.getByText(/No matches among the 1 execution loaded/)).toBeInTheDocument();
+        expect(screen.queryByText("No executions found.")).not.toBeInTheDocument();
+    });
+
+    it("reports a plain no-match once every page is loaded", async () => {
+        show([row("exec-1", "SUCCEEDED", "2026-08-01T09:00:00Z")], false);
+        render(<QueryClientProvider client={queryClient}>{board}</QueryClientProvider>);
+
+        await userEvent.type(screen.getByLabelText("Search"), "nope");
+
+        expect(screen.getByText('No executions match "nope".')).toBeInTheDocument();
+        expect(screen.queryByText(/load more to search further/)).not.toBeInTheDocument();
+    });
+
+    it("qualifies a column sort while more pages remain unloaded", async () => {
+        show(
+            [
+                row("exec-1", "SUCCEEDED", "2026-08-01T09:00:00Z"),
+                row("exec-2", "SUCCEEDED", "2026-08-01T08:00:00Z"),
+            ],
+            true
+        );
+        render(<QueryClientProvider client={queryClient}>{board}</QueryClientProvider>);
+
+        // Control: an unsorted table makes no claim about scope, so nothing is said.
+        expect(screen.queryByText(/Sorted within/)).not.toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole("button", { name: /Execution ID/ }));
+
+        expect(
+            screen.getByText(/Sorted within the 2 executions loaded so far/)
+        ).toBeInTheDocument();
+    });
+});

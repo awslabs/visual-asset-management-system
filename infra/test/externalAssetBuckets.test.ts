@@ -141,4 +141,54 @@ describe("validateExternalAssetBuckets", () => {
             /overlapping baseAssetsPrefix/
         );
     });
+
+    // Amazon S3 requires an event-notification destination to be in the same region as the
+    // bucket, and VAMS creates its notification topics in the deployment region. Without this
+    // guard the mismatch surfaces only as a PutBucketNotificationConfiguration InvalidArgument
+    // from a custom resource, well into the deploy.
+    describe("bucketRegion must match the deployment region", () => {
+        test("rejects a bucket in a different region than the deployment", () => {
+            const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "eu-west-1" })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
+            ).toThrow(/does not match the deployment region/);
+        });
+
+        test("accepts a bucket in the deployment region", () => {
+            const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "us-east-1" })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
+            ).not.toThrow();
+        });
+
+        test("accepts an omitted bucketRegion, which defaults to the deployment region", () => {
+            const buckets = [entry({ bucketAccountId: "222222222222" })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
+            ).not.toThrow();
+        });
+
+        test("treats UNDEFINED bucketRegion as omitted rather than as a mismatch", () => {
+            const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "UNDEFINED" })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
+            ).not.toThrow();
+        });
+
+        test("skips the check when the deployment region is unknown at synth", () => {
+            const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "eu-west-1" })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", undefined)
+            ).not.toThrow();
+        });
+
+        test("names both regions so the operator can see which to change", () => {
+            const buckets = [
+                entry({ bucketAccountId: "222222222222", bucketRegion: "ap-southeast-2" }),
+            ];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-west-2")
+            ).toThrow(/ap-southeast-2[\s\S]*us-west-2/);
+        });
+    });
 });

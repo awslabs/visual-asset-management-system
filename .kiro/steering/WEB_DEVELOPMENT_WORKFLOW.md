@@ -2,7 +2,7 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
-> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `web/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
 ## 🏗️ **Architecture Overview**
 
@@ -434,6 +434,39 @@ When system-wide frontend standards change (new rules, new patterns, new convent
 1. `web/CLAUDE.md` -- frontend steering document
 2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
 3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
+
+### **Rule 18: Regenerate the CSP Hashes After Editing an Inline Script in `index.html`**
+
+`web/index.html` carries inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer` probe, the pre-render theme application). The CDK Content-Security-Policy allows them by **SHA-256 hash** rather than by `'unsafe-inline'`, so an injected inline script is still blocked.
+
+A CSP hash covers the **exact text content** of the element -- every byte between the tags, indentation included. Adding a line, renaming a variable, or letting Prettier reindent the block invalidates its hash. The browser then refuses to run that script, the app breaks at runtime, and **nothing fails at build time**.
+
+**Any edit to an inline `<script>` block in `web/index.html` -- including a pure reformat -- requires regenerating the hashes and updating the CDK constant in the same change:**
+
+```bash
+cd web && npm run build                        # hash the HTML that is actually served
+node scripts/cspInlineScriptHashes.js --ts     # emit the TypeScript constant
+# paste over INDEX_HTML_INLINE_SCRIPT_HASHES in infra/lib/helper/cspInlineScriptHashes.ts
+cd ../infra && npx jest test/cspInlineScriptHashes.test.ts   # drift guard must pass
+```
+
+Omit `--ts` for a readable per-block listing.
+
+| File                                        | Role                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                            | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`      | Generator -- hashes every inline block, skips any with a `src` attribute |
+| `infra/lib/helper/cspInlineScriptHashes.ts` | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`              | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/cspInlineScriptHashes.test.ts`  | Recomputes from `index.html` and fails on drift                          |
+
+**A hash and `'unsafe-inline'` are mutually exclusive.** A CSP may allow inline script by hash **or** by the `'unsafe-inline'` keyword, never both -- when a hash source is present, browsers ignore `'unsafe-inline'` entirely. The two are not additive, so `'unsafe-inline'` cannot be kept as a fallback.
+
+For that reason `generateContentSecurityPolicy()` emits `'unsafe-inline'` **only** when the Physna add-on is enabled: that viewer renders Physna-hosted HTML in a `blob:` iframe, a `blob:` document inherits the parent page's CSP, and its inline scripts are not ours to hash. Enabling the add-on trades hash protection for viewer compatibility, scoped to the deployments that opt in.
+
+If a **new** viewer plugin needs inline script, widen that condition (or add a dedicated `app.webUi` flag) rather than returning `'unsafe-inline'` to the base `script-src` list -- the base list is what protects a default deployment.
+
+An external `<script src="...">` needs no hash; it is matched by host-source. It may still need its origin added to `script-src`/`connect-src`.
 
 ---
 

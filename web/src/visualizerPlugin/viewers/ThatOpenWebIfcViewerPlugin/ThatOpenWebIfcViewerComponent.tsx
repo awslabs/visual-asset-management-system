@@ -11,7 +11,12 @@ import LoadingSpinner from "../../components/LoadingSpinner";
 import { ThatOpenWebIfcDependencyManager } from "./dependencies";
 import ThatOpenWebIfcPanel from "./ThatOpenWebIfcPanel";
 import { IfcViewerInstance, SelectedElement, SpatialNode } from "./types";
-import { extractIfcBytes, loadIfcModel, fitCameraToModels } from "./utils/ifcLoader";
+import {
+    assertIfcSizeWithinLimit,
+    extractIfcBytes,
+    loadIfcModel,
+    fitCameraToModels,
+} from "./utils/ifcLoader";
 import { buildSpatialTree } from "./utils/spatialTree";
 
 // Self-hosted Fragments model worker, copied next to the bundle by the
@@ -27,7 +32,6 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
     assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const [config] = useState(appCache.getItem("config"));
     const [bundleReady, setBundleReady] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
@@ -73,6 +77,9 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
 
     // ---- Step 2: build world, fetch + load the IFC, wire selection ----
     useEffect(() => {
+        // Read at effect time rather than captured at mount: /api/secure-config
+        // may still have been in flight when this component first rendered.
+        const config = appCache.getItem("config");
         if (
             !assetKey ||
             initializationRef.current ||
@@ -83,6 +90,20 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
             return;
         }
         initializationRef.current = true;
+        // The previous run's cleanup set this to abandon its load; this run is a
+        // new file and must not inherit that.
+        loadingCancelledRef.current = false;
+
+        // A re-run means a different file: go back to the loading state so the
+        // panel and HUD don't stay mounted against the disposed scene.
+        setSceneReady(false);
+        setIsLoading(true);
+        setError(null);
+        setSpatialTree(null);
+        setSelectedElement(null);
+        setSelectedLocalIds([]);
+        setElementCount(0);
+        setLoadingMessage("Initializing viewer...");
 
         const handleResize = () => {
             const inst = viewerInstanceRef.current;
@@ -171,6 +192,12 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                     throw new Error(
                         `Failed to load: ${assetKey.split("/").pop()} (${response.status})`
                     );
+                }
+                // Refuse before buffering: arrayBuffer() on a multi-GB file takes
+                // the tab down with no error to show the user.
+                const declaredLength = Number(response.headers.get("content-length"));
+                if (declaredLength > 0) {
+                    assertIfcSizeWithinLimit(declaredLength, "This IFC file");
                 }
                 const arrayBuffer = await response.arrayBuffer();
                 if (loadingCancelledRef.current) return;
@@ -296,10 +323,13 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                 console.warn("ThatOpenWebIfc: dispose error:", disposeErr);
             }
             viewerInstanceRef.current = null;
+            // Released so a re-run for the next file initializes instead of
+            // returning at the guard and leaving an empty container.
+            initializationRef.current = false;
             ThatOpenWebIfcDependencyManager.cleanup();
             console.log("ThatOpenWebIfc Viewer: Cleanup complete");
         };
-    }, [bundleReady, assetKey, assetId, databaseId, versionId, assetVersionId, config]);
+    }, [bundleReady, assetKey, assetId, databaseId, versionId, assetVersionId]);
 
     // Escape hides the control panel (matches the Three.js viewer's shortcut).
     // Ignore keypresses that originate from text inputs so typing isn't hijacked.
@@ -353,36 +383,44 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
         }
     }, []);
 
-    if (error) {
-        return (
+    // The failure message is an overlay rather than a replacement tree: returning
+    // early here unmounts the container the load effect needs, so the next file
+    // opened in this viewer would stop at that guard and keep showing this error.
+    const errorOverlay = error ? (
+        <div
+            style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: "#f5f5f5",
+                zIndex: 1001,
+            }}
+        >
             <div
-                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
-                id="thatopenwebifc-viewer-root"
+                style={{
+                    color: "#d13212",
+                    fontSize: "1.4em",
+                    lineHeight: "1.5",
+                    maxWidth: "800px",
+                    position: "absolute",
+                    top: "50%",
+                    left: "50%",
+                    transform: "translate(-50%, -50%)",
+                    textAlign: "center",
+                    padding: "20px",
+                }}
             >
-                <div
-                    style={{
-                        color: "#d13212",
-                        fontSize: "1.4em",
-                        lineHeight: "1.5",
-                        maxWidth: "800px",
-                        position: "absolute",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
-                        textAlign: "center",
-                        padding: "20px",
-                    }}
-                >
-                    {error}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a supported IFC (.ifc / .ifczip) format
-                    </span>
-                </div>
+                {error}
+                <br />
+                <br />
+                <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                    Please ensure the file is a supported IFC (.ifc / .ifczip) format
+                </span>
             </div>
-        );
-    }
+        </div>
+    ) : null;
 
     return (
         <div
@@ -393,7 +431,13 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                 ref={containerRef}
                 style={{ width: "100%", height: "100%" }}
                 id="thatopenwebifc-viewer-container"
+                role="img"
+                aria-label={`IFC building model 3D view${
+                    assetKey ? `: ${assetKey.split("/").pop()}` : ""
+                }`}
             />
+
+            {errorOverlay}
 
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 

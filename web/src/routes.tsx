@@ -7,10 +7,15 @@ import React, { Suspense, useEffect, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { checkWebRoutesAllowed } from "./services/webRoutesCheck";
 import AppLayout from "@cloudscape-design/components/app-layout";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import { Navigation } from "./layout/Navigation";
 import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
@@ -236,6 +241,30 @@ function CenterSpinner() {
     );
 }
 
+/**
+ * Rendered in place of a page whose render threw. Sits inside AppLayout's content slot so
+ * the header, side navigation and footer stay on screen and the user keeps a way out.
+ */
+export function PageErrorPanel({ onHome }: { onHome: () => void }) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="error"
+                statusIconAriaLabel="Error"
+                header="Something went wrong on this page"
+                action={
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Button onClick={onHome}>Go to Home</Button>
+                        <Button onClick={() => window.location.reload()}>Reload</Button>
+                    </SpaceBetween>
+                }
+            >
+                This page could not be displayed. The rest of the application is still available.
+            </Alert>
+        </Box>
+    );
+}
+
 export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
     const location = useLocation();
     const navigate = useNavigate();
@@ -245,21 +274,12 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     //Used to detect duplicate/stacked hash route pathing and correct
     //Note: This will null out any state passing for the naviagation and may break a a state passing page if triggered
     useEffect(() => {
-        console.log("Location changed: ", window.location.href);
-        console.log("user", user);
-
         const hashes = window.location.href.match(/#/g) || [];
-        console.log("Hash Count in URL: ", hashes.length);
 
         if (hashes.length > 1) {
-            const { state } = location;
-            console.log("Previous State Recorded: ", state);
-
             const segments = window.location.href.split("#/");
-
-            //console.log('Total URL Segments Found: ', segments);
-
             const fragmentWeWant = segments.pop();
+
             console.log(
                 "HashRoute Duplicate Detected, Re-routing to Last Hash:",
                 `#/${fragmentWeWant}`
@@ -267,8 +287,6 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
 
             const url = new URL(window.location.href);
             url.hash = `#/${fragmentWeWant}`;
-
-            console.log("Full URL Redirect:", url.href);
 
             window.location.href = url.toString();
         }
@@ -333,9 +351,16 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                             loading ? (
                                 <CenterSpinner />
                             ) : (
-                                <Suspense fallback={<CenterSpinner />}>
-                                    <Page />
-                                </Suspense>
+                                // Suspense catches the lazy-load promise, not a render error.
+                                // Without a boundary here an uncaught error in any page
+                                // unmounts the whole root and leaves a blank screen.
+                                <ErrorBoundary
+                                    fallback={<PageErrorPanel onHome={() => navigate("/")} />}
+                                >
+                                    <Suspense fallback={<CenterSpinner />}>
+                                        <Page />
+                                    </Suspense>
+                                </ErrorBoundary>
                             )
                         }
                         navigation={<Navigation activeHref={active} user={user} />}

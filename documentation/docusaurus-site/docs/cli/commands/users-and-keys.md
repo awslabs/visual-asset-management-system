@@ -53,7 +53,7 @@ Each entry reports `userId`, `email`, `phone` (if set), `userStatus`, `enabled`,
 
 ## user cognito create
 
-Create a new user. Amazon Cognito generates a temporary password that is returned in the response; the user must change it on first login.
+Create a new user. Amazon Cognito generates a temporary password and emails it to the user; it is not returned in the response and cannot be read from the command output. The user must change it on first login.
 
 ```bash
 vamscli user cognito create -u <USER_ID> -e <EMAIL> [OPTIONS]
@@ -128,7 +128,7 @@ This action is permanent and cannot be undone. All user data and sessions are re
 
 ## user cognito reset-password
 
-Reset a user's password. Amazon Cognito generates a new temporary password that is returned in the response; the user must change it on their next login.
+Reset a user's password. Amazon Cognito emails the user a reset code, or — for an account that has never completed a first sign-in — a new invitation carrying a fresh temporary password. Nothing is returned in the response, so the new credential cannot be read from the command output. The user must change their password on their next login.
 
 ```bash
 vamscli user cognito reset-password -u <USER_ID> --confirm [OPTIONS]

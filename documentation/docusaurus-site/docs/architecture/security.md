@@ -39,7 +39,7 @@ SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS
 | Field                 | Description                                                                                                                                                                          |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `name`                | Identifies the SAML identity provider in the Amazon Cognito User Pool and in the web UI                                                                                              |
-| `cognitoDomainPrefix` | DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL (for example, `https://\{prefix\}.auth.\{region\}.amazoncognito.com/saml2/idpresponse`) |
+| `cognitoDomainPrefix` | DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL (for example, `https://{prefix}.auth.{region}.amazoncognito.com/saml2/idpresponse`) |
 | `metadataContent`     | URL of your SAML metadata. Can also point to a local file if `metadataType` is changed to `cognito.UserPoolIdentityProviderSamlMetadataType.FILE`                                    |
 | `attributeMapping`    | Maps SAML attributes back to VAMS (email, fullname)                                                                                                                                  |
 
@@ -47,7 +47,7 @@ SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS
 
 #### OIDC Federation
 
-OIDC federation enables the same federated access through an OpenID Connect provider instead of SAML. Amazon Cognito acts as the relying party, discovering the provider's endpoints from `\{issuerUrl\}/.well-known/openid-configuration`.
+OIDC federation enables the same federated access through an OpenID Connect provider instead of SAML. Amazon Cognito acts as the relying party, discovering the provider's endpoints from `{issuerUrl}/.well-known/openid-configuration`.
 
 :::warning[Commercial partition only]
 OIDC federation uses the Amazon Cognito hosted UI, which is not available in AWS GovCloud (US) or the AWS European Sovereign Cloud. Configuration validation rejects `useOidc` in those partitions. Use the external OAuth identity provider option for federated sign-in there.
@@ -119,7 +119,8 @@ VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, provi
 -   **Payload Format Version 2.0**: Simple boolean responses (`isAuthorized: true/false`)
 -   **Comprehensive JWT Claims Context**: All JWT claims are passed to downstream Lambda functions
 -   **Public Key Caching**: `CACHE_TTL` (1 hour) for JWKS public keys to reduce external API calls
--   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names
+-   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names, or `USER_ROLES_EMPTY_CACHE_TTL` (5 seconds) when the lookup resolves to no roles
+-   **Authorizer Result Caching**: applied by Amazon API Gateway on top of the caches above — `AUTH_CACHE_TTL_SECONDS` (30 seconds) keyed on the `Authorization` header for authenticated routes, `ANON_AUTH_CACHE_TTL_SECONDS` (900 seconds) keyed on the source IP for anonymous routes
 -   **API Key Caching**: `API_KEY_CACHE_TTL` (15 seconds) per key, including negative results for unknown keys
 -   **Dedicated Lambda Layer**: Isolated dependencies for security and performance
 
@@ -181,7 +182,7 @@ elif 'lambdaCrossCall' in event:
 
 #### Role Resolution
 
-The `vams:roles` context value is resolved by the custom Lambda authorizer, which reads the caller's assigned roles from the user roles table after verifying the presented credential and passes them to handler Lambda functions through the authorizer context. Resolved roles are cached per user for `USER_ROLES_CACHE_TTL` (60 seconds); an empty role list is cached as well, so a user with no roles does not re-query the table on every request. Resolving roles at authorization time applies to every authentication mechanism — Amazon Cognito, an external OAuth identity provider, and API keys — and means a role assignment or revocation takes effect within that cache lifetime rather than persisting for the lifetime of an issued token. The Amazon Cognito pre-token-generation trigger therefore populates only `vams:tokens` and `email`, leaving `vams:roles` empty in the token itself.
+The `vams:roles` context value is resolved by the custom Lambda authorizer, which reads the caller's assigned roles from the user roles table after verifying the presented credential and passes them to handler Lambda functions through the authorizer context. Resolved roles are cached per user for `USER_ROLES_CACHE_TTL` (60 seconds); an empty role list is cached as well, so a user with no roles does not re-query the table on every request, but only for the shorter `USER_ROLES_EMPTY_CACHE_TTL` (5 seconds) — the API key path denies a caller that resolves to no roles, and a full-lifetime empty entry would keep denying a machine identity for a minute after its role was granted. Resolving roles at authorization time applies to every authentication mechanism — Amazon Cognito, an external OAuth identity provider, and API keys — and means a role assignment or revocation takes effect within that cache lifetime rather than persisting for the lifetime of an issued token. Amazon API Gateway caches the authorizer result itself for `AUTH_CACHE_TTL_SECONDS` (30 seconds) on authenticated routes, a Deny included, so that is the floor on how quickly a first grant to a previously roleless identity becomes visible — roughly 30 seconds rather than 5. The Amazon Cognito pre-token-generation trigger therefore populates only `vams:tokens` and `email`, leaving `vams:roles` empty in the token itself.
 
 Authorization decisions do not depend on this context value: `CasbinEnforcer` independently reads the caller's roles from the user roles table when it builds policy. The context value carries the resolved roles for handler-side use and records them in the audit logs.
 
@@ -295,10 +296,18 @@ object before enforcement, so a constraint on either one evaluates against the r
 
 Roles can require MFA verification. When a role has `mfaRequired=True`, it is only active when the user's authentication claims include `mfaEnabled=True`. This provides an additional security layer for privileged operations.
 
-The API Gateway custom authorizer performs the MFA check: after verifying the caller's JWT, it calls the customizable `customMFATokenScopeCheckOverride` hook (`customConfigCommon/customAuthClaimsCheck.py`) and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. For Amazon Cognito, the default hook reads the user's MFA preference with the `AdminGetUser` API (cached per user per sign-in session); for external OAuth IDPs, organizations implement their own MFA verification in the hook. Handler Lambda functions read this context value and need no identity provider access of their own. The check runs against Amazon Cognito over the public service endpoint, so it requires the authorizer to have a network path to Amazon Cognito.
+The API Gateway custom authorizer performs the MFA check: after verifying the caller's JWT, it calls the customizable `customMFATokenScopeCheckOverride` hook (`customConfigCommon/customAuthClaimsCheck.py`) and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. The hook selects its behavior from the `COGNITO_AUTH_ENABLED` environment variable, which is set on the authorizer Lambda only. When it is `TRUE`, the default hook reads the user's MFA preference with the Amazon Cognito `AdminGetUser` API (cached per user per sign-in session); otherwise the hook takes a marked slot for organization-specific external OAuth IDP logic, which returns `False` until that logic is supplied. Handler Lambda functions read the resulting context value and need no identity provider access of their own. The check runs against Amazon Cognito over the public service endpoint, so it requires the authorizer to have a network path to Amazon Cognito.
 
-:::warning[MFA requires the authorizer to run outside the VPC]
-VAMS does not create Amazon Cognito VPC interface endpoints, so an authorizer running inside the VPC has no in-VPC path to Amazon Cognito. When VAMS Lambda functions run in the VPC (`app.useGlobalVpc.useForAllLambdas`), the Cognito MFA check is disabled (`COGNITO_AUTH_ENABLED = FALSE` on the authorizer Lambda) and `mfaRequired` on a role has no effect. The MFA check (`COGNITO_AUTH_ENABLED = TRUE`) and MFA-aware role enforcement apply only when the authorizer runs outside the VPC.
+The hook resolves to `false` in each of the following cases, leaving every role with `mfaRequired=True` inactive for the session:
+
+-   **External OAuth IDP authentication.** `COGNITO_AUTH_ENABLED` is `TRUE` only when `app.authProvider.useCognito.enabled` is set, and the two authentication providers are mutually exclusive, so an `app.authProvider.useExternalOAuthIdp` deployment always takes the external branch of the hook.
+-   **VAMS Lambda functions running in the VPC.** VAMS does not create Amazon Cognito VPC interface endpoints, so an authorizer running inside the VPC has no in-VPC path to Amazon Cognito. When `app.useGlobalVpc.useForAllLambdas` is enabled the Cognito MFA check is disabled (`COGNITO_AUTH_ENABLED = FALSE`) regardless of the authentication provider, so this applies to an Amazon Cognito deployment as well.
+-   **API key authentication.** The authorizer builds an API key request's context from the stored key record and sets no `vams:mfaEnabled` value, which handler Lambda functions read as `false`.
+-   **An MFA factor that is not registered in the user pool.** The default hook reports MFA from the MFA methods registered for the user in the Amazon Cognito user pool (`UserMFASettingList`). It does not inspect the presented token, so an `amr` or `acr` claim asserting an MFA factor — including one satisfied at a provider federated into the user pool — is not read.
+-   **A hook that cannot resolve a status.** If the hook module is unavailable, raises, or has no user pool identifier to query, the authorizer records `false`.
+
+:::warning[An inactive MFA-required role fails silently]
+A role that is inactive for a session is dropped whole: its `deny` constraints go with its `allow` constraints. An `allow` in an MFA-required role therefore never grants access, and a `deny` written there to carve an exception out of a broader grant held by another role is simply absent. The role drops out while the policy is compiled, so the outcome is an ordinary 403 or an ordinary success and not an error that names the role — the one exception is the role named by `app.authProvider.authorizerOptions.defaultUserRoleName`, whose omission is logged. To use MFA-required roles on a deployment whose MFA state the default hook does not resolve, supply the verification logic in the marked external OAuth IDP section of `customConfigCommon/customAuthClaimsCheck.py`. Nothing downstream changes: the value the hook returns reaches Casbin through the authorizer context. Because identity providers differ in how they assert an MFA factor, VAMS ships no default implementation for that branch.
 :::
 
 ### Policy Caching
@@ -309,7 +318,7 @@ The Casbin enforcer caches compiled user policies per user for `CASBIN_REFRESH_P
 
 Pipelines can invoke customer-registered AWS Lambda functions, so the pipeline-management Lambda holds an `iam:PassRole` grant scoped by role-name pattern rather than to a single fixed role ARN. This is intentional: it lets an operator register pipelines that run under different roles without a CDK change for each one. Two controls bound this openness — the Casbin API-tier authorization gates who may create or update a pipeline (`pipeline` object type), and `iam:PassRole` can only pass roles within the same account.
 
-To narrow the scope in a hardened deployment, give the roles VAMS pipelines are allowed to assume a common, dedicated name prefix (for example `\{config.name\}-pipeline-*`) and tighten the `iam:PassRole` resource in the pipeline Lambda builder to that prefix and to the deployment account, rather than an account-wildcard name-substring pattern. Keeping a prefix pattern (rather than a single ARN) preserves the ability to register multiple pipeline roles while removing the account wildcard.
+To narrow the scope in a hardened deployment, give the roles VAMS pipelines are allowed to assume a common, dedicated name prefix (for example `{config.name}-pipeline-*`) and tighten the `iam:PassRole` resource in the pipeline Lambda builder to that prefix and to the deployment account, rather than an account-wildcard name-substring pattern. Keeping a prefix pattern (rather than a single ARN) preserves the ability to register multiple pipeline roles while removing the account wildcard.
 
 ## Encryption
 
@@ -409,7 +418,7 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | ----------------- | --------------------------------------------------------------- |
 | `base-uri`        | `'none'`                                                        |
 | `default-src`     | `'none'`                                                        |
-| `script-src`      | `'self'`, `'unsafe-hashes'`, `'unsafe-inline'`                  |
+| `script-src`      | `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, per-script SHA-256 hashes |
 | `style-src`       | `'self'`, `'unsafe-inline'`                                     |
 | `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint |
 | `worker-src`      | `'self'`, `blob:`, `data:`                                      |
@@ -422,7 +431,34 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | `manifest-src`    | `'self'`                                                        |
 
 :::note[Framing directives]
-`frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes used by add-on viewers (such as the Physna Viewer). `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
+`frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes. A viewer that frames a third-party document needs that document's origin added as well, which is what the Physna Sync add-on contributes in the conditional table below. `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
+:::
+
+:::note[Inline scripts are allowed by hash]
+`script-src` permits the inline `<script>` blocks in the web application's `index.html` by SHA-256 hash
+rather than by the `'unsafe-inline'` keyword, so an inline script injected into a page is still blocked. A
+hash source matches only the exact script bytes it was computed from, and the hash list is generated from
+the built HTML rather than maintained by hand.
+
+The hash list is specific to `index.html`. The policy is delivered as a response header for the whole web
+distribution, so it also governs the other HTML documents served from the web bucket — including the
+SuperSplat editor's own `index.html` under `/viewers/supersplat/`, whose upstream inline service-worker
+registration carries no hash and therefore does not run. That block registers an offline cache for the
+editor; the editor itself loads from an external script file, which `'self'` matches. A served document that
+requires an inline script needs hashes computed from that document.
+
+A Content Security Policy may allow inline script by hash **or** by `'unsafe-inline'`, never both — when a
+hash source is present, browsers ignore the keyword. The two are therefore not additive, and `script-src`
+carries `'unsafe-inline'` in no deployment configuration: the hashes are the mechanism, and the keyword
+alongside them would be ignored. An `'unsafe-inline'` entry added to `scriptSrc` through the extensible CSP
+configuration is rejected with a warning at synthesis time for the same reason.
+
+Two other `'unsafe-*'` sources do appear in `script-src`, neither of which permits an arbitrary inline
+script. `'unsafe-hashes'` is unconditional and extends hash matching to inline event handlers and
+`javascript:` URLs. `'wasm-unsafe-eval'` is also unconditional — it permits WebAssembly compilation for the
+WASM-based viewer plugins and is not an inline-script keyword, so it neither relies on nor competes with the
+hash sources. The broader `'unsafe-eval'`, which those viewers' JavaScript loaders also require, is added
+when `app.webUi.allowUnsafeEvalFeatures` is enabled.
 :::
 
 ### Conditional CSP Sources
@@ -434,11 +470,25 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | External OAuth IDP               | IDP auth provider URL in `connect-src`                                   |
 | `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins) |
 | Amazon Location Service enabled  | Maps endpoint in `connect-src`                                           |
-| Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`                    |
+| Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`. The add-on adds no `script-src` source, and in particular no `'unsafe-inline'` |
+
+:::note[The Physna add-on does not relax inline-script protection]
+The Physna viewer embeds Physna's hosted viewer URL directly as the `src` of an `<iframe>`, so the framed
+document is cross-origin and loads under **Physna's** Content Security Policy. Its inline `<script>` blocks
+are governed by that policy, not by the VAMS policy, which is why the add-on needs only the Physna origin in
+`frame-src` and `connect-src`.
+
+Relaxing `script-src` would not reach the viewer. Only a `blob:` or `srcdoc` document inherits the embedding
+page's policy; a cross-origin `src` does not. Adding `'unsafe-inline'` for the add-on would therefore have no
+effect inside the iframe, and none on a VAMS page either, since the hash sources make browsers ignore the
+keyword. The hash-based protection is identical whether or not the add-on is enabled.
+:::
 
 ### Extensible CSP
 
 Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, `styleSrc`, and `frameSrc` arrays.
+
+Entries are screened when the file is read at synthesis time. A non-string or empty entry is skipped with a warning, as is an `'unsafe-inline'` entry in `scriptSrc` — the inline-script hashes make browsers ignore that keyword, so accepting it would lengthen the policy without permitting anything. Inline script in a served document is permitted by adding a hash computed from that document. Every other source, including a script origin and `'unsafe-eval'`, merges into its directive as written.
 
 ## IP Range Restrictions
 
@@ -463,9 +513,9 @@ For custom bucket policy statements beyond network restrictions, `infra/config/p
 
 When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
 
-The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the `X-Forwarded-For` client IP (`FORWARDED_IP`) rather than the immediate connection source, so it counts each real end user even when requests arrive through CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress IP. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
+The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the address AWS WAF observes on the connection. An `X-Forwarded-For` aggregation key is not applied: the header is supplied by the caller and can be rotated to evade the limit, and AWS WAF omits a request that omits the header from the rule's evaluation altogether. Requests arriving through Amazon CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress address therefore share a counter. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
 
-When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit, aggregation key, and response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
 
 ## IAM Least Privilege
 
@@ -478,6 +528,14 @@ Each Lambda function receives an individually scoped IAM execution role:
 
 :::warning[No Wildcard Resource ARNs]
 Lambda execution roles do not receive `Resource: "*"` for data operations. All permissions are scoped to specific table ARNs, bucket ARNs, or log group ARNs.
+:::
+
+### Login Profile Role Synchronization
+
+The execution role of the `authLoginProfile` Lambda function holds write access to the Amazon DynamoDB user roles table that stores role assignments, although the shipped handler writes only the user profile table. The grant is deliberate. `customAuthProfileLoginWriteOverride` in `backend/backend/customConfigCommon/customAuthLoginProfile.py` is the supported extension point for identity-provider-specific login behavior, and organizations commonly override it to synchronize a user's VAMS role assignments from an external identity provider on each sign-in. Because the permission is already in place, such an override needs no infrastructure change. See [Login profile](../developer/security.md#login-profile--customauthprofileloginwriteoverride) in the developer guide for the hook's contract.
+
+:::warning[Role Assignment Trust Boundary]
+An override that writes role assignments determines which VAMS roles a user holds, and Casbin evaluates those assignments on every subsequent request. Validate what the override writes: map only the identity provider groups the deployment recognizes onto known VAMS role names, and discard anything else, so an attribute controlled by the identity provider cannot become an unintended VAMS grant.
 :::
 
 ### IAM Aspects
@@ -514,14 +572,17 @@ When `useGlobalVpc.enabled = true`, all Lambda functions can be deployed into VP
 
 ## FIPS Endpoints
 
-When `useFips = true` (typically in AWS GovCloud), the partition-aware service helper automatically selects FIPS-compliant endpoints for all AWS service calls. The service helper supports four AWS partitions:
+When `useFips = true` (typically in AWS GovCloud), the partition-aware service helper automatically selects FIPS-compliant endpoints for all AWS service calls. The service helper supports the `aws`, `aws-us-gov`, `aws-eusc` (AWS European Sovereign Cloud), `aws-cn`, and `aws-iso*` partitions:
 
-| Partition  | Identifier   |
-| ---------- | ------------ |
-| Commercial | `aws`        |
-| GovCloud   | `aws-us-gov` |
-| China      | `aws-cn`     |
-| Isolated   | `aws-iso`    |
+| Partition                    | Identifier   | DNS suffix           |
+| ---------------------------- | ------------ | -------------------- |
+| Commercial                   | `aws`        | `amazonaws.com`      |
+| GovCloud                     | `aws-us-gov` | `amazonaws.com`      |
+| AWS European Sovereign Cloud | `aws-eusc`   | `amazonaws.eu`       |
+| China                        | `aws-cn`     | `amazonaws.com.cn`   |
+| Isolated                     | `aws-iso*`   | Per isolated Region  |
+
+Each partition entry carries both a standard and a FIPS hostname, so `useFips` resolves within whichever partition the deployment targets. The shipped configuration templates set `useFips` to `true` for GovCloud and `false` for the commercial and AWS European Sovereign Cloud partitions.
 
 ## Blocked File Types
 
@@ -537,7 +598,7 @@ VAMS validates all uploaded files against blocked extension and MIME type lists 
 
 ## Audit Logging
 
-VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, each with 10-year retention:
+VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, each retained for 1 year:
 
 | Log Group              | Events                                                     |
 | ---------------------- | ---------------------------------------------------------- |
@@ -584,14 +645,19 @@ Custom bucket policies can be applied to all VAMS Amazon S3 buckets via `infra/c
 
 ## GovCloud Security Constraints
 
-When deploying to AWS GovCloud with `govCloud.enabled = true`:
+`govCloud.enabled = true` is the restricted-partition switch: the AWS GovCloud (US), AWS European Sovereign Cloud, and ISO partitions all set it. When it is `true`:
 
-| Constraint                 | Enforcement                                  |
-| -------------------------- | -------------------------------------------- |
-| VPC required               | `useGlobalVpc.enabled` must be `true`        |
-| No Amazon CloudFront       | `useCloudFront.enabled` must be `false`      |
-| No Amazon Location Service | `useLocationService.enabled` must be `false` |
-| FIPS endpoints             | Automatically selected by service helper     |
+| Constraint                                | Enforcement                                                                            |
+| ----------------------------------------- | --------------------------------------------------------------------------------------- |
+| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                   |
+| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                                 |
+| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                            |
+| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                            |
+| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable)    |
+| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                       |
+| FIPS endpoints                            | Automatically selected by service helper                                                |
+
+The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain.
 
 When `govCloud.il6Compliant = true`:
 
@@ -615,7 +681,7 @@ The following recommendations should be reviewed with your organization's securi
 8. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain.
 9. **Review Content Security Policy** — The CSP is dynamically generated based on deployment configuration. Review the generated policy headers for compliance with your organization's standards.
 10. **Enable audit logging review** — Regularly review audit logs in Amazon CloudWatch for suspicious activity patterns such as repeated authorization failures or unusual file download volumes.
-11. **Restrict constraint management to trusted administrators** — The constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, `/auth/constraintsTemplateImport`) allow a role to define the authorization policy itself. A role with this access can grant access to any resource, comparable to holding AWS Identity and Access Management (IAM) policy-editing permissions. In the default deployment these routes are granted only to the `admin` role. Do not delegate `api` access to these routes to general or untrusted roles, and treat changes to who can manage constraints as privileged administrative changes. Auth changes are recorded in the Auth Changes audit log group for review.
+11. **Restrict constraint management to trusted administrators** — The constraint management routes (`/auth/constraints`, `/auth/constraints/{constraintId}`, `/auth/constraintsTemplateImport`) allow a role to define the authorization policy itself. A role with this access can grant access to any resource, comparable to holding AWS Identity and Access Management (IAM) policy-editing permissions. In the default deployment these routes are granted only to the `admin` role. Do not delegate `api` access to these routes to general or untrusted roles, and treat changes to who can manage constraints as privileged administrative changes. Auth changes are recorded in the Auth Changes audit log group for review.
 
 :::warning[Shared Responsibility]
 VAMS is provided under the AWS shared responsibility model. Any customization for customer use must go through a security review to confirm that modifications do not introduce new vulnerabilities. Any team implementing VAMS takes on the responsibility of ensuring their implementation has gone through a proper security review.

@@ -2,7 +2,7 @@
 
 This document provides comprehensive guidelines for developing and extending VAMS backend APIs and CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all backend and infrastructure implementations.
 
-> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `backend/CLAUDE.md` and `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `backend/CLAUDE.md` and `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `backend/tests/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
 ## 🏗️ **Architecture Overview**
 
@@ -62,7 +62,7 @@ One folder per domain. The current domains:
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
 -   `metadata/` — Metadata CRUD
 -   `metadataschema/` — Metadata schema management
--   `pipelines/` — Pipeline management (Pydantic models; Lambda/SQS/EventBridge execution types)
+-   `pipelines/` — Pipeline management (Pydantic models; Lambda/SQS/EventBridge/DeadlineCloud execution types — `PIPELINE_EXECUTION_TYPES` in `models/pipelines.py`. DeadlineCloud is async-only with a mandatory task-token callback: `waitForCallback` must be `Enabled` or create returns 400, and it is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` in the commercial `aws` partition only)
 -   `roles/` — Role CRUD
 -   `search/` — OpenSearch search handlers
 -   `sendEmail/` — Email notification Lambda
@@ -107,7 +107,7 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
--   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values
+-   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values
 -   [ ] **Resolve Resource Names**: Use `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in try/except
 -   [ ] **Add AWS Clients**: Configure AWS clients with retry configuration
 -   [ ] **Implement Business Logic**: Separate business logic from request handling
@@ -122,7 +122,7 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Configure Permissions**: Grant appropriate DynamoDB/S3/SNS permissions
 -   [ ] **Configure VPC**: Add VPC/subnet configuration based on config flags
 -   [ ] **Add KMS Permissions**: Include KMS key permissions for encryption
--   [ ] **Add API Routes**: Register routes in `apiBuilder2-nestedStack.ts` (preferred; `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit)
+-   [ ] **Add API Routes**: Register routes in `apiBuilder2-nestedStack.ts` (preferred; the two API stacks stay split so each keeps its own CloudFormation per-template budget — see Rule 6)
 -   [ ] **Follow Naming Conventions**: Use consistent naming patterns
 
 #### **Step 4: API Gateway Integration**
@@ -199,6 +199,49 @@ list versions — use `common.s3.is_object_version_archived()`, which issues one
 is O(1) regardless of version count. Handler-local `is_file_archived` helpers must
 delegate to it.
 
+**A DynamoDB `FilterExpression` is applied AFTER the page is read, so a single filtered
+call is not a lookup and not an existence check.** DynamoDB reads up to 1 MB (or `Limit`
+items) and only then discards the non-matching ones. Empty `Items` alongside a present
+`LastEvaluatedKey` is the normal shape for "the match is on a later page" — it does not
+mean "no such item". Three consequences, each of which has occurred in this codebase:
+
+-   `len(response['Items']) > 0` as an existence test is a **false negative** once the
+    table outgrows one page. The caller then accepts a duplicate, accepts a link that
+    closes a cycle, or treats a node with children as a leaf.
+-   A filtered `scan` used to fetch **one** row by a non-key attribute returns `None` for a
+    row that exists. Query a GSI on that attribute instead of scanning.
+-   `Limit=N` bounds items **evaluated**, not items returned, so a narrow filter over a wide
+    window legitimately returns an empty page plus a `NextToken`.
+
+This is the one place the S3 exception above does not carry over: S3 applies `Prefix`
+server-side before `MaxKeys`, so `MaxKeys=1` genuinely answers "does this exist".
+
+When the **handler** needs every row (cascade delete, cycle check, existence test,
+descendant walk), loop on `LastEvaluatedKey`:
+
+```python
+from boto3.dynamodb.conditions import Key
+
+rows = []
+query_kwargs = {'KeyConditionExpression': Key('databaseId').eq(database_id)}
+while True:
+    response = table.query(**query_kwargs)
+    rows.extend(response.get('Items', []))
+    if 'LastEvaluatedKey' not in response:       # presence, not truthiness
+        break
+    query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+```
+
+Two details decide whether that loop is correct:
+
+-   **Test key presence, not truthiness.** DynamoDB omits `LastEvaluatedKey` when the walk
+    is complete and never returns a falsy one, so both forms agree in production but not
+    under test: `response.get('LastEvaluatedKey')` against a bare `MagicMock` is truthy on
+    every iteration and the loop never terminates, while `in` resolves `False` and exits.
+-   **Assign any "drained"/"complete" flag on every exit path.** A flag set only on the
+    `LastEvaluatedKey`-absent branch reports the opposite of the truth whenever an early
+    `break` (a page cap, a found-it short-circuit) leaves the loop first.
+
 ### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
 
 A response that can exceed the AWS Lambda synchronous response limit (6 MB) must
@@ -211,6 +254,16 @@ then offset-slice to the page. Limits that bound response size or protect Lambda
 runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
 constants with a rationale comment — keep them. CLI and web clients that consume a
 paginated GET must follow `NextToken` to retrieve the complete set.
+
+**The token must round-trip, and nothing checks that for you.** The value the handler emits
+has to be something the request model accepts back, on the parameter the handler actually
+reads. Emitting the raw `LastEvaluatedKey` **dict** as `NextToken` while the request model
+declares `startingToken: Optional[str]` yields a token no client can return: page one looks
+correct, every later page is unreachable, and no error is raised anywhere. Base64-encode the
+key so it is a string and opaque (clients then cannot depend on its interior), and pin it
+with a test that takes the token from page one, feeds it back, and asserts page two begins
+where page one stopped — asserting only that `NextToken` is present passes on a token that
+cannot be used.
 
 ### **Rule 4: Keep handlers portable across AWS partitions**
 
@@ -282,6 +335,11 @@ if not bucket_name or not base_assets_prefix:
 
 if not asset:
     raise VAMSGeneralErrorResponse("Resource not found")
+
+# The empty-token guard is a separate statement before enforce(), never a wrapper
+# around it — see "Two-Level Authorization" below.
+if len(claims_and_roles["tokens"]) == 0:
+    raise VAMSGeneralErrorResponse("Access denied")
 
 if not casbin_enforcer.enforce(resource, "GET"):
     raise VAMSGeneralErrorResponse("Access denied")
@@ -391,9 +449,9 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 ```python
 class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Secure request model with proper validation"""
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
-    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
+    assetId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    assetName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
 
     @root_validator
     def validate_fields(cls, values):
@@ -546,6 +604,16 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
 
+**`Field()` silently swallows unknown kwargs.** Pydantic v1 collects any keyword it does not
+recognize into `FieldInfo.extra` instead of raising, so a v2 spelling like `pattern=` becomes
+an inert annotation that validates **nothing** — the model imports cleanly, tests pass, and
+the field is unconstrained. `regex=` is the v1 spelling. `strip_whitespace=` is likewise inert
+on `Field()` (it is a `class Config` / `constr` option, not a field constraint), so a padded
+value is stored verbatim — which matters for the ABAC-visible name fields. Set
+`anystr_strip_whitespace = True` on the model's `class Config` when stripping is wanted.
+`backend/tests/models/test_no_dead_field_kwargs.py` enforces both across every model, so
+scaffolding the v2 spelling breaks the suite rather than shipping an unconstrained field.
+
 ```python
 # ✅ CORRECT - Follow assetsV3.py patterns
 from typing import Dict, List, Optional, Literal
@@ -555,8 +623,11 @@ from common.validators import validate, id_pattern, object_name_pattern
 
 class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for [operation] [domain]"""
-    requiredField: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=id_pattern)
+    requiredField: str = Field(min_length=1, max_length=256, regex=id_pattern)
     optionalField: Optional[str] = Field(None, min_length=1, max_length=256)
+
+    class Config:
+        anystr_strip_whitespace = True
 
     @root_validator
     def validate_fields(cls, values):
@@ -627,6 +698,53 @@ export function build[Domain]Service(
 ```
 
 ### **Rule 4: Authorization MUST Include Casbin Enforcement**
+
+Both tiers must deny when `claims_and_roles["tokens"]` is empty. An empty token list is not
+"an anonymous user" — it means no identity could be established, so there is nothing to
+evaluate policy against. There are exactly three permitted shapes, and each makes the empty
+case deny structurally rather than by remembering to check:
+
+```python
+# ── Tier 1: API-level (in lambda_handler) ─────────────────────────────────────
+# The flag is pre-set False and only flipped INSIDE the token check, so the empty-token
+# case cannot reach the dispatch below.
+method_allowed_on_api = False
+if len(claims_and_roles["tokens"]) > 0:
+    if CasbinEnforcer(claims_and_roles).enforceAPI(event):
+        method_allowed_on_api = True
+if not method_allowed_on_api:
+    return authorization_error()
+
+# ── Tier 2: single resource ───────────────────────────────────────────────────
+# The token guard is a SEPARATE statement before enforce(), never a wrapper around it.
+resource.update({"object__type": "[objectType]"})
+if len(claims_and_roles["tokens"]) == 0:
+    return authorization_error()
+if not CasbinEnforcer(claims_and_roles).enforce(resource, "GET"):
+    return authorization_error()
+
+# ── Tier 2: list filtering ────────────────────────────────────────────────────
+# The one shape that may test tokens as a condition: it APPENDS on success, so empty
+# tokens yield an empty result rather than an unfiltered one.
+allowed = []
+for item in items:
+    item.update({"object__type": "[objectType]"})
+    if len(claims_and_roles["tokens"]) > 0 and casbin_enforcer.enforce(item, "GET"):
+        allowed.append(item)
+```
+
+```python
+# ❌ VIOLATION - single-resource enforce() gated on tokens with no else that denies.
+# When tokens is empty the whole block is skipped and execution falls through to the
+# mutation below, so the request succeeds unauthorized. This reads as a guard and is the
+# opposite of one.
+if len(claims_and_roles["tokens"]) > 0:
+    if not casbin_enforcer.enforce(resource, "PUT"):
+        return authorization_error()
+
+table.put_item(Item=resource)          # reached with NO authorization when tokens == []
+return success(body=resource)
+```
 
 ```python
 # ✅ CORRECT - Include proper authorization checks
@@ -743,7 +861,11 @@ return {
 
 ### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
 
-Prefer `apiBuilder2-nestedStack.ts` for new endpoints — the primary `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
+
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 106 resources in a ~0.40 MB template and `apiBuilder2` emits 69 in ~0.24 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+
+A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
 ```typescript
 // ✅ CORRECT - Register API routes
@@ -999,7 +1121,7 @@ When making backend or CDK changes, update the corresponding Docusaurus document
 
 -   **New or changed API endpoint (incl. path renames)** → Update **both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md`) — two separate sources of truth that must stay in sync — plus the CLI command reference if applicable
 -   **New config option** → Update `deployment/configuration-reference.md`
--   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts`, so new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` and kept in sync by review, not by the test. A missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts`: a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table, not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, update `overview/features.md`, update `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
 -   **Permission changes** → Update `concepts/permissions-model.md`, `user-guide/permissions.md`
@@ -1520,9 +1642,9 @@ class [Domain]ListRequestModel(BaseModel, extra='ignore'):
 
 class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a [domain]"""
-    [domain]Id: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
-    [domain]Name: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    [domain]Id: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    [domain]Name: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=4, max_length=256)
     tags: Optional[List[str]] = []
 
     @root_validator
@@ -2116,6 +2238,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 **Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy environment variable overrides (e.g., `REQUIRED_STORAGE_TABLE_NAME`), then consults a 60-minute in-module cache, then fetches all resource name parameters from SSM via one paginated GetParametersByPath call. This allows pytest tests and local utilities to inject names directly as environment variables while deployed handlers use SSM.
 
 **Pipeline handlers** in `backendPipelines/` continue to use legacy environment variables and do not call `get_table_name()`.
+
+**`PRESIGNED_URL_TIMEOUT_SECONDS` is not global.** Only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`), and all five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level. A handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start — CDK synth, lint, and env-patching unit tests all pass. Add the variable to the handler's own builder before reading it.
 
 ### **AWS Client Configuration Pattern**
 

@@ -378,6 +378,41 @@ Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instance
 2. Request a service quota increase for the required instance types through the AWS Service Quotas console.
 3. For Isaac Lab Training, consider enabling the `keepWarmInstance` option to reduce cold start times at the cost of continuous compute charges.
 
+### Deadline Cloud Jobs Never Start and Workers Are Replaced Repeatedly
+
+A `DeadlineCloud` pipeline execution hangs, and the Deadline Cloud fleet keeps launching and discarding workers. The usual cause is the fleet role missing Amazon CloudWatch Logs write permission — the AWS managed `AWSDeadlineCloud-FleetWorker` policy does not include it.
+
+**Symptoms:**
+
+-   The VAMS execution stays in a running state until it times out, with no error reported by VAMS
+-   The farm, fleet, and queue all report `ACTIVE`, and the Deadline Cloud job was created successfully
+-   The job's task never leaves its pending state; jobs that are cancelled show `CANCELED` having never run
+-   The fleet's worker-not-responding alarm fires, and the fleet replaces its instance every few minutes
+-   The worker agent log records `AccessDeniedException` on `UpdateWorker` with `does not have sufficient access to perform CreateLogStream`
+
+**Resolution:**
+
+Add the two log actions to the fleet role, alongside the worker permissions it already holds:
+
+```json
+{
+    "Effect": "Allow",
+    "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+    "Resource": [
+        "arn:aws:logs:*:<account-id>:log-group:/aws/deadline/*",
+        "arn:aws:logs:*:<account-id>:log-group:/aws/deadline/*:log-stream:*"
+    ]
+}
+```
+
+Submit a job again and confirm its task reaches `SUCCEEDED`. A worker on a scale-to-zero fleet is created, runs, and is released quickly, so it may not be observable in `ListWorkers` between polls — the job's terminal status is the reliable signal, not catching the worker in a particular state.
+
+:::warning
+Because the alarm names worker responsiveness rather than an IAM permission, this reads as a capacity or instance-availability problem. Check the fleet role's log permissions before requesting quota increases or changing instance types.
+:::
+
+See [Configuration reference](../deployment/configuration-reference.md) for the full list of operator-supplied Deadline Cloud prerequisites.
+
 ### Pipeline Timeout vs. Workflow Timeout
 
 Pipeline step timeouts and overall workflow timeouts are configured separately. A pipeline step that exceeds its timeout will cause the workflow to fail.

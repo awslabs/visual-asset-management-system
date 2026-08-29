@@ -86,15 +86,50 @@ describe("deriveAutomationInputFiles", () => {
         expect(out.map((f) => f.versionId)).toEqual(["v1", "v2"]);
     });
 
-    it("does NOT pin a file version while browsing a specific asset version", () => {
-        // The asset version already determines which file version applies; pinning again would
-        // conflict with it. Same rule the download and view paths follow.
+    it("pins the version-resolved file version while browsing a specific asset version", () => {
+        // In version-browse mode the entry's versionId already IS that version's object version (the
+        // listing overlays it), and the launch payload names no asset version, so dropping it would
+        // silently run the workflow on the live object instead of the bytes on screen.
         const out = deriveAutomationInputFiles({
             ...base,
             assetVersionId: "av7",
             selectedItem: { relativePath: "/pump.glb", versionId: "v3" },
         });
-        expect(out[0].versionId).toBeUndefined();
+        expect(out[0].versionId).toBe("v3");
+    });
+
+    it("pins every file version in a multi-selection under a specific asset version", () => {
+        const out = deriveAutomationInputFiles({
+            ...base,
+            assetVersionId: "av7",
+            isMultiSelect: true,
+            selectedItems: [
+                { relativePath: "/a.glb", versionId: "v1" },
+                { relativePath: "/b.glb", versionId: "v2" },
+            ],
+        });
+        expect(out.map((f) => f.versionId)).toEqual(["v1", "v2"]);
+    });
+
+    it("yields nothing for a folder or whole-asset selection under a specific asset version", () => {
+        // A folder is expanded at launch against the live state, so it cannot stand for the version
+        // being browsed.
+        expect(
+            deriveAutomationInputFiles({
+                ...base,
+                assetVersionId: "av7",
+                isFolder: true,
+                selectedItem: { relativePath: "/models/", versionId: "v9" },
+            })
+        ).toEqual([]);
+        expect(
+            deriveAutomationInputFiles({
+                ...base,
+                assetVersionId: "av7",
+                isFolder: true,
+                selectedItem: { relativePath: "/" },
+            })
+        ).toEqual([]);
     });
 
     it("drops archived and deleted entries from a multi-selection", () => {
@@ -200,6 +235,28 @@ describe("automationDisabledReason", () => {
                 ...base,
                 isMultiSelect: true,
                 selectedItems: [{ relativePath: "/a.glb" }, { relativePath: "/b.glb" }],
+            })
+        ).toBeUndefined();
+    });
+
+    it("explains that a folder cannot run against a historical asset version", () => {
+        expect(
+            reason({
+                ...base,
+                assetVersionId: "av7",
+                isFolder: true,
+                selectedItem: { relativePath: "/models/" },
+            })
+        ).toMatch(/individual files/i);
+    });
+
+    it("still allows a single file under a historical asset version", () => {
+        // Positive control for the version branch: it must block folders only, not the whole group.
+        expect(
+            reason({
+                ...base,
+                assetVersionId: "av7",
+                selectedItem: { relativePath: "/pump.glb", versionId: "v3" },
             })
         ).toBeUndefined();
     });

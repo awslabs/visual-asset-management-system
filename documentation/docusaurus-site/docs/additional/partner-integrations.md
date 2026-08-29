@@ -58,10 +58,10 @@ VAMS creates the following NGSI-LD entity types in the Garnet Framework:
 
 | Entity Type     | URN Format                                                     | Description                                |
 | --------------- | -------------------------------------------------------------- | ------------------------------------------ |
-| `VAMSDatabase`  | `urn:vams:database:\{databaseId\}`                             | Database entities with bucket associations |
-| `VAMSAsset`     | `urn:vams:asset:\{databaseId\}:\{assetId\}`                    | Asset entities with full metadata          |
-| `VAMSAssetLink` | `urn:vams:assetlink:\{assetLinkId\}`                           | Asset relationship entities                |
-| `VAMSFile`      | `urn:vams:file:\{databaseId\}:\{assetId\}:\{encodedFilePath\}` | File entities with Amazon S3 details       |
+| `VAMSDatabase`  | `urn:vams:database:{databaseId}`                             | Database entities with bucket associations |
+| `VAMSAsset`     | `urn:vams:asset:{databaseId}:{assetId}`                    | Asset entities with full metadata          |
+| `VAMSAssetLink` | `urn:vams:assetlink:{assetLinkId}`                           | Asset relationship entities                |
+| `VAMSFile`      | `urn:vams:file:{databaseId}:{assetId}:{encodedFilePath}` | File entities with Amazon S3 details       |
 
 #### Event flow
 
@@ -83,7 +83,7 @@ The Physna Sync add-on performs a one-way synchronization of supported VAMS file
 
 Phase 1 implements VAMS-to-Physna sync only. Future phases will add bidirectional sync and additional in-VAMS UI surfaces.
 
-The Physna add-on also includes a **Physna Viewer** plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS for files that have been synced. The viewer plugin calls a VAMS-authorized proxy endpoint, so no Physna credentials or viewer tokens are exposed to the browser. See the [Physna Integration](../developer/physna-integration.md#physna-viewer) developer guide for details.
+The Physna add-on also includes a **Physna Viewer** plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS for files that have been synced. A VAMS-authorized endpoint applies both authorization tiers and returns a Physna viewer token to the browser, which loads the viewer directly from Physna; the Physna client credentials stay in AWS Secrets Manager and are never sent to the browser. That token carries no asset scope, so Physna-hosted viewer access is flat across every synced database — see [Physna Viewer](../developer/physna-integration.md#physna-viewer) in the developer guide for the limitation and its side effects.
 
 #### What gets synchronized
 

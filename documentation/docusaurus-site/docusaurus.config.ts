@@ -14,8 +14,14 @@ const config: Config = {
     organizationName: "awslabs",
     projectName: "visual-asset-management-system",
 
-    onBrokenLinks: "warn",
-    onBrokenMarkdownLinks: "warn",
+    // Fail the build on a broken cross-reference rather than warning. These three checks catch
+    // different things and none subsumes another: `onBrokenLinks` resolves against the built routes,
+    // `onBrokenMarkdownLinks` against the relative file, and `onBrokenAnchors` against the target
+    // page's headings — so a link can point at a real file and a real route while its `#anchor` is
+    // dead. A warning does not fail the build, which is how a link to a renumbered uninstall step
+    // shipped: the build printed "Docusaurus found broken anchors!" and then exited 0.
+    onBrokenLinks: "throw",
+    onBrokenAnchors: "throw",
 
     i18n: {
         defaultLocale: "en",
@@ -25,6 +31,11 @@ const config: Config = {
     markdown: {
         mermaid: true,
         format: "detect",
+        // Top-level `onBrokenMarkdownLinks` is deprecated and removed in Docusaurus v4; this is its
+        // replacement.
+        hooks: {
+            onBrokenMarkdownLinks: "throw",
+        },
     },
 
     themes: ["@docusaurus/theme-mermaid"],

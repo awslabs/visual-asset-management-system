@@ -2,7 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the workflow trigger handler (workflowTriggerService). Parent-workflow Tier-2 auth
-+ trigger CRUD; CasbinEnforcer/request_to_claims/tables patched. IDs >=3 chars (isolation-safe)."""
++ trigger CRUD; CasbinEnforcer/request_to_claims/tables patched. IDs >=3 chars (isolation-safe).
+
+A trigger's default templates are additionally scoped to the pipelines the parent workflow specifies,
+so `WF_ITEM` carries the `specifiedPipelines` snapshot naming the pipeline these bodies pick a template
+for. That entry is load-bearing: a workflow row that specifies nothing can have no in-scope template,
+and every PUT below that names one would be refused. Scope-rejection behaviour itself is covered by
+test_workflowTriggerService_template_scope.py."""
 
 import json
 from unittest.mock import MagicMock, patch
@@ -31,10 +37,36 @@ def _enforcer(api=True, obj=True):
     return inst
 
 
-WF_ITEM = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W"}
+WF_ITEM = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W",
+           "specifiedPipelines": [
+               {"pipelineDatabaseId": "db1", "pipelineId": "pipe1",
+                "pipelineDatabaseId:pipelineId": "db1:pipe1",
+                "jobName": "", "defaultTemplateId": ""},
+           ]}
+# The record the scope check and the required-template check read for that pipeline. `systemConfig`
+# requires no template, so no default-template query follows.
+PIPELINE_ITEM = {"databaseId": "db1", "pipelineId": "pipe1", "pipelineName": "P",
+                 "systemConfig": {}, "executionConfig": {"executionType": "Lambda"}}
 BASE = "/database/db1/workflows/wflow1/triggers"
 PARAMS = {"databaseId": "db1", "workflowId": "wflow1"}
 TPARAMS = {"databaseId": "db1", "workflowId": "wflow1", "triggerType": "fileUpload"}
+
+
+@pytest.fixture(autouse=True)
+def _stub_lookup_tables():
+    """The two lookup tables the template checks read, stubbed for every test in this module.
+
+    An unstubbed read would reach a real DynamoDB resource and fail, which the two checks answer
+    differently: the required-template check treats a failed lookup as "skip the check" and would let
+    these tests pass for the wrong reason, while the template scope check authorizes against the
+    pipeline record and would refuse every PUT that names a template."""
+    pipelines = MagicMock()
+    pipelines.get_item.return_value = {"Item": dict(PIPELINE_ITEM)}
+    templates = MagicMock()
+    templates.query.return_value = {"Items": []}
+    with patch(f"{MOD}._pipelines_table", return_value=pipelines), \
+         patch(f"{MOD}._templates_table", return_value=templates):
+        yield
 
 
 @pytest.mark.unit

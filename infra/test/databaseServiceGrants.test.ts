@@ -15,6 +15,7 @@ import * as Service from "../lib/helper/service-helper";
 import { storageResources } from "../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import { buildDatabaseService } from "../lib/lambdaBuilder/databaseFunctions";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 /**
  * databaseService is reachable by any authenticated caller of the /databases routes. Its
@@ -91,7 +92,7 @@ const grantedTableIds = (template: Template, candidates: string[]): string[] => 
 
 describe("buildDatabaseService DynamoDB grants", () => {
     test("grants the V2 pipeline/workflow tables and not the retained V1 tables", () => {
-        const app = new cdk.App();
+        const app = newTestApp();
         const stack = new cdk.Stack(app, "TestStack", {
             env: { account: "123456789012", region: "us-east-1" },
         });

@@ -7,9 +7,15 @@
   (not the output asset's bucket), so a multi-bucket deployment still applies them;
 - the output listing pages to exhaustion, so an output block larger than one S3 page is complete;
 - a total failure RAISES so the Step Functions Catch routes to the error-handler state instead of
-  the state machine reporting the run SUCCEEDED with no outputs.
+  the state machine reporting the run SUCCEEDED with no outputs;
+- that raise is scoped to invocations carrying a workflowExecutionId (the ProcessOutput task); a
+  direct invocation with no execution context still answers with a 400 payload.
+
+Guards FIX-017 (S2-BACKEND-046): returning a 400 payload for a runtime failure lets Step
+Functions record the run SUCCEEDED with no outputs ingested.
 """
 
+import json
 import os
 import sys
 import types
@@ -167,3 +173,47 @@ class TestFailuresPropagateToStepFunctions:
         resp = po.lambda_handler({"body": {"outputAssetId": "a.glb", "outputDatabaseId": "db1"}},
                                  MagicMock())
         assert resp["statusCode"] == 400
+
+    def test_asset_not_found_raises_for_a_workflow_execution(self):
+        """A missing output asset leaves the run with nothing ingested, so the task must fail."""
+        with patch.object(po, "lookup_existing_asset", return_value=None):
+            with pytest.raises(po.VAMSGeneralErrorResponse) as exc:
+                po.lambda_handler(_event(), MagicMock())
+        assert "Asset not found" in str(exc.value)
+
+    def test_asset_not_found_without_execution_context_returns_a_response(self):
+        """Negative control: the same failure on a direct invocation (no workflowExecutionId) has no
+        Catch to route to, so it keeps the 400 payload."""
+        event = _event()
+        del event["body"]["workflowExecutionId"]
+        with patch.object(po, "lookup_existing_asset", return_value=None):
+            resp = po.lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 400
+
+    def test_invalid_output_target_raises_for_a_workflow_execution(self):
+        """A threaded output target that fails the ASSET_ID validator is a run failure, not a
+        caller contract error, because the ASL supplied the value."""
+        with pytest.raises(po.VAMSGeneralErrorResponse) as exc:
+            po.lambda_handler(_event(outputAssetId="bad/asset.glb"), MagicMock())
+        assert "assetId" in str(exc.value)
+
+    def test_invalid_output_target_without_execution_context_returns_a_response(self):
+        event = _event(outputAssetId="bad/asset.glb")
+        del event["body"]["workflowExecutionId"]
+        resp = po.lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 400
+
+    def test_successful_ingest_still_returns_its_payload(self):
+        """Control against over-tightening: a clean run answers 200 and records SUCCEEDED."""
+        with patch.object(po, "lookup_existing_asset",
+                          return_value={"databaseId": "db1", "assetId": "asset1.glb",
+                                        "bucketId": "b1"}), \
+             patch.object(po, "get_default_bucket_details",
+                          return_value={"bucketId": "b1", "bucketName": ASSET_BUCKET,
+                                        "baseAssetsPrefix": "assets/"}), \
+             patch.object(po, "record_execution_outputs") as m_record, \
+             patch.object(po, "_fetch_execution_logs", return_value=("", "")):
+            resp = po.lambda_handler(_event(), MagicMock())
+        assert resp["statusCode"] == 200
+        assert json.loads(resp["body"])["message"] == "Workflow Execution Output Processing Complete"
+        assert m_record.call_args.kwargs["execution_status"] == "SUCCEEDED"

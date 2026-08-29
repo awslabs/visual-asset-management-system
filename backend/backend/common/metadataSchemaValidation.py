@@ -22,6 +22,34 @@ logger = safeLogger(service_name="MetadataSchemaValidation")
 _schema_cache: Dict[str, Tuple[Any, float]] = {}
 _cache_ttl = 60  # seconds
 
+# Bound on the pages one database's schema query may read. get_aggregated_schemas runs on the
+# SYNCHRONOUS metadata create/update path whenever the 60-second cache misses, so an unbounded walk
+# lets one write issue an arbitrary number of sequential DynamoDB queries. Stopping at the cap means
+# the field set is incomplete, which is exactly what SchemaLookupError reports: a partial aggregate
+# reads as "no schema applies" and turns restrictMetadataOutsideSchemas and the required-field check
+# off, so the cap raises rather than returning -- or caching -- what it has. 20 pages of up to 1 MB
+# each is far more schema than a database defines; mirrors the sibling page caps
+# (pipelineService.MAX_REFERENCING_WORKFLOW_PAGES).
+MAX_SCHEMA_QUERY_PAGES = 20
+
+
+class SchemaLookupError(Exception):
+    """A schema query did not complete, so the aggregated schema set is incomplete.
+
+    Raised instead of returning the partial aggregate -- by a query that failed, and by one that
+    stopped at MAX_SCHEMA_QUERY_PAGES with pages still unread. Every control derived from the
+    aggregate reads absence as permission: `restrictMetadataOutsideSchemas` is applied only inside
+    `if aggregated_schema:`, so an empty aggregate skips the off-schema key prohibition
+    entirely, and a required field missing from a partial aggregate is simply not required. A
+    transient DynamoDB error must not turn a configured governance control off silently.
+
+    Each caller translates it with the arm it already wraps the lookup in, so none of them has to
+    know about this type: write paths refuse the write, the four metadata DELETE paths refuse the
+    deletion (validate_metadata_deletion is the only guard on removing a schema-required field, or a
+    field another field depends on, so a swallowed lookup error disabled exactly that control), and
+    read paths degrade to un-enriched output.
+    """
+
 
 def _get_from_cache(cache_key: str) -> Optional[Dict]:
     """Get schema from cache if not expired
@@ -125,8 +153,6 @@ def get_aggregated_schemas(
     # Fetch schemas from DynamoDB
     all_schemas = []
     deserializer = TypeDeserializer()
-    query_successful = True  # Track if all queries succeed
-    
     logger.info(f"Fetching schemas for databases: {database_ids}, entity_type: {entity_type}, file_extension: {file_extension}")
     
     for database_id in database_ids:
@@ -138,26 +164,50 @@ def get_aggregated_schemas(
             #logger.info(f"Using GSI: DatabaseIdMetadataEntityTypeIndex")
             #logger.info(f"Composite key: {composite_key}")
             
-            response = dynamodb_client.query(
-                TableName=schema_table_name,
-                IndexName='DatabaseIdMetadataEntityTypeIndex',
-                KeyConditionExpression='#pk = :pkValue',
-                ExpressionAttributeNames={'#pk': 'databaseId:metadataEntityType'},
-                ExpressionAttributeValues={':pkValue': {'S': composite_key}}
-            )
+            query_kwargs = {
+                'TableName': schema_table_name,
+                'IndexName': 'DatabaseIdMetadataEntityTypeIndex',
+                'KeyConditionExpression': '#pk = :pkValue',
+                'ExpressionAttributeNames': {'#pk': 'databaseId:metadataEntityType'},
+                'ExpressionAttributeValues': {':pkValue': {'S': composite_key}},
+            }
+            schema_items = []
+            pages_read = 0
+            while True:
+                response = dynamodb_client.query(**query_kwargs)
+                schema_items.extend(response.get('Items', []))
+                pages_read += 1
+                # Paged on the PRESENCE of the key, which is how DynamoDB signals the
+                # last page. A single call returns at most 1 MB, so a database with
+                # more schemas than fit one page would otherwise yield exactly the
+                # partial field set the raise below exists to prevent -- and it would
+                # be cached as the answer for the next 60 seconds.
+                if 'LastEvaluatedKey' not in response:
+                    break
+                if pages_read >= MAX_SCHEMA_QUERY_PAGES:
+                    # Truncation is reported, not returned: the pages already read are a
+                    # partial aggregate, and a partial aggregate is what disables
+                    # restrictMetadataOutsideSchemas and the required-field check.
+                    logger.error(
+                        f"Schema query for {composite_key} reached the "
+                        f"{MAX_SCHEMA_QUERY_PAGES}-page cap with more pages remaining")
+                    raise SchemaLookupError(
+                        f"Metadata schema lookup stopped at the {MAX_SCHEMA_QUERY_PAGES}-page "
+                        f"cap before reading every schema in scope")
+                query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
             
-            items_found = len(response.get('Items', []))
+            items_found = len(schema_items)
             logger.info(f"Query result for {composite_key}: {items_found} schemas found")
             
             # Log schema IDs found for debugging
             if items_found > 0:
                 schema_ids = []
-                for item in response.get('Items', []):
+                for item in schema_items:
                     schema_id = deserializer.deserialize(item.get('metadataSchemaId', {}))
                     schema_ids.append(schema_id)
                 #logger.info(f"Schema IDs found: {schema_ids}")
             
-            for item in response.get('Items', []):
+            for item in schema_items:
                 deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
                 
                 # Log schema structure for debugging
@@ -272,22 +322,30 @@ def get_aggregated_schemas(
                 
                 all_schemas.append(deserialized_item)
                 
+        except SchemaLookupError:
+            raise
         except Exception as e:
             logger.exception(f"Error fetching schemas for database {database_id}, entity_type {entity_type}: {e}")
-            query_successful = False
-            # Continue with other databases
-    
+            # Fail closed. Continuing here returned an aggregate missing this database's
+            # schemas -- empty when it was the only database in scope -- and every caller reads
+            # absence as "no schema applies", so a throttle silently disabled
+            # restrictMetadataOutsideSchemas and the required-field check for that write.
+            raise SchemaLookupError(
+                "Metadata schema lookup did not complete for every database in scope"
+            ) from e
+
     # Aggregate schema fields
     aggregated_fields = aggregate_schema_fields(all_schemas)
-    
+
     logger.info(f"Aggregated {len(aggregated_fields)} schema fields from {len(all_schemas)} schemas")
-    
-    # Only cache if all queries were successful
-    if query_successful:
-        _set_in_cache(cache_key, aggregated_fields)
-    else:
-        logger.warning(f"Not caching results for {cache_key} due to query failures")
-    
+
+    # Cacheable because the aggregate is known to be complete: every database's query paged
+    # to exhaustion (the last page is the one carrying no LastEvaluatedKey), and a query that
+    # did not complete raised SchemaLookupError above instead of reaching this point. A partial
+    # aggregate must never be cached -- it would extend one incomplete read into 60 seconds of
+    # writes validated against the wrong field set, on every Lambda instance that saw it.
+    _set_in_cache(cache_key, aggregated_fields)
+
     return aggregated_fields
 
 

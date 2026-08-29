@@ -20,6 +20,19 @@ invokes. If every pipeline in your deployment is a VAMS built-in, the data migra
 nothing here applies.
 :::
 
+:::tip[An AI coding agent can help with the porting]
+If you are working in a clone of this repository with [Claude Code](../developer/agentic-development.md),
+the **`/add-pipeline`** slash command scaffolds a pipeline against the **current** v2.6 contract. That is
+useful here in two ways: as a reference implementation to port your v2.5 code toward, and — when a
+pipeline has diverged far enough that porting it in place is more work than re-wrapping it — as the
+starting point for a fresh wrapper around the processing service you already have. The service itself
+does not change; what changes is the `vamsExecute` and `constructPipeline` layer around it.
+
+Read the porting order below first. The command produces v2.6-shaped scaffolding, but it cannot know
+which of your pipeline's behaviours were load-bearing, and the manifest, task-token, and sub-process
+registration changes on this page are the ones a mechanical port most often gets wrong.
+:::
+
 ## What the data migration already did
 
 Before changing any code, know what is already true after the migration runs:

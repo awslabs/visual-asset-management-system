@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -11,7 +12,9 @@ import click
 from ..constants import (
     API_ASSET_EXPORT, DEFAULT_PARALLEL_DOWNLOADS, DEFAULT_DOWNLOAD_TIMEOUT
 )
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.decorators import (
+    requires_setup_and_auth, get_profile_manager_from_context, invoked_from_another_command
+)
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_info, output_warning
 from ..utils.exceptions import (
@@ -542,7 +545,11 @@ def export_command(
     - File information with metadata and version details
     - Asset link relationships with metadata (unless --no-fetch-relationships)
     - Optional presigned URLs for file downloads
-    
+
+    With --download-files, the command exits non-zero when any file failed to download, so a partial
+    export is distinguishable from a complete one. `downloadResults` still reports
+    `overall_success` and `failed_downloads`.
+
     \b
     Relationship Fetching Options:
         By default, the command fetches asset relationships (parent-child links).
@@ -756,9 +763,18 @@ def export_command(
             success_message=success_msg,
             cli_formatter=format_export_result_cli
         )
-        
+
+        # Same contract as `file upload` / `assets download`: a download that did not fully apply
+        # must not exit 0, or a CI step cannot tell a partial export from a complete one. Only the
+        # download half can partially fail; the export call itself either returns or raises.
+        download_results = result.get('downloadResults')
+        if (isinstance(download_results, dict)
+                and download_results.get('overall_success') is False
+                and not invoked_from_another_command(ctx)):
+            sys.exit(1)
+
         return result
-        
+
     except AssetNotFoundError as e:
         output_error(
             e,

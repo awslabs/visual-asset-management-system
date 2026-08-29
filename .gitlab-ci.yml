@@ -1,11 +1,16 @@
+# Pipeline for the internal AWS GitLab CI/CD system. It publishes the documentation site to the
+# internal GitLab Pages host and includes an indexer template from an internal GitLab project, so it
+# runs nowhere else. A customer using GitLab should replace this file with their own pipeline rather
+# than adapt it; the `include` below will not resolve outside the internal instance.
+
 stages:
     - build
     - deploy
     - index
 
 variables:
-    # Badges on (default). Set to "true" to skip the README badge commit —
-    # indexing, score, security and interfaces still run.
+    # README badge commit off. Set to "false" to let the indexer commit the badges —
+    # indexing, score, security and interfaces run either way.
     SKIP_README_UPDATE: "true"
 
 include:

@@ -148,9 +148,12 @@ export class CoreVAMSStack extends cdk.Stack {
         );
 
         //Deploy Resource Names SSM Parameters (nested stack). Deploys directly after storage
-        //and before every Lambda-bearing stack so the parameters exist before any function
-        //that resolves them cold-starts, and so the parameter-creation burst does not race
-        //other stacks' SSM writes (shared PutParameter rate limit).
+        //and before the downstream Lambda-bearing stacks so the parameters exist before any of
+        //their functions resolve them, and so the parameter-creation burst does not race other
+        //stacks' SSM writes (shared PutParameter rate limit). Storage is the exception: it holds
+        //the bucket-sync Lambdas and cannot depend on this stack, since this stack depends on it,
+        //so a bucket-sync invocation arriving before the parameters exist fails at initialization
+        //and is retried from its SQS queue.
         const resourceNamesNestedStack = new ResourceNamesBuilderNestedStack(
             this,
             "ResourceNamesBuilder",
@@ -172,7 +175,7 @@ export class CoreVAMSStack extends cdk.Stack {
                         "VAMSCloudTrailLogs",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             });
 
@@ -237,8 +240,9 @@ export class CoreVAMSStack extends cdk.Stack {
             apiBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
 
             //Deploy Backend API framework - secondary stack (nested stack).
-            //Holds API domains) moved out of ApiBuilder to keep
-            //it under the CloudFormation per-stack resource limit. Add new API endpoints here.
+            //Holds API domains moved out of ApiBuilder to keep both stacks clear of the
+            //per-template CloudFormation ceilings (500 resources, 1 MB template body).
+            //Add new API endpoints here. See "API Stack Ceilings" in infra/CLAUDE.md.
             const apiBuilder2NestedStack = new ApiBuilder2NestedStack(this, "ApiBuilder2", {
                 config: props.config,
                 registry: apiRouteRegistry,

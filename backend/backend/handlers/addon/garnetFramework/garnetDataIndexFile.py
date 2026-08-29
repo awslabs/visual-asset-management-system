@@ -67,6 +67,30 @@ logger = safeLogger(service_name="GarnetFileIndexer")
 SYNC_SYSTEM_TYPE = "garnetFramework"
 
 
+def _sync_action_for_stream_event(event_name: str) -> str:
+    """Map a DynamoDB stream event name onto a sync-tracking action.
+
+    Mirrors the asset and database indexers: a first-time index (INSERT) is a
+    create and a removed metadata record is a delete. The Garnet entity itself is
+    re-sent with the archived flag rather than removed from the broker, so the
+    action describes what happened to the VAMS record.
+    """
+    if event_name == 'INSERT':
+        return SYNC_ACTION_CREATE
+    if event_name == 'REMOVE':
+        return SYNC_ACTION_DELETE
+    return SYNC_ACTION_MODIFY
+
+
+def _sync_action_for_s3_event(event_name: str) -> str:
+    """Map an S3 notification event name onto a sync-tracking action."""
+    if event_name.startswith('ObjectCreated'):
+        return SYNC_ACTION_CREATE
+    if event_name.startswith('ObjectRemoved'):
+        return SYNC_ACTION_DELETE
+    return SYNC_ACTION_MODIFY
+
+
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
     """Best-effort outbound sync tracking record. Success means the entity was
@@ -92,39 +116,19 @@ excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset storage table name")
-    asset_storage_table_name = None
-
-try:
     asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset file metadata table name")
-    asset_file_metadata_storage_table_name = None
-
-try:
     file_attribute_storage_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving file attribute table name")
-    file_attribute_storage_table_name = None
-
-try:
     s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving S3 asset buckets table name")
-    s3_asset_buckets_storage_table_name = None
-
-try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading Garnet environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-asset_storage_table = dynamodb.Table(asset_storage_table_name) if asset_storage_table_name else None
-asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name) if asset_file_metadata_storage_table_name else None
-file_attribute_table = dynamodb.Table(file_attribute_storage_table_name) if file_attribute_storage_table_name else None
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
+asset_storage_table = dynamodb.Table(asset_storage_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
+file_attribute_table = dynamodb.Table(file_attribute_storage_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
 
 #######################
 # Utility Functions
@@ -137,8 +141,13 @@ def extract_file_extension(file_path: str) -> Optional[str]:
     return None
 
 def is_folder_path(file_path: str) -> bool:
-    """Check if path represents a folder"""
-    return file_path.endswith('/') or '.' not in os.path.basename(file_path)
+    """Check if path represents a folder.
+
+    Folder-ness is decided from the key shape alone. A missing filename extension
+    does not mean a folder: `LICENSE`, `Dockerfile`, `Makefile` and extension-less
+    data exports are ordinary files, and upload validation accepts them.
+    """
+    return file_path.endswith('/')
 
 def should_skip_file(s3_key: str) -> bool:
     """Check if file should be skipped based on excluded patterns/prefixes"""
@@ -743,7 +752,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
         else:
             logger.error(f"Failed to send file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
-        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE, SYNC_ACTION_MODIFY, success,
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE,
+                     _sync_action_for_s3_event(event_name), success,
                      database_id, asset_id=asset_id, file_path=relative_path,
                      s3_version_id=(s3_file_info or {}).get("versionId"),
                      entity_id=ngsi_ld_entity["id"])
@@ -855,7 +865,8 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
         else:
             logger.error(f"Failed to send file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
-        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE, SYNC_ACTION_MODIFY, success,
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE,
+                     _sync_action_for_stream_event(event_name), success,
                      database_id, asset_id=asset_id, file_path=file_path,
                      s3_version_id=(s3_file_info or {}).get("versionId"),
                      entity_id=ngsi_ld_entity["id"])

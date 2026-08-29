@@ -19,6 +19,7 @@ import re
 import hashlib
 import requests
 import urllib.request
+from collections import OrderedDict
 from typing import Dict, Any, Optional, List
 from aws_lambda_powertools import Logger
 import boto3
@@ -80,6 +81,24 @@ API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
 
 # User Roles Configuration
 USER_ROLES_CACHE_TTL = 60  # seconds before a cached entry expires
+# An empty role list expires sooner than a populated one. The API-key branch DENIES a
+# request whose user resolves to no roles, so a full-TTL empty entry keeps denying a machine
+# identity for a minute after its role was granted, while a short window still bounds how
+# often a roleless identity re-reads the table.
+#
+# This value is not the grant latency an operator sees. API Gateway caches the policy this
+# authorizer returns -- a Deny included -- for authorizerResultTtlInSeconds, which the
+# authenticated security scheme sets to 30 seconds keyed on the Authorization header (see
+# infra buildOpenApiSpec.ts), and an API key travels in that same header. So the authorizer
+# cache is the dominating term: this TTL removes the extra minute the role cache would add,
+# leaving a floor of about 30 seconds rather than 5. A value below the authorizer cache
+# shortens nothing an operator can observe; a value above it puts the role cache back in
+# charge of the window.
+USER_ROLES_EMPTY_CACHE_TTL = 5  # seconds before a cached EMPTY role list expires
+
+# Upper bound on entries held in each of the two per-request caches below.
+API_KEY_CACHE_MAX_ENTRIES = 1000
+USER_ROLES_CACHE_MAX_ENTRIES = 1000
 
 # DynamoDB client for API key lookups (only initialized if table configured)
 _dynamodb_resource = None
@@ -91,12 +110,38 @@ _user_roles_table = None
 # - On cache miss (no entry): query GSI once, cache the result (record or None for not-found)
 # - On cache miss (expired entry): query GSI once, update cache
 # - None record means "we looked and it doesn't exist" — prevents repeated lookups for bad keys
-_api_key_cache = {}
+# Bounded and insertion-ordered: the cache key is the hash of a caller-supplied header value,
+# so entries are added for keys that can never be hit again (see _cache_store).
+_api_key_cache = OrderedDict()
 
 # Per-user cache: maps userId -> { "roles": [roleName, ...], "expiry": timestamp }
-# An empty role list is cached like any other result, so a user with no roles does not
-# re-query the table on every request.
-_user_roles_cache = {}
+# An empty role list is cached too, so a user with no roles does not re-query the table on
+# every request, but only for USER_ROLES_EMPTY_CACHE_TTL. Bounded on the same terms as the
+# API key cache.
+_user_roles_cache = OrderedDict()
+
+
+def _cache_store(cache: OrderedDict, key: str, value: dict, max_entries: int) -> None:
+    """Insert into a size-bounded, insertion-ordered cache.
+
+    The cache key of both caches below derives from a caller-supplied value, so an unbounded
+    dict keeps growing for the life of the container with entries that can never be hit
+    again. At capacity, entries whose expiry has already passed are dropped first and then
+    the oldest insertions, so a stream of distinct keys evicts itself instead of the cache
+    growing without limit.
+
+    Expired entries are deliberately kept while the cache is below capacity: both lookups
+    fall back to an expired entry when the table read fails, which is what stops a transient
+    DynamoDB error from dropping a live identity's roles.
+    """
+    cache.pop(key, None)
+    if len(cache) >= max_entries:
+        current_time = time.time()
+        for expired_key in [k for k, v in cache.items() if v.get('expiry', 0) <= current_time]:
+            cache.pop(expired_key, None)
+    while len(cache) >= max_entries:
+        cache.popitem(last=False)
+    cache[key] = value
 
 def _get_api_key_table():
     global _dynamodb_resource, _api_key_table
@@ -153,10 +198,12 @@ def _lookup_api_key_by_hash(key_hash: str):
         record = items[0] if items else None
 
         # Cache the result (including None for not-found)
-        _api_key_cache[key_hash] = {
-            'record': record,
-            'expiry': current_time + API_KEY_CACHE_TTL
-        }
+        _cache_store(
+            _api_key_cache,
+            key_hash,
+            {'record': record, 'expiry': current_time + API_KEY_CACHE_TTL},
+            API_KEY_CACHE_MAX_ENTRIES,
+        )
         return record
     except Exception as e:
         logger.error(f"Failed to query API key by hash: {str(e)}")
@@ -170,7 +217,12 @@ def _lookup_user_roles(user_id: str) -> List[str]:
     Cache behavior mirrors the API key cache:
     - Fresh cache hit: return immediately (no DynamoDB call)
     - Expired or missing: query the user roles table once, cache for USER_ROLES_CACHE_TTL
-    - An empty list is cached like any other result, so users with no roles do not re-query
+    - An empty list is cached for the shorter USER_ROLES_EMPTY_CACHE_TTL: it is the result a
+      role grant changes, and the API-key branch denies on it, so a machine identity must
+      not keep being denied for the full window after its role is assigned. What an
+      operator observes is floored by the 30-second API Gateway authorizer result cache,
+      which replays the Deny for the same Authorization header without calling this
+      function at all
 
     Returns an empty list when the table is unavailable or the query fails. Roles are
     informational in the authorizer context (Casbin re-reads a user's roles from DynamoDB
@@ -192,15 +244,28 @@ def _lookup_user_roles(user_id: str) -> List[str]:
         return cached['roles'] if cached else []
 
     try:
-        response = user_roles_table.query(
-            KeyConditionExpression=DDBKey('userId').eq(user_id)
-        )
-        roles = [r.get('roleName', '') for r in response.get('Items', []) if r.get('roleName')]
+        # Paged to exhaustion: one query returns at most 1 MB, and a user with more role
+        # assignments than that would otherwise have vams:roles silently truncated. Reading
+        # the PRESENCE of LastEvaluatedKey is how DynamoDB reports the end of a listing, and
+        # it also keeps the loop finite against a stubbed reader whose .get() answers every
+        # key with a truthy mock.
+        roles = []
+        query_kwargs = {'KeyConditionExpression': DDBKey('userId').eq(user_id)}
+        while True:
+            response = user_roles_table.query(**query_kwargs)
+            roles.extend(
+                r.get('roleName', '') for r in response.get('Items', []) if r.get('roleName'))
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
-        _user_roles_cache[user_id] = {
-            'roles': roles,
-            'expiry': current_time + USER_ROLES_CACHE_TTL
-        }
+        ttl = USER_ROLES_CACHE_TTL if roles else USER_ROLES_EMPTY_CACHE_TTL
+        _cache_store(
+            _user_roles_cache,
+            user_id,
+            {'roles': roles, 'expiry': current_time + ttl},
+            USER_ROLES_CACHE_MAX_ENTRIES,
+        )
         return roles
     except Exception as e:
         logger.error(f"Failed to query roles for user: {str(e)}")
@@ -236,14 +301,61 @@ def resolve_mfa_enabled(username: str, claims: Dict[str, Any], event: dict) -> b
 # Cache for public keys to avoid fetching them on every request
 # Download them only on cold start as per AWS best practices
 # https://aws.amazon.com/blogs/compute/container-reuse-in-lambda/
+# Maps cache_key -> {"keys": [...], "expiry": timestamp, "fetched": timestamp}. The expiry is
+# held per entry, matching _api_key_cache and jwks_uri_cache: a single module-wide expiry
+# scalar is reset by a fetch under any cache_key, which extends the freshness window of every
+# other entry and can serve a stale key set past its own TTL.
 keys_cache = {}
-keys_cache_expiry = 0
 CACHE_TTL = 60 * 60  # 1 hour in seconds
+
+# Minimum age a cached key set must reach before a `kid` miss may force a refetch. An issuer
+# signing-key rotation puts a kid in circulation that a warm container's cached set does not
+# contain, and that entry stays fresh for CACHE_TTL, so without a refetch every validly
+# signed new-kid token is denied for the rest of that window. The floor bounds the JWKS
+# request rate an unknown kid can drive to one per key set per container per interval.
+JWKS_MIN_REFETCH_INTERVAL_SECONDS = 60
+
+# Timeout for JWKS and OpenID discovery HTTP fetches. urlopen with no timeout inherits the
+# process-wide default socket timeout, which is None, so a black-holed endpoint blocks the
+# authorizer until the Lambda timeout instead of failing fast.
+JWKS_FETCH_TIMEOUT_SECONDS = 10
 
 # Resolved JWKS URI per external issuer, cached so OpenID Connect discovery is not
 # performed on the hot path of every authenticated request. Maps issuer_url ->
 # {"jwks_uri": str, "expiry": timestamp}.
 jwks_uri_cache = {}
+
+
+def _cached_jwks_keys(cache_key: str, current_time: float) -> Optional[List[Dict[str, Any]]]:
+    """The cached key set for cache_key while its own expiry is still in the future."""
+    entry = keys_cache.get(cache_key)
+    if entry and current_time < entry['expiry']:
+        return entry['keys']
+    return None
+
+
+def _jwks_refetch_is_rate_limited(cache_key: str, current_time: float) -> bool:
+    """True when cache_key was fetched too recently to be force-refetched again."""
+    entry = keys_cache.get(cache_key)
+    if not entry:
+        return False
+    return (current_time - entry.get('fetched', 0)) < JWKS_MIN_REFETCH_INTERVAL_SECONDS
+
+
+def _store_jwks_keys(cache_key: str, keys: List[Dict[str, Any]], current_time: float) -> None:
+    keys_cache[cache_key] = {
+        'keys': keys,
+        'expiry': current_time + CACHE_TTL,
+        'fetched': current_time,
+    }
+
+
+def _key_for_kid(keys: Optional[List[Dict[str, Any]]], kid: str) -> Optional[Dict[str, Any]]:
+    """The JWK carrying this kid, or None when the set does not contain it."""
+    for key in keys or []:
+        if key.get('kid') == kid:
+            return key
+    return None
 
 # URL Templates
 COGNITO_JWKS_URL_TEMPLATE = "{cognito_base_url}/{user_pool_id}/.well-known/jwks.json"
@@ -271,20 +383,21 @@ def is_path_ignored(path: str) -> bool:
     """
     Check if the request path should bypass authentication (the IP check still applies).
 
-    Matches an ignored path exactly, or as a path-segment-anchored suffix of the request
-    path. Anchoring on a leading "/" tolerates a stage prefix that a REST API
-    REQUEST-authorizer event may include (for example "/api/api/version" when the stage is
-    "api") while ensuring an unrelated route cannot become anonymous merely because its
-    tail happens to spell an ignored path (e.g. "/foo/notapi/version").
+    Matches an ignored path exactly. A REST API REQUEST-authorizer event exposes the
+    resource path with the stage already stripped ("/api/version", not "/api/api/version"),
+    which is also what _path_from_method_arn returns, so the resolved request path is
+    directly comparable to a configured entry. The comparison stays an equality test: a
+    prefix or suffix test would let a greedy "{proxy+}" route whose tail spells an ignored
+    path (e.g. ".../download/stream/api/version") bypass authentication.
     """
     if not path:
         return False
     for ignored in IGNORED_PATHS:
-        # Anchor the suffix match on a path-segment boundary ("/" + the ignored path,
-        # normalized to a single leading slash) so only a whole trailing segment sequence
-        # matches, never a partial segment.
-        anchored = "/" + ignored.lstrip("/")
-        if path == ignored or path.endswith(anchored):
+        if not ignored:
+            continue
+        # Compare against a single-leading-slash form of the configured entry so an entry
+        # written without one still matches the resolved path.
+        if path == "/" + ignored.lstrip("/"):
             return True
     return False
 
@@ -305,6 +418,35 @@ def extract_token_from_header(event: Dict[str, Any]) -> Optional[str]:
         return None
 
     return match.group(1)
+
+
+def _api_key_expiry_denial(expires_at: str, api_key_id: str) -> Optional[str]:
+    """
+    Evaluate a stored API key expiresAt value, returning a denial reason or None.
+
+    Accepts both formats the API key models accept — an ISO 8601 datetime
+    ("2026-12-31T23:59:59Z") and a date-only value ("2026-12-31") — and reads a value
+    carrying no UTC offset as UTC, so a date-only expiry compares instead of raising.
+    A value that cannot be evaluated denies: expiry is the only lifetime bound on an
+    API key (isActive is a separate manual flag), so an unreadable value must not read
+    as "no expiry" and extend the credential indefinitely. The raw value is not logged.
+    """
+    from datetime import datetime, timezone
+    try:
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            expiry = datetime.strptime(expires_at, '%Y-%m-%d')
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError, AttributeError) as e:
+        logger.warning(f"API key expiresAt could not be evaluated, denying key {api_key_id}: {e}")
+        return 'API key expiry could not be evaluated'
+
+    if datetime.now(timezone.utc) > expiry:
+        logger.info(f"API key has expired: {api_key_id}")
+        return 'API key has expired'
+    return None
 
 
 def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
@@ -336,14 +478,9 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
         # Check expiration
         expires_at = api_key_record.get('expiresAt', '')
         if expires_at:
-            from datetime import datetime, timezone
-            try:
-                expiry = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-                if datetime.now(timezone.utc) > expiry:
-                    logger.info(f"API key has expired: {api_key_record.get('apiKeyId')}")
-                    return {'denied': True, 'reason': 'API key has expired'}
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Could not parse expiresAt '{expires_at}': {e}")
+            expiry_denial = _api_key_expiry_denial(expires_at, api_key_record.get('apiKeyId'))
+            if expiry_denial:
+                return {'denied': True, 'reason': expiry_denial}
 
         # Look up userId roles
         user_id = api_key_record.get('userId', '')
@@ -351,16 +488,16 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
             logger.error(f"API key has no userId: {api_key_record.get('apiKeyId')}")
             return {'denied': True, 'reason': 'API key has no userId configured'}
 
-        roles_response = user_roles_table.query(
-            KeyConditionExpression=DDBKey('userId').eq(user_id)
-        )
-        user_roles = roles_response.get('Items', [])
-        if not user_roles:
+        # Roles come from the same per-user helper the JWT path uses, so the two cannot
+        # drift. It pages the query to exhaustion -- one query returns at most 1 MB, and a
+        # machine identity holding more role assignments than that would otherwise carry a
+        # silently short vams:roles -- and caches the result per user.
+        role_names = _lookup_user_roles(user_id)
+        if not role_names:
             logger.info(f"No roles found for API key userId: {user_id}")
             return {'denied': True, 'reason': f'No roles for API key user {user_id}'}
 
         # Build synthetic claims context
-        role_names = [r.get('roleName', '') for r in user_roles if r.get('roleName')]
         claims = {
             'sub': user_id,
             'cognito:username': user_id,
@@ -398,19 +535,21 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         # Get the public keys
         keys = get_cognito_keys(AWS_REGION, USER_POOL_ID)
 
-        # Search for the kid in the downloaded public keys
-        key_index = -1
-        for i in range(len(keys)):
-            if kid == keys[i]['kid']:
-                key_index = i
-                break
+        # Search for the kid in the downloaded public keys. A kid the cached set does not
+        # contain is what an issuer signing-key rotation looks like, so refetch once
+        # (rate-limited) before denying rather than waiting out the entry's own TTL.
+        key_record = _key_for_kid(keys, kid)
+        if key_record is None:
+            logger.info(f"Public key for kid {kid} not in the cached key set; refetching JWKS")
+            keys = get_cognito_keys(AWS_REGION, USER_POOL_ID, force_refresh=True)
+            key_record = _key_for_kid(keys, kid)
 
-        if key_index == -1:
+        if key_record is None:
             logger.error(f"Public key not found in jwks.json for kid: {kid}")
             return None
 
         # Import the public key using joserfc
-        public_key = joserfc_jwk.import_key(keys[key_index])
+        public_key = joserfc_jwk.import_key(key_record)
 
         # Decode and verify the token using joserfc, pinning the accepted algorithm to
         # RS256 (Cognito's issuance algorithm). An explicit allow-list prevents algorithm
@@ -512,19 +651,30 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_cognito_keys(region: str, user_pool_id: str) -> List[Dict[str, Any]]:
+def get_cognito_keys(region: str, user_pool_id: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
     """
     Download and cache Cognito public keys from JWKS endpoint
+
+    force_refresh bypasses a still-fresh cache entry, which is how a kid the cached set does
+    not contain (an issuer key rotation) is picked up before that entry's TTL lapses. The
+    refetch is skipped, and the cached set returned unchanged, while the entry is younger
+    than JWKS_MIN_REFETCH_INTERVAL_SECONDS.
     """
-    global keys_cache, keys_cache_expiry
+    global keys_cache
 
     current_time = time.time()
     cache_key = f"cognito:{region}:{user_pool_id}"
 
-    # Check if we have valid cached keys
-    if cache_key in keys_cache and current_time < keys_cache_expiry:
-        logger.info("Using cached Cognito public keys")
-        return keys_cache[cache_key]
+    if force_refresh:
+        if _jwks_refetch_is_rate_limited(cache_key, current_time):
+            logger.info("Cognito public keys were fetched recently; serving the cached set")
+            return keys_cache[cache_key]['keys']
+    else:
+        # Check if we have valid cached keys
+        cached_keys = _cached_jwks_keys(cache_key, current_time)
+        if cached_keys is not None:
+            logger.info("Using cached Cognito public keys")
+            return cached_keys
 
     # Download fresh keys using configurable base URL
     if not COGNITO_BASE_URL:
@@ -535,7 +685,7 @@ def get_cognito_keys(region: str, user_pool_id: str) -> List[Dict[str, Any]]:
     logger.info(f"Downloading Cognito public keys from: {keys_url}")
 
     try:
-        with urllib.request.urlopen(keys_url) as response:
+        with urllib.request.urlopen(keys_url, timeout=JWKS_FETCH_TIMEOUT_SECONDS) as response:
             if response.getcode() != 200:
                 raise Exception(f"Failed to fetch JWKS. Status code: {response.getcode()}")
 
@@ -543,8 +693,7 @@ def get_cognito_keys(region: str, user_pool_id: str) -> List[Dict[str, Any]]:
             keys = jwks_data['keys']
 
             # Cache the keys
-            keys_cache[cache_key] = keys
-            keys_cache_expiry = current_time + CACHE_TTL
+            _store_jwks_keys(cache_key, keys, current_time)
 
             logger.info(f"Successfully downloaded and cached {len(keys)} public keys")
             return keys
@@ -570,13 +719,19 @@ def get_signing_key_for_external_token(token: str, jwt_issuer_url: str) -> Optio
         # Get the public keys
         keys = get_external_keys(jwt_issuer_url)
 
-        # Find the key with matching kid
-        for key in keys:
-            if key.get('kid') == kid:
-                return construct_public_key_from_jwk(key)
+        # Find the key with matching kid, refetching once (rate-limited) when the cached set
+        # does not carry it — the shape an issuer signing-key rotation takes.
+        key = _key_for_kid(keys, kid)
+        if key is None:
+            logger.info(f"Public key for kid {kid} not in the cached key set; refetching JWKS")
+            keys = get_external_keys(jwt_issuer_url, force_refresh=True)
+            key = _key_for_kid(keys, kid)
 
-        logger.error(f"Public key not found for kid: {kid}")
-        return None
+        if key is None:
+            logger.error(f"Public key not found for kid: {kid}")
+            return None
+
+        return construct_public_key_from_jwk(key)
 
     except Exception as e:
         logger.error(f"Error getting signing key: {str(e)}")
@@ -642,7 +797,7 @@ def discover_jwks_uri(issuer_url: str) -> Optional[str]:
     logger.info(f"Attempting OpenID Connect discovery at: {discovery_url}")
 
     try:
-        response = requests.get(discovery_url, timeout=10)
+        response = requests.get(discovery_url, timeout=JWKS_FETCH_TIMEOUT_SECONDS)
         response.raise_for_status()
 
         discovery_data = response.json()
@@ -706,12 +861,15 @@ def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
     return fallback_uri
 
 
-def get_external_keys(jwt_issuer_url: str) -> List[Dict[str, Any]]:
+def get_external_keys(jwt_issuer_url: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
     """
     Download and cache External IDP public keys from JWKS endpoint
     Uses OpenID Connect discovery with fallback to standard JWKS endpoint
+
+    force_refresh behaves as it does in get_cognito_keys: it bypasses a still-fresh entry so
+    a rotated signing key is picked up on a kid miss, subject to the same minimum interval.
     """
-    global keys_cache, keys_cache_expiry
+    global keys_cache
 
     current_time = time.time()
 
@@ -721,24 +879,29 @@ def get_external_keys(jwt_issuer_url: str) -> List[Dict[str, Any]]:
     # Use the actual JWKS URI in the cache key to ensure proper cache isolation
     cache_key = f"external_jwks:{jwks_uri}"
 
-    # Check if we have valid cached keys for this specific JWKS URI
-    if cache_key in keys_cache and current_time < keys_cache_expiry:
-        logger.info(f"Using cached External IDP public keys for: {jwks_uri}")
-        return keys_cache[cache_key]
+    if force_refresh:
+        if _jwks_refetch_is_rate_limited(cache_key, current_time):
+            logger.info(f"External IDP public keys for {jwks_uri} were fetched recently; serving the cached set")
+            return keys_cache[cache_key]['keys']
+    else:
+        # Check if we have valid cached keys for this specific JWKS URI
+        cached_keys = _cached_jwks_keys(cache_key, current_time)
+        if cached_keys is not None:
+            logger.info(f"Using cached External IDP public keys for: {jwks_uri}")
+            return cached_keys
 
     # Download fresh keys from the determined JWKS URI
     logger.info(f"Downloading External IDP public keys from: {jwks_uri}")
 
     try:
-        response = requests.get(jwks_uri, timeout=10)
+        response = requests.get(jwks_uri, timeout=JWKS_FETCH_TIMEOUT_SECONDS)
         response.raise_for_status()
 
         jwks_data = response.json()
         keys = jwks_data['keys']
 
         # Cache the keys with the specific JWKS URI
-        keys_cache[cache_key] = keys
-        keys_cache_expiry = current_time + CACHE_TTL
+        _store_jwks_keys(cache_key, keys, current_time)
 
         logger.info(f"Successfully downloaded and cached {len(keys)} public keys from: {jwks_uri}")
         return keys
@@ -754,6 +917,10 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     Returns a provider-neutral result dict:
         {"authorized": bool, "context": dict|None, "reason": str|None}
+
+    An ignored-path bypass additionally carries "ignoredPath": True. It is the one
+    authorized result that establishes no identity, so a caller building an IAM policy
+    can scope it to the ignored paths rather than to the whole API.
 
     The IP check uses the clientIp module's resolve_client_ip to handle XFF/CloudFront-aware
     resolution based on the fronted parameter.
@@ -780,7 +947,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     )
     if is_path_ignored(request_path):
         logger.info(f"Path {request_path} is in ignored paths, allowing access")
-        return {"authorized": True, "context": None, "reason": None}
+        return {"authorized": True, "context": None, "reason": None, "ignoredPath": True}
 
     # Step 3: Extract authorization header
     headers = event.get("headers", {}) or {}

@@ -192,21 +192,38 @@ None.
 
 `POST /auth/routes`
 
-Returns the list of web application routes that the current user is authorized to access. The frontend uses this to conditionally render navigation items and gate route access.
+Returns the subset of the submitted web application routes that the current user is authorized to access. The frontend uses this to conditionally render navigation items and gate route access.
 
 **Request Body:**
 
+Each entry in `routes` is an object carrying the HTTP method and the web route path. At least one entry is required, and at most 500 may be submitted per request.
+
+| Field         | Type   | Required | Description                                              |
+| ------------- | ------ | -------- | -------------------------------------------------------- |
+| `method`      | string | Yes      | HTTP method to check: `GET`, `PUT`, `POST`, or `DELETE`. |
+| `route__path` | string | Yes      | Web route path, up to 512 characters.                    |
+
 ```json
 {
-    "routes": ["/databases", "/assets", "/pipelines", "/workflows", "/admin/roles", "/admin/users"]
+    "routes": [
+        { "method": "GET", "route__path": "/databases" },
+        { "method": "GET", "route__path": "/assets" },
+        { "method": "GET", "route__path": "/admin/roles" }
+    ]
 }
 ```
 
 **Response:**
 
+`allowedRoutes` contains only the submitted routes the user may access; `email` is the requesting user's identity.
+
 ```json
 {
-    "allowedRoutes": ["/databases", "/assets", "/pipelines", "/workflows"]
+    "allowedRoutes": [
+        { "method": "GET", "route__path": "/databases", "object__type": "web" },
+        { "method": "GET", "route__path": "/assets", "object__type": "web" }
+    ],
+    "email": "user@example.com"
 }
 ```
 
@@ -223,7 +240,7 @@ Returns the list of web application routes that the current user is authorized t
 
 `GET /auth/loginProfile/{userId}`
 
-Retrieves the requesting user's stored login profile. A user who has authenticated but has no stored profile yet (for example, not assigned any roles) receives an identity-only profile (just `userId`) so login can still proceed. The profile may also include organization-specific fields.
+Retrieves the requesting user's stored login profile. `userId` must be the caller's own identity, and the caller's roles must allow the route: a user whose roles do not grant `/auth/loginProfile` receives a `403`, as does an authenticated user with no roles at all unless `app.authProvider.authorizerOptions.defaultUserRoleName` names a role that grants it. An authorized user whose profile record has not been written yet receives an identity-only profile (just `userId`). The profile may also include organization-specific fields.
 
 **Request Parameters:**
 
@@ -291,403 +308,19 @@ Optional. Body contents may be overridden by internal organizational profile log
 
 ---
 
-## Cognito User Management Endpoints
+## Cognito user management
 
-These endpoints are only available when Cognito authentication is enabled (`app.authProvider.useCognito.enabled`). All endpoints return a `503` status when Cognito is not enabled.
-
-### List Cognito Users
-
-`GET /user/cognito`
-
-Retrieves a paginated list of all users in the Cognito user pool.
-
-**Request Parameters:**
-
-| Parameter       | Location | Type    | Required | Description                                            |
-| --------------- | -------- | ------- | -------- | ------------------------------------------------------ |
-| `maxItems`      | query    | integer | No       | Maximum number of users to return (1-60, default: 60). |
-| `pageSize`      | query    | integer | No       | Number of users per page (1-60, default: 60).          |
-| `startingToken` | query    | string  | No       | Pagination token from a previous response.             |
-
-**Response:**
-
-```json
-{
-    "users": [
-        {
-            "userId": "user@example.com",
-            "email": "user@example.com",
-            "phone": "+15551234567",
-            "status": "CONFIRMED",
-            "enabled": true,
-            "mfaEnabled": false,
-            "dateCreated": "2024-01-15T10:30:00Z",
-            "dateModified": "2024-06-01T14:22:00Z"
-        }
-    ],
-    "NextToken": "eyJ..."
-}
-```
-
-**Error Responses:**
-
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Invalid pagination parameters.            |
-| `403`  | Not authorized to list users.             |
-| `500`  | Internal server error.                    |
-| `503`  | Cognito user management is not available. |
+Amazon Cognito user pool management -- listing, creating, updating, and deleting users, and resetting a user's password -- is documented in the [Authorization API](auth.md#cognito-user-management). These endpoints are only available when Cognito authentication is enabled (`app.authProvider.useCognito.enabled`).
 
 ---
 
-### Create Cognito User
+## API key management
 
-`POST /user/cognito`
-
-Creates a new user in the Cognito user pool. Cognito auto-generates a temporary password and sends a welcome email to the user.
-
-**Request Body:**
-
-```json
-{
-    "email": "newuser@example.com",
-    "phone": "+15551234567"
-}
-```
-
-| Field   | Type   | Required | Description                           |
-| ------- | ------ | -------- | ------------------------------------- |
-| `email` | string | Yes      | User's email address (auto-verified). |
-| `phone` | string | No       | User's phone number in E.164 format.  |
-
-**Response:**
-
-```json
-{
-    "message": "User created successfully",
-    "userId": "newuser@example.com"
-}
-```
-
-**Error Responses:**
-
-| Status | Description                                |
-| ------ | ------------------------------------------ |
-| `400`  | Invalid parameters or user already exists. |
-| `403`  | Not authorized to create users.            |
-| `500`  | Internal server error.                     |
-| `503`  | Cognito user management is not available.  |
+API key issuance and lifecycle management is documented in the [Authorization API](auth.md#api-keys). Two variants exist: the administrative `/auth/api-keys` routes, which operate across every user's keys, and the self-service [`/auth/user/api-keys`](auth.md#user-self-service-api-keys) routes, through which a user manages their own keys.
 
 ---
 
-### Update Cognito User
+## Related resources
 
-`PUT /user/cognito/{userId}`
-
-Updates an existing Cognito user's email and/or phone number. Updated attributes are automatically marked as verified.
-
-**Request Parameters:**
-
-| Parameter | Location | Type   | Required | Description                   |
-| --------- | -------- | ------ | -------- | ----------------------------- |
-| `userId`  | path     | string | Yes      | User ID (username) to update. |
-
-**Request Body:**
-
-```json
-{
-    "email": "updated@example.com",
-    "phone": "+15559876543"
-}
-```
-
-At least one field (`email` or `phone`) must be provided.
-
-**Response:**
-
-```json
-{
-    "message": "User updated successfully",
-    "userId": "user@example.com"
-}
-```
-
-**Error Responses:**
-
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Invalid parameters or no fields provided. |
-| `403`  | Not authorized to update users.           |
-| `404`  | User not found.                           |
-| `500`  | Internal server error.                    |
-| `503`  | Cognito user management is not available. |
-
----
-
-### Delete Cognito User
-
-`DELETE /user/cognito/{userId}`
-
-Permanently deletes a user from the Cognito user pool.
-
-:::danger[Irreversible Operation]
-This operation cannot be undone. The user will be permanently removed from the Cognito user pool.
-:::
-
-**Request Parameters:**
-
-| Parameter | Location | Type   | Required | Description                   |
-| --------- | -------- | ------ | -------- | ----------------------------- |
-| `userId`  | path     | string | Yes      | User ID (username) to delete. |
-
-**Response:**
-
-```json
-{
-    "message": "User deleted successfully",
-    "userId": "user@example.com"
-}
-```
-
-**Error Responses:**
-
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Invalid userId parameter.                 |
-| `403`  | Not authorized to delete users.           |
-| `404`  | User not found.                           |
-| `500`  | Internal server error.                    |
-| `503`  | Cognito user management is not available. |
-
----
-
-### Reset Cognito User Password
-
-`POST /user/cognito/{userId}/resetPassword`
-
-Resets a user's password using Cognito's built-in password reset. Cognito auto-generates a new temporary password and sends it to the user's email. The user must change the password on next login.
-
-**Request Parameters:**
-
-| Parameter | Location | Type   | Required | Description                               |
-| --------- | -------- | ------ | -------- | ----------------------------------------- |
-| `userId`  | path     | string | Yes      | User ID (username) to reset password for. |
-
-**Request Body:**
-
-```json
-{
-    "confirmed": true
-}
-```
-
-| Field       | Type    | Required | Description                                |
-| ----------- | ------- | -------- | ------------------------------------------ |
-| `confirmed` | boolean | No       | Confirmation flag for the reset operation. |
-
-**Response:**
-
-```json
-{
-    "message": "Password reset successfully",
-    "userId": "user@example.com"
-}
-```
-
-**Error Responses:**
-
-| Status | Description                                      |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid parameters or confirmation not provided. |
-| `403`  | Not authorized to reset passwords.               |
-| `404`  | User not found.                                  |
-| `500`  | Internal server error.                           |
-| `503`  | Cognito user management is not available.        |
-
----
-
-## API Key Management Endpoints
-
-These endpoints manage API keys for programmatic access to VAMS.
-
-### List API Keys
-
-`GET /auth/api-keys`
-
-Retrieves all API keys for the current user, or all API keys if the user has admin permissions.
-
-**Request Parameters:**
-
-None.
-
-**Response:**
-
-```json
-{
-    "apiKeys": [
-        {
-            "apiKeyId": "ak-12345678",
-            "userId": "user@example.com",
-            "name": "My API Key",
-            "enabled": true,
-            "dateCreated": "2024-01-15T10:30:00Z",
-            "expiresAt": "2025-01-15T10:30:00Z"
-        }
-    ]
-}
-```
-
-**Error Responses:**
-
-| Status | Description                      |
-| ------ | -------------------------------- |
-| `403`  | Not authorized to list API keys. |
-| `500`  | Internal server error.           |
-
----
-
-### Create API Key
-
-`POST /auth/api-keys`
-
-Creates a new API key for programmatic access.
-
-**Request Body:**
-
-```json
-{
-    "name": "My Integration Key",
-    "expiresInDays": 365
-}
-```
-
-**Response:**
-
-```json
-{
-    "apiKeyId": "ak-12345678",
-    "apiKey": "vams_ak_abc123...",
-    "name": "My Integration Key",
-    "message": "API key created. Store the key securely -- it will not be shown again."
-}
-```
-
-:::warning[Store the API Key Securely]
-The full API key value is only returned once at creation time. It cannot be retrieved again.
-:::
-
-**Error Responses:**
-
-| Status | Description                        |
-| ------ | ---------------------------------- |
-| `400`  | Invalid parameters.                |
-| `403`  | Not authorized to create API keys. |
-| `500`  | Internal server error.             |
-
----
-
-### Get API Key
-
-`GET /auth/api-keys/{apiKeyId}`
-
-Retrieves details of a specific API key. The full key value is not returned.
-
-**Request Parameters:**
-
-| Parameter  | Location | Type   | Required | Description             |
-| ---------- | -------- | ------ | -------- | ----------------------- |
-| `apiKeyId` | path     | string | Yes      | The API key identifier. |
-
-**Response:**
-
-```json
-{
-    "apiKeyId": "ak-12345678",
-    "userId": "user@example.com",
-    "name": "My API Key",
-    "enabled": true,
-    "dateCreated": "2024-01-15T10:30:00Z",
-    "expiresAt": "2025-01-15T10:30:00Z"
-}
-```
-
-**Error Responses:**
-
-| Status | Description                          |
-| ------ | ------------------------------------ |
-| `403`  | Not authorized to view this API key. |
-| `404`  | API key not found.                   |
-| `500`  | Internal server error.               |
-
----
-
-### Update API Key
-
-`PUT /auth/api-keys/{apiKeyId}`
-
-Updates an API key's properties such as name or enabled status.
-
-**Request Parameters:**
-
-| Parameter  | Location | Type   | Required | Description             |
-| ---------- | -------- | ------ | -------- | ----------------------- |
-| `apiKeyId` | path     | string | Yes      | The API key identifier. |
-
-**Request Body:**
-
-```json
-{
-    "name": "Updated Key Name",
-    "enabled": false
-}
-```
-
-**Response:**
-
-```json
-{
-    "message": "API key updated successfully",
-    "apiKeyId": "ak-12345678"
-}
-```
-
-**Error Responses:**
-
-| Status | Description                            |
-| ------ | -------------------------------------- |
-| `400`  | Invalid parameters.                    |
-| `403`  | Not authorized to update this API key. |
-| `404`  | API key not found.                     |
-| `500`  | Internal server error.                 |
-
----
-
-### Delete API Key
-
-`DELETE /auth/api-keys/{apiKeyId}`
-
-Permanently deletes an API key, revoking all access associated with it.
-
-**Request Parameters:**
-
-| Parameter  | Location | Type   | Required | Description             |
-| ---------- | -------- | ------ | -------- | ----------------------- |
-| `apiKeyId` | path     | string | Yes      | The API key identifier. |
-
-**Response:**
-
-```json
-{
-    "message": "API key deleted successfully",
-    "apiKeyId": "ak-12345678"
-}
-```
-
-**Error Responses:**
-
-| Status | Description                            |
-| ------ | -------------------------------------- |
-| `400`  | Invalid parameters.                    |
-| `403`  | Not authorized to delete this API key. |
-| `404`  | API key not found.                     |
-| `500`  | Internal server error.                 |
+-   [API Overview](overview.md) -- Authentication methods, headers, and unauthenticated endpoints
+-   [Authorization API](auth.md) -- Constraints, roles, user-role assignments, Cognito users, and API keys

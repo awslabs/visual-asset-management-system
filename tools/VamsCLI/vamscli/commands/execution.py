@@ -12,6 +12,7 @@ files across multiple assets, so these are keyed on the executionId, not an asse
     execution permanent-delete   remove the execution's DynamoDB rows only (admin, guarded)
 """
 
+import sys
 from typing import Dict, Any, Optional
 
 import click
@@ -92,9 +93,13 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                     starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """List workflow executions globally (permission-filtered), with optional filters.
 
-    Only executions whose workflow you can read AND whose input/output asset you can read are shown.
-    By default only recent executions (started within the last 90 days) are listed; use
-    --filter-start-date / --filter-end-date to query an explicit date range.
+    Only executions whose workflow you can read are listed, and then only when you can read every
+    asset the run read and the asset it wrote to. By default only recent executions (started within
+    the last 90 days) are listed; use --filter-start-date / --filter-end-date to query an explicit
+    date range.
+
+    A page shorter than --page-size is a stated bound rather than an absence of matches: the reason
+    is reported under Warnings, and a NextToken continues from where the page stopped.
 
     Examples:
         vamscli execution list
@@ -140,16 +145,28 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
         return params
 
     def _fmt(data: Dict[str, Any]) -> str:
+        def _rendered(lines) -> str:
+            # Every reason a page can be shorter than --page-size: the cap on distinct assets it
+            # resolves for permission checks, and its per-request work budget. Rendered on the empty
+            # page too, because that is the case a bare "No executions found." misreports as an
+            # absence of matches rather than a stated bound.
+            warnings = data.get('warnings')
+            if warnings:
+                lines.append(f"\nWarnings ({len(warnings)}):")
+                lines.extend(f"  - {w}" for w in warnings)
+            return '\n'.join(lines)
+
         items = data.get('Items', [])
         if not items:
-            # The backend applies filters after the DynamoDB page limit, so an empty page may still
-            # carry a NextToken for later pages that do contain matches.
+            # The service fills a page by walking its query, so an empty page means either that no
+            # visible execution matched or that a bound stopped the walk first — `warnings` names the
+            # bound when one fired. A NextToken continues either way.
             if not data.get('autoPaginated') and data.get('NextToken'):
-                return ("No executions on this page; more pages available."
-                        f"\n\nNext token: {data['NextToken']}")
+                return _rendered(["No executions on this page; more pages available.",
+                                  f"\nNext token: {data['NextToken']}"])
             if data.get('note'):
-                return f"No executions found.\n\n{data['note']}"
-            return "No executions found."
+                return _rendered(["No executions found.", f"\n{data['note']}"])
+            return _rendered(["No executions found."])
         out = []
         if data.get('autoPaginated'):
             out.append(f"Auto-paginated: {data.get('totalItems', 0)} item(s) in "
@@ -175,13 +192,18 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             out.append(f"\nNext token: {data['NextToken']}")
         if data.get('note'):
             out.append(f"\n{data['note']}")
-        return '\n'.join(out)
+        return _rendered(out)
 
     try:
         if auto_paginate:
             max_total = max_items or 10000
             output_status(f"Listing executions (auto-paginating up to {max_total})...", json_output)
             all_items = []
+            # Each page reports the bounds that shortened it in its own `warnings`; the aggregate is
+            # rebuilt from the accumulated items alone, so they are collected here (deduplicated, in
+            # order) or a walk of 200 pages loses every bound that fired along the way and reads as a
+            # complete listing.
+            all_warnings = []
             next_token = None
             page_count = 0
             while True:
@@ -192,6 +214,9 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 page = _message(api_client.list_executions(params=params))
                 items = page.get('Items', [])
                 all_items.extend(items)
+                for warning in page.get('warnings') or []:
+                    if warning not in all_warnings:
+                        all_warnings.append(warning)
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')
@@ -200,6 +225,8 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count}
+            if all_warnings:
+                result['warnings'] = all_warnings
             # Both stop conditions carry the outstanding token: it is the only way to continue, and
             # without it a caller chunking a large deployment has to re-walk every page already paid
             # for (each of which re-pays the per-page authorization fan-out).
@@ -503,6 +530,10 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
          end_time: Optional[int], next_token: Optional[str], json_output: bool):
     """Retrieve an execution's logs (truncated stored text or full live CloudWatch search).
 
+    --filter-pattern, --limit, --start-time, --end-time and --next-token act on the live CloudWatch
+    search only, so they require --mode full; supplying one without it is rejected rather than
+    ignored.
+
     Examples:
         vamscli execution logs my-execution-id
         vamscli execution logs my-execution-id --mode full --limit 200
@@ -511,14 +542,31 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
     params: Dict[str, Any] = {'mode': mode}
     if pipeline_execution_id:
         params['pipelineExecutionId'] = pipeline_execution_id
-    if mode == 'full':
+    # Truncated mode returns one joined blob of stored text with no continuation token, so the
+    # CloudWatch search parameters have nothing to act on there. Rejected rather than warned:
+    # output_warning is suppressed under --json-output, which is exactly where a silently
+    # unfiltered log reads as "no matching events".
+    full_mode_only = [
+        name for name, value in (('--filter-pattern', filter_pattern), ('--limit', limit),
+                                 ('--start-time', start_time), ('--end-time', end_time),
+                                 ('--next-token', next_token))
+        if value is not None
+    ]
+    if mode != 'full':
+        if full_mode_only:
+            raise click.ClickException(
+                f"{', '.join(full_mode_only)} only appl{'ies' if len(full_mode_only) == 1 else 'y'} "
+                f"with --mode full.")
+    else:
         if filter_pattern:
             params['filterPattern'] = filter_pattern
-        if limit:
+        if limit is not None:
+            if limit < 1:
+                raise click.ClickException("--limit must be 1 or greater.")
             params['limit'] = limit
-        if start_time:
+        if start_time is not None:
             params['startTime'] = start_time
-        if end_time:
+        if end_time is not None:
             params['endTime'] = end_time
         if next_token:
             params['nextToken'] = next_token
@@ -607,7 +655,12 @@ def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[st
         raise click.ClickException(
             "Provide a member EXECUTION_ID along with --group-id (the group abort route is keyed on "
             "an execution id).")
-    if group_id and not yes and not json_output:
+    if group_id and not yes:
+        if json_output:
+            output_result({"error": "Confirmation required",
+                           "message": "Aborting an execution group requires the --yes flag",
+                           "groupId": group_id}, json_output=True)
+            sys.exit(1)
         click.confirm(
             f"Abort every active execution in group '{group_id}'? This cannot be undone.",
             abort=True)
@@ -700,13 +753,19 @@ def rerun(ctx: click.Context, execution_id: str, execution_group_id: Optional[st
 def permanent_delete(ctx: click.Context, execution_id: str, yes: bool, json_output: bool):
     """Permanently delete an execution's DynamoDB records (admin; does not touch Step Functions history).
 
-    The execution must not be in progress. This is irreversible.
+    The execution must not be in progress. This is irreversible. `--yes` is required in JSON mode,
+    where no interactive prompt is possible.
 
     Examples:
         vamscli execution permanent-delete my-execution-id --yes
     """
     api_client = _api(ctx)
-    if not yes and not json_output:
+    if not yes:
+        if json_output:
+            output_result({"error": "Confirmation required",
+                           "message": "Permanently deleting an execution requires the --yes flag",
+                           "executionId": execution_id}, json_output=True)
+            sys.exit(1)
         click.confirm(
             f"Permanently delete all DynamoDB records for execution '{execution_id}'? "
             "This is irreversible.", abort=True)

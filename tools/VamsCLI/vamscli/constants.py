@@ -211,7 +211,13 @@ PROFILE_NAME_MAX_LENGTH = 50
 RESERVED_PROFILE_NAMES = ["help", "version", "list"]
 
 # Authentication and API Configuration
+# Seconds to wait for the TCP connection to the API Gateway endpoint.
 DEFAULT_TIMEOUT = 30
+# Seconds to wait between bytes of a response. Sized above API_GATEWAY_MAX_TIMEOUT_SECONDS (300, the
+# ceiling getConfig() allows for app.api.apiGatewayRest.apiGatewayTimeoutTime), so a deployment that
+# raised its integration timeout is never cut off by the client while a stalled or black-holed socket
+# still ends rather than hanging the command forever.
+DEFAULT_READ_TIMEOUT = 310
 MAX_AUTH_RETRIES = 3
 MINIMUM_API_VERSION = "2.2"
 API_LOGIN_PROFILE = "/auth/loginProfile"

@@ -316,9 +316,13 @@ class DeleteMetadataSchemaRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting a metadata schema"""
     confirmDelete: bool = Field(default=False, description="Confirmation for deletion")
 
-    @validator('confirmDelete')
+    @validator('confirmDelete', always=True)
     def validate_confirmation(cls, v):
-        """Ensure confirmation is provided for deletion"""
+        """Ensure confirmation is provided for deletion
+
+        always=True is required: a plain v1 validator does not run when the field is absent from
+        the body, so the default would satisfy the interlock it exists to enforce.
+        """
         if not v:
             raise ValueError("confirmDelete must be true for deletion")
         return v

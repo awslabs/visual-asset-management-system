@@ -2,7 +2,7 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all CDK implementations.
 
-> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `infra/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its pipeline development sections are also the Kiro counterpart for `infra/lib/nestedStacks/pipelines/CLAUDE.md` and `backendPipelines/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
 ## 🏗️ **Architecture Overview**
 
@@ -261,6 +261,43 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 -   [ ] **Test Dependencies**: Verify stack dependency resolution
 -   [ ] **Test Deployment**: Deploy to test environment and verify functionality
 -   [ ] **Test Feature Switches**: Verify feature switches work correctly
+-   [ ] **Add a T1 synth assertion for anything partition-, distribution-, or VPC-sensitive** (see below)
+
+##### **The T1 tier: synth assertions across all three config templates**
+
+`infra/test/support/templateSynth.ts` synthesizes the whole app from
+`config.template.{commercial,govcloud,eusovereign}.json` and exposes every emitted nested template. This is
+the **only** validation GovCloud and the EU Sovereign Cloud get, because no environment exists for either — a
+partition defect otherwise ships and surfaces as a `CREATE_FAILED` mid-deploy, rolling back the core stack.
+
+```typescript
+const s = synthTemplate("govcloud");
+const withTags = s.ofType("AWS::Lambda::EventSourceMapping").filter((m) => "Tags" in m.properties);
+expectAbsent("EventSourceMapping with Tags", withTags, {
+    description: "govcloud emits mappings at all",
+    count: s.ofType("AWS::Lambda::EventSourceMapping").length,
+});
+```
+
+Four rules for writing one:
+
+1. **`expectAbsent()` requires a positive control.** A negative assertion on a restricted partition is
+   satisfied equally by correct behaviour and by a template that emitted nothing. The control is a required
+   argument so it cannot be forgotten.
+2. **Docker is not needed, but avoiding it takes two steps.** `lambdaLayersBuilder-nestedStack.ts:36` calls
+   `cdk.DockerImage.fromBuild()` as an _eager argument_ to `bundling.image`, so it runs before CDK consults
+   its bundling-skip logic. `aws:cdk:bundling-stacks: []` alone does **not** avoid the docker build; the
+   harness also stubs the static. `infra.test.ts` and `genAiPipelineConstructs.test.ts` do neither, which is
+   why `npm test` fails whenever Docker Desktop is not running.
+3. **Assert over the assembly, not one stack.** VAMS puts nearly everything in nested stacks, so
+   `Template.fromStack(root)` sees ~17 resources out of ~600.
+4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
+   and then a token boundary, so the assertion passes while checking nothing. Use `SynthResult.flatten()`.
+
+The harness resets `s3AssetBucketRecords` between synths — it is a module-level mutable array with no reset,
+so a second synth in the same process otherwise fails with `There is already a Construct with name
+'bucketSyncCreated--<previous stack name>--...'`. **Any new module-level registry must be reset there too**,
+or the second template silently inherits the first one's state.
 
 #### **Step 7: Documentation**
 
@@ -762,8 +799,16 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    from changing the meaning of bundles written before it existed.
 6. **`allowWorkflowTriggerChaining` (default `false`)** lets ANOTHER workflow's output fire this
    workflow's triggers -- how a preview or metadata built-in runs on a conversion pipeline's result. A
-   workflow never fires on its own output whatever the value, so it cannot loop on its own files; a
-   chained file must still match the trigger's `inputFileFilters`.
+   file whose recorded provenance names this workflow never re-triggers it whatever the value, so a
+   workflow does not loop directly on output attributed to itself. **That check is narrower than a loop
+   guard.** It compares a file only against the workflow recorded as writing it, never against the chain
+   of runs that led to it, and there is no depth limit and no cycle detection -- two workflows that each
+   enable chaining and each write a file the other accepts fire one another indefinitely. It also
+   depends on what the file records: a workflow-written file whose provenance does not name its producer
+   counts as another workflow's output, so a workflow with chaining enabled can fire on a file it wrote
+   itself. Keeping a chain finite is an authoring responsibility -- review the `inputFileFilters` and
+   output file types of every bundle in a chain. A chained file must still match the trigger's
+   `inputFileFilters`.
 7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
    an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
    one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
@@ -1346,8 +1391,8 @@ export interface WafPolicyConfig {
         name: string;
         priority: number;
         limit: number; // per 5-min window per aggregate key
-        aggregateKeyType?: string; // "IP" (default) or "FORWARDED_IP"
-        forwardedIPConfig?: { headerName?: string; fallbackBehavior?: string }; // for FORWARDED_IP
+        aggregateKeyType?: string; // accepted for compatibility; every rule is emitted with "IP"
+        forwardedIPConfig?: { headerName?: string; fallbackBehavior?: string }; // accepted, not emitted
         blockResponseCode?: number; // default 429 (throttle), with a JSON custom-response body
     }>;
 }
@@ -1418,7 +1463,7 @@ export class Wafv2BasicConstruct extends Construct {
 
 The shipped `wafPolicyConfig.json` overrides two Common Rule Set rules to `count`. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking. `SizeRestrictions_QUERYSTRING` is likewise overridden to `count`: it blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter. A presigned URL carrying a session security token already approaches that limit, and the viewer requires the value double-encoded to survive its own two decode passes, which roughly doubles it again — so the iframe request for the static viewer page was blocked with a 403 before it ever reached S3.
 
-The shipped `VAMS-RateLimit` rate-based rule uses `aggregateKeyType: FORWARDED_IP` (with `forwardedIPConfig` on `X-Forwarded-For`, `NO_MATCH` fallback) so it counts the real client IP behind CloudFront, an ALB, or a shared NAT/VPN egress — the same policy applies to both the CloudFront-scoped and regional web ACLs. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. Unit test: `infra/test/wafRateLimit.test.ts`.
+The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. Unit test: `infra/test/wafRateLimit.test.ts`.
 
 ### **Security Helper Integration**
 
@@ -2311,7 +2356,7 @@ When making CDK infrastructure changes, update the corresponding documentation a
 #### **Docusaurus Documentation Updates:**
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
--   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts`, so new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` and kept in sync by review, not by the test. A missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts`: a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table, not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 -   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
@@ -2327,6 +2372,8 @@ When adding or changing a storage resource (Amazon S3 bucket, Amazon DynamoDB ta
 2. **Custom name (redeploy-collision flag)** — Whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can cause a **name collision on redeploy** with the same configuration name and account.
 
 These axes are independent. A resource that is **retained but auto-named** (for example, the VAMS asset, auxiliary, artefacts, and access logs buckets, and all DynamoDB tables) does **not** need to be deleted before redeploying with the same config — leave it unless you intend to remove the data. A resource with a **custom/fixed name** (for example, the ALB web app bucket and its access logs bucket, named for the domain host; and all `/aws/vendedlogs/...` log groups) **must** be flagged so operators delete any orphaned copy before redeploying.
+
+The **VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`) is `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. It is **not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 :::
 
 #### **Cross-Steering File Updates:**
@@ -2403,9 +2450,10 @@ The docs-site config generator is a hand-maintained mirror of `config.ts` — it
 1. Document it in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
 2. Update the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`):
     - `schema.ts` — add a `FIELDS` entry (path + label + input kind + section).
-    - `defaults.ts` — add the default (kept deep-equal to `config.template.commercial.json` / `config.template.govcloud.json`).
-    - `validation.ts` — add a `Rule` mirroring any new `throw new Error(...)` / `console.warn(...)` you added in `getConfig()`.
-3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field. **Note:** the test covers only `schema.ts` (fields) and `defaults.ts` (presets); it does **not** validate `validation.ts` against `getConfig()`. Keeping the `validation.ts` rules in step with `getConfig()`'s `throw`/`warn` logic is a manual, review-enforced task — a stale or missing rule will not be caught by any test.
+    - `defaults.ts` — add the default (kept deep-equal to all three of `config.template.commercial.json` / `config.template.govcloud.json` / `config.template.eusovereign.json`).
+    - `validation.ts` — add a `Rule` mirroring any new `throw new Error(...)` / `console.warn(...)` you added in `getConfig()`. Each rule section anchors to the `getConfig()` block it mirrors by quoting that block's leading comment or error-message text, not by line number.
+    - `derived.ts` — mirror any `getConfig()` auto-mutation you added or changed (an assignment that rewrites the operator's config), and **delete** any that `getConfig()` does not perform. It performs none today, so `applyDerived()` is a pass-through; a feature added to a `getConfig()` constraint list such as the VPC-requiring set belongs in `validation.ts`'s `VPC_REQUIRING_FEATURES` table instead.
+3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field. **Note:** the test covers only `schema.ts` (fields) and `defaults.ts` (presets); it validates neither `validation.ts` nor `derived.ts` against `getConfig()`. Keeping those two in step with `getConfig()`'s `throw`/`warn` logic and its auto-mutations is a manual, review-enforced task — a stale, missing, or leftover rule will not be caught by any test.
 
 ### **Creating New Nested Stacks**
 

@@ -12,7 +12,7 @@ VAMS serves as a **single pane of glass** for an organization's spatial data sou
 
 ## Open-Source Extensibility
 
-As an open-source project, VAMS is designed to be adapted to your organization's specific requirements. The plugin-based architecture supports integration of new viewer plugins, upstream data sources (external S3 buckets, partner connectors), downstream consumers (knowledge graphs, processing services), and custom workflow pipelines — all without vendor lock-in.
+As an open-source project, VAMS is designed to be adapted to your organization's specific requirements. The plugin-based architecture supports integration of new viewer plugins, upstream data sources (external Amazon S3 buckets, partner connectors), downstream consumers (knowledge graphs, processing services), and custom workflow pipelines — all without vendor lock-in.
 
 ---
 
@@ -49,7 +49,7 @@ VAMS includes 20 built-in viewer plugins that allow users to visualize a wide ra
 
 ## Automated Processing Pipelines
 
-VAMS provides a configurable pipeline and workflow system that automates common asset processing tasks. Pipelines execute as AWS Batch Fargate containers orchestrated by AWS Step Functions, with support for AWS Lambda, Amazon SQS, and Amazon EventBridge execution types.
+VAMS provides a configurable pipeline and workflow system that automates common asset processing tasks. AWS Step Functions orchestrates the steps of a workflow, and each step reaches its processing backend through one of four execution types -- AWS Lambda, Amazon SQS, Amazon EventBridge, or AWS Deadline Cloud. Container-based processing runs on AWS Batch Fargate, with licensed pipelines also available on Amazon ECS and Amazon EKS.
 
 -   **3D Conversion** -- Convert between 3D file formats using Trimesh and Blender
 -   **CAD/Mesh Metadata Extraction** -- Automatically extract geometric metadata from CAD and mesh files using CADQuery
@@ -111,7 +111,7 @@ VAMS is built from the ground up for deployment across AWS partitions and region
 -   AWS WAF integration for web application firewall protection (optional)
 
 :::warning[Compliance Responsibility]
-VAMS is provided as near-production-grade at its default configuration. Consult with your organizational security team prior to production use, and review the [Security Considerations](../developer/setup.md) section for recommended hardening steps.
+VAMS is provided as near-production-grade at its default configuration. Consult with your organizational security team prior to production use, and review the [Security Recommendations](../architecture/security.md#security-recommendations) for recommended hardening steps.
 :::
 
 ---

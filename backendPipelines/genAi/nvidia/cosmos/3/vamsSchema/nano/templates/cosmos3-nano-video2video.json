@@ -1,0 +1,48 @@
+{
+    "templateId": "cosmos3-nano-video2video",
+    "templateName": "Video-to-Video (Nano)",
+    "description": "Regenerate a source video from a prompt with the Cosmos 3 Nano (16B) omni model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_VARIANT\": \"nano\", \"TASK_MODE\": \"video2video\", \"DISABLE_GUARDRAILS\": {{DISABLE_GUARDRAILS}}, \"PROMPT\": \"{{PROMPT}}\", \"NEGATIVE_PROMPT\": \"{{NEGATIVE_PROMPT}}\", \"NUM_FRAMES\": {{NUM_FRAMES}}}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Regenerates a source video using Cosmos3-Nano. Select the source video as the input file; the prompt describes the output. For a structure-preserving transform driven by a control signal (edge, depth, segmentation), use the Control-Signal Transfer template instead.\n\nThis template consumes ONE input file, so run it from a workflow whose inputFileArity is 'one' or 'multi'. The built-in \"NVIDIA Cosmos 3 Nano (16B)\" workflow takes no input files and serves the text-only templates.\n\nMetadata this template reads (all optional; file metadata wins over asset metadata):\n  COSMOS3_PROMPT           What to generate. Falls back to this when the Prompt field is blank.\n  COSMOS3_NEGATIVE_PROMPT  What to avoid in the output.\n  COSMOS3_SEED             Integer seed; the same seed reproduces the same generation.\n  COSMOS3_GUIDANCE         How strictly to follow the prompt.\n  COSMOS3_NUM_FRAMES       Number of frames to generate.\n\nHow to supply metadata: set these on the input FILE or on the ASSET (Metadata tab, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: a value you type into a field above WINS. Metadata is used only where the field is left blank, so a standing value acts as a default.\n\nContent safety: Disable content-safety guardrails ships CHECKED, so the NVIDIA guardrail models are skipped. They load alongside the generation model and need more GPU memory than the shipped instance types provide, so they are off by default for capacity reasons. Clear the field to run them, after raising the pipeline's instanceTypes to a larger GPU tier.",
+    "overrides": {
+        "inputFileArity": "one",
+        "inputFileFilters": {
+            "allow": ["*.mp4", "*.mov"],
+            "exclude": []
+        }
+    },
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "What to generate from the source video. Leave blank to fall back to the COSMOS3_PROMPT metadata key."
+        },
+        {
+            "tagKey": "NEGATIVE_PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Negative prompt",
+            "description": "What to avoid in the generation. Blank falls back to COSMOS3_NEGATIVE_PROMPT metadata."
+        },
+        {
+            "tagKey": "NUM_FRAMES",
+            "type": "integer",
+            "required": false,
+            "default": 93,
+            "label": "Frames to generate",
+            "description": "Video length in frames at 24 fps, so 93 is about 3.9 seconds. Longer sequences need more GPU memory than the model weights leave free, and a value the reserved GPUs cannot hold fails during generation rather than at launch — raise it in steps and keep to a multiple of four plus one (93, 121, 189). Blank falls back to COSMOS3_NUM_FRAMES asset metadata."
+        },
+        {
+            "tagKey": "DISABLE_GUARDRAILS",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Disable content-safety guardrails",
+            "description": "Checked by default, which skips the NVIDIA guardrail models. They load alongside the generation model and need more GPU memory than the shipped instance types provide, so guardrails ship off for capacity reasons. Clear this to run them, after raising the pipeline's instanceTypes to a larger GPU tier."
+        }
+    ]
+}

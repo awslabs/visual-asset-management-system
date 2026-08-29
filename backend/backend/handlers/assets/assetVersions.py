@@ -211,12 +211,16 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         
         # Check permissions
         asset["object__type"] = "asset"
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(asset, operation):
-                raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
-        
+
+        # Fail closed: with no authenticated identity no authorization can be
+        # evaluated, so deny rather than return the asset.
+        if len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(asset, operation):
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+
         return asset
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
@@ -999,16 +1003,28 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
                     # Create sort key: type:filePath:metadataKey
                     sort_key = f"metadata:{file_path}:{deserialized['metadataKey']}"
                     
-                    # Prepare item for version table
+                    # Prepare item for version table. `metadataValue` and `metadataValueType` are
+                    # carried only when the stored row holds them: a row written by an earlier
+                    # release can lack either, and subscripting one raised a KeyError that the
+                    # enclosing `except` two dozen lines below logged as a WARNING before carrying on
+                    # to the attribute section — so the version was created with NO metadata at all,
+                    # permanently, because a version snapshot is immutable history. The attribute
+                    # branch further down omits its equivalents for the same reason, and
+                    # `get_asset_metadata_version` reports an absent attribute as null on read
+                    # rather than inventing one, so an omitted attribute round-trips.
                     version_item = {
                         'databaseId:assetId:assetVersionId': {'S': version_pk},
                         'type:filePath:metadataKey': {'S': sort_key},
                         'databaseId:assetId': {'S': composite_key},
                         'metadataKey': {'S': deserialized['metadataKey']},
-                        'metadataValue': {'S': deserialized['metadataValue']},
-                        'metadataValueType': {'S': deserialized['metadataValueType']},
                         'createdAt': {'S': created_at}
                     }
+                    if deserialized.get('metadataValue') is not None:
+                        version_item['metadataValue'] = {'S': deserialized['metadataValue']}
+                    if deserialized.get('metadataValueType') is not None:
+                        version_item['metadataValueType'] = {
+                            'S': deserialized['metadataValueType']
+                        }
                     
                     items_to_write.append({'PutRequest': {'Item': version_item}})
                 
@@ -1049,22 +1065,31 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
                     
                     # Get attribute key (handle both old and new field names)
                     attribute_key = deserialized.get('attributeKey', deserialized.get('metadataKey', ''))
-                    attribute_value = deserialized.get('attributeValue', deserialized.get('metadataValue', ''))
-                    attribute_value_type = deserialized.get('attributeValueType', deserialized.get('metadataValueType', 'string'))
-                    
+                    # The value and its type are carried only when the stored row holds one.
+                    # A row written by an earlier release can carry neither, and a snapshot is
+                    # immutable history, so a default recorded here becomes a value the row never
+                    # had for as long as the version exists. The metadata branch above omits them
+                    # for the same reason.
+                    attribute_value = deserialized.get(
+                        'attributeValue', deserialized.get('metadataValue'))
+                    attribute_value_type = deserialized.get(
+                        'attributeValueType', deserialized.get('metadataValueType'))
+
                     # Create sort key: type:filePath:metadataKey
                     sort_key = f"attribute:{file_path}:{attribute_key}"
-                    
+
                     # Prepare item for version table
                     version_item = {
                         'databaseId:assetId:assetVersionId': {'S': version_pk},
                         'type:filePath:metadataKey': {'S': sort_key},
                         'databaseId:assetId': {'S': composite_key},
                         'metadataKey': {'S': attribute_key},
-                        'metadataValue': {'S': attribute_value},
-                        'metadataValueType': {'S': attribute_value_type},
                         'createdAt': {'S': created_at}
                     }
+                    if attribute_value is not None:
+                        version_item['metadataValue'] = {'S': attribute_value}
+                    if attribute_value_type is not None:
+                        version_item['metadataValueType'] = {'S': attribute_value_type}
                     
                     items_to_write.append({'PutRequest': {'Item': version_item}})
                 
@@ -1102,6 +1127,17 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         return False
 
 
+# Stored version-snapshot attributes a read tolerates as absent, and the placeholder each is
+# validated with before being reported as null. AssetVersionMetadataItemModel declares both as
+# str, so the placeholder is what lets the rest of the row still be validated; it never reaches a
+# caller. The null survives being nested in AssetVersionResponseModel because pydantic v1 copies
+# a nested value that is already an instance of the declared class rather than re-validating it.
+TOLERATED_ABSENT_VERSION_FIELDS = ('metadataValue', 'metadataValueType')
+ABSENT_VERSION_FIELD_PLACEHOLDER = ''
+# How many metadata keys one aggregated log line names. The count is always reported in full.
+ABSENT_FIELD_LOG_KEY_SAMPLE = 25
+
+
 def get_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: str) -> List[AssetVersionMetadataItemModel]:
     """Get metadata/attributes snapshot for a specific asset version
     
@@ -1132,6 +1168,7 @@ def get_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: st
         
         # Process items
         metadata_items = []
+        absent_keys_by_field = {}
         deserializer = TypeDeserializer()
         
         for item in page_iterator.get('Items', []):
@@ -1146,14 +1183,46 @@ def get_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: st
                 file_path = parts[1]  # "/" or "/path/to/file"
                 metadata_key = parts[2]
                 
-                metadata_items.append(AssetVersionMetadataItemModel(
-                    type=item_type,
-                    filePath=file_path,
-                    metadataKey=metadata_key,
-                    metadataValue=deserialized.get('metadataValue', ''),
-                    metadataValueType=deserialized.get('metadataValueType', 'string')
-                ))
-        
+                # A stored version row can carry no metadataValue or metadataValueType --
+                # the snapshot write omits either when the source row lacked it, which is the
+                # shape a pre-upgrade write leaves behind. Absent is reported as null rather than
+                # defaulted, so the same key reads the same way here as it does on the metadata
+                # GET; defaulting the type to "string" made one deployment answer two different
+                # shapes for one key. The rest of the row is still validated: the absent field is
+                # validated with a placeholder that is replaced by None before the item is
+                # returned, so no placeholder reaches a caller.
+                fields = {
+                    'type': item_type,
+                    'filePath': file_path,
+                    'metadataKey': metadata_key,
+                    'metadataValue': deserialized.get('metadataValue'),
+                    'metadataValueType': deserialized.get('metadataValueType')
+                }
+                absent = [name for name in TOLERATED_ABSENT_VERSION_FIELDS
+                          if fields[name] is None]
+                if absent:
+                    for field_name in absent:
+                        absent_keys_by_field.setdefault(field_name, []).append(metadata_key)
+                    validated = AssetVersionMetadataItemModel(**dict(
+                        fields,
+                        **{name: ABSENT_VERSION_FIELD_PLACEHOLDER for name in absent}))
+                    metadata_items.append(
+                        validated.copy(update={name: None for name in absent}))
+                else:
+                    metadata_items.append(AssetVersionMetadataItemModel(**fields))
+
+        # One line per absent attribute rather than per row: an upgraded asset can hold many
+        # legacy rows, and a line that grows with the data is a volume problem of its own. Rule 9:
+        # a metadata key is an identifier, so naming it is safe where rendering its value is not.
+        for field_name in sorted(absent_keys_by_field):
+            keys = absent_keys_by_field[field_name]
+            sample = [str(key) for key in keys[:ABSENT_FIELD_LOG_KEY_SAMPLE]]
+            more = f" (+{len(keys) - len(sample)} more)" if len(keys) > len(sample) else ""
+            logger.warning(
+                f"{len(keys)} stored metadata row(s) in version "
+                f"{databaseId}:{assetId}:{assetVersionId} carry no {field_name}; reported as null "
+                f"so the row stays visible for repair. Keys: {', '.join(sample)}{more}")
+
         # Sort by type first (attribute < metadata), then by filePath
         metadata_items.sort(key=lambda x: (x.type, x.filePath))
         
@@ -1325,13 +1394,22 @@ def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVer
                 
                 # Restore to assetFileMetadataStorageTable
                 if asset_file_metadata_table:
+                    # metadataValue / metadataValueType are carried only when the snapshot
+                    # row holds them. get_asset_metadata_version reports an absent attribute as
+                    # None, and boto3 rejects {'S': None} before the batch is sent, so one row
+                    # written by an earlier release would otherwise fail the whole revert.
+                    # Omitting restores the row in the shape it was snapshotted in.
                     restore_item = {
                         'metadataKey': {'S': metadata_item.metadataKey},
                         'databaseId:assetId:filePath': {'S': file_path_composite},
-                        'databaseId:assetId': {'S': asset_composite_key},
-                        'metadataValue': {'S': metadata_item.metadataValue},
-                        'metadataValueType': {'S': metadata_item.metadataValueType}
+                        'databaseId:assetId': {'S': asset_composite_key}
                     }
+                    if metadata_item.metadataValue is not None:
+                        restore_item['metadataValue'] = {'S': metadata_item.metadataValue}
+                    if metadata_item.metadataValueType is not None:
+                        restore_item['metadataValueType'] = {
+                            'S': metadata_item.metadataValueType
+                        }
                     items_to_restore.append({
                         'table': asset_file_metadata_table_name,
                         'item': {'PutRequest': {'Item': restore_item}}
@@ -1345,13 +1423,19 @@ def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVer
                   
                   # Restore to fileAttributeStorageTable
                   if file_attribute_table:
+                      # attributeValue / attributeValueType are carried only when the
+                      # snapshot row holds them, matching the metadata branch above.
                       restore_item = {
                           'attributeKey': {'S': metadata_item.metadataKey},
                           'databaseId:assetId:filePath': {'S': file_path_composite},
-                          'databaseId:assetId': {'S': asset_composite_key},
-                          'attributeValue': {'S': metadata_item.metadataValue},
-                          'attributeValueType': {'S': metadata_item.metadataValueType}
+                          'databaseId:assetId': {'S': asset_composite_key}
                       }
+                      if metadata_item.metadataValue is not None:
+                          restore_item['attributeValue'] = {'S': metadata_item.metadataValue}
+                      if metadata_item.metadataValueType is not None:
+                          restore_item['attributeValueType'] = {
+                              'S': metadata_item.metadataValueType
+                          }
                       items_to_restore.append({
                           'table': file_attribute_table_name,
                           'item': {'PutRequest': {'Item': restore_item}}
@@ -1902,10 +1986,14 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -1986,10 +2074,14 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -2083,10 +2175,14 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -2152,10 +2248,14 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -2221,10 +2321,14 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
 
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
 
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -2340,10 +2444,14 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
 
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
 
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -2441,10 +2549,14 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
 
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
 
         # Get path parameters
         path_params = event.get('pathParameters', {})

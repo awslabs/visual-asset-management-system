@@ -136,6 +136,11 @@
                 {
                     "field": "route__path",
                     "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
                     "value": "/asset-links"
                 },
                 {

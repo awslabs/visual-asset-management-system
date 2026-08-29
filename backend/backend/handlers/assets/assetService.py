@@ -141,6 +141,16 @@ asset_file_metadata_versions_table = dynamodb.Table(asset_file_metadata_versions
 subscription_table = dynamodb.Table(subscription_table_name) if subscription_table_name else None
 asset_file_version_history_table = dynamodb.Table(asset_file_version_history_table_name) if asset_file_version_history_table_name else None
 
+
+class AuthorizationDenied(Exception):
+    """Object-level authorization refused the caller.
+
+    Raised rather than returned so a business-logic function has one return type -- its
+    response model -- and a denial cannot be mistaken for data by its caller. Translated to
+    authorization_error() by the request handler.
+    """
+
+
 #######################
 # Version Functions
 #######################
@@ -898,6 +908,41 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
+def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles):
+    """Tier-2 authorization for a single-asset operation, decided before existence and state.
+
+    The verdict is reached before the caller learns anything about the asset, so a refusal
+    cannot be told apart from a not-found or a wrong-state rejection. When the asset exists it
+    is annotated with its object type and evaluated as stored; when it does not, the
+    identifiers the request supplied stand in, so an unauthorized caller is refused rather than
+    told the identifiers are unused. An empty token list is no identity to evaluate, so it
+    denies without constructing an enforcer.
+
+    Args:
+        asset: The stored asset record, or None when no asset was found
+        databaseId: The database ID from the request
+        assetId: The asset ID from the request
+        action: The Casbin action for the operation (GET / PUT / DELETE)
+        claims_and_roles: User claims and roles for authorization
+
+    Returns:
+        True if the caller is authorized for the operation
+    """
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+
+    if asset:
+        asset.update({"object__type": "asset"})
+        authorization_object = asset
+    else:
+        authorization_object = {
+            'databaseId': databaseId,
+            'assetId': assetId,
+            'object__type': 'asset'
+        }
+
+    return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action)
+
 def get_assets(databaseId, query_params, showArchived=False):
     """Get assets for a database
     
@@ -1075,21 +1120,23 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         assetId: The asset ID
         update_data: Dictionary with fields to update
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         Updated asset data
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to update the asset
     """
     # Get the existing asset
     asset = get_asset_details(databaseId, assetId)
+
+    # Check authorization before existence, so a refused caller cannot use the not-found
+    # response to learn which assets exist
+    if not authorize_single_asset(asset, databaseId, assetId, "PUT", claims_and_roles):
+        raise AuthorizationDenied()
+
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "PUT"):
-            return authorization_error()
 
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
@@ -1120,6 +1167,27 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         # simply cannot add it again, because it no longer resolves in scope.
         existing_tags = asset.get('tags') or []
         added_tags = [tag for tag in new_tags if tag not in existing_tags]
+
+        # A tag can carry object-level authority, so the check above — made against the stored
+        # tag list — is satisfied by the very tags a tag edit replaces. A constraint matches its
+        # action exactly (`r.act == p.act`), and a tag that gates visibility is written as a GET
+        # rule while the edit itself is a PUT, so a PUT-only check never consults it. A tag change
+        # is therefore authorized for GET as well: the caller must already reach the asset they are
+        # retagging, and must still reach the record they are about to write. A tag that keeps the
+        # asset out of their reach can neither be dropped nor attached. The two objects differ only
+        # in the tag list, so the decision isolates the tag change; PUT on the stored tag list is
+        # established above, and an unchanged tag list is still gated exactly once.
+        if sorted(new_tags) != sorted(existing_tags):
+            post_mutation_asset = {**asset, 'tags': new_tags}
+            tag_change_enforcer = CasbinEnforcer(claims_and_roles)
+            for enforced_asset, enforced_action in (
+                (asset, "GET"),
+                (post_mutation_asset, "GET"),
+                (post_mutation_asset, "PUT"),
+            ):
+                if not tag_change_enforcer.enforce(enforced_asset, enforced_action):
+                    raise AuthorizationDenied()
+
         # The shared validators raise ValueError, which this handler does not translate — it
         # would surface as a 500. Re-raised as VAMSGeneralErrorResponse so a rejected tag is a
         # 400 with its reason, matching the create path.
@@ -1172,25 +1240,28 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         assetId: The asset ID
         request_model: ArchiveAssetRequestModel with archive options
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         AssetOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to archive the asset
     """
     # Get the existing asset
     asset = get_asset_details(databaseId, assetId)
+
+    # Check authorization before existence and archive state, so a refused caller cannot use
+    # the not-found or already-archived response to learn either
+    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles):
+        raise AuthorizationDenied()
+
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
-    
+
     # Check if asset is already archived
     if databaseId.endswith('#deleted') or asset.get('status') == 'archived':
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} is already archived")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "DELETE"):
-            return authorization_error()
+        logger.info(f"Asset {assetId} in database {databaseId} is already archived")
+        raise VAMSGeneralErrorResponse("Asset is already archived")
 
     #Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
@@ -1263,9 +1334,12 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         assetId: The asset ID
         request_model: UnarchiveAssetRequestModel with unarchive options
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         AssetOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to unarchive the asset
     """
     # Normalize databaseId - remove #deleted if present
     original_db_id = databaseId.replace("#deleted", "")
@@ -1276,22 +1350,19 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     if not asset:
         # Try without #deleted suffix in case user provided clean ID
         asset = get_asset_details(original_db_id, assetId, showArchived=True)
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found")
-        # If found in original location, check if it's actually archived
-        if asset.get('status') != 'archived':
-            raise VAMSGeneralErrorResponse("Asset is not archived. Only archived assets can be unarchived.")
-    else:
-        # Found via #deleted key — verify it is indeed in archived state
-        if asset.get('status') != 'archived':
-            raise VAMSGeneralErrorResponse("Asset is not in a valid archived state. Cannot unarchive.")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "PUT"):
-            return authorization_error()
+
+    # Check authorization before existence and archive state, so a refused caller cannot use
+    # the not-found or not-archived response to learn either
+    if not authorize_single_asset(asset, original_db_id, assetId, "PUT", claims_and_roles):
+        raise AuthorizationDenied()
+
+    if not asset:
+        raise VAMSGeneralErrorResponse("Asset not found")
+
+    # Only an archived asset can be unarchived
+    if asset.get('status') != 'archived':
+        logger.info(f"Asset {assetId} in database {original_db_id} is not in an archived state")
+        raise VAMSGeneralErrorResponse("Asset is not archived. Only archived assets can be unarchived.")
 
     # Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
@@ -1379,25 +1450,27 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         assetId: The asset ID
         request_model: DeleteAssetRequestModel with delete options
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         AssetOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to delete the asset
     """
     # Verify confirmPermanentDelete is True
     if not request_model.confirmPermanentDelete:
         raise VAMSGeneralErrorResponse("Permanent deletion requires explicit confirmation")
-    
+
     # Get the existing asset (including archived)
     asset = get_asset_details(databaseId, assetId, showArchived=True)
+
+    # Check authorization before existence, so a refused caller cannot use the not-found
+    # response to learn which assets exist
+    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles):
+        raise AuthorizationDenied()
+
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "DELETE"):
-            return authorization_error()
 
     #Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
@@ -1754,33 +1827,32 @@ def handle_get_request(event):
             
             # Get the asset
             asset = get_asset_details(path_parameters['databaseId'], path_parameters['assetId'], show_archived)
-            
-            # Check if asset exists and user has permission
-            if asset:
-                asset.update({"object__type": "asset"})
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce(asset, "GET"):
-                        return authorization_error()
-                
-                # Enhance asset with version information
-                enhanced_asset = enhance_asset_with_version_info(asset)
 
-                #Get bucket details for asset
-                bucketDetails = get_asset_bucket_details(asset)
-                enhanced_asset["bucketName"] = bucketDetails['bucketName']
-                
-                # Convert to AssetResponseModel for consistent response format
-                try:
-                    response_model = AssetResponseModel(**enhanced_asset)
-                    return success(body=response_model.dict())
-                except ValidationError as v:
-                    logger.exception(f"Error converting asset to response model: {v}")
-                    # Fall back to raw response if conversion fails
-                    return success(body={"message": enhanced_asset})
-            else:
+            # Check authorization before existence, so a refused caller cannot use the
+            # not-found response to learn which assets exist
+            if not authorize_single_asset(asset, path_parameters['databaseId'],
+                                          path_parameters['assetId'], "GET", claims_and_roles):
+                return authorization_error()
+
+            if not asset:
                 return general_error(body={"message": "Asset not found"}, status_code=404, event=event)
-        
+
+            # Enhance asset with version information
+            enhanced_asset = enhance_asset_with_version_info(asset)
+
+            #Get bucket details for asset
+            bucketDetails = get_asset_bucket_details(asset)
+            enhanced_asset["bucketName"] = bucketDetails['bucketName']
+
+            # Convert to AssetResponseModel for consistent response format
+            try:
+                response_model = AssetResponseModel(**enhanced_asset)
+                return success(body=response_model.dict())
+            except ValidationError as v:
+                logger.exception(f"Error converting asset to response model: {v}")
+                # Fall back to raw response if conversion fails
+                return success(body={"message": enhanced_asset})
+
         # Case 2: Get assets for a specific database
         elif 'databaseId' in path_parameters:
             logger.info(f"Listing assets for database {path_parameters['databaseId']}")
@@ -2013,10 +2085,12 @@ def handle_put_request(event):
             update_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
         # Return success response
         return success(body=result.dict())
-        
+
+    except AuthorizationDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
@@ -2116,7 +2190,9 @@ def handle_delete_request(event):
                 claims_and_roles
             )
             return success(body=result.dict())
-            
+
+    except AuthorizationDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)

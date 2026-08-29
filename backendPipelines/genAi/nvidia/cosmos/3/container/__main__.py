@@ -21,7 +21,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from inference import generate_preview_gif, run_inference
-from model_manager import ensure_models_cached
+from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 import manifest_io
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 
 INPUT_DIR = Path("/tmp/input")
 OUTPUT_DIR = Path("/tmp/output")
-HF_CACHE_BASE = "/mnt/efs/cosmos-models/hf_cache"
+# One EFS filesystem is mounted at one path by ALL FOUR Cosmos pipelines, so a cache directory
+# that does not name the pipeline is shared by all of them -- and the cache check asks only
+# whether the directory holds any weights at all. The first pipeline to run would populate it
+# and every other one would read a hit, skip its own S3 restore, and download its weights during
+# inference instead, while the backup uploaded the combined directory to each pipeline's own
+# prefix. This lay dormant only because the mount never worked -- an unmounted path is an empty
+# local directory, so the check was correctly a miss -- so fixing the mount is what activates it.
+# The segment comes from the S3 prefix that already identifies this pipeline, so the filesystem
+# layout and the backup layout cannot drift apart.
+HF_CACHE_BASE = f"/mnt/efs/cosmos-models/hf_cache/{S3_HF_CACHE_PREFIX.split('/')[0]}"
 
 # Task modes that consume an input file
 INPUT_FILE_MODES = ("image2video", "video2video", "transfer")
@@ -218,6 +227,10 @@ def main():
         effective_mode = task_mode or ""
 
         logger.info(f"Variant: {variant}, task_mode: {task_mode}, seed: {seed}, num_frames: {num_frames}")
+        # The guardrail state is the one generation setting with a safety consequence, and it is
+        # decided by the input configuration rather than by anything visible in the job definition,
+        # so the run records which way it resolved.
+        logger.info(f"Guardrails: {'disabled' if disable_guardrails else 'enabled'}")
         logger.info(f"Prompt: {cosmos_prompt}")
 
         # Step 1: Ensure models cached

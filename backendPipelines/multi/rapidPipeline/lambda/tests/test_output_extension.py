@@ -79,5 +79,16 @@ class TestOutputExtensionResolution:
         assert "-e model.gltf" in command
 
     def test_uploaded_object_carries_the_extension(self):
+        # This event is the same-extension case (a '.glb' input with no outputType), so the
+        # destination carries the same-format folder that keeps the write-back off the input's own
+        # key. The uploaded file name still carries the extension, which is what this asserts.
+        subdir = self._load().SAME_FORMAT_OUTPUT_SUBDIR
         command = self._run({}, self._event())
-        assert command.endswith("model.glb s3://abkt/pipelines/p1/MJOB/output/E1/files/")
+        assert command.endswith(
+            f"model.glb s3://abkt/pipelines/p1/MJOB/output/E1/files/{subdir}/")
+
+    def test_a_format_changing_conversion_uploads_directly_to_the_files_prefix(self):
+        # Control for the destination above: a different output extension cannot collide with the
+        # input, so no folder is added and the object lands directly under the files prefix.
+        command = self._run({"outputType": ".gltf"}, self._event())
+        assert command.endswith("model.gltf s3://abkt/pipelines/p1/MJOB/output/E1/files/")

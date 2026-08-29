@@ -40,6 +40,7 @@ import loginBgImageSrc from "../resources/img/login_bg.png";
 import logoDarkImageSrc from "../../logo_dark.png";
 
 import LoadingScreen from "../components/loading/LoadingScreen";
+import { ErrorBoundary } from "../components/common/ErrorBoundary";
 import { Alert } from "@cloudscape-design/components";
 import styles from "./loginbox.module.css";
 import "@aws-amplify/ui-react/styles.css";
@@ -247,6 +248,10 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
 
 type AuthProps = { children?: React.ReactNode };
 
+/** Bounded retry for the secure-config fetch that carries the feature switches. */
+const SECURE_CONFIG_MAX_ATTEMPTS = 3;
+const SECURE_CONFIG_RETRY_DELAY_MILLIS = 1500;
+
 //Cognito components
 const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {
     return (
@@ -422,10 +427,19 @@ const Auth: React.FC<AuthProps> = (props) => {
         () => localStorage.getItem(SESSION_EXPIRED_KEY) === "true"
     );
 
+    // Always the latest config, for async callbacks that must merge over current
+    // state rather than the value captured when they started.
+    const configRef = useRef(config);
+    configRef.current = config;
+
     // Tracks whether secure-config has been fetched for the current login
     // session, so feature switches are refetched on every re-login instead of
     // being cached forever in localStorage.
     const secureConfigFetchedRef = useRef(false);
+
+    // Attempt number for the secure-config fetch. Held in state, not a ref, so a
+    // failed attempt actually schedules another effect run.
+    const [secureConfigAttempt, setSecureConfigAttempt] = useState(0);
 
     // Tracks whether amplify-config has been re-fetched for this page load, so the
     // runtime Amplify/OAuth configuration is refreshed from the backend on every
@@ -502,11 +516,13 @@ const Auth: React.FC<AuthProps> = (props) => {
                         !fetchedConfig._configError &&
                         fetchedConfig.api
                     ) {
-                        // Merge fresh amplify-config over the cached config so
-                        // secure-config-derived fields (featuresEnabled, etc.) are
-                        // preserved. Only re-render/reconfigure if something changed.
-                        const merged = { ...config, ...fetchedConfig };
-                        if (JSON.stringify(merged) !== JSON.stringify(config)) {
+                        // Merge fresh amplify-config over the CURRENT config, not the one
+                        // captured when this fetch started, so secure-config-derived fields
+                        // (featuresEnabled, etc.) that landed meanwhile are preserved. Only
+                        // re-render/reconfigure if something changed.
+                        const latest = configRef.current;
+                        const merged = { ...latest, ...fetchedConfig };
+                        if (JSON.stringify(merged) !== JSON.stringify(latest)) {
                             appCache.setItem("config", merged);
                             setConfig(merged);
                         }
@@ -695,21 +711,39 @@ const Auth: React.FC<AuthProps> = (props) => {
             secureConfigFetchedRef.current = true;
             getSecureConfig()
                 .then((value) => {
-                    // Normalize to a string array so the many config.featuresEnabled.includes(...)
-                    // consumers cannot crash if the API returns a
-                    // non-array (e.g. a boolean or comma-separated string).
-                    config.featuresEnabled = normalizeFeaturesEnabled(value.featuresEnabled);
-                    config.locationServiceApiUrl = value.locationServiceApiUrl;
-                    config.webDeployedUrl = value.webDeployedUrl || "";
-                    appCache.setItem("config", config);
-                    // nosemgrep: calling-set-state-on-current-state
-                    setConfig(config);
+                    // A new object, not a mutation of the current one: re-setting the same
+                    // reference makes React bail out of the render, leaving every mounted
+                    // consumer of featuresEnabled on its pre-fetch reading.
+                    // featuresEnabled is normalized to a string array so the many
+                    // config.featuresEnabled.includes(...) consumers cannot crash if the API
+                    // returns a non-array (e.g. a boolean or comma-separated string).
+                    const withSecureConfig = {
+                        ...configRef.current,
+                        featuresEnabled: normalizeFeaturesEnabled(value.featuresEnabled),
+                        locationServiceApiUrl: value.locationServiceApiUrl,
+                        webDeployedUrl: value.webDeployedUrl || "",
+                    };
+                    appCache.setItem("config", withSecureConfig);
+                    setConfig(withSecureConfig);
                 })
                 .catch((error: Error) => {
                     console.error("Error getting secure-config:", error.message);
 
-                    // Allow a retry on the next effect run if the fetch failed
+                    // Retry: a single transient failure would otherwise hold the app on its
+                    // no-features configuration for the whole session. Clearing the ref alone
+                    // is not enough — nothing in the dependency list would change, so the
+                    // attempt counter (state) is what schedules the next run.
                     secureConfigFetchedRef.current = false;
+                    if (secureConfigAttempt + 1 < SECURE_CONFIG_MAX_ATTEMPTS) {
+                        const retry = () => setSecureConfigAttempt((attempt) => attempt + 1);
+                        setTimeout(retry, SECURE_CONFIG_RETRY_DELAY_MILLIS);
+                    } else {
+                        console.error(
+                            "secure-config could not be loaded after",
+                            SECURE_CONFIG_MAX_ATTEMPTS,
+                            "attempts; feature-gated functionality stays disabled until the page is reloaded"
+                        );
+                    }
                 });
             console.log("Fetched secure config");
         }
@@ -734,7 +768,7 @@ const Auth: React.FC<AuthProps> = (props) => {
             console.log("Pinged LoginProfile API");
         }
         if (isLoggedIn) setIsLoading(false); // if logged in, can deem that the loading is complete
-    }, [config, isLoggedIn]);
+    }, [config, isLoggedIn, secureConfigAttempt]);
 
     //Both Effect
     //Once logged in, fetch and cache the API routes the user is authorized to
@@ -1153,7 +1187,11 @@ const Auth: React.FC<AuthProps> = (props) => {
         return (
             <>
                 <GlobalHeader authorizationHeader={false} />
-                <Suspense fallback={<LoadingScreen />}>{props.children}</Suspense>
+                {/* Guards the shell itself (top navigation, router, footer). routes.tsx has a
+                    second boundary around each page, so a page error stays inside the layout. */}
+                <ErrorBoundary componentName="The application">
+                    <Suspense fallback={<LoadingScreen />}>{props.children}</Suspense>
+                </ErrorBoundary>
             </>
         );
     }

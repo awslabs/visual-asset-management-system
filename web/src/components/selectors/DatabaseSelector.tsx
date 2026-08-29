@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { fetchAllDatabases } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
+import Synonyms from "../../synonyms";
 
 const DatabaseSelector = (props: any) => {
     const { showGlobal = false, ...restProps } = props;
@@ -59,6 +60,13 @@ const DatabaseSelector = (props: any) => {
 
     return (
         <Select
+            /* Named and placeheld here rather than at each call site: `selectedAriaLabel` below
+               names the SELECTED-STATE announcement, not the control, so a caller that wraps this in
+               nothing renders a combobox a screen reader announces with no name at all. Declared
+               before the spread so a caller can still override any of the three. */
+            ariaLabel={`Select ${Synonyms.Database}`}
+            placeholder={`Choose a ${Synonyms.database}`}
+            selectedOption={null}
             {...restProps}
             onChange={handleChange}
             options={[

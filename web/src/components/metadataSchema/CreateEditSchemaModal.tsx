@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
     Modal,
     Box,
@@ -24,6 +24,32 @@ import {
 } from "./types";
 import { SchemaFieldEditor } from "./SchemaFieldEditor";
 import Synonyms from "../../synonyms";
+
+/**
+ * Reads a schema's field definitions out of any of the shapes they arrive in: the nested
+ * `{ fields: [...] }` object, a bare array, or the JSON string the schema record stores.
+ */
+const readSchemaFields = (fields: any): MetadataSchemaField[] => {
+    let value = fields;
+
+    if (typeof value === "string") {
+        try {
+            value = JSON.parse(value);
+        } catch {
+            return [];
+        }
+    }
+
+    if (Array.isArray(value)) {
+        return value;
+    }
+
+    if (value && Array.isArray(value.fields)) {
+        return value.fields;
+    }
+
+    return [];
+};
 
 interface CreateEditSchemaModalProps {
     visible: boolean;
@@ -59,7 +85,7 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
             setEntityType(editingSchema.metadataSchemaEntityType);
             setEnabled(editingSchema.enabled);
             setFileKeyTypeRestriction(editingSchema.fileKeyTypeRestriction || "");
-            setFields(editingSchema.fields.fields || []);
+            setFields(readSchemaFields(editingSchema.fields));
         } else {
             // Reset form for create mode
             setSchemaName("");
@@ -72,6 +98,42 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
     }, [editingSchema, visible]);
 
     const showFileTypeRestriction = entityType === "fileMetadata" || entityType === "fileAttribute";
+
+    // The `required` flag each field carried when the schema was opened. Fields can be added,
+    // removed and reordered in the editor, so the flag is keyed by field name rather than by
+    // position. Empty in create mode, where no stored metadata can pre-date a field.
+    const originalRequiredByFieldName = useMemo(() => {
+        const originalRequired = new Map<string, boolean>();
+
+        readSchemaFields(editingSchema?.fields).forEach((field) => {
+            if (field && field.metadataFieldKeyName) {
+                originalRequired.set(field.metadataFieldKeyName, field.required === true);
+            }
+        });
+
+        return originalRequired;
+    }, [editingSchema]);
+
+    // Fields that already existed as optional and are now marked required. A field that is new to
+    // this schema, or that was already required, is excluded.
+    const newlyRequiredFieldNames = useMemo(
+        () =>
+            fields
+                .filter(
+                    (field) =>
+                        field.required === true &&
+                        originalRequiredByFieldName.get(field.metadataFieldKeyName) === false
+                )
+                .map((field) => field.metadataFieldKeyName),
+        [fields, originalRequiredByFieldName]
+    );
+
+    const newlyRequiredWarning =
+        `${newlyRequiredFieldNames.join(", ")} changed from optional to ` +
+        "required. Required-field validation applies to records that already exist: once this " +
+        "schema is saved, a metadata create or update on an entity this schema covers is " +
+        "rejected until every required field holds a value. Fill in the value for the affected " +
+        `records in this ${Synonyms.database} to allow their metadata to be changed again.`;
 
     const validateForm = (): string | null => {
         if (!schemaName || schemaName.length < 1) {
@@ -275,6 +337,12 @@ export const CreateEditSchemaModal: React.FC<CreateEditSchemaModalProps> = ({
                         Schema is enabled and active
                     </Checkbox>
                 </FormField>
+
+                {newlyRequiredFieldNames.length > 0 && (
+                    <Alert type="warning" header="Required fields apply to existing records">
+                        {newlyRequiredWarning}
+                    </Alert>
+                )}
 
                 <SchemaFieldEditor fields={fields} entityType={entityType} onChange={setFields} />
             </SpaceBetween>

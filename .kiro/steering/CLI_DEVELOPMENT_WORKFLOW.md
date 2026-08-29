@@ -153,13 +153,14 @@ Three consumers sit **downstream of the CLI** and must be carried through in the
 **MCP server:**
 
 -   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
--   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`).
+-   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`). The tier is about STORED DATA, so `abort_execution` is write-tier even though it is irreversible; the compute risk is carried by the README's `autoApprove` caution and `tools/VamsMCP/CLAUDE.md` Rule 4, which name `execute_workflow`, `rerun_execution` and `abort_execution` together. A required-true request field is not a confirmation to re-expose: `delete_asset` sends `confirmPermanentDelete=True` because `DeleteAssetRequestModel` declares an `always=True` validator rejecting any other value, so surfacing it as a tool parameter would give the agent a boolean whose only non-erroring value is `True`.
 -   [ ] **Check Pagination Shape**: `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. Confirm the `items_key` still matches the endpoint's response.
+-   [ ] **Give the List Tool a `starting_token`, and State Its Bound**: `paginate()` stops at `max_items` or at `max_pages` (a per-call work bound on the server process, which a larger `max_items` deliberately does not raise), sets `truncated` with a `note` naming which fired — including the case where one page returned more rows than `max_items` and carried no token, which a token-only check misses — and returns the outstanding `NextToken`. Every paginated read tool takes a `starting_token` that forwards it as the first page's `startingToken`, and says so in its docstring. Without that pair the ceiling is a wall and the rows past it are unreachable through the server at all.
 -   [ ] **Repeat Filter-Pinned Query Parameters on Every Page**: Some continuation tokens are only valid alongside the filters that produced them — the paged execution-detail metadata read pins its token to the request's `collection` and `pipelineId`, and the handler answers a mismatch with a 400. `paginate()` sends only `pageSize` and `startingToken`, so merge those filters into the params inside the `fetch_page` callable rather than on the first request alone.
--   [ ] **Carry Out-of-Band Bound Signals Through**: A handler can answer successfully while withholding rows, and it says so in a field alongside the items — a top-level `warnings` array, a `truncatedCollections` list, or an echoed filter window such as the executions list's `filterStartDate`. `paginate()` rebuilds its result from the accumulated items alone and drops all of them, so an agent reports an understated count or concludes an object does not exist. Use `server.py`'s `_paginate_with_page_metadata(fetch_page, passthrough_keys=...)` for a list endpoint that can report those, and `_unwrap_message_with_warnings()` for a single call whose `warnings` array is a sibling of `message` (the pipeline saves). Then say in the docstring what the flag means for the agent's conclusion, not merely that the field exists.
+-   [ ] **Carry Out-of-Band Bound Signals Through**: A handler can answer successfully while withholding rows, and it says so in a field alongside the items — a top-level `warnings` array, a `truncatedCollections` list, or an echoed filter window such as the executions list's `filterStartDate`. `paginate()` rebuilds its result from the accumulated items alone and drops all of them, so an agent reports an understated count or concludes an object does not exist. A `warnings` array can carry more than one entry, because more than one bound can shorten the same page (the global executions list reports both its distinct-asset permission-check cap and its per-request work budget), so collect every entry rather than the first, and do the same in the CLI's own `--auto-paginate` aggregate — it rebuilds its result from the items too. Use `server.py`'s `_paginate_with_page_metadata(fetch_page, passthrough_keys=...)` for a list endpoint that can report those, and `_unwrap_message_with_warnings()` for a single call whose `warnings` array is a sibling of `message` (the pipeline saves). Then say in the docstring what the flag means for the agent's conclusion, not merely that the field exists.
 -   [ ] **Forward Every Narrowing Parameter**: An omitted optional parameter silently pins the agent to the server default. `get_execution_logs` without `limit`/`next_token` caps a container's output at 100 events with no way past the first page; `list_workflows` without `include_archived` makes the archived id that `unarchive_workflow` requires undiscoverable. Read the matching `vamscli` command for the endpoint's full parameter set, and send a parameter only in the mode that acts on it (the log paging parameters go in `full` mode only — truncated mode returns one joined blob and no continuation token).
 -   [ ] **Verify Placement and Uniqueness**: The tools are plain module-level `def`s, so both ways placement goes wrong leave a valid, importable module. A repeated tool name silently shadows the earlier definition, and a `def` past the `if __name__` entrypoint or outside its gate block is simply never executed — in both cases the tool is missing at run time with no error. `tests/test_server_tools.py` asserts against the source layout for exactly this; keep those checks passing.
--   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list, and to the `autoApprove` array of that README's sample MCP host config if it is a safe read. A tool whose parameters or response fields change also needs its README paragraph updated — that list is the only place the parameter set is documented outside the docstring.
+-   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list, and to the `autoApprove` array of that README's sample MCP host config if it is a safe read. Document a new environment variable in `tools/VamsMCP/.env.example` **and** in the README's `env` sample. That file is a reference list, not a dotenv template: nothing in the package loads a `.env` (and a cwd-upward search would not reliably find it, since a host spawns the console script from an arbitrary directory), so never write documentation telling a reader to copy it — a `.env` beside the server is silently ignored and the usual next step is to delete the gate guard in source. A tool whose parameters or response fields change also needs its README paragraph updated — that list is the only place the parameter set is documented outside the docstring.
 -   [ ] **Roll the MCP Version**: When the server's contract with the CLI changes, bump both `tools/VamsMCP/pyproject.toml` and `tools/VamsMCP/vams_mcp/__init__.py` alongside `tools/VamsCLI/vamscli/version.py`.
 -   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed). The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection. Assert the params that reach the `APIClient`, not just that the call happened — a dropped optional parameter is a silent server-default that no assertion on the return value catches.
 
@@ -169,6 +170,8 @@ Three consumers sit **downstream of the CLI** and must be carried through in the
 -   [ ] **ArcGIS Pro** (`arcgispro-connector-for-vams/Services/VamsCliService.cs`): verify the interpolated argument strings, plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
 -   [ ] **Map keys to the right command**: `file list` items and the `file info` response are **different shapes**. A listing item carries `dateCreatedCurrentVersion` and no `contentType`/`lastModified`; `file info` carries `contentType`/`lastModified` and no `dateCreatedCurrentVersion`. Mapping a key onto the wrong command yields a permanently empty value with no error.
 -   [ ] **Guard ArcGIS computed properties**: a computed convenience property whose name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`) **must** carry `[JsonIgnore]`. Deserialization runs with `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata and fails the entire response, not just that field.
+-   [ ] **Keep `--profile` on every invocation, PREPENDED**: an omitted `--profile` resolves to whatever `profile switch` last recorded (see Profile Resolution), so a connector that skips the flag runs against another deployment. It is a group-level option, so a flag appended after the subcommand is rejected with Click's "no such option" — an argv-membership assertion passes while the command still fails at runtime. Both connectors prepend it centrally, in `_execute_command` and `ExecuteCommandAsync`; add it there rather than at each call site. `profile info <name>` takes the profile as a **positional** as well, which must track the configured name too.
+-   [ ] **Keep credentials on stdin, never on argv**: the connectors pipe the password and the override token to `--password-stdin` / `--token-override-stdin` (see Credential Input). A connector-side flag rename is caught only by the paired suites — `tools/VamsCLI/tests/test_auth_secret_not_in_argv.py` and `isaacsim_vams_integration/tests/test_vams_cli_service_secrets.py` — because the connectors do not import the package.
 -   [ ] **Validate the command surface**: confirm every group/subcommand/flag the connectors pass still resolves (walk `cli.commands[group].commands[cmd].params`), then spot-check a live `--json-output` response for the keys each connector parses.
 
 **Agent skill:**
@@ -287,6 +290,29 @@ def my_command():
     pass
 ```
 
+### Credential Input
+
+The OS process table publishes every argument of a running process — `/proc/<pid>/cmdline` and
+`ps -ef` on Linux, Task Manager's command-line column on Windows — to any other local account,
+including one with no VAMS entitlement. A command that accepts a password, token, or API key as an
+**option value only** therefore has no safe non-interactive form, and the CLI's two external
+connectors are non-interactive by construction.
+
+`auth login` pairs each credential option with a stdin flag: `-p/--password` with `--password-stdin`,
+`--token-override` with `--token-override-stdin`. Follow that shape for any new credential input:
+
+-   Read the secret with `read_secret_from_stdin()` (`commands/auth.py`). It reads `sys.stdin.buffer`
+    and decodes UTF-8, because the writer is usually another process and a text-mode read would use
+    the console code page, which differs on the two ends. Only CR and LF are stripped, so a
+    credential ending in a space survives.
+-   Reject the stdin flag combined with its option form, and reject an empty payload — an empty pipe
+    otherwise authenticates with an empty secret, or saves an override token that 401s on every call.
+-   **Keep the option form working**; existing scripts and integrations depend on it. Say in its
+    `help` text that it is discouraged and why, and document the stdin form as the recommended one in
+    `documentation/docusaurus-site/docs/cli/commands/setup-and-auth.md`.
+
+Guarded by `tests/test_auth_secret_not_in_argv.py`.
+
 ### **Error Handling Standards**
 
 #### **Rule 5: Custom Exception Hierarchy**
@@ -354,6 +380,27 @@ class TestAssetCommands:
         assert result.exit_code == 1
         assert 'Authentication required' in result.output
 ```
+
+#### **Output Encoding Is Set by the CLI, and a Fixture Must Not Paper Over It**
+
+The CLI prints Unicode status indicators (`✓`, `✗`, `●`) throughout its human-readable output, and
+`main._use_utf8_output()` reconfigures `sys.stdout`/`sys.stderr` to UTF-8 with `errors="replace"` at the
+entry point. Without that, Python takes the encoding from the locale whenever stdout is not a console —
+`cp1252` on a default Windows install — and every redirect or pipe raised `UnicodeEncodeError`.
+
+Two testing consequences:
+
+-   **`CliRunner` cannot observe this class of defect.** It replaces `sys.stdout` with an in-memory
+    buffer that has no code page, so encoding behaviour must be exercised by spawning
+    `python -m vamscli.main` as a subprocess (which brings its own config-home requirement, because the
+    setup gate is live outside pytest).
+-   **Never set `PYTHONIOENCODING=utf-8` in a fixture to make glyphs encode.** Doing so fixes the symptom
+    for the suite and leaves the defect in production — which is exactly how it survived a full release.
+    A test covering output encoding forces a legacy code page instead, and carries a positive control
+    asserting a non-`cp1252` character really reaches stdout so it cannot pass vacuously. See
+    `tools/VamsCLI/tests/test_output_encoding.py`.
+
+Mirrors `tools/VamsCLI/CLAUDE.md` Rule 9.
 
 ## 📝 **Development Templates**
 
@@ -1348,7 +1395,7 @@ def test_download(self, mock_asyncio_run, cli_runner, assets_command_mocks):
 
 A leaked `_verbose_mode = True` is not cosmetic: in verbose mode every `log_*` call also writes to stderr, `CliRunner` merges stderr into `result.output`, and any later test doing `json.loads(result.output)` fails on text wrapped around its JSON document — in a test that never touched logging. The autouse `isolate_logging_globals` fixture restores both globals, and `tests/test_logging_isolation.py` guards it in ordered `test_a_` / `test_b_` pairs (the setter half doubles as the positive control).
 
-`tests/conftest.py` removes `--verbose` from `sys.argv` at import time, before collection. `_is_verbose_mode()` treats that literal string anywhere in `sys.argv` as a request for verbose output, including pytest's own argv, which would enable stderr logging session-wide and break ~113 tests that parse `result.output` as JSON. No fixture can prevent it — the helper is consulted per call, not per test — so the argument has to be gone before anything runs. Stripping it in the test harness rather than changing the reader is deliberate: click already registers `--verbose` in `main.py` and hands it to `initialize_logging`, which sets the module global, so the argv fallback is redundant for the real CLI and no production behaviour needs to change. Keep the strip; `pytest --verbose` is green only because of it. The one visible cost is that pytest reads the same flag for its own per-test display, so `pytest --verbose` renders as dots — use `pytest tests/ -v`, a different string that never triggered the sniff.
+`_is_verbose_mode()` reads only the `_verbose_mode` module global, which `initialize_logging()` sets from click's parsed `--verbose` (registered in `main.py`). It must stay that way. While it also matched the literal `--verbose` anywhere in `sys.argv`, the suite's outcome depended on how pytest was invoked: pytest's own flag enabled stderr logging session-wide and broke ~113 tests that parse `result.output` as JSON, and no fixture could prevent it because the helper is consulted per call rather than per test. `tests/conftest.py` compensated by stripping the argument out of `sys.argv` at import — a process global no test owns. The same sniff also fired on an option VALUE, so `vamscli search assets -q "--verbose"` turned on full request/response logging. Both are pinned by `tests/test_logging_isolation.py::test_verbosity_does_not_depend_on_process_argv` and `tests/test_logging.py::TestVerboseMode`.
 
 #### **Fixture Usage Patterns:**
 
@@ -1782,6 +1829,41 @@ The `vamscli.utils.json_output` module provides:
 
 These utilities ensure consistent JSON output handling across all commands.
 
+### **Rule 18: Never Log a Whole Request or Response Payload Unredacted**
+
+The CLI writes to a rotating log file (`get_config_dir()/logs/vamscli.log`, up to 6 files) at DEBUG level regardless of whether `--verbose` is set. Anything written there **outlives the command** and, on a shared host or build agent, is readable by other local users. Several API payloads carry live credentials:
+
+| Payload                                       | Credential                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------ |
+| `auth login` response                         | Amazon Cognito access, refresh, and id tokens                      |
+| `auth login` / `auth change-password` request | The plaintext password                                             |
+| `api-key create` response                     | The one-time plaintext `vams_…` API key                            |
+| Any download response                         | Presigned Amazon S3 URLs (a bearer credential in the query string) |
+
+**Every log call that receives a whole request or response payload MUST route it through the redactor in `utils/logging.py`:**
+
+```python
+from .logging import redact_to_text    # returns a redacted string
+from .logging import redact_sensitive  # returns a redacted copy of the object
+
+logger.debug(f"Response body: {redact_to_text(response_data)}")
+```
+
+The three existing sinks are wired: `output_result` (`utils/json_output.py`), `log_api_request`, and `log_api_response` (`utils/logging.py`). **Adding a fourth sink means adding the redactor call** — there is no automatic interception, because the payload reaches the logger as an already-formatted string.
+
+**How the redactor decides:**
+
+-   **By key name** — a key whose normalized form (separators stripped, lowercased) contains `password`, `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`, or `cookie` is replaced. Applied recursively through dicts and sequences.
+-   **By descriptive suffix (an exception)** — a key that also _ends_ in `id`, `name`, `arn`, `type`, `count`, `expiry`, `expiration`, `enabled`, or `status` names a credential rather than carrying one, so `apiKeyId`, `tokenType`, and `credentialsSecretArn` survive. `apiKeyHash` and `passwordHash` deliberately do **not** survive.
+-   **By value shape** — `vams_…` keys, JWTs, `Bearer …`, and presigned-URL `X-Amz-Signature` / `X-Amz-Security-Token` parameters are scrubbed even when the key name gives no hint, covering a payload already rendered to a string.
+
+**Two properties that must not be broken** (both pinned by `tests/test_log_redaction.py`):
+
+1. **Redaction applies to the log file only — never to console or `--json-output`.** A newly created API key is displayed exactly once and cannot be retrieved again, so leaking redaction into the output path would make `api-key create` useless. `redact_sensitive` returns a **copy** and never mutates its input.
+2. **Non-secret keys must survive.** This CLI logs S3 object keys constantly (`s3Key`, `objectKey`, `keyName`, `bucketExistingKey`). Over-redaction destroys the diagnostic value the log exists for, which is why the key-fragment list spells out credential names rather than matching a bare `key`.
+
+> **One predicate, every per-key filter:** `redact_mapping_for_log()` wraps `_is_sensitive_key`, and `log_command_start`, `log_api_request`'s header filter, `log_config_info`, `log_config_diagnostic` and `log_auth_diagnostic` all use it. A new per-key log filter must call it rather than keep its own list. Each of those sites previously matched with `key.lower() in ['password', 'token', 'secret', 'key']`, which missed every parameter name the CLI actually declares -- `new_password`, `old_password`, `token_override`, `access_token` -- while the redaction visibly fired for `password` on the same line. Pinned by `tests/test_log_redaction.py::TestPerKeyLogFiltersShareOnePredicate`, which asserts both directions (the secrets are masked, and `starting_token` / `tokenType` / `apiKeyId` survive).
+
 ## 📚 **Detailed Implementation Guide**
 
 ### **Adding New API Endpoints**
@@ -2150,6 +2232,37 @@ if not required_param:
 11. **Always** follow the new exception handling architecture
 12. **Always** let global exceptions bubble up to main.py
 13. **Always** match the surrounding comment density and style — describe **what** code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in code)
+14. **Never** call `list()`, `get()` or `set()` in a module that defines a command of that name — use `builtin_list` (see below)
+
+### **Builtins Shadowed by Command Names**
+
+A Click command is bound to a module-scope name, so a command named `list` makes the module attribute
+`list` a `click.Command` and shadows the builtin for that whole module. A `Command` is callable and its
+`__call__` runs `main()`, so `list(x)` executes that CLI command as a nested program with `x` parsed as
+its argv — it does not build a list, and it raises no `TypeError` to point at the call site.
+
+```python
+# In commands/assets.py, which defines `def list(...)` as `assets list`:
+list([])            # runs `assets list` -> prints the asset listing, SystemExit(0)
+list({'dup.txt'})   # runs `assets list dup.txt` -> "unexpected extra argument", SystemExit(2)
+```
+
+The empty-iterable case is the dangerous one: the command emits an unrelated asset listing instead of
+its own result **and exits 0**, so it looks like a successful run of a different command.
+
+Modules that define such a command must alias the builtin and use the alias:
+
+```python
+from builtins import list as builtin_list  # Avoid namespace collision with the 'list' command
+
+unique = builtin_list(set(conflicts))
+```
+
+`commands/metadata.py` established the idiom and `commands/assets.py` follows it. Of the command names
+this CLI uses, `list`, `get` and `set` are builtins. Prefer a comprehension or `[*a, *b]` where one
+will do, since neither names the builtin. No linter catches this — the rebinding is valid Python and
+the call type-checks — so treat a command whose output contains another command's output as this bug
+until shown otherwise.
 
 ## 🛠️ **Development Commands**
 

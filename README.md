@@ -75,6 +75,10 @@ VAMS deploys as a serverless architecture using AWS CDK with 14 nested CloudForm
 
 ```bash
 # 1. Build the web application
+#    Viewer plugins are baked in at build time from
+#    web/src/visualizerPlugin/config/viewerConfig.json; the shipped defaults work unedited.
+#    To change which viewers ship, edit it before building.
+#    See documentation/docusaurus-site/docs/additional/viewer-plugins.md
 cd web && nvm use && npm install && npm run build
 
 # 2. Install CDK dependencies
@@ -85,7 +89,7 @@ cd ../infra && npm install
 #    See documentation/docusaurus-site/docs/deployment/deploy-the-solution.md (Bootstrap step)
 cdk bootstrap aws://ACCOUNT_ID/REGION
 
-# 4. Configure deployment (edit config.json and viewerConfig.json)
+# 4. Configure deployment (edit infra/config/config.json)
 #    See documentation/docusaurus-site/docs/deployment/configuration-reference.md
 
 # 5. Deploy

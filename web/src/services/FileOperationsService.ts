@@ -195,46 +195,73 @@ export const deleteAssetPreview = async (
 // Backend cap on file keys per bulk download request; larger sets page locally
 export const MAX_DOWNLOAD_KEYS_PER_REQUEST = 1500;
 
+// Pause before re-checking a bulk chunk whose request failed, so a throttled chunk is not
+// immediately conceded to the per-file fallback.
+export const BULK_URL_CHUNK_RETRY_DELAY_MILLIS = 1000;
+
+/** Reported for a chunk whose keys could not be signed, after the retry also failed. */
+export interface BulkDownloadUrlChunkFailure {
+    keys: string[];
+    error: any;
+}
+
 /**
  * Generate presigned download URLs for a set of file keys, returning a map
  * keyed by file key.
  *
  * Uses the bulk download API, paging locally in chunks of the backend's
  * per-request key limit. Keys that cannot be signed are omitted from the map.
+ * A chunk whose request fails is re-checked once after a pause; if it fails again its
+ * keys are reported through onChunkError, which lets a caller distinguish "these keys
+ * could not be signed" from "these keys were not requested" and tell the user, rather
+ * than silently falling back to one request per file.
  */
 export const generateBulkDownloadUrlMap = async (
     databaseId: string,
     assetId: string,
     keys: string[],
-    assetVersionId?: string
+    assetVersionId?: string,
+    onChunkError?: (failure: BulkDownloadUrlChunkFailure) => void
 ): Promise<Map<string, string>> => {
     const urlByKey = new Map<string, string>();
 
+    const requestChunk = (chunk: string[]) => {
+        const downloadBody: any = {
+            downloadType: "assetFile",
+            keys: chunk,
+        };
+        if (assetVersionId) {
+            downloadBody.assetVersionId = assetVersionId;
+        }
+        return apiClient.post(`database/${databaseId}/assets/${assetId}/download`, {
+            body: downloadBody,
+        });
+    };
+
     for (let start = 0; start < keys.length; start += MAX_DOWNLOAD_KEYS_PER_REQUEST) {
         const chunk = keys.slice(start, start + MAX_DOWNLOAD_KEYS_PER_REQUEST);
+        let response: any;
         try {
-            const downloadBody: any = {
-                downloadType: "assetFile",
-                keys: chunk,
-            };
-            if (assetVersionId) {
-                downloadBody.assetVersionId = assetVersionId;
-            }
-
-            const response = await apiClient.post(
-                `database/${databaseId}/assets/${assetId}/download`,
-                {
-                    body: downloadBody,
-                }
-            );
-
-            for (const entry of response?.files || []) {
-                if (entry.success && entry.downloadUrl) {
-                    urlByKey.set(entry.key, entry.downloadUrl);
-                }
-            }
+            response = await requestChunk(chunk);
         } catch (error) {
-            console.log("Bulk URL generation failed for chunk:", error);
+            // One bulk request stands in for up to MAX_DOWNLOAD_KEYS_PER_REQUEST per-file
+            // requests, so conceding it inverts precisely when it costs most: the caller
+            // then signs every key individually against the endpoint that just failed.
+            console.error("Bulk URL generation failed for chunk, re-checking once:", error);
+            await new Promise((resolve) => setTimeout(resolve, BULK_URL_CHUNK_RETRY_DELAY_MILLIS));
+            try {
+                response = await requestChunk(chunk);
+            } catch (retryError) {
+                console.error("Bulk URL generation failed for chunk after retry:", retryError);
+                onChunkError?.({ keys: chunk, error: retryError });
+                continue;
+            }
+        }
+
+        for (const entry of response?.files || []) {
+            if (entry.success && entry.downloadUrl) {
+                urlByKey.set(entry.key, entry.downloadUrl);
+            }
         }
     }
 

@@ -10,8 +10,8 @@ Two AI coding agents are supported: Claude Code and Kiro. Each reads from dedica
 
 VAMS also ships an MCP server and an agent skill for **operating** a deployed VAMS instance with agents, rather than writing VAMS code. See [Operating a Deployment with Agents](#operating-a-deployment-with-agents).
 
-:::note[Cline support deprecated]
-The Cline agent (`.clinerules/workflows/`) is no longer supported. Its steering files have been removed. Use Claude Code or Kiro instead.
+:::note[Cline is not supported]
+The Cline agent is not among the supported agents, and VAMS ships no `.clinerules/` steering files. Use Claude Code or Kiro instead.
 :::
 
 ## Supported Agents
@@ -81,15 +81,15 @@ Adding a new API endpoint in VAMS requires coordinated changes across as many as
 | Step | File                                                          | Action                                                           |
 | ---- | ------------------------------------------------------------- | ---------------------------------------------------------------- |
 | 1    | `backend/backend/common/apiRoutes.py`                         | Define the route constant and add it to its category group array |
-| 2    | `backend/backend/handlers/\{domain\}/\{handler\}.py`          | Implement Lambda handler with Casbin enforcement                 |
-| 3    | `backend/backend/models/\{domain\}.py`                        | Define request/response models (Pydantic v1)                     |
-| 4    | `infra/lib/lambdaBuilder/\{domain\}Functions.ts`              | Build Lambda with environment variables, permissions, VPC config |
+| 2    | `backend/backend/handlers/{domain}/{handler}.py`          | Implement Lambda handler with Casbin enforcement                 |
+| 3    | `backend/backend/models/{domain}.py`                        | Define request/response models (Pydantic v1)                     |
+| 4    | `infra/lib/lambdaBuilder/{domain}Functions.ts`              | Build Lambda with environment variables, permissions, VPC config |
 | 5    | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route                               |
 | 6    | `web/src/services/APIService.ts`                              | Add API call method                                              |
-| 7    | `tools/VamsCLI/vamscli/commands/\{group\}.py`                 | Add CLI command, and the endpoint path to `constants.py`         |
+| 7    | `tools/VamsCLI/vamscli/commands/{group}.py`                 | Add CLI command, and the endpoint path to `constants.py`         |
 | 8    | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it                  |
 | 9    | `documentation/VAMS_API.yaml`                                 | Add the path and its component schemas to the OpenAPI spec       |
-| 10   | `documentation/docusaurus-site/docs/api/\{domain\}.md`        | Add the human-readable endpoint reference                        |
+| 10   | `documentation/docusaurus-site/docs/api/{domain}.md`        | Add the human-readable endpoint reference                        |
 
 Without steering documents, an AI agent might create a handler without the corresponding API Gateway route (resulting in dead code), add a route without a handler (resulting in 500 errors), or stop at the backend and leave the client tooling and documentation describing an API that no longer matches the deployment.
 
@@ -282,7 +282,7 @@ Follow the established pattern for new steering documents:
 
 ### File Placement
 
-Create the workflow document in `.kiro/steering/\{WORKFLOW_NAME\}.md`.
+Create the workflow document in `.kiro/steering/{WORKFLOW_NAME}.md`.
 
 For component-level steering, create a `CLAUDE.md` file in the component's root directory. Reference the root `CLAUDE.md` for the standard sections and conventions to include. If the component warrants a mirrored Kiro front-end-style steering file, copy the `CLAUDE.md` content into `.kiro/steering/` and keep the two in sync.
 

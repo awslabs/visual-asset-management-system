@@ -108,17 +108,34 @@ def lambda_handler(event, context):
 
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
-        method_allowed_on_api = False
 
-        asset_object = get_asset_object_from_id(None, event['body']["assetId"])
-        asset_object.update({"object__type": "asset"})
+        # Route authorization runs ahead of the asset lookup, so a caller without access
+        # to the route learns nothing about whether the requested asset exists
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if (casbin_enforcer.enforceAPI(event) and
-                    casbin_enforcer.enforce(asset_object, "GET")):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
-        if method_allowed_on_api and httpMethod == 'POST':
+        if not method_allowed_on_api:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
+
+        asset_object = get_asset_object_from_id(None, event['body']["assetId"])
+        if asset_object is None:
+            response['statusCode'] = 404
+            response['body'] = json.dumps({"message": "Asset not found"})
+            return response
+
+        asset_object.update({"object__type": "asset"})
+
+        allowed = False
+        if len(claims_and_roles["tokens"]) > 0:
+            if casbin_enforcer.enforce(asset_object, "GET"):
+                allowed = True
+
+        if allowed and httpMethod == 'POST':
             return check_subscriptions(event['body'])
         else:
             response['statusCode'] = 403

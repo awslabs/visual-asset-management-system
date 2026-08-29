@@ -74,10 +74,9 @@ def _query_all_in_partition(table, scope):
     while True:
         response = table.query(**query_kwargs)
         items.extend(response.get('Items', []))
-        last_key = response.get('LastEvaluatedKey')
-        if not last_key:
+        if 'LastEvaluatedKey' not in response:
             return items
-        query_kwargs['ExclusiveStartKey'] = last_key
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
 
 def get_tag_types():

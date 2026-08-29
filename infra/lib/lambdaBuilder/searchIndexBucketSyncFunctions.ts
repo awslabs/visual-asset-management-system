@@ -28,6 +28,13 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
+// The single orchestration-bus event sqsBucketSync publishes (publish_to_orchestration_bus in
+// backend/backend/handlers/indexing/sqsBucketSync.py): Source is the deployment's event-source prefix
+// followed by this suffix, and DetailType is fixed. The handler builds the same two literals from its
+// ORCHESTRATION_EVENT_SOURCE_PREFIX env var, and nothing else couples the two languages.
+const FILE_UPLOAD_EVENT_SOURCE_SUFFIX = ".trigger.fileUpload";
+const FILE_UPLOAD_EVENT_DETAIL_TYPE = "asset.file.uploaded";
+
 export function buildSearchFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -284,8 +291,23 @@ export function buildSqsBucketSyncFunction(
     // Grant SNS publish permissions
     storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
 
-    // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery).
-    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
+    // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery), scoped to the
+    // one event the handler emits. A PutEvents request carries a set of entries, so its source and
+    // detail-type condition keys are multi-valued and take the ForAllValues operator: a batch is
+    // allowed only when every entry carries this source and detail type.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["events:PutEvents"],
+            resources: [storageResources.eventBridge.orchestrationBus.eventBusArn],
+            conditions: {
+                "ForAllValues:StringEquals": {
+                    "events:source": `${storageResources.eventBridge.eventSourcePrefix}${FILE_UPLOAD_EVENT_SOURCE_SUFFIX}`,
+                    "events:detail-type": FILE_UPLOAD_EVENT_DETAIL_TYPE,
+                },
+            },
+        })
+    );
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({

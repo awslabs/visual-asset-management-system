@@ -8,7 +8,7 @@
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import { Construct } from "constructs";
-import { Duration } from "aws-cdk-lib";
+import { Duration, Size } from "aws-cdk-lib";
 import {
     suppressCdkNagErrorsByGrantReadWrite,
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -24,6 +24,17 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { storageResources } from "../../../storage/storageBuilder-nestedStack";
 
+// Both sync Lambdas stage an asset file on local disk before uploading it to Physna — physnaAssetSync
+// repairs drift by calling the same `physnaFileSync._upload_file_to_physna` path — so both need more
+// than the 512 MB Lambda default to handle large CAD files.
+//
+// Disk is not the binding limit. The upload reads the staged file into memory and the HTTP client
+// builds a second multipart copy of those bytes, so peak memory is roughly twice the file size
+// against LAMBDA_MEMORY_SIZE: files above ~2.4 GiB exhaust memory whatever the disk budget is. The
+// headroom past that point covers the staged copy plus filesystem overhead, and raising it further
+// does not raise the supported file size — streaming the multipart body would.
+const PHYSNA_SYNC_EPHEMERAL_STORAGE = Size.gibibytes(4);
+
 interface BuildPhysnaLambdaProps {
     scope: Construct;
     name: string;
@@ -33,6 +44,7 @@ interface BuildPhysnaLambdaProps {
     vpc: ec2.IVpc;
     subnets: ec2.ISubnet[];
     credsSecret: secretsmanager.ISecret;
+    ephemeralStorageSize?: Size;
 }
 
 function buildCommonPhysnaLambda(props: BuildPhysnaLambdaProps): lambda.Function {
@@ -45,6 +57,7 @@ function buildCommonPhysnaLambda(props: BuildPhysnaLambdaProps): lambda.Function
         vpc,
         subnets,
         credsSecret,
+        ephemeralStorageSize,
     } = props;
 
     const fun = new lambda.Function(scope, name, {
@@ -54,6 +67,7 @@ function buildCommonPhysnaLambda(props: BuildPhysnaLambdaProps): lambda.Function
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
+        ephemeralStorageSize: ephemeralStorageSize,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? vpc
@@ -114,6 +128,7 @@ export function buildPhysnaFileSyncFunction(
         vpc,
         subnets,
         credsSecret,
+        ephemeralStorageSize: PHYSNA_SYNC_EPHEMERAL_STORAGE,
     });
 }
 
@@ -135,6 +150,7 @@ export function buildPhysnaAssetSyncFunction(
         vpc,
         subnets,
         credsSecret,
+        ephemeralStorageSize: PHYSNA_SYNC_EPHEMERAL_STORAGE,
     });
 }
 

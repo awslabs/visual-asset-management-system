@@ -290,9 +290,12 @@ class TestGeneratedRulesAreWellFormed:
         the backslash has to survive two levels. Two backslashes in the rule text is the correct
         count: one would emit a SyntaxWarning (and raise under ``-W error::SyntaxWarning``, which
         makes the enforcer deny everything), while the decision assertions above would still pass.
+
+        The anchor is checked as terminating the quoted PATTERN rather than the whole rule: the
+        clause group is parenthesised, so the rule itself ends in the closing bracket.
         """
         backslash = chr(92)
         for operator in ("equals", "ends_with"):
             rule = _rule(operator, "Secret")
             assert rule.count(backslash) == 2, f"{operator}: expected 2 backslashes, got {rule!r}"
-            assert rule.endswith(f"{backslash}{backslash}Z')"), rule
+            assert f"{backslash}{backslash}Z')" in rule, rule

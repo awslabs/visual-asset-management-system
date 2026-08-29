@@ -120,7 +120,7 @@ backend/
 
 8.  **ALWAYS use `extra='ignore'`** on every Pydantic model class to silently drop unexpected fields.
 
-9.  **NEVER log sensitive data.** `safeLogger` auto-redacts the credential keys `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` and the caller-authored content keys `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions` (also inside a JSON-string request `body`), at every nesting level in dicts and lists. Do not circumvent this. The redaction is key-driven, so an f-string that interpolates a payload value bypasses it — log identifiers and counts, never rendered bodies or tag values.
+9.  **NEVER log sensitive data.** `safeLogger` auto-redacts the credential keys `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey` and the caller-authored content keys `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions` (also inside a JSON-string request `body`), at every nesting level in dicts and lists. Do not circumvent this. The redaction is key-driven, so an f-string that interpolates a payload value bypasses it — log identifiers and counts, never rendered bodies or tag values.
 
 10. **ALWAYS resolve resource names at module level** via `get_table_name()`, `get_bucket_name()`, or `get_log_group_name()` from `common.resourceNames` inside a `try/except`. Never read `os.environ["TABLE_NAME"]` for resource names in non-pipeline handlers — SSM resolution provides centralized name management with env-var overrides for testing.
 
@@ -154,6 +154,27 @@ backend/
     best-effort sampling). A bare `list_object_versions(..., MaxKeys=N)` silently drops
     versions beyond `N` (wrong archive status, truncated history). Existence-only checks
     (`MaxKeys=1`) are the allowed exception.
+
+    **A DynamoDB `FilterExpression` is applied AFTER the page is read, so a single
+    filtered call is not a lookup and not an existence check.** DynamoDB reads up to
+    1 MB (or `Limit` items), then discards the non-matching ones. Empty `Items`
+    alongside a present `LastEvaluatedKey` is therefore the normal shape for "the match
+    is on a later page" — it does not mean "no such item". Three consequences, each of
+    which has occurred in this codebase:
+
+    -   `len(response['Items']) > 0` as an existence test is a **false negative** once
+        the table outgrows one page. The caller then accepts a duplicate, accepts a link
+        that closes a cycle, or treats a node with children as a leaf.
+    -   A filtered `scan` used to fetch **one** row by a non-key attribute returns `None`
+        for a row that exists. Query a GSI on that attribute instead of scanning.
+    -   `Limit=N` bounds items **evaluated**, not items returned, so a narrow filter over
+        a wide window legitimately returns an empty page plus a `NextToken`. A caller that
+        stops at the first empty page loses everything after it.
+
+    This is the one place the S3 exception above does not carry over: S3 applies `Prefix`
+    server-side before `MaxKeys`, so `MaxKeys=1` genuinely answers "does this exist".
+    DynamoDB's filter does not work that way. See the paging patterns under
+    [DynamoDB Patterns](#pagination-patterns) for the two correct shapes.
 
             **To check whether a single key or specific `versionId` is archived, do NOT list
             versions** — use `common.s3.is_object_version_archived(bucket, key, version_id,
@@ -319,9 +340,12 @@ from pydantic import Field
 from common.validators import validate, id_pattern, object_name_pattern
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
-    itemName:   str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    itemName:   str = Field(min_length=1, max_length=256, regex=object_name_pattern)
     tags: Optional[list[str]] = []
+
+    class Config:
+        anystr_strip_whitespace = True      # `strip_whitespace=` on Field() does nothing
 
     @root_validator
     def validate_fields(cls, values):
@@ -365,7 +389,7 @@ assert not MyModel.__fields__['databaseId'].field_info.extra          # nothing 
 
 Common shapes:
 
--   String with regex: `Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)`
+-   String with regex: `Field(min_length=4, max_length=256, regex=id_pattern)` — to strip whitespace, set `anystr_strip_whitespace = True` on the model's `class Config`, not `strip_whitespace=` on the field
 -   Optional with default: `Optional[list[str]] = []`, `Optional[str] = None`
 -   Numeric constraints: `Field(None, ge=0)`, `Field(None, ge=0, le=10000)`
 -   Nested models: `Optional[CurrentVersionModel] = None`
@@ -386,20 +410,57 @@ Reference: `backend/handlers/authz/__init__.py`
 
 ### Two-Level Enforcement
 
+Both tiers must deny when `claims_and_roles["tokens"]` is empty (Rule 4). An empty token list is
+not "an anonymous user" — it means no identity could be established, so there is nothing to
+evaluate policy against and `enforce()` must not be the only thing standing between the request
+and the mutation. Copy these three shapes exactly; each makes the empty case deny structurally
+rather than by remembering to check.
+
 ```python
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 
-# Tier 1: API-level authorization (in lambda_handler)
+# ── Tier 1: API-level authorization (in lambda_handler) ────────────────────────
+# The flag is pre-set False and only ever flipped INSIDE the token check, so the
+# empty-token case cannot reach the dispatch below.
 claims_and_roles = request_to_claims(event)
-casbin_enforcer = CasbinEnforcer(claims_and_roles)
-if not casbin_enforcer.enforceAPI(event):
+
+method_allowed_on_api = False
+if len(claims_and_roles["tokens"]) > 0:
+    if CasbinEnforcer(claims_and_roles).enforceAPI(event):
+        method_allowed_on_api = True
+if not method_allowed_on_api:
     return authorization_error()
 
-# Tier 2: Object-level authorization (in method handlers)
-item['object__type'] = 'asset'  # MUST annotate object type before enforce()
-if not casbin_enforcer.enforce(event, item):
+# ── Tier 2: single resource (in method handlers) ───────────────────────────────
+# The token guard is a SEPARATE statement before enforce(), never a wrapper around it.
+item['object__type'] = 'asset'          # MUST annotate object type before enforce()
+if len(claims_and_roles["tokens"]) == 0:
     return authorization_error()
+if not CasbinEnforcer(claims_and_roles).enforce(event, item):
+    return authorization_error()
+
+# ── Tier 2: list filtering ────────────────────────────────────────────────────
+# The one shape that may test tokens as a condition: it APPENDS on success, so empty
+# tokens yield an empty result rather than an unfiltered one.
+allowed = []
+for item in items:
+    item['object__type'] = 'asset'
+    if len(claims_and_roles["tokens"]) > 0 and casbin_enforcer.enforce(event, item):
+        allowed.append(item)
+```
+
+```python
+# ❌ VIOLATION — the single-resource enforce() gated on tokens with no else that denies.
+# When tokens is empty the whole block is skipped and execution falls through to the
+# mutation/response below, so the request succeeds unauthorized. This reads as a guard
+# and is the opposite of one; it is the exact defect Rule 4 exists to prevent.
+if len(claims_and_roles["tokens"]) > 0:
+    if not casbin_enforcer.enforce(event, item):
+        return authorization_error()
+
+your_table.put_item(Item=item)          # reached with NO authorization when tokens == []
+return success(body=item)
 ```
 
 ### Key Concepts
@@ -408,7 +469,7 @@ if not casbin_enforcer.enforce(event, item):
 -   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
--   Valid object types: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
+-   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`. Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
 
 ### System User (`SYSTEM_USER`)
 
@@ -513,21 +574,57 @@ your_table.update_item(
 )
 ```
 
-### Pagination Pattern
+### Pagination Patterns
 
-Use Base64-encoded `NextToken` around `LastEvaluatedKey` (see Rule 15 for the wider rule
-against unbounded in-memory sets):
+Two different jobs with two different shapes. Decide which by asking who needs the complete
+set — the handler, or the caller. Never let a single un-looped `query`/`scan` stand in for
+either (Rule 14): DynamoDB caps one call at 1 MB and applies any `FilterExpression` only to
+what that call already read.
+
+**A. Read to exhaustion — the handler needs every row** (cycle checks, cascade deletes,
+existence tests, descendant walks). Loop on `LastEvaluatedKey`, feeding it back as
+`ExclusiveStartKey`:
+
+```python
+from boto3.dynamodb.conditions import Key
+
+items = []
+query_kwargs = {'KeyConditionExpression': Key('databaseId').eq(database_id)}
+while True:
+    response = your_table.query(**query_kwargs)
+    items.extend(response.get('Items', []))
+    if 'LastEvaluatedKey' not in response:       # presence, not truthiness — see below
+        break
+    query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+```
+
+Three details that decide whether this loop is correct:
+
+-   **Test for presence (`'LastEvaluatedKey' not in response`), not truthiness.** DynamoDB
+    omits the key entirely when the walk is complete and never returns a falsy one, so the
+    two forms agree in production but not under test: `response.get('LastEvaluatedKey')`
+    against a bare `MagicMock` returns a truthy `Mock` on every iteration and the loop never
+    terminates, while `in` resolves to `False` and exits. A hanging test is the good outcome
+    here; the same shape in a `while` loop with a page cap silently returns one page.
+-   **Assign any "drained"/"complete" flag on every exit path.** A flag set only on the
+    `LastEvaluatedKey`-absent branch reports the opposite of the truth when an early `break`
+    (a cap, a found-it short-circuit) leaves the loop first.
+-   **Rule 15 still applies to the response.** Reading to exhaustion internally is fine;
+    returning that set to the caller is not. Enrich the full set, then slice to the page.
+
+**B. External paging — the caller needs every row.** Return one page plus an opaque
+Base64 `NextToken` wrapping `LastEvaluatedKey`:
 
 ```python
 import base64, json
 from common.dynamodb import validate_pagination_info
 
 max_items = int(query_params.get('maxItems', '100'))
-next_token = query_params.get('NextToken')
+starting_token = query_params.get('startingToken')
 
 scan_kwargs = {'Limit': max_items}
-if next_token:
-    scan_kwargs['ExclusiveStartKey'] = json.loads(base64.b64decode(next_token).decode('utf-8'))
+if starting_token:
+    scan_kwargs['ExclusiveStartKey'] = json.loads(base64.b64decode(starting_token).decode('utf-8'))
 
 response = your_table.scan(**scan_kwargs)
 result = {'Items': response.get('Items', [])}
@@ -537,6 +634,16 @@ if 'LastEvaluatedKey' in response:
     ).decode('utf-8')
 return success(body=result)
 ```
+
+**The token must round-trip, and nothing checks that for you.** The value the handler emits
+has to be something the request model accepts back on the parameter the handler actually
+reads. Emitting the raw `LastEvaluatedKey` **dict** as `NextToken` while the request model
+declares `startingToken: Optional[str]` yields a token no client can return: page one looks
+perfect, every later page is unreachable, and no error is raised anywhere. The Base64 wrap
+above exists for exactly that reason — it makes the key a string, and opaque, so clients
+cannot come to depend on its interior. Pin it with a test that takes the token from page one,
+feeds it back, and asserts page two begins where page one stopped; asserting only that
+`NextToken` is present passes on a token that cannot be used.
 
 ### Archived Assets Pattern
 
@@ -569,7 +676,7 @@ logger.info(...); logger.warning(...); logger.error(...); logger.exception(...) 
 
 `safeLogger` auto-redacts two key families at every nesting level, walking dicts, lists, and tuples (`customLogging.logger.mask_sensitive_data`, case-insensitive on the key name):
 
--   **Credential keys** (`SENSITIVE_KEYS`) — `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
+-   **Credential keys** (`SENSITIVE_KEYS`) — `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`.
 -   **Content keys** (`CONTENT_KEYS`) — `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`. A pipeline template body or tag value carries free-form caller content (prompts, model configuration). Every field that can carry a template body belongs here whichever request delivers it: an execute request supplies one as `customTemplateOverride`, a template record as `configBody`. The value is replaced with `<redacted>` and the key is kept, so the record still shows that the field was submitted.
 
 A request `body` is masked whether it arrives as a dict or as a JSON string — the string is parsed, masked, and re-serialized. Redaction is key-driven, so an f-string that interpolates a payload value (`logger.info(f"template {body}")`) bypasses it entirely: log identifiers, counts, and flags instead.
@@ -619,7 +726,9 @@ asset_table = dynamodb.Table(asset_table_name)
 
 ### Common Environment Variables
 
-`VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `PRESIGNED_URL_TIMEOUT_SECONDS` (required): S3 presigned URL TTL. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`.
+`VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`.
+
+`PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** set for every handler — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, covering the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`). All five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level, so a handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start. Add the variable to the handler's own builder before reading it.
 
 **Legacy env-var overrides** (for pipeline handlers and testing): `ASSET_STORAGE_TABLE_NAME`, `DATABASE_STORAGE_TABLE_NAME`, `S3_ASSET_AUXILIARY_BUCKET`, `AUDIT_LOG_*`, etc. Non-pipeline handlers resolve these via SSM unless the legacy env var is explicitly set.
 
@@ -713,6 +822,9 @@ Most anti-patterns are the inverse of a Critical Rule above. The compact list ci
 -   Skipping the `enforceAPI()` check in `lambda_handler` — Rule 4.
 -   Missing `object__type` annotation before `enforce()` — Rule 4.
 -   Gating a single-resource `enforce()` on `if len(tokens) > 0:` without an `else` that denies — Rule 4. Fails open on empty tokens; the list-filtering "append only when `enforce()` passes" shape is the one exception (fail-closed by construction).
+-   Treating a single filtered `query`/`scan` as a lookup or an existence check — Rule 14. The `FilterExpression` runs after the 1 MB page read, so empty `Items` with a `LastEvaluatedKey` present means "the match is on a later page", not "absent". Loop to exhaustion, or query a GSI on the attribute.
+-   Terminating a paging loop on `response.get('LastEvaluatedKey')` truthiness instead of key presence — see Pagination Patterns. Equivalent in production, divergent under test.
+-   Emitting a pagination token the request model cannot accept back (raw `LastEvaluatedKey` dict vs a declared `str`) — see Pagination Patterns. Caps the listing at page one with no error.
 -   Inline regex validation — Rule 3. Use the `validate()` dispatcher.
 -   `print()` for logging — Rule 5.
 -   Creating boto3 clients inside functions — Rule 6.
@@ -750,6 +862,7 @@ When creating or modifying a handler:
 -   [ ] Routes dispatch via `ApiRoute.matches()` (not hardcoded fragments)
 -   [ ] Request bodies parsed with `parse(body, model=ModelClass)`; params validated with the `validate()` dispatcher
 -   [ ] Tier-2 auth via `casbin_enforcer.enforce(event, item)` with `object__type` set; empty-token case fails closed with an explicit `authorization_error()` before any single-resource `enforce()`
+-   [ ] Every `query`/`scan` either pages to exhaustion or returns a round-tripped `NextToken` — no single filtered call standing in for a lookup, existence check, or full listing (Rule 14, Pagination Patterns)
 -   [ ] Business logic errors raise `VAMSGeneralErrorResponse`; error handling maps ValidationError→400, VAMSGeneralErrorResponse→400, Exception→500
 -   [ ] Client error messages are generic (no echoed input or internal details); response functions pass `event=event` for audit logging
 -   [ ] No `print()`, no Pydantic v2 syntax; models declare `extra='ignore'`

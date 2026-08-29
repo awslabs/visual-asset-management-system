@@ -3,7 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+/**
+ * How long a typed term settles before it is reported to the caller's search.
+ *
+ * `onQueryChange` feeds a TanStack query key, and each distinct key is a separate server search — so
+ * reporting per keystroke made request volume a function of characters typed rather than of searches
+ * performed, with every intermediate response discarded. One typing burst now costs one request.
+ * Enter still reports at once, which is what the field's placeholder advertises.
+ */
+export const QUERY_REPORT_DEBOUNCE_MS = 300;
 
 export interface SelectOption {
     value: string;
@@ -57,6 +67,40 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     const [query, setQuery] = useState("");
     const containerRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
+    const reportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Read through a ref so a settled report never fires through a stale callback.
+    const onQueryChangeRef = useRef(onQueryChange);
+    onQueryChangeRef.current = onQueryChange;
+
+    const cancelPendingReport = () => {
+        if (reportTimerRef.current !== null) {
+            clearTimeout(reportTimerRef.current);
+            reportTimerRef.current = null;
+        }
+    };
+
+    /** Report the term once typing settles, replacing any report still waiting. */
+    const scheduleReport = (term: string) => {
+        if (!onQueryChange) return;
+        cancelPendingReport();
+        reportTimerRef.current = setTimeout(() => {
+            reportTimerRef.current = null;
+            onQueryChangeRef.current?.(term);
+        }, QUERY_REPORT_DEBOUNCE_MS);
+    };
+
+    const reportNow = (term: string) => {
+        cancelPendingReport();
+        onQueryChangeRef.current?.(term);
+    };
+
+    // An unmount while a report is pending would otherwise fire a search for a picker that is gone.
+    useEffect(
+        () => () => {
+            if (reportTimerRef.current !== null) clearTimeout(reportTimerRef.current);
+        },
+        []
+    );
 
     const allOptions = useMemo(
         () => (leadingOption ? [leadingOption, ...options] : options),
@@ -87,6 +131,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     }, [allOptions, query, onQueryChange]);
 
     const close = () => {
+        cancelPendingReport();
         setOpen(false);
         setQuery("");
     };
@@ -108,6 +153,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
         if (!open) return;
         const onDocClick = (e: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+                cancelPendingReport();
                 setOpen(false);
                 setQuery("");
             }
@@ -156,15 +202,18 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                         type="text"
                         value={query}
                         onChange={(e) => {
+                            // The field itself is uncontrolled by the search: the text lands
+                            // immediately and only the REPORT to the caller waits for typing to
+                            // settle, so client-side filtering stays per-keystroke.
                             setQuery(e.target.value);
-                            onQueryChange?.(e.target.value);
+                            scheduleReport(e.target.value);
                         }}
                         onKeyDown={(e) => {
                             // Enter re-runs the search, matching how the rest of the app's asset search
                             // behaves (press Enter to search).
                             if (e.key === "Enter" && onQueryChange) {
                                 e.preventDefault();
-                                onQueryChange(query);
+                                reportNow(query);
                             }
                         }}
                         placeholder={

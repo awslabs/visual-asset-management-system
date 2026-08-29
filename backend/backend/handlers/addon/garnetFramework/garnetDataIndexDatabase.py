@@ -78,32 +78,17 @@ def _record_sync(object_type, action, success, database_id, asset_id=None,
 
 try:
     database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving database storage table name")
-    database_storage_table_name = None
-
-try:
     database_metadata_storage_table_name = get_table_name(ResourceKeys.DATABASE_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving database metadata table name")
-    database_metadata_storage_table_name = None
-
-try:
     s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving S3 asset buckets table name")
-    s3_asset_buckets_storage_table_name = None
-
-try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading Garnet environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-database_storage_table = dynamodb.Table(database_storage_table_name) if database_storage_table_name else None
-database_metadata_table = dynamodb.Table(database_metadata_storage_table_name) if database_metadata_storage_table_name else None
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
+database_storage_table = dynamodb.Table(database_storage_table_name)
+database_metadata_table = dynamodb.Table(database_metadata_storage_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
 
 #######################
 # Data Retrieval Functions

@@ -6,16 +6,18 @@ This guide covers development patterns for the VAMS React frontend, including pr
 
 | Technology                  | Version | Purpose                          |
 | --------------------------- | ------- | -------------------------------- |
-| React                       | 17.0.2  | UI framework (not React 18)      |
-| TypeScript                  | 4.4.4   | Type system                      |
-| Vite                        | 6.x     | Build tooling                    |
+| React                       | 18.x    | UI framework                     |
+| TypeScript                  | 5.x     | Type system                      |
+| Vite                        | 8.x     | Build tooling                    |
 | Cloudscape Design System    | 3.x     | AWS UI component library         |
 | AWS Amplify                 | v6      | Authentication integration       |
-| React Router                | v6      | Client-side routing (HashRouter) |
-| `@badgateway/oauth2-client` | 2.4.2   | External OAuth2 PKCE flow        |
+| React Router                | v7      | Client-side routing (HashRouter) |
+| `@badgateway/oauth2-client` | 2.x     | External OAuth2 PKCE flow        |
+
+Exact dependency ranges are declared in `web/package.json`.
 
 :::info[React 18]
-This project uses React 18. The app mounts with `createRoot` from `react-dom/client`, and React 18 APIs such as `useId`, `useSyncExternalStore`, `useTransition`, and `useDeferredValue` are available.
+The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such as `useId`, `useSyncExternalStore`, `useTransition`, and `useDeferredValue` are available.
 :::
 
 ## Project Structure
@@ -26,7 +28,7 @@ web/src/
   routes.tsx              # Centralized route table with React.lazy
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
-  index.tsx               # Entry point (ReactDOM.render)
+  index.tsx               # Entry point (createRoot)
 
   FedAuth/Auth.tsx        # Dual-mode authentication orchestrator
 

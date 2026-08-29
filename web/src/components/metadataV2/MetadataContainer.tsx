@@ -119,7 +119,10 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             filtered = filtered.filter(
                 (row) =>
                     row.metadataKey.toLowerCase().includes(lowerSearch) ||
-                    row.metadataValue.toLowerCase().includes(lowerSearch)
+                    // A row stored before the value was recorded reads back as null, so the search
+                    // treats it as empty text rather than throwing on it: filtering is not the place
+                    // an incomplete row should surface.
+                    (row.metadataValue ?? "").toLowerCase().includes(lowerSearch)
             );
         }
 
@@ -351,7 +354,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                 // Reset to original values
                 updateRow(index, {
                     editKey: row.metadataKey,
-                    editValue: row.metadataValue,
+                    editValue: row.metadataValue ?? "",
                     editType: row.metadataValueType,
                     hasChanges: false,
                     validationError: undefined,

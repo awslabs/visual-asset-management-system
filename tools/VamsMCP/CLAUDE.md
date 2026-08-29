@@ -29,17 +29,29 @@ authentication.
 ```
 tools/VamsMCP/
   pyproject.toml             # package + deps (mcp, vamscli, requests)
-  .env.example               # documents every supported env var
+  .env.example               # reference list of every supported env var (NOT a dotenv template -
+                             # nothing loads a .env; set them in the MCP host's `env` block)
   vams_mcp/
     __init__.py              # __version__ (roll with pyproject.toml)
     config.py                # env-based config (profile, feature gates, pagination)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager
     server.py                # FastMCP app, response-shape helpers, tool definitions, logging guard
   tests/
+    conftest.py              # clears VAMS_ENABLE_* / VAMS_PROFILE / pagination vars at import,
+                             # BEFORE vams_mcp.server reads them at module level
     test_config.py           # env parsing + the writes/destructive gate interaction
     test_client_helpers.py   # paginate(), unwrap_message(), trim_search_results()
     test_server_tools.py     # tool behavior + the source-layout assertions of Mandatory Rule 4
+    test_gated_tools.py      # the write/destructive tool bodies, via a module reload with both gates on
 ```
+
+**No dotenv.** `config.py` reads `os.environ` only, and there is no `python-dotenv` dependency. That
+is the right mechanism for this transport — a host spawns the `vams-mcp` console script from an
+arbitrary working directory, so a cwd-upward `.env` search would not reliably find this one — but it
+means `.env.example` is a reference list, not a template to copy. Never write documentation that
+tells a reader to copy it: a `.env` beside the server is silently ignored, the gates stay off with
+nothing reporting why, and the usual next step is to delete the `if CONFIG.enable_writes:` guard in
+source. Document a new variable in `.env.example` **and** in the README's `env` sample.
 
 ### Layers
 
@@ -90,14 +102,29 @@ asymmetry other callers rely on):
    `if CONFIG.enable_destructive:` and must never be in `autoApprove`.
    `enable_destructive` is AND-ed with `enable_writes` in `Config.from_env()`, so
    `VAMS_ENABLE_DESTRUCTIVE=true` alone registers nothing.
-   `execute_workflow` and `rerun_execution` start real AWS compute, so keep them
-   out of `autoApprove` too even though they are write-tier, not destructive.
-   Because the tools are module-level `def`s, misplacement fails **silently**: a
-   duplicate name shadows the earlier definition, and a `def` after the
-   `if __name__` entrypoint or outside its gate block never executes, so the tool
-   is simply absent with no import error. `tests/test_server_tools.py` asserts the
-   source layout (uniqueness, position relative to each gate and the entrypoint,
-   and that every `CLIENT.api.*` call resolves on `APIClient`) — keep it passing.
+   `execute_workflow`, `rerun_execution` and `abort_execution` are write-tier, not
+   destructive — they remove no stored data — but all three act on real AWS
+   compute (the first two start it, `abort_execution` irreversibly stops it and
+   fans out across a group), so keep all three out of `autoApprove`. The tier is
+   about stored data; that list is about compute. Three places state this and must
+   agree: this rule, the README's caution paragraph, and the tool's own docstring.
+
+    **A required-true request field is not a confirmation to re-expose.**
+    `delete_asset` sends `confirmPermanentDelete=True` because
+    `DeleteAssetRequestModel` declares an `always=True` validator that rejects any
+    other value — it is part of the request contract, not an optional interlock, so
+    surfacing it as a tool parameter would give the agent a boolean whose only
+    non-erroring value is `True`. What actually controls these tools is the
+    destructive gate (which `Config.from_env()` additionally requires
+    `enable_writes` for), the tool name, the docstring, and keeping them out of
+    `autoApprove`.
+    Because the tools are module-level `def`s, misplacement fails **silently**: a
+    duplicate name shadows the earlier definition, and a `def` after the
+    `if __name__` entrypoint or outside its gate block never executes, so the tool
+    is simply absent with no import error. `tests/test_server_tools.py` asserts the
+    source layout (uniqueness, position relative to each gate and the entrypoint,
+    and that every `CLIENT.api.*` call resolves on `APIClient`) — keep it passing.
+
 5. **Return data, not exceptions.** Wrap tool bodies with `@tool_result` so
    failures return `{"error": ..., "error_type": ...}`.
 6. **API Gateway URL only.** The server rejects CloudFront URLs implicitly (the
@@ -129,8 +156,10 @@ asymmetry other callers rely on):
 8. **Never let a bounded response read as a complete one.** A VAMS handler can
    answer successfully while withholding rows, and it reports that out of band: a
    top-level `warnings` array (a page that hit its distinct-asset permission-check
-   cap), a `truncatedCollections` list (a bounded execution-detail collection), or
-   an echoed filter window (`filterStartDate` on the executions list). Because
+   cap, or spent its per-request work budget before filling the page — the array
+   can carry more than one entry, so collect them all rather than the first), a
+   `truncatedCollections` list (a bounded execution-detail collection), or an
+   echoed filter window (`filterStartDate` on the executions list). Because
    `paginate()` rebuilds its result from the accumulated items alone, every one of
    those is dropped by default, and the agent reports an understated count or
    concludes an object does not exist.
@@ -141,6 +170,17 @@ asymmetry other callers rely on):
     `warnings` as a sibling of `message`. Then say in the docstring what the flag
     means for the agent's conclusion, not just that the field exists — a tool
     description is the only place an agent learns not to trust a short list.
+
+    **`paginate()`'s own bound is one of those, and every paginated tool docstring
+    must state it.** The walk stops at `max_items` or at `max_pages`, whichever
+    comes first, and sets `truncated` plus a `note` naming which fired — including
+    the case where a single page returned more rows than `max_items` and carried no
+    token at all, which a token-only check misses. It returns the outstanding
+    `NextToken`, and every paginated read tool takes a `starting_token` that
+    forwards it as the first page's `startingToken`; without that pair the ceiling
+    is a wall and rows past it are unreachable through this server. `max_pages` is
+    a per-call work bound on the server process, so a larger `max_items`
+    deliberately does NOT raise it — the resumption token is the way past it.
 
 9. **Forward every narrowing parameter the endpoint supports.** A tool that omits
    one silently pins the agent to the server default: `get_execution_logs` without

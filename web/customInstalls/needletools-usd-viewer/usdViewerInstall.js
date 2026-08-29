@@ -11,11 +11,11 @@ const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
 const viewerId = "needletools-usd-viewer";
-const gitRepoSourceDestDir = "./customInstalls/needletools-usd-viewer/source"; //Relative to base web directory where yarn/npm is run
+const gitRepoSourceDestDir = "./customInstalls/needletools-usd-viewer/source"; //Relative to base web directory where npm is run
 const gitRepoUrl = "https://github.com/needle-tools/usd-viewer.git";
 const gitRepoCommitHash = "aab170a";
 
-const destinationDir = "./public/viewers/needletools_usd_viewer"; //Relative to base web directory where yarn/npm is run
+const destinationDir = "./public/viewers/needletools_usd_viewer"; //Relative to base web directory where npm is run
 
 // Function to cleanup previous git source and build binaries
 const previousCleanUp = async () => {
@@ -49,17 +49,6 @@ const npmBuild = () => {
     try {
         execSync("npm install", { cwd: gitRepoSourceDestDir }); //Install dependencies
         console.log("NeedleTools-USDViewer Build NPM install complete");
-        // Best-effort: apply safe (non-breaking) npm audit fixes after install.
-        // Non-fatal — npm audit fix exits non-zero when unfixable vulnerabilities
-        // remain (those need --force/manual review, which we do NOT apply).
-        try {
-            execSync("npm audit fix", { cwd: gitRepoSourceDestDir });
-            console.log("NeedleTools-USDViewer npm audit fix complete");
-        } catch (auditErr) {
-            console.warn(
-                "NeedleTools-USDViewer npm audit fix reported unresolved/unfixable vulnerabilities (continuing)."
-            );
-        }
         // Note: npm run build is not needed as the repo includes pre-built files
         console.log("NeedleTools-USDViewer: Using pre-built WASM files from repository");
     } catch (err) {

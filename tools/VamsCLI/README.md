@@ -13,7 +13,7 @@ cd tools/VamsCLI
 pip install .
 ```
 
-> **Note:** On Windows, set `PYTHONIOENCODING=utf-8` or use Windows Terminal for proper Unicode support.
+> **Note:** VamsCLI writes UTF-8 output regardless of the system code page, so no encoding configuration is required. On Windows, Windows Terminal renders its status indicators as intended.
 
 ## Quick Start
 

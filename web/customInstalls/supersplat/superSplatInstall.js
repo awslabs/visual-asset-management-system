@@ -42,25 +42,6 @@ const npmInstall = () => {
     console.log("SuperSplat: NPM install complete");
 };
 
-// Best-effort: apply any safe (non-breaking) dependency fixes that `npm audit fix`
-// can resolve automatically before the bundle is built and packaged. This patches
-// quickly-fixable vulnerabilities in SuperSplat's dependency tree (e.g. PlayCanvas
-// transitive deps). Intentionally non-fatal: `npm audit fix` exits non-zero when
-// unfixable vulnerabilities remain (those require `--force`/manual review, which we
-// do NOT apply), and a registry hiccup must not break the viewer build.
-const auditFix = () => {
-    console.log("SuperSplat: Running npm audit fix (safe fixes only)...");
-    try {
-        execSync("npm audit fix", { cwd: cloneDir, stdio: "inherit" });
-        console.log("SuperSplat: npm audit fix complete");
-    } catch (err) {
-        console.warn(
-            "SuperSplat: npm audit fix reported unresolved/unfixable vulnerabilities " +
-                "(continuing with build; no breaking --force fixes applied)."
-        );
-    }
-};
-
 const buildBundle = () => {
     console.log("SuperSplat: Building static bundle with Rollup...");
     // SuperSplat reads process.env.BASE_HREF and substitutes the <base href> placeholder.
@@ -112,7 +93,6 @@ const main = async () => {
 
         cloneRepo();
         npmInstall();
-        auditFix();
         buildBundle();
         await copyBundledFiles();
         await cleanupClone();

@@ -4,7 +4,7 @@ Scaffold a new VAMS processing pipeline with all required files following establ
 
 ## Instructions
 
-You are scaffolding a new VAMS processing pipeline. Follow root `CLAUDE.md` "Adding a New Processing Pipeline" and `infra/CLAUDE.md` "Pipeline Nested Stack Pattern" — the authoritative checklists. VAMS pipelines process assets through AWS Step Functions state machines with Lambda orchestration and either Lambda containers or Batch/Fargate for heavy processing.
+You are scaffolding a new VAMS processing pipeline. Follow `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" and `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" — the authoritative checklists. Neither auto-loads from the repo root, so read both before scaffolding; the root `CLAUDE.md` "Adding a New Processing Pipeline" section is a summary that points at them. VAMS pipelines process assets through AWS Step Functions state machines with Lambda orchestration and either Lambda containers or Batch/Fargate for heavy processing.
 
 ### Step 1: Gather Requirements
 
@@ -37,14 +37,41 @@ All four Lambdas live in `backendPipelines/{category}/{pipelineName}/lambda/`.
 
 #### Pipeline S3 Output Paths (critical)
 
-The workflow ASL passes these paths to each pipeline step. Use the correct one (see root `CLAUDE.md` "Pipeline S3 Output Paths"):
+The workflow ASL passes these paths to each pipeline step. Use the correct one (see `backendPipelines/CLAUDE.md` "Pipeline S3 Output Paths" for the full rules, including the `constructPipeline` auxiliary-path fallback and the relative-path derivation):
 
-| Path                                   | Bucket    | Use For                                                                     |
-| -------------------------------------- | --------- | --------------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned. |
-| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.    |
-| `outputS3AssetMetadataPath`            | Asset     | Metadata output. Versioned.                                                 |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.          |
+| Path                                   | Bucket    | Use For                                                                      |
+| -------------------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.  |
+| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.     |
+| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below. |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.           |
+
+**Metadata / attribute output naming.** The process-output step decides what a JSON file under
+`outputS3AssetMetadataPath` means from its **file name**, matched on suffix anywhere under the path:
+
+| File the pipeline writes            | Applied to                       | Store           |
+| ----------------------------------- | -------------------------------- | --------------- |
+| `asset.metadata.json`               | The asset (recorded against `/`) | Asset metadata  |
+| `<relativeFilePath>.metadata.json`  | That file                        | File metadata   |
+| `<relativeFilePath>.attribute.json` | That file                        | File attributes |
+
+`asset.metadata.json` is a reserved basename — any other `*.metadata.json` is treated as file-level,
+so an asset-level file under a different name writes file metadata against a nonexistent path. Body
+for all three (`type` is auto-corrected from the file name; `updateType` is `update` or `replace_all`):
+
+```json
+{
+    "type": "metadata",
+    "updateType": "update",
+    "metadata": [{ "metadataKey": "K", "metadataValue": "V" }]
+}
+```
+
+**A pipeline may write a new file AND metadata for that new file in the same run.** Files under
+`outputS3AssetFilesPath` are ingested before the metadata path is listed, so the file exists on the
+asset by the time its metadata is written. Name the metadata file after the file's final
+asset-relative path (including the workflow's `defaultOutputFileBaseExecutionPathExtension`), not its
+absolute S3 key.
 
 **Rules:**
 
@@ -343,7 +370,7 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 
 1. **`documentation/docusaurus-site/docs/deployment/configuration-reference.md`**: add a section for the pipeline documenting every config option, following the existing pipeline-section format.
 2. **`documentation/docusaurus-site/docs/pipelines/`**: create a new pipeline page, add it to `documentation/docusaurus-site/sidebars.ts`, and add the pipeline to the `pipelines/overview.md` table and `overview/features.md`.
-3. **Root `CLAUDE.md`**: add the pipeline to the pipeline list (Rule 11).
+3. **Root `CLAUDE.md`**: add the pipeline to the Project Overview pipeline list **and** to the directory tree (Rule 11). The tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist.
 4. If the pipeline added a VPC subnet/endpoint requirement, update the "VPC Resource Usage by Feature" tables in the configuration reference.
 
 ### Step 10: Validate

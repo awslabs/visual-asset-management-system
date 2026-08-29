@@ -14,6 +14,13 @@ export interface LoaderResult {
 }
 
 /**
+ * CAD formats routed to the OCCT loader, without the leading dot. Every entry
+ * must also appear in the `threejs-viewer` entry's `supportedExtensions` in
+ * config/viewerConfig.json, or the registry never offers this viewer for it.
+ */
+export const OCCT_FORMATS = ["stp", "step", "iges", "igs", "brep"];
+
+/**
  * Get file extension from file key
  */
 export function getFileExtension(fileKey: string): string {
@@ -33,9 +40,7 @@ export function isSupportedThreeFormat(fileKey: string): boolean {
  * Check if file is an OCCT format (CAD)
  */
 export function isOCCTFormat(fileKey: string): boolean {
-    const ext = getFileExtension(fileKey);
-    const occtFormats = ["stp", "step", "iges", "brep"];
-    return occtFormats.includes(ext);
+    return OCCT_FORMATS.includes(getFileExtension(fileKey));
 }
 
 /**
@@ -229,8 +234,7 @@ export async function loadFile(
     manager?: any
 ): Promise<LoaderResult> {
     // Check if this is an OCCT format
-    const occtFormats = ["stp", "step", "iges", "igs", "brep"];
-    if (occtFormats.includes(extension.toLowerCase())) {
+    if (OCCT_FORMATS.includes(extension.toLowerCase())) {
         // CRITICAL: Check for SharedArrayBuffer support FIRST
         // CAD files require WASM which needs SharedArrayBuffer
         if (typeof SharedArrayBuffer === "undefined") {

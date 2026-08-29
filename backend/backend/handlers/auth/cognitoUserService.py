@@ -351,94 +351,63 @@ def delete_cognito_user(user_id, claims_and_roles):
 
 
 def reset_user_password(user_id, claims_and_roles):
-    """Reset a Cognito user's password by deleting and recreating the user
-    
-    This approach ensures password reset works regardless of user state (CONFIRMED, FORCE_CHANGE_PASSWORD, etc.)
-    by deleting the user and recreating them with the same email and phone number.
-    Cognito will send a new welcome email with a temporary password.
-    
+    """Reset a Cognito user's password
+
+    Starts the Cognito password reset flow with admin_reset_user_password, which puts the
+    account into RESET_REQUIRED state and emails the user a password reset code. An account
+    that has never completed a first sign-in has no password to reset, so for those Cognito
+    resends the invitation message with a new temporary password. The account itself is left
+    in place on both paths, along with its email, phone and other attributes.
+
     Args:
         user_id: The user ID to reset password for
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         CognitoUserOperationResponseModel with operation result
     """
     try:
         check_cognito_enabled()
-        
-        logger.info(f"Resetting password for Cognito user {user_id} via delete/recreate")
-        
-        # Step 1: Get current user attributes to preserve email and phone
+
+        logger.info(f"Resetting password for Cognito user {user_id}")
+
         try:
-            user_response = cognito_client.admin_get_user(
+            cognito_client.admin_reset_user_password(
                 UserPoolId=user_pool_id,
                 Username=user_id
             )
-            
-            # Extract current attributes
-            current_attributes = {}
-            for attr in user_response.get('UserAttributes', []):
-                current_attributes[attr['Name']] = attr['Value']
-            
-            email = current_attributes.get('email')
-            phone = current_attributes.get('phone_number')
-            
-            logger.info(f"Retrieved user attributes - email: {email}, phone: {phone}")
-            
+            logger.info(f"Started the password reset flow for user {user_id}")
+            delivery_detail = "A password reset code has been sent to their email."
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'UserNotFoundException':
                 raise VAMSGeneralErrorResponse("User not found")
-            raise
-        
-        # Step 2: Delete the user
-        try:
-            cognito_client.admin_delete_user(
-                UserPoolId=user_pool_id,
-                Username=user_id
-            )
-            logger.info(f"Deleted user {user_id}")
-        except ClientError as e:
-            logger.exception(f"Error deleting user during reset: {e}")
-            raise VAMSGeneralErrorResponse("Error resetting password - could not delete user")
-        
-        # Step 3: Recreate the user with same email and phone
-        try:
-            user_attributes = [
-                {'Name': 'email', 'Value': email},
-                {'Name': 'email_verified', 'Value': 'true'}
-            ]
-            
-            if phone:
-                user_attributes.extend([
-                    {'Name': 'phone_number', 'Value': phone},
-                    {'Name': 'phone_number_verified', 'Value': 'true'}
-                ])
-            
+            if error_code not in ('NotAuthorizedException', 'InvalidParameterException'):
+                raise
+
+            # The reset code flow needs an account that has completed its first sign-in and
+            # has a verified email or phone; otherwise the invitation message is resent
+            logger.info(f"Password reset flow unavailable for user {user_id} ({error_code}), resending invitation")
             cognito_client.admin_create_user(
                 UserPoolId=user_pool_id,
                 Username=user_id,
-                UserAttributes=user_attributes,
+                MessageAction='RESEND',
                 DesiredDeliveryMediums=['EMAIL']
             )
-            logger.info(f"Recreated user {user_id} with new temporary password")
-            
-        except ClientError as e:
-            logger.exception(f"Error recreating user during reset: {e}")
-            raise VAMSGeneralErrorResponse("Error resetting password - could not recreate user")
-        
+            logger.info(f"Resent the invitation message for user {user_id}")
+            delivery_detail = "A new temporary password has been sent to their email."
+
         logger.info(f"Successfully reset password for Cognito user {user_id}")
-        
+
         now = datetime.utcnow().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
-            message=f"Password reset successfully for user {user_id}. A new temporary password has been sent to their email.",
+            message=f"Password reset successfully for user {user_id}. {delivery_detail}",
             userId=user_id,
             operation="resetPassword",
             timestamp=now
         )
-        
+
     except VAMSGeneralErrorResponse:
         # Re-raise VAMS errors
         raise
@@ -548,21 +517,33 @@ def handle_post_request(event):
             
             # Parse request body for confirmation
             body = event.get('body')
-            if body:
-                if isinstance(body, str):
-                    try:
-                        body = json.loads(body)
-                    except json.JSONDecodeError as e:
-                        logger.exception(f"Invalid JSON in request body: {e}")
-                        return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
-                
-                # Parse and validate reset request
+            if isinstance(body, str):
                 try:
-                    request_model = parse(body, model=ResetPasswordRequestModel)
-                except ValidationError as v:
-                    logger.exception(f"Validation error: {v}")
-                    return validation_error(body={'message': validation_error_message(v)}, event=event)
-            
+                    body = json.loads(body) if body.strip() else {}
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+
+            # An absent, null or empty body carries no confirmation
+            if body is None:
+                body = {}
+
+            if not isinstance(body, dict):
+                logger.error("Request body is not a string or dict")
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
+
+            # Parse and validate reset request
+            try:
+                request_model = parse(body, model=ResetPasswordRequestModel)
+            except ValidationError as v:
+                logger.exception(f"Validation error: {v}")
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
+
+            # The model default is not confirmation - the reset only runs when confirmReset is sent as true
+            if not request_model.confirmReset:
+                logger.error(f"Password reset for user {user_id} requested without confirmation")
+                return validation_error(body={'message': "confirmReset must be true to reset password"}, event=event)
+
             # Reset password
             result = reset_user_password(user_id, claims_and_roles)
             

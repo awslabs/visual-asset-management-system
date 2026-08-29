@@ -578,3 +578,35 @@ describe("WizardInputStage output path prefix help", () => {
         );
     });
 });
+
+/**
+ * The Input step is where files are chosen, so its restriction summary has to say when the resolution
+ * is still indicative. A step whose pipeline requires a template can be narrowed further by that
+ * template's `overrides` — which are only chosen on a LATER step — so dropping `templateKnown` on the
+ * way into resolveRestrictions presented a provisional answer as the final one, and the caveat wording
+ * that exists for exactly this case could never render here.
+ */
+describe("WizardInputStage template caveat", () => {
+    const constraints = (templateKnown?: boolean) => [
+        {
+            label: 'Pipeline "pipe1"',
+            systemConfig: { inputFileArity: "multi", requireTemplate: true } as any,
+            templateOverrides: undefined,
+            templateKnown,
+        },
+    ];
+
+    it("says the resolution can still narrow while a required template is unchosen", () => {
+        renderStage([], multiWorkflow(), { pipelineConstraints: constraints(false) });
+
+        expect(screen.getByText(/template can narrow these further/i)).toBeInTheDocument();
+    });
+
+    it("drops the caveat once every step's template is known", () => {
+        // Control: the wording is conditional, so the assertion above is only evidence if the same
+        // surface can also render WITHOUT it.
+        renderStage([], multiWorkflow(), { pipelineConstraints: constraints(true) });
+
+        expect(screen.queryByText(/template can narrow these further/i)).not.toBeInTheDocument();
+    });
+});

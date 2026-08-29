@@ -56,6 +56,57 @@ export interface CognitoWebNativeConstructStackProps extends cdk.StackProps {
     oidcSettings?: OidcSettings;
 }
 
+/** Name of the app client the web application authenticates against. */
+export const COGNITO_WEB_CLIENT_NAME = "WebClient";
+
+/** Token lifetimes and authentication flows declared on the web client. */
+export function cognitoWebClientTokenAndAuthFlowSettings(config: Config.Config) {
+    const credTokenTimeout = Duration.seconds(
+        config.app.authProvider.useCognito.credTokenTimeoutSeconds
+    );
+    return {
+        refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
+        accessTokenValidity: credTokenTimeout,
+        idTokenValidity: credTokenTimeout,
+        authFlows: {
+            userSrp: true,
+            custom: true,
+            userPassword: config.app.authProvider.useCognito.useUserPasswordAuthFlow,
+        },
+    };
+}
+
+/**
+ * The same settings as UpdateUserPoolClient request parameters.
+ *
+ * That API replaces the whole app client configuration: a parameter the request omits is set back to
+ * its Amazon Cognito default (30 days of refresh-token validity, 1 hour of access/ID token validity,
+ * and the SRP/custom/refresh auth flows). Any post-deploy update of the web client therefore has to
+ * send these alongside whatever it is changing. Durations are expressed in minutes to match what the
+ * `UserPoolClient` resource emits, so the two can be compared directly.
+ */
+export function cognitoWebClientUpdateParameters(config: Config.Config): Record<string, unknown> {
+    const settings = cognitoWebClientTokenAndAuthFlowSettings(config);
+    return {
+        ClientName: COGNITO_WEB_CLIENT_NAME,
+        RefreshTokenValidity: settings.refreshTokenValidity.toMinutes(),
+        AccessTokenValidity: settings.accessTokenValidity.toMinutes(),
+        IdTokenValidity: settings.idTokenValidity.toMinutes(),
+        TokenValidityUnits: {
+            RefreshToken: "minutes",
+            AccessToken: "minutes",
+            IdToken: "minutes",
+        },
+        // Order matches the list cognito.UserPoolClient builds from the same authFlows object.
+        ExplicitAuthFlows: [
+            ...(settings.authFlows.userPassword ? ["ALLOW_USER_PASSWORD_AUTH"] : []),
+            "ALLOW_CUSTOM_AUTH",
+            "ALLOW_USER_SRP_AUTH",
+            "ALLOW_REFRESH_TOKEN_AUTH",
+        ],
+    };
+}
+
 /**
  * Deploys Cognito with an Authenticated & UnAuthenticated Role with a Web and Native client
  */
@@ -223,20 +274,9 @@ export class CognitoWebNativeConstructStack extends Construct {
         const userPoolWebClient = new cognito.UserPoolClient(this, "UserPoolWebClient", {
             generateSecret: false,
             userPool: userPool,
-            userPoolClientName: "WebClient",
-            refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
-            accessTokenValidity: cdk.Duration.seconds(
-                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
-            ),
-            idTokenValidity: cdk.Duration.seconds(
-                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
-            ),
+            userPoolClientName: COGNITO_WEB_CLIENT_NAME,
             supportedIdentityProviders,
-            authFlows: {
-                userSrp: true,
-                custom: true,
-                userPassword: props.config.app.authProvider.useCognito.useUserPasswordAuthFlow,
-            },
+            ...cognitoWebClientTokenAndAuthFlowSettings(props.config),
         });
 
         // Ensure the web client is created after the OIDC identity provider so it

@@ -74,3 +74,74 @@ describe("WizardReviewStage", () => {
         expect(screen.getByText(/Template: tpl1/)).toBeInTheDocument();
     });
 });
+
+/**
+ * The output path prefix decides where every output file lands and is the hardest input to undo after
+ * a run, but it was collected on the Input step, sent on launch, and never shown on the confirmation
+ * screen — so neither a cleared value nor a mistyped tag was verifiable before launching.
+ */
+describe("WizardReviewStage output target", () => {
+    const renderReview = (props: Record<string, any> = {}) =>
+        render(
+            <WizardReviewStage
+                workflow={workflow}
+                databaseId="db1"
+                pipelines={[pipeline]}
+                pipelineData={{}}
+                inputFiles={[]}
+                validationErrors={{}}
+                {...props}
+            />
+        );
+
+    it("states the prefix the run will write under", () => {
+        renderReview({ outputPathPrefix: "/run/" });
+
+        expect(screen.getByText("Output Target")).toBeInTheDocument();
+        expect(screen.getByText(/Path prefix: \/run\//)).toBeInTheDocument();
+    });
+
+    it("spells out a cleared prefix rather than showing a blank", () => {
+        // "" is a deliberate write-at-the-asset-root, which a blank line cannot distinguish from a
+        // field nobody touched.
+        renderReview({ outputPathPrefix: "" });
+
+        expect(screen.getByText(/Path prefix: None \(asset root\)/)).toBeInTheDocument();
+    });
+
+    it("says the workflow default applies when the field was never touched", () => {
+        renderReview({ outputPathPrefix: undefined });
+
+        expect(screen.getByText(/Path prefix: \(workflow default\)/)).toBeInTheDocument();
+    });
+
+    it("shows the target for a run that overrode nothing", () => {
+        // Previously the whole block was withheld unless an output id was set, so a default-target run
+        // confirmed no destination at all.
+        renderReview({ outputPathPrefix: "/x/" });
+
+        expect(screen.getByText(/Asset: \(default\) \/ \(default\)/)).toBeInTheDocument();
+    });
+
+    it("omits the target for a results-only workflow", () => {
+        // Control: the block is conditional, so the assertions above are only evidence if it can also
+        // be absent — a results-only run writes no asset output and has no destination to confirm.
+        const resultsOnly: Workflow = {
+            ...workflow,
+            systemConfig: { outputTarget: { locationType: "none" } },
+        } as Workflow;
+
+        render(
+            <WizardReviewStage
+                workflow={resultsOnly}
+                databaseId="db1"
+                pipelines={[pipeline]}
+                pipelineData={{}}
+                inputFiles={[]}
+                validationErrors={{}}
+            />
+        );
+
+        expect(screen.queryByText("Output Target")).not.toBeInTheDocument();
+    });
+});

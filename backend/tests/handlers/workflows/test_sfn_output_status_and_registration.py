@@ -81,6 +81,17 @@ def _event(**overrides):
     return {"body": body}
 
 
+def _collecting_table(puts):
+    """A table stub that collects written items from EITHER write mode -- one-at-a-time put_item or a
+    batch_writer context -- so an assertion about WHICH rows were written does not also pin HOW the
+    recording batched them."""
+    table = MagicMock()
+    table.put_item.side_effect = lambda Item: puts.append(Item)
+    table.batch_writer.return_value.__enter__.return_value.put_item.side_effect = (
+        lambda Item: puts.append(Item))
+    return table
+
+
 def _asset_patches():
     return (
         patch.object(po, "lookup_existing_asset",
@@ -172,8 +183,7 @@ class TestOutputFileBucketPairing:
 
     def test_recorded_row_prefers_the_descriptor_bucket_over_the_asset_bucket(self):
         puts = []
-        table = MagicMock()
-        table.put_item.side_effect = lambda Item: puts.append(Item)
+        table = _collecting_table(puts)
         dynamo = MagicMock(Table=MagicMock(return_value=table))
         po.record_execution_outputs(
             dynamo=dynamo, workflow_execution_id="E1", end_state_pipeline_execution_id="P1",
@@ -188,8 +198,7 @@ class TestOutputFileBucketPairing:
 
     def test_falls_back_to_bucket_name_when_descriptor_has_none(self):
         puts = []
-        table = MagicMock()
-        table.put_item.side_effect = lambda Item: puts.append(Item)
+        table = _collecting_table(puts)
         dynamo = MagicMock(Table=MagicMock(return_value=table))
         po.record_execution_outputs(
             dynamo=dynamo, workflow_execution_id="E1", end_state_pipeline_execution_id="P1",

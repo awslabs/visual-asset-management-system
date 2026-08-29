@@ -235,7 +235,7 @@ vamscli api-key list --json-output
 
 **Resolution:**
 
-The admin `api-key create` command requires `--name`, `--user-id`, and `--description`. The API key name must match the pattern `[a-zA-Z0-9\-._\s]\{1,256\}`. Re-run with `--verbose` for full request and response detail.
+The admin `api-key create` command requires `--name`, `--user-id`, and `--description`. The API key name must match the pattern `[a-zA-Z0-9\-._\s]{1,256}`. Re-run with `--verbose` for full request and response detail.
 
 ```bash
 vamscli api-key create \

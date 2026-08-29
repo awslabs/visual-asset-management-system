@@ -530,6 +530,6 @@ vamscli assets create -d my-db --name "Bob Asset" --profile bob
 
 ## Troubleshooting
 
-For authentication troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+For authentication troubleshooting, see [CLI setup and authentication troubleshooting](https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth).
 
-For general command usage, see [COMMANDS.md](COMMANDS.md).
+For general command usage, see [Command Reference](https://awslabs.github.io/visual-asset-management-system/cli/command-reference).

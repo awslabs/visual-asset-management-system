@@ -95,7 +95,7 @@ only the specific failure message (the Step Functions error and cause) and is se
 terminal status.
 
 `executionError` is the broadly visible message. Full log retrieval is scoped to a separate, narrower
-route (`GET /workflows/executions/\{executionId\}/logs`), which the shipped Database User and read-only
+route (`GET /workflows/executions/{executionId}/logs`), which the shipped Database User and read-only
 permission templates deny; both fields are passed through log redaction before they leave the handler.
 
 ## Which record populates when
@@ -139,7 +139,7 @@ Treat them as reserved rather than as a data source.
 
 A pipeline step may report the lower-level resources it created — its Step Functions sub-execution and its
 CloudWatch log locations — by putting an event on the orchestration event bus under the source prefix
-`\{eventSourcePrefix\}.execution.\{executionId\}.pipeline.\{pipelineExecutionId\}` with the detail type
+`{eventSourcePrefix}.execution.{executionId}.pipeline.{pipelineExecutionId}` with the detail type
 `pipeline.execution.register`. A standing Amazon EventBridge rule routes the event to
 `registerPipelineExecution`, which appends the reported resources to the targeted pipeline row's
 `registeredSubExecutions` and `registeredLogs` lists.
@@ -164,8 +164,8 @@ uses — but it is what makes two capabilities work:
    which sets the matching `*Truncated` flag and leaves the complete body in Amazon S3.
 3. Enforce both authorization tiers. Execution reads and aborts authorize through
    `authorize_execution_access`, which requires `GET` on the workflow, the matching action on every asset
-   the run read (or wrote to, for a run with no inputs), and `GET` on every database the run captured
-   metadata from.
+   the run read and on the asset it wrote to, and `GET` on every database the run captured metadata
+   from.
 4. Never return a partially populated collection without flagging it. Every response that bounds a
    collection names what it dropped in `truncatedCollections` so the caller can page the remainder through
-   `GET /workflows/executions/\{executionId\}/details/metadata`.
+   `GET /workflows/executions/{executionId}/details/metadata`.

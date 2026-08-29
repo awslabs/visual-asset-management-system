@@ -32,6 +32,37 @@ def _s3_put_record(bucket, key, event_name="ObjectCreated:Put"):
     }
 
 
+def _version_probe(entries_by_key):
+    """Stub for ``_s3.list_object_versions``, keyed by the probed ``Prefix``.
+
+    A key absent from the map answers with neither ``Versions`` nor
+    ``DeleteMarkers`` — exactly what S3 returns for a key it no longer holds.
+    Every test that reaches the version probe must supply this, because the
+    module-level ``_s3`` is a real boto3 client: leaving it unstubbed makes a
+    live ``list_object_versions`` call whose outcome depends on ambient
+    credentials rather than on the code under test.
+    """
+
+    def _probe(**kwargs):
+        return entries_by_key.get(kwargs.get("Prefix"), {})
+
+    return _probe
+
+
+def _delete_marker_over_live_version(key):
+    """Version listing for an ARCHIVED object: a delete marker is the latest
+    entry but the live version it hides is still there, so an unarchive can
+    restore the file."""
+    return {
+        key: {
+            "Versions": [{"Key": key, "VersionId": "v-live", "IsLatest": False}],
+            "DeleteMarkers": [
+                {"Key": key, "VersionId": "v-marker", "IsLatest": True}
+            ],
+        }
+    }
+
+
 @pytest.mark.unit
 class TestFileUpload:
     def test_unsupported_extension_is_skipped(self):
@@ -428,10 +459,14 @@ class TestFileVersionTracking:
         s3_download.assert_not_called()
         delete_stale.assert_not_called()
         update_meta.assert_called_once()
-        # Metadata refresh path uses file_version=None (preserve existing)
+        # The refresh must SEND the version key. `_update_physna_metadata` is a full replace: it
+        # deletes every Physna key the payload does not carry, so omitting the version key removes
+        # it rather than preserving it — and a file with no version routes the next sync into the
+        # delete-and-re-upload path. The value carried is the one Physna already holds, which in
+        # this branch equals the object's current S3 version by the branch condition.
         _client, _fp, uuid_arg, payload = update_meta.call_args.args
         assert uuid_arg == "uuid-1"
-        assert "__VAMS__FileVersion" not in payload
+        assert payload["__VAMS__FileVersion"] == "v-abc"
 
     def test_delete_and_reupload_when_file_version_differs(self, monkeypatch):
         physnaFileSync = self._setup_upload_mocks(
@@ -606,10 +641,12 @@ class TestS3MissingObjectReconciliation:
         )
 
     def test_missing_s3_object_deletes_stale_physna_copy(self, monkeypatch):
-        """The canonical case: VAMS event fires for an S3 key whose object
-        has already been removed, but Physna still has a copy from a prior
-        upload. The handler must issue a DELETE against Physna so the two
-        sides converge, then return True so the batch record is ack'd."""
+        """The canonical case: VAMS event fires for an S3 key whose object has
+        been permanently removed — every version purged, so the version probe
+        finds nothing under any spelling of the key — but Physna still has a
+        copy from a prior upload. The handler must issue a DELETE against
+        Physna so the two sides converge, then return True so the batch
+        record is ack'd."""
         physnaFileSync = self._setup(monkeypatch, physna_has_asset=True)
         client = MagicMock()
 
@@ -617,6 +654,10 @@ class TestS3MissingObjectReconciliation:
             physnaFileSync._s3,
             "download_file",
             side_effect=self._no_such_key_error(),
+        ), patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=_version_probe({}),
         ), patch.object(
             physnaFileSync, "_delete_physna_asset_by_uuid"
         ) as reconcile_delete, patch.object(
@@ -630,6 +671,86 @@ class TestS3MissingObjectReconciliation:
         reconcile_delete.assert_called_once()
         # We bailed out before the metadata PATCH — nothing to update with.
         update_meta.assert_not_called()
+
+    def test_key_spelling_mismatch_does_not_delete(self, monkeypatch):
+        """The reconcile-delete must not fire on an absence measured under a
+        different spelling of the key than the one S3 holds.
+
+        Event sources deliver keys URL-encoded or literal, and keys composed
+        from VAMS records carry whichever form VAMS stored, so a filename
+        containing '+' is downloaded under one spelling while S3 holds it
+        under the other. The download 404s, but the object exists — deleting
+        the Physna copy there destroys indexed geometry for a live file. The
+        version probe therefore covers every spelling of the key and an entry
+        under any of them preserves the copy."""
+        physnaFileSync = self._setup(monkeypatch, physna_has_asset=True)
+        client = MagicMock()
+
+        composed_key = "prefix/asset-1/PART+A.step"
+        # The spelling S3 actually holds: unquote_plus(composed_key).
+        stored_key = "prefix/asset-1/PART A.step"
+
+        with patch.object(
+            physnaFileSync._s3,
+            "download_file",
+            side_effect=self._no_such_key_error(),
+        ), patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=_version_probe(
+                {
+                    stored_key: {
+                        "Versions": [{"Key": stored_key, "VersionId": "v-live"}]
+                    }
+                }
+            ),
+        ) as probe, patch.object(
+            physnaFileSync, "_delete_physna_asset_by_uuid"
+        ) as reconcile_delete:
+            ok = physnaFileSync._upload_file_to_physna(
+                "db-1",
+                "asset-1",
+                "/PART+A.step",
+                "bucket",
+                composed_key,
+                client=client,
+            )
+
+        assert ok is True
+        reconcile_delete.assert_not_called()
+        # The probe must have covered BOTH spellings — otherwise the absence of
+        # a delete would prove nothing about which spelling was measured.
+        probed_prefixes = [c.kwargs["Prefix"] for c in probe.call_args_list]
+        assert composed_key in probed_prefixes
+        assert stored_key in probed_prefixes
+
+    def test_head_resolvable_object_is_not_reconcile_deleted(self, monkeypatch):
+        """A HeadObject that resolves an S3 VersionId while the download 404s
+        means S3 holds the object under a spelling the download did not use.
+        That is a key mismatch, not a deletion, so the Physna copy stays."""
+        physnaFileSync = self._setup(monkeypatch, physna_has_asset=True)
+        monkeypatch.setattr(
+            physnaFileSync, "_get_s3_version_id", lambda b, k: "v-live"
+        )
+        client = MagicMock()
+
+        with patch.object(
+            physnaFileSync._s3,
+            "download_file",
+            side_effect=self._no_such_key_error(),
+        ), patch.object(
+            physnaFileSync._s3, "list_object_versions"
+        ) as probe, patch.object(
+            physnaFileSync, "_delete_physna_asset_by_uuid"
+        ) as reconcile_delete:
+            ok = physnaFileSync._upload_file_to_physna(
+                "db-1", "asset-1", "/part.step", "bucket", "bucket/key", client=client
+            )
+
+        assert ok is True
+        reconcile_delete.assert_not_called()
+        # The version read already answered "present"; no probe needed.
+        probe.assert_not_called()
 
     def test_missing_s3_object_with_no_physna_copy_is_a_clean_noop(self, monkeypatch):
         """If S3 and Physna are both empty for this path we simply ack the
@@ -1029,11 +1150,33 @@ class TestObjectRemovedSkipsHeadObject:
     """S3 ObjectRemoved events must reach _delete_physna_asset even when
     head_object 404s — which is the norm, since the object is gone by the
     time the event fires. Before this fix, the head_object 404 aborted
-    the resolver and the delete never ran."""
+    the resolver and the delete never ran.
+
+    The event NAME does not decide whether the Physna copy goes: archive,
+    unarchive, and permanent delete all emit ObjectRemoved. The remaining S3
+    version state is what separates them, so every test here scripts it.
+    """
+
+    ARCHIVED_KEY = "xABC/archived.glb"
+
+    @staticmethod
+    def _resolver(relative):
+        def _resolve(bucket, key):
+            return {
+                "databaseId": "db-1",
+                "assetId": "xABC",
+                "relativePath": relative,
+                "bucketName": bucket,
+                "s3Key": key,
+            }
+
+        return _resolve
 
     def test_object_removed_triggers_delete_despite_head_object_404(
         self, monkeypatch
     ):
+        """Permanent delete: every version is purged, so the version probe
+        answers "nothing left" and the Physna copy is an orphan."""
         from backend.backend.handlers.addon.physna import physnaFileSync
 
         # Rig the head_object helper to 404 — same as the incident log.
@@ -1046,13 +1189,7 @@ class TestObjectRemovedSkipsHeadObject:
         monkeypatch.setattr(
             physnaFileSync,
             "_resolve_asset_from_s3_key_without_metadata",
-            lambda bucket, key: {
-                "databaseId": "db-1",
-                "assetId": "xABC",
-                "relativePath": "/part.glb",
-                "bucketName": bucket,
-                "s3Key": key,
-            },
+            self._resolver("/part.glb"),
         )
 
         event = _sns_sqs_event(
@@ -1060,6 +1197,10 @@ class TestObjectRemovedSkipsHeadObject:
         )
 
         with patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=_version_probe({}),
+        ), patch.object(
             physnaFileSync, "_delete_physna_asset"
         ) as do_delete, patch.object(
             physnaFileSync, "PhysnaClient"
@@ -1078,39 +1219,95 @@ class TestObjectRemovedSkipsHeadObject:
         assert asset == "xABC"
         assert rel == "/part.glb"
 
-    def test_delete_marker_created_event_also_triggers_physna_delete(
+    def test_delete_marker_over_live_versions_does_not_delete(
         self, monkeypatch
     ):
-        """VAMS treats archive (soft delete, ``ObjectRemoved:
-        DeleteMarkerCreated``) the same as permanent delete for Physna:
-        the file is no longer accessible in VAMS, so the Physna copy
-        should be removed. The handler's ``event_name.startswith
-        ("ObjectRemoved")`` check must cover BOTH delete shapes."""
+        """Archive (soft delete, ``ObjectRemoved:DeleteMarkerCreated``) writes
+        a delete marker OVER the live versions, and unarchive removes that
+        marker. Versions remain, so the file is restorable and the Physna
+        copy — indexed geometry that no re-upload can rebuild from bytes that
+        are not readable — must survive. The event is still resolved and the
+        record still ack'd; only the delete is withheld."""
         from backend.backend.handlers.addon.physna import physnaFileSync
+
+        resolved = {"count": 0}
+
+        def resolver(bucket, key):
+            resolved["count"] += 1
+            return self._resolver("/archived.glb")(bucket, key)
 
         monkeypatch.setattr(
             physnaFileSync,
             "_resolve_asset_from_s3_key_without_metadata",
-            lambda bucket, key: {
-                "databaseId": "db-1",
-                "assetId": "xABC",
-                "relativePath": "/archived.glb",
-                "bucketName": bucket,
-                "s3Key": key,
-            },
+            resolver,
         )
 
         event = _sns_sqs_event(
             [
                 _s3_put_record(
                     "vams-bucket",
-                    "xABC/archived.glb",
+                    self.ARCHIVED_KEY,
                     event_name="ObjectRemoved:DeleteMarkerCreated",
                 )
             ]
         )
 
         with patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=_version_probe(
+                _delete_marker_over_live_version(self.ARCHIVED_KEY)
+            ),
+        ), patch.object(
+            physnaFileSync, "_delete_physna_asset"
+        ) as do_delete, patch.object(
+            physnaFileSync, "PhysnaClient"
+        ), patch.object(
+            physnaFileSync.logger, "info"
+        ) as log_info:
+            response = physnaFileSync.lambda_handler(event, MagicMock())
+
+        # The ObjectRemoved branch still ran — the metadata-free resolver is
+        # only reached from there — and the record was ack'd, not dropped.
+        assert resolved["count"] == 1
+        assert response["statusCode"] == 200
+        assert response["body"]["successful"] == 1
+        do_delete.assert_not_called()
+        log_messages = " ".join(str(c.args[0]) for c in log_info.call_args_list)
+        assert "still holds versions" in log_messages
+        assert "Keeping the Physna copy" in log_messages
+
+    def test_delete_marker_created_with_every_version_purged_does_delete(
+        self, monkeypatch
+    ):
+        """The same ``DeleteMarkerCreated`` event shape as above, with the
+        opposite S3 version state: nothing is left under the key, so this is a
+        permanent delete whose archive event arrived late and the Physna copy
+        IS reconciled. Pairs with the test above to show the version state,
+        not the event name, is what decides."""
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        monkeypatch.setattr(
+            physnaFileSync,
+            "_resolve_asset_from_s3_key_without_metadata",
+            self._resolver("/archived.glb"),
+        )
+
+        event = _sns_sqs_event(
+            [
+                _s3_put_record(
+                    "vams-bucket",
+                    self.ARCHIVED_KEY,
+                    event_name="ObjectRemoved:DeleteMarkerCreated",
+                )
+            ]
+        )
+
+        with patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=_version_probe({}),
+        ), patch.object(
             physnaFileSync, "_delete_physna_asset"
         ) as do_delete, patch.object(
             physnaFileSync, "PhysnaClient"
@@ -1123,6 +1320,48 @@ class TestObjectRemovedSkipsHeadObject:
         assert db == "db-1"
         assert asset == "xABC"
         assert rel == "/archived.glb"
+
+    def test_unreadable_version_state_preserves_the_physna_copy(
+        self, monkeypatch
+    ):
+        """When no spelling of the key can be read at all the probe answers
+        None, which callers must treat as "leave the Physna copy in place" —
+        an unreadable version state is not evidence of a deletion."""
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        monkeypatch.setattr(
+            physnaFileSync,
+            "_resolve_asset_from_s3_key_without_metadata",
+            self._resolver("/archived.glb"),
+        )
+
+        event = _sns_sqs_event(
+            [
+                _s3_put_record(
+                    "vams-bucket",
+                    self.ARCHIVED_KEY,
+                    event_name="ObjectRemoved:Delete",
+                )
+            ]
+        )
+
+        with patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=RuntimeError("version listing unavailable"),
+        ), patch.object(
+            physnaFileSync, "_delete_physna_asset"
+        ) as do_delete, patch.object(
+            physnaFileSync, "PhysnaClient"
+        ), patch.object(
+            physnaFileSync.logger, "info"
+        ) as log_info:
+            response = physnaFileSync.lambda_handler(event, MagicMock())
+
+        assert response["statusCode"] == 200
+        do_delete.assert_not_called()
+        log_messages = " ".join(str(c.args[0]) for c in log_info.call_args_list)
+        assert "could not be read" in log_messages
 
     def test_non_remove_events_still_use_head_object_resolver(
         self, monkeypatch
@@ -1162,3 +1401,187 @@ class TestObjectRemovedSkipsHeadObject:
 
         assert called["metadata_free"] == 0
         assert called["metadata_backed"] == 1
+
+
+@pytest.mark.unit
+class TestVersionProbeAbsenceIsConclusive:
+    """The version probe is the whole of the evidence for a Physna delete, so
+    "absent" must mean every spelling of the key was read successfully and none
+    of them held an entry. A spelling that could not be read is an unknown, and
+    an unknown mixed with empties is still an unknown.
+
+    The key here carries a space, which is what makes the spelling set larger
+    than one entry — and therefore what makes a partial read possible at all.
+    """
+
+    KEY_WITH_SPACE = "xABC/PART A.glb"
+
+    @staticmethod
+    def _spellings(key):
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        return physnaFileSync._s3_key_spellings(key)
+
+    @staticmethod
+    def _throttled():
+        from botocore.exceptions import ClientError
+
+        return ClientError(
+            error_response={
+                "Error": {"Code": "SlowDown", "Message": "Please reduce your request rate."},
+                "ResponseMetadata": {"HTTPStatusCode": 503},
+            },
+            operation_name="ListObjectVersions",
+        )
+
+    def _run_object_removed(self, monkeypatch, key, probe_side_effect):
+        """Drive one ObjectRemoved event through the handler.
+
+        Returns the ``_delete_physna_asset`` mock and the list of ``Prefix``
+        values the version probe was actually asked for, so a test can assert
+        both the decision and the evidence it rested on.
+        """
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        monkeypatch.setattr(
+            physnaFileSync,
+            "_resolve_asset_from_s3_key_without_metadata",
+            lambda bucket, s3_key: {
+                "databaseId": "db-1",
+                "assetId": "xABC",
+                "relativePath": "/PART A.glb",
+                "bucketName": bucket,
+                "s3Key": s3_key,
+            },
+        )
+
+        event = _sns_sqs_event(
+            [_s3_put_record("vams-bucket", key, event_name="ObjectRemoved:Delete")]
+        )
+
+        with patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=probe_side_effect,
+        ) as probe, patch.object(
+            physnaFileSync, "_delete_physna_asset"
+        ) as do_delete, patch.object(
+            physnaFileSync, "PhysnaClient"
+        ):
+            response = physnaFileSync.lambda_handler(event, MagicMock())
+
+        assert response["statusCode"] == 200
+        return do_delete, [c.kwargs["Prefix"] for c in probe.call_args_list]
+
+    def test_an_unreadable_spelling_makes_the_answer_unknown(self):
+        """One spelling that errors plus one that answers cleanly-empty is not
+        an absence — the object may be the one the unread spelling names.
+
+        The control is the same data with the error removed: identical empties,
+        no error, and the answer becomes a definite False. Without that pairing
+        the None could come from the probe never reading anything at all.
+        """
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        spellings = self._spellings(self.KEY_WITH_SPACE)
+        assert len(spellings) > 1, (
+            "the partial-read case needs a key that spells more than one way"
+        )
+        empty = _version_probe({})
+
+        def one_spelling_errors(**kwargs):
+            if kwargs.get("Prefix") == spellings[0]:
+                raise self._throttled()
+            return empty(**kwargs)
+
+        with patch.object(
+            physnaFileSync._s3,
+            "list_object_versions",
+            side_effect=one_spelling_errors,
+        ):
+            assert (
+                physnaFileSync._vams_file_still_in_s3(
+                    "vams-bucket", [self.KEY_WITH_SPACE]
+                )
+                is None
+            )
+
+        with patch.object(
+            physnaFileSync._s3, "list_object_versions", side_effect=empty
+        ):
+            assert (
+                physnaFileSync._vams_file_still_in_s3(
+                    "vams-bucket", [self.KEY_WITH_SPACE]
+                )
+                is False
+            )
+
+    def test_an_unreadable_spelling_does_not_delete(self, monkeypatch):
+        """A transient S3 error on one spelling must not destroy the Physna
+        copy of a file that exists. The remaining spellings answer "nothing
+        here", which on its own would read as a permanent delete."""
+        spellings = self._spellings(self.KEY_WITH_SPACE)
+        empty = _version_probe({})
+
+        def one_spelling_errors(**kwargs):
+            if kwargs.get("Prefix") == spellings[0]:
+                raise self._throttled()
+            return empty(**kwargs)
+
+        do_delete, probed = self._run_object_removed(
+            monkeypatch, self.KEY_WITH_SPACE, one_spelling_errors
+        )
+
+        do_delete.assert_not_called()
+        # The error did not abort the probe: the other spellings were asked and
+        # answered empty, so the preserved copy is the unread spelling's doing
+        # rather than a short circuit that measured nothing.
+        assert set(probed) >= set(spellings)
+
+    def test_a_key_held_under_the_literal_plus_spelling_is_not_deleted(
+        self, monkeypatch
+    ):
+        """S3 holds "PART+A.glb" while the key VAMS composed reads "PART A.glb".
+
+        Ingestion decodes a form-encoded event key with ``unquote_plus``, and a
+        literal '+' in a filename decodes to a space the same way an encoded
+        space does — so the stored path can carry a space for an object S3
+        holds with a '+'. That object exists; measuring it as absent deletes a
+        live file's indexed geometry."""
+        stored_key = "xABC/PART+A.glb"
+        assert stored_key in self._spellings(self.KEY_WITH_SPACE), (
+            "the literal-'+' spelling must be in the probe set for this case "
+            "to be reachable at all"
+        )
+
+        do_delete, probed = self._run_object_removed(
+            monkeypatch,
+            self.KEY_WITH_SPACE,
+            _version_probe(
+                {stored_key: {"Versions": [{"Key": stored_key, "VersionId": "v-live"}]}}
+            ),
+        )
+
+        do_delete.assert_not_called()
+        assert stored_key in probed
+
+    def test_absent_under_every_spelling_still_deletes(self, monkeypatch):
+        """POSITIVE CONTROL: reconciliation is the feature.
+
+        Every spelling was read successfully and none held a version or a
+        delete marker, so the object really is permanently gone and the Physna
+        copy is an orphan. Without this test, "does not delete" is satisfied by
+        a handler that never reconciles anything."""
+        spellings = self._spellings(self.KEY_WITH_SPACE)
+
+        do_delete, probed = self._run_object_removed(
+            monkeypatch, self.KEY_WITH_SPACE, _version_probe({})
+        )
+
+        do_delete.assert_called_once()
+        assert do_delete.call_args.kwargs.get("skip_s3_existence_check") is True
+        _client, db, asset, rel = do_delete.call_args.args
+        assert (db, asset, rel) == ("db-1", "xABC", "/PART A.glb")
+        # Every spelling was evaluated — that is what makes the absence
+        # conclusive rather than a single lucky empty answer.
+        assert set(probed) == set(spellings)

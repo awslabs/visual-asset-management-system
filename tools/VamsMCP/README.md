@@ -63,7 +63,9 @@ vams-mcp        # stdio transport; uses your active vamscli profile
 
 ## Configure (optional)
 
-All configuration is via environment variables — none are required (see `.env.example`):
+All configuration is via environment variables — none are required. Set them in the `env` block
+of your MCP host's server entry (see the `mcpServers` sample below); no `.env` file is read.
+`.env.example` lists every supported variable for reference.
 
 | Variable                  | Description                                                          |
 | ------------------------- | -------------------------------------------------------------------- |
@@ -146,7 +148,11 @@ cross-asset list. A workflow id is unique only within its database, so pass both
 filters when the same id exists in more than one (`GLOBAL` is the shared catalog).
 `list_executions` echoes the applied `filterStartDate` window (90 days back by
 default) and surfaces a `warnings` array — plus `truncated` — when a page withheld
-rows it could not evaluate, so a short list is never mistaken for a complete one.
+rows, either because it reached its cap on distinct assets resolved for permission
+checks or because it spent its per-request work budget, so a short list is never
+mistaken for a complete one. Its rows are also permission-filtered on the asset
+each run WROTE to, so a run whose output landed somewhere the user cannot read is
+absent even when its inputs are readable.
 
 `list_workflows` takes `include_archived` (default off, matching `list_pipelines`
 and `list_assets`); it is how an archived workflow's id is found in order to
@@ -155,7 +161,22 @@ restore it with `unarchive_workflow`.
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
 a 403 mid-task. `search_assets` and `search_files` accept a `geo_search` filter
-(point + radius, bounding box, or GeoJSON) against the `geo_MD_location` field.
+(point + radius, bounding box, or GeoJSON) against the `geo_MD_location` field,
+plus `from_offset` for paging past `size` hits and `sort_field` / `sort_desc` for
+ordering by an indexed field instead of relevance (relevance order cannot answer
+"the newest N"). `database_id` is matched on `str_databaseid.keyword`, so a
+database whose id is a hyphen-token prefix of another (`proj` vs `proj-archive`)
+does not leak into the results; `GLOBAL` is not an asset database and is treated
+as unscoped.
+
+**Every paginated list tool is BOUNDED.** The walk stops at `max_items`, or at the
+`VAMS_MAX_PAGES` work bound, whichever comes first. The result then carries
+`truncated: true`, a `note` naming which bound fired, and — when a continuation
+token remains — `NextToken`. Pass that token back as the tool's `starting_token`
+to continue. A `truncated` result must never be used to report a count or to
+conclude that something does not exist. `find_and_summarize` issues one extra
+paginated request per hit, so its `size` is clamped to 25; use
+`search_assets(from_offset=...)` to page a larger result set.
 
 ### Write (require `VAMS_ENABLE_WRITES=true`)
 
@@ -169,9 +190,11 @@ Pipelines, workflows, and executions: `create_pipeline`, `update_pipeline`,
 `abort_execution`.
 
 `execute_workflow`, `rerun_execution`, and the pipelines they launch start real
-AWS compute and can incur cost. Keep them out of `autoApprove`. `rerun_execution`
-re-runs ONE execution; its `execution_group_id` assigns the new execution's group
-membership rather than selecting a group to re-run.
+AWS compute and can incur cost. `abort_execution` irreversibly STOPS running
+compute and, with `group_id`, fans out across every active execution in that group.
+Keep all three out of `autoApprove`, and confirm a group abort with the user first.
+`rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
+execution's group membership rather than selecting a group to re-run.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
@@ -197,6 +220,13 @@ but still not runnable. `delete_pipeline_template`, `delete_workflow_trigger`, a
 -   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC).
 -   Writes and destructive tools are **off by default**. Keep destructive tools
     out of `autoApprove`.
+-   `generate_download_url` returns a presigned Amazon S3 URL, which is a bearer
+    credential: it needs no further authentication and anyone holding it can
+    download the object until it expires (`app.authProvider.presignedUrlTimeoutSeconds`,
+    24 hours by default). Because it is returned as tool output it also lands in
+    the host's conversation log and telemetry. Where the URL can be used is
+    bounded only by the deployment's
+    `app.assetBuckets.presignedUrlNetworkRestrictions`, which is unset by default.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
 

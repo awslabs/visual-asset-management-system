@@ -4,10 +4,16 @@
 """Tests for the auth routes handler (web route checks + API route listing)."""
 
 import json
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 
 from backend.backend.handlers.auth.routes import lambda_handler
+
+# The bulk route checks flush their batched denial audit records through
+# get_log_group_name, which resolves an env-var override ahead of any SSM lookup. Seeding
+# the audit log-group name keeps that resolution offline.
+os.environ.setdefault("AUDIT_LOG_AUTHORIZATION", "test-auditAuthorization")
 
 
 def _make_event(method='POST', path='/auth/routes', body=None):
@@ -53,7 +59,9 @@ class TestCheckWebRoutes:
     def test_allowed_and_denied_routes(self, mock_casbin, mock_claims):
         mock_claims.return_value = dict(_CLAIMS)
         mock_enforcer = MagicMock()
-        mock_enforcer.enforce.side_effect = [True, False]
+        # The route loop batches its denial audit records, so it runs each check against
+        # the enforcer's service object rather than through CasbinEnforcer.enforce.
+        mock_enforcer.service_object.enforce.side_effect = [True, False]
         mock_casbin.return_value = mock_enforcer
 
         event = _make_event(body={
@@ -158,7 +166,9 @@ class TestGetAllowedApiRoutes:
         def fake_enforce(obj, act):
             return obj.get('route__path') == '/database' and act == 'GET'
 
-        mock_enforcer.enforce.side_effect = fake_enforce
+        # The route loop batches its denial audit records, so it runs each check against
+        # the enforcer's service object rather than through CasbinEnforcer.enforce.
+        mock_enforcer.service_object.enforce.side_effect = fake_enforce
         mock_casbin.return_value = mock_enforcer
 
         event = _make_event(method='GET', path='/auth/routes/api/allowed')

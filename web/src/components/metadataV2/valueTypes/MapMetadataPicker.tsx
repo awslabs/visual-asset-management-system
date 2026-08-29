@@ -6,17 +6,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Map, { MapMouseEvent, MapRef, Marker, NavigationControl } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
-import {
-    Alert,
-    Box,
-    Button,
-    ButtonGroup,
-    FormField,
-    Header,
-    Input,
-    Select,
-    SpaceBetween,
-} from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import ButtonGroup from "@cloudscape-design/components/button-group";
+import FormField from "@cloudscape-design/components/form-field";
+import Header from "@cloudscape-design/components/header";
+import Input from "@cloudscape-design/components/input";
+import Select from "@cloudscape-design/components/select";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import { appCache } from "../../../services/appCache";
 import { featuresEnabled } from "../../../common/constants/featuresEnabled";
 

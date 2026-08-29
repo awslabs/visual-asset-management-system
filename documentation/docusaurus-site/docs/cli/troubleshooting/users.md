@@ -77,7 +77,7 @@ The specified user does not exist in the Amazon Cognito user pool, or the user I
 3. Verify you are operating against the intended profile, since each profile targets a different deployment:
 
     ```bash
-    vamscli --profile \{profile-name\} user cognito list
+    vamscli --profile {profile-name} user cognito list
     ```
 
 ### User Already Exists
@@ -184,13 +184,13 @@ Your account lacks the permissions required for user management operations, whic
 2. Re-authenticate if your session may have expired:
 
     ```bash
-    vamscli auth login -u \{your-username\}
+    vamscli auth login -u {your-username}
     ```
 
 3. If you use an override token, ensure it carries the required permissions:
 
     ```bash
-    vamscli auth set-override --token \{new-token\}
+    vamscli auth set-override --token {new-token}
     ```
 
 4. If the problem persists, ask your VAMS administrator to verify your role grants user management permissions.

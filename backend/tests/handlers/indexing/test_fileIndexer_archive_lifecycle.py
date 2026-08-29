@@ -224,26 +224,237 @@ class TestUnarchiveNotTreatedAsPermanentDelete:
 
 
 @pytest.mark.unit
+class TestSplitAssetKey:
+    """Object keys are ``{baseAssetsPrefix}{assetId}/{filePath}``. The prefix has to come
+    off before the first remaining component is the asset ID — the property that fails for
+    every bucket registered below the root."""
+
+    def test_root_bucket(self, fileIndexer):
+        assert fileIndexer.split_asset_key("a1/file.txt", "/") == ("a1", "/file.txt")
+
+    def test_root_bucket_empty_and_none_prefix(self, fileIndexer):
+        assert fileIndexer.split_asset_key("a1/f.txt", "") == ("a1", "/f.txt")
+        assert fileIndexer.split_asset_key("a1/f.txt", None) == ("a1", "/f.txt")
+
+    def test_non_root_prefix_is_removed_first(self, fileIndexer):
+        # Splitting the raw key would give ("prefix-a", "/a1/folder/file.txt").
+        assert fileIndexer.split_asset_key(
+            "prefix-a/a1/folder/file.txt", "prefix-a/") == ("a1", "/folder/file.txt")
+
+    def test_prefix_accepted_in_any_registered_form(self, fileIndexer):
+        for prefix in ("prefix-a", "prefix-a/", "/prefix-a", "/prefix-a/"):
+            assert fileIndexer.split_asset_key("prefix-a/a1/f.txt", prefix) == ("a1", "/f.txt")
+
+    def test_multi_segment_prefix(self, fileIndexer):
+        assert fileIndexer.split_asset_key(
+            "team/vams/a1/f.txt", "team/vams/") == ("a1", "/f.txt")
+
+    def test_key_with_no_path_below_the_asset_folder(self, fileIndexer):
+        assert fileIndexer.split_asset_key("a1", "/") == (None, None)
+        assert fileIndexer.split_asset_key("prefix-a/a1", "prefix-a/") == (None, None)
+
+    def test_prefix_that_does_not_fit_the_key_is_not_applied(self, fileIndexer):
+        # Never strip a prefix the key does not carry -- that would eat real path segments.
+        assert fileIndexer.split_asset_key("a1/f.txt", "other/") == ("a1", "/f.txt")
+
+
+@pytest.mark.unit
+class TestResolveRegisteredBucketPrefix:
+    """Which prefix an object sits under must be resolved, never assumed to be the root:
+    the root is also what an absent value defaults to, and treating a non-root bucket as
+    root reads the prefix's first segment as the asset ID."""
+
+    def _buckets_table(self, fileIndexer, *prefixes):
+        fileIndexer.s3_asset_buckets_table = MagicMock()
+        fileIndexer.s3_asset_buckets_table.query.return_value = {
+            "Items": [{"bucketName": "bucket", "baseAssetsPrefix": p} for p in prefixes]
+        }
+        return fileIndexer.s3_asset_buckets_table
+
+    def test_non_root_event_prefix_that_fits_is_taken_without_a_lookup(self, fileIndexer):
+        table = self._buckets_table(fileIndexer, "/")
+        assert fileIndexer.resolve_registered_bucket_prefix(
+            "bucket", "prefix-a/a1/f.txt", "prefix-a/") == "prefix-a/"
+        table.query.assert_not_called()
+
+    def test_absent_prefix_recovered_from_the_registration(self, fileIndexer):
+        self._buckets_table(fileIndexer, "prefix-a/")
+        assert fileIndexer.resolve_registered_bucket_prefix(
+            "bucket", "prefix-a/a1/f.txt", None) == "prefix-a/"
+
+    def test_root_default_does_not_mask_a_non_root_registration(self, fileIndexer):
+        """The '/' every other read of this field defaults to is indistinguishable from a
+        genuine root registration, so it is re-resolved rather than trusted."""
+        self._buckets_table(fileIndexer, "prefix-a/")
+        assert fileIndexer.resolve_registered_bucket_prefix(
+            "bucket", "prefix-a/a1/f.txt", "/") == "prefix-a/"
+
+    def test_root_registration_resolves_to_the_empty_stored_form(self, fileIndexer):
+        self._buckets_table(fileIndexer, "/")
+        assert fileIndexer.resolve_registered_bucket_prefix(
+            "bucket", "a1/f.txt", None) == ""
+
+    def test_unregistered_bucket_stays_unknown(self, fileIndexer):
+        self._buckets_table(fileIndexer)  # no records
+        assert fileIndexer.resolve_registered_bucket_prefix(
+            "bucket", "a1/f.txt", None) is None
+
+    def test_picks_the_registration_the_key_sits_under(self, fileIndexer):
+        # One bucket may carry several non-overlapping registrations (getConfig rejects
+        # overlap, and the root overlaps everything), so at most one can match a key.
+        self._buckets_table(fileIndexer, "prefix-a/", "prefix-b/")
+        assert fileIndexer.resolve_registered_bucket_prefix(
+            "bucket", "prefix-b/a1/f.txt", None) == "prefix-b/"
+
+    def test_lookup_is_cached_per_bucket(self, fileIndexer):
+        table = self._buckets_table(fileIndexer, "prefix-a/")
+        for _ in range(3):
+            fileIndexer.resolve_registered_bucket_prefix("bucket", "prefix-a/a1/f.txt", None)
+        assert table.query.call_count == 1
+
+    def test_lookup_failure_falls_back_to_the_event_value(self, fileIndexer):
+        fileIndexer.s3_asset_buckets_table = MagicMock()
+        fileIndexer.s3_asset_buckets_table.query.side_effect = RuntimeError("throttled")
+        assert fileIndexer.resolve_registered_bucket_prefix(
+            "bucket", "a1/f.txt", "/") == ""
+
+
+@pytest.mark.unit
 class TestOrphanCleanupFallback:
-    def test_orphan_docs_deleted_when_record_gone(self, fileIndexer):
+    def _permanently_deleted(self, fileIndexer, *, registered_prefixes=("/",)):
+        """Drive the permanent-delete branch: no versions and no markers remain, and the
+        asset record is gone from both partitions."""
         fileIndexer.s3_client = MagicMock()
         fileIndexer.s3_client.list_object_versions.return_value = {
             "Versions": [], "DeleteMarkers": [],
         }
-        # Asset record entirely gone
         fileIndexer.asset_storage_table = MagicMock()
         fileIndexer.asset_storage_table.query.return_value = {"Items": []}
+        fileIndexer.s3_asset_buckets_table = MagicMock()
+        fileIndexer.s3_asset_buckets_table.query.return_value = {
+            "Items": [{"bucketName": "bucket", "baseAssetsPrefix": p}
+                      for p in registered_prefixes]
+        }
         fileIndexer.delete_file_documents_by_asset_and_path = MagicMock(return_value=1)
 
+    def _cleanup_args(self, fileIndexer):
+        return [c.args for c in
+                fileIndexer.delete_file_documents_by_asset_and_path.call_args_list]
+
+    def test_orphan_docs_deleted_when_record_gone(self, fileIndexer):
+        self._permanently_deleted(fileIndexer, registered_prefixes=("prefix-a/",))
         record = {
             "eventName": "ObjectRemoved:Delete",
-            "s3": {"bucket": {"name": "bucket"}, "object": {"key": "a1/file.txt"}},
+            "s3": {"bucket": {"name": "bucket"},
+                   "object": {"key": "prefix-a/a1/file.txt"}},
+            "ASSET_BUCKET_NAME": "bucket",
+            "ASSET_BUCKET_PREFIX": "prefix-a/",
         }
         result = fileIndexer.handle_s3_notification(record)
         assert result.operation == "delete"
-        fileIndexer.delete_file_documents_by_asset_and_path.assert_called_once_with(
-            "a1", "/file.txt", "bucket"
+        # The event's bucket prefix must reach the cleanup so the match can be
+        # scoped to one database. Asserted as a property of the call arguments,
+        # not as a call count.
+        assert ("a1", "/file.txt", "bucket", "prefix-a/") in self._cleanup_args(fileIndexer)
+
+    def test_orphan_cleanup_runs_when_the_record_carries_no_prefix(self, fileIndexer):
+        """The production shape: a delete record with NO `ASSET_BUCKET_PREFIX` key at all.
+
+        This is the gap that let a real defect through three tests written for this exact
+        scenario. `test_orphan_docs_deleted_when_record_gone` above supplies the field
+        explicitly, and the two `delete_file_documents_by_asset_and_path` tests call that
+        function directly — so nothing exercised the CALL SITE with the field absent, which is
+        how records actually arrive when the prefix was not propagated through the SNS/SQS
+        nesting.
+
+        Read without a default the value is `None`, which the cleanup treats as "prefix
+        unknown" and refuses to run unscoped: the orphan cleanup could never delete anything,
+        and a permanently deleted asset's file documents stayed in the index indefinitely.
+        Verified live on a deployment — the document was still searchable five minutes after
+        the asset was permanently deleted, with the indexer logging "Skipping orphan
+        file-document cleanup ... the event carries no bucket prefix".
+
+        The prefix is recovered from the bucket's own registration records rather than
+        defaulted to the root: the registration outlives the asset, and a root default is
+        wrong for every bucket registered below the root.
+        """
+        self._permanently_deleted(fileIndexer)  # registered at the root
+        record = {
+            "eventName": "ObjectRemoved:Delete",
+            "s3": {"bucket": {"name": "bucket"}, "object": {"key": "a1/file.txt"}},
+            "ASSET_BUCKET_NAME": "bucket",
+            # No ASSET_BUCKET_PREFIX -- deliberately absent.
+        }
+        result = fileIndexer.handle_s3_notification(record)
+        assert result.operation == "delete"
+
+        arg_sets = self._cleanup_args(fileIndexer)
+        assert arg_sets, "the orphan cleanup was never called at all"
+        prefixes = [args[3] for args in arg_sets]
+        assert None not in prefixes, (
+            f"the cleanup was handed None for the bucket prefix, which makes it decline and "
+            f"leave the document in the index: {arg_sets}"
         )
+        # A bucket rooted at '/' is indexed with an empty str_bucketprefix.
+        assert ("a1", "/file.txt", "bucket", "") in arg_sets, arg_sets
+
+    def test_non_root_bucket_with_no_prefix_on_the_record(self, fileIndexer):
+        """A bucket registered below the root, with the field absent — the case where
+        defaulting to '/' searched for asset "prefix-a" and path "/a1/file.txt", matching
+        no document and leaving the orphan in the index with a "deleted 0" success."""
+        self._permanently_deleted(fileIndexer, registered_prefixes=("prefix-a/",))
+        record = {
+            "eventName": "ObjectRemoved:Delete",
+            "s3": {"bucket": {"name": "bucket"},
+                   "object": {"key": "prefix-a/a1/folder/file.txt"}},
+            "ASSET_BUCKET_NAME": "bucket",
+        }
+        result = fileIndexer.handle_s3_notification(record)
+        assert result.operation == "delete"
+        assert ("a1", "/folder/file.txt", "bucket", "prefix-a/") in self._cleanup_args(fileIndexer)
+
+    def test_unregistered_bucket_declines_rather_than_assuming_root(self, fileIndexer):
+        """With no registration to resolve, the prefix is genuinely unknown and the
+        cleanup must decline rather than search unscoped across every database."""
+        self._permanently_deleted(fileIndexer, registered_prefixes=())
+        record = {
+            "eventName": "ObjectRemoved:Delete",
+            "s3": {"bucket": {"name": "bucket"}, "object": {"key": "a1/file.txt"}},
+            "ASSET_BUCKET_NAME": "bucket",
+        }
+        fileIndexer.delete_file_documents_by_asset_and_path = MagicMock(return_value=0)
+        result = fileIndexer.handle_s3_notification(record)
+        assert result.operation == "skip"
+        prefixes = [args[3] for args in self._cleanup_args(fileIndexer)]
+        assert prefixes == [None], prefixes
+
+    def test_non_root_resolvable_asset_deletes_the_right_document(self, fileIndexer):
+        """The lookup_success branch: the asset ID handed to the database lookup, and the
+        path handed to the delete, are both below the registered prefix."""
+        fileIndexer.s3_client = MagicMock()
+        fileIndexer.s3_client.list_object_versions.return_value = {
+            "Versions": [], "DeleteMarkers": [],
+        }
+        fileIndexer.s3_asset_buckets_table = MagicMock()
+        fileIndexer.s3_asset_buckets_table.query.return_value = {
+            "Items": [{"bucketName": "bucket", "baseAssetsPrefix": "prefix-a/"}]
+        }
+        fileIndexer.lookup_database_id_for_permanent_delete = MagicMock(
+            return_value=("db1", True))
+        fileIndexer.delete_file_document = MagicMock(return_value=True)
+
+        record = {
+            "eventName": "ObjectRemoved:Delete",
+            "s3": {"bucket": {"name": "bucket"},
+                   "object": {"key": "prefix-a/a1/folder/file.txt"}},
+            "ASSET_BUCKET_NAME": "bucket",
+        }
+        result = fileIndexer.handle_s3_notification(record)
+        assert result.operation == "delete"
+        fileIndexer.delete_file_document.assert_called_once_with(
+            "db1", "a1", "/folder/file.txt")
+        assert fileIndexer.lookup_database_id_for_permanent_delete.call_args.args == (
+            "a1", "bucket", "prefix-a/")
 
     def test_orphan_search_drains_and_deletes_by_id(self, fileIndexer):
         client = MagicMock()
@@ -257,7 +468,7 @@ class TestOrphanCleanupFallback:
         fileIndexer.opensearch_manager.get_client.return_value = client
 
         deleted = fileIndexer.delete_file_documents_by_asset_and_path(
-            "a1", "/file.txt", "bucket")
+            "a1", "/file.txt", "bucket", "prefix-a/")
         assert deleted == 2
         assert client.delete.call_count == 2
 
@@ -271,9 +482,61 @@ class TestOrphanCleanupFallback:
         fileIndexer.opensearch_manager.get_client.return_value = client
 
         deleted = fileIndexer.delete_file_documents_by_asset_and_path(
-            "a1", "/file.txt", "bucket")
+            "a1", "/file.txt", "bucket", "prefix-a/")
         assert deleted == 1
         assert client.delete.call_count == 1
+
+    def test_orphan_query_is_scoped_to_the_event_bucket_prefix(self, fileIndexer):
+        """S2-BACKEND-096: str_key is asset-relative, so asset+path+bucket-name
+        also matches another database's live document on the same bucket under a
+        different baseAssetsPrefix. The prefix must be part of the filter."""
+        client = MagicMock()
+        client.search.return_value = {"hits": {"hits": []}}
+        fileIndexer.opensearch_manager = MagicMock()
+        fileIndexer.opensearch_manager.is_available.return_value = True
+        fileIndexer.opensearch_manager.get_client.return_value = client
+
+        fileIndexer.delete_file_documents_by_asset_and_path(
+            "a1", "/file.txt", "bucket", "prefix-a")
+
+        body = client.search.call_args.kwargs["body"]
+        filters = body["query"]["bool"]["filter"]
+        # A trailing slash is added and a leading one removed, matching the form
+        # get_bucket_details stores on the document.
+        assert {"term": {"str_bucketprefix.keyword": "prefix-a/"}} in filters
+        assert {"term": {"str_assetid.keyword": "a1"}} in filters
+        assert {"term": {"str_key.keyword": "/file.txt"}} in filters
+        assert {"term": {"str_bucketname.keyword": "bucket"}} in filters
+
+    def test_orphan_query_root_prefix_matches_stored_empty_string(self, fileIndexer):
+        """A bucket rooted at '/' is indexed with an empty str_bucketprefix."""
+        client = MagicMock()
+        client.search.return_value = {"hits": {"hits": []}}
+        fileIndexer.opensearch_manager = MagicMock()
+        fileIndexer.opensearch_manager.is_available.return_value = True
+        fileIndexer.opensearch_manager.get_client.return_value = client
+
+        fileIndexer.delete_file_documents_by_asset_and_path(
+            "a1", "/file.txt", "bucket", "/")
+
+        filters = client.search.call_args.kwargs["body"]["query"]["bool"]["filter"]
+        assert {"term": {"str_bucketprefix.keyword": ""}} in filters
+
+    def test_orphan_cleanup_skipped_when_prefix_unknown(self, fileIndexer):
+        """Positive control for the two tests above: with no prefix the cleanup
+        must not run unscoped -- no search, no delete, nothing removed."""
+        client = MagicMock()
+        client.search.return_value = {"hits": {"hits": [{"_id": "d1"}]}}
+        fileIndexer.opensearch_manager = MagicMock()
+        fileIndexer.opensearch_manager.is_available.return_value = True
+        fileIndexer.opensearch_manager.get_client.return_value = client
+
+        deleted = fileIndexer.delete_file_documents_by_asset_and_path(
+            "a1", "/file.txt", "bucket", None)
+
+        assert deleted == 0
+        client.search.assert_not_called()
+        client.delete.assert_not_called()
 
 
 @pytest.mark.unit

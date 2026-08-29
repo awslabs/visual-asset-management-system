@@ -1324,7 +1324,9 @@ class TestAssetExportWithDownload:
                 '--local-path', '/tmp'
             ])
             
-            assert result.exit_code == 0
+            # A partial download must be distinguishable from a complete one at the exit-code level
+            # (FIX for S6-TOOLS-009, extended to `assets export --download-files`).
+            assert result.exit_code != 0
             assert '⚠ Export completed with download errors' in result.output
             assert 'Failed downloads (1):' in result.output
             assert 'Connection timeout' in result.output

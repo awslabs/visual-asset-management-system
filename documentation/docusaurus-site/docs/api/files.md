@@ -703,13 +703,17 @@ Returns file metadata (size, content type) without the file body.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description                                |
-| ------------ | -------- | ------ | -------- | ------------------------------------------ |
-| `databaseId` | path     | string | Yes      | Database identifier.                       |
-| `assetId`    | path     | string | Yes      | Asset identifier.                          |
-| `{proxy+}`   | path     | string | Yes      | The relative file path within the asset.   |
-| `v`          | query    | string | No       | S3 version ID for a specific file version. |
-| `avid`       | query    | string | No       | VAMS asset version ID.                     |
+| Parameter              | Location | Type   | Required | Description                                                            |
+| ---------------------- | -------- | ------ | -------- | ---------------------------------------------------------------------- |
+| `databaseId`           | path     | string | Yes      | Database identifier.                                                   |
+| `assetId`              | path     | string | Yes      | Asset identifier.                                                      |
+| `{proxy+}`             | path     | string | Yes      | The relative file path within the asset.                               |
+| `versionId`            | query    | string | No       | Amazon S3 version ID of a specific file version.                       |
+| `assetVersionId`       | query    | string | No       | VAMS asset version ID; the file version recorded in it is resolved.    |
+| `assetVersionIdAlias`  | query    | string | No       | Alias of a VAMS asset version, resolved the same way.                  |
+
+Supply at most one of `versionId`, `assetVersionId` and `assetVersionIdAlias`. Supplying more than one
+returns `400` with a message naming the three. Supplying none streams the current version.
 
 **Response:**
 

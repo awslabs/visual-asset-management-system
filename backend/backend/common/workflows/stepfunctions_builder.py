@@ -490,9 +490,14 @@ class TaskStateBuilder(ABC):
 
         The body carries the manifest + input-configuration S3 LOCATIONS plus the fields that are
         only available at the workflow-execution level (the asset/aux bucket names and asset keys,
-        the workflow/execution identifiers, and the executing-user context). Everything a pipeline
+        the workflow/execution identifiers, and the executing user's name). Everything a pipeline
         needs about its inputs/outputs (resolved input files, output/aux/metadata locations, asset
-        identity, orchestration config) is read from the manifest at inputManifestS3Location."""
+        identity, orchestration config) is read from the manifest at inputManifestS3Location.
+
+        The executing caller's API Gateway request context stays inside VAMS: a pipeline — which
+        may be a third-party Lambda, an SQS consumer, or an EventBridge subscriber — is not part
+        of the authorization path, so no decoded JWT claim, role list, or caller source IP travels
+        in the body."""
         payload = {
             "body": {
                 # --- Workflow-execution identity ---
@@ -505,9 +510,15 @@ class TaskStateBuilder(ABC):
                 #     threaded, so the body is input-file-agnostic and multi-file-ready) ---
                 "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
 
-                # --- Executing-user context ---
+                # --- Executing-user context. Both fields resolve to the executing user's NAME.
+                #     The request context the execute call was authorized with — every decoded JWT
+                #     claim, the resolved vams:roles list, the caller's source IP, and the
+                #     account/API identifiers — is threaded only to the workflow's process-output
+                #     state, which is where the output write-back's object-level check reads it.
+                #     executingRequestContext keeps its place in the body because a pipeline may
+                #     read the key directly. ---
                 "executingUserName.$": "$.executingUserName",
-                "executingRequestContext.$": "$.executingRequestContext",
+                "executingRequestContext.$": "$.executingUserName",
             }
         }
 
@@ -684,9 +695,9 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
 
     The shared body envelope is flattened into reserved OpenJD job parameters
     (``Vams``-prefixed, string-typed). The registered job template must declare
-    every one of these parameters. ``executingRequestContext`` is excluded: it is a
-    multi-KB JSON object and Deadline caps a string job parameter at 1024 characters;
-    it stays in the Step Functions state for the process-output step. The job reads
+    every one of these parameters. ``executingRequestContext`` is excluded: it carries
+    the same executing user name as ``VamsExecutingUserName``, so injecting it would only
+    add a parameter every registered job template has to declare. The job reads
     everything else (resolved input files, output prefixes, aux locations) from the
     manifest at VamsInputManifestS3Location.
 
@@ -697,8 +708,8 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
     deadlineMaxFailedTasksCount, deadlineStorageProfileId.
     """
 
-    # Body fields not forwarded as job parameters (too large for the 1024-char
-    # Deadline string-parameter cap; remain available in the SFN state).
+    # Body fields not forwarded as job parameters (duplicated by another parameter;
+    # remain available in the SFN state).
     EXCLUDED_BODY_FIELDS = {"executingRequestContext"}
 
     DEFAULT_PRIORITY = 50

@@ -240,13 +240,6 @@ export class Gr00tFinetuneConstruct extends Construct {
          * Batch Compute Environment
          * GPU-accelerated compute for Gr00t fine-tuning
          */
-        const batchServiceRole = new iam.Role(this, "BatchServiceRole", {
-            assumedBy: new iam.ServicePrincipal("batch.amazonaws.com"),
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBatchServiceRole"),
-            ],
-        });
-
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
             assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
             managedPolicies: [
@@ -316,7 +309,15 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                         },
                     },
                 ],
-                userData: Buffer.from(userData).toString("base64"),
+                // Encoded by CloudFormation, not here: this string carries CDK tokens -- the EFS file
+                // system id among them -- and Buffer.from() freezes a token as its DEBUG TEXT, because a
+                // base64 blob is opaque to the resolver that runs afterwards. The deployed template read
+                // "mount -t efs -o tls ${Token[TOKEN.NNNN]}:/ /mnt/efs/cosmos-models", which bash parses as
+                // an array subscript ("invalid arithmetic operator") and which aborts the whole
+                // scripts-user module, skipping every later line too. So the model cache was never mounted
+                // and every run restored its weights from S3 on billed GPU time. Fn.base64 emits
+                // Fn::Base64, so the encoding happens after token resolution.
+                userData: cdk.Fn.base64(userData),
                 tagSpecifications: [
                     {
                         resourceType: "instance",
@@ -331,15 +332,32 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             },
         });
 
-        const batchEnvironment = new batch.CfnComputeEnvironment(this, "Gr00tOnDemandComputeEnv", {
+        const batchEnvironment = new batch.CfnComputeEnvironment(this, "Gr00tGpuComputeEnv", {
             // No explicit name - let CDK auto-generate to allow CloudFormation replacements
             // when instance types change (custom-named resources can't be replaced in-place)
             type: "MANAGED",
             state: "ENABLED",
-            serviceRole: batchServiceRole.roleArn,
+            // No serviceRole, so this environment uses the Batch service-linked role
+            // (AWSServiceRoleForBatch). Naming a role instead is what forbids an in-place update of the
+            // launch template, instance types, subnets or security groups -- Batch allows those fields to
+            // be updated "only for ... Compute Environment having a Batch Service Linked Role" -- which
+            // left this environment unable to take a change to its instance start-up script at all.
+            //
+            // Safe to ship to an existing deployment only because the construct id changed in the same
+            // release: that makes the upgrade a CREATE of this resource and a DELETE of the old one rather
+            // than an update, so replaceComputeEnvironment does not have to permit the one replacement the
+            // upgrade needs. An environment still naming a service role can be neither updated in place nor
+            // migrated to the service-linked role, so this property without the rename fails the upgrade.
+            replaceComputeEnvironment: false,
             computeResources: {
                 type: "EC2",
                 allocationStrategy: "BEST_FIT_PROGRESSIVE",
+                // Each infrastructure update takes the current ECS-optimised AMI rather than staying on
+                // the one that was current when this environment was created, which matters on a GPU image
+                // carrying drivers. It is also the fourth condition CloudFormation names for updating a
+                // compute environment in place, alongside no serviceRole, a progressive allocation strategy
+                // and replaceComputeEnvironment.
+                updateToLatestImageVersion: true,
                 minvCpus: minVCpus,
                 maxvCpus: maxVCpus * 2, // Allow headroom for concurrent jobs
                 desiredvCpus: minVCpus,
@@ -354,7 +372,13 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                 instanceRole: instanceProfile.attrArn,
                 launchTemplate: {
                     launchTemplateId: launchTemplate.ref,
-                    version: "$Latest",
+                    // Pinned to this template's own latest version, not "$Latest". Batch does not read
+                    // the launch template when an instance launches: it MERGES it with its own bootstrap
+                    // into a Batch-managed copy when the compute environment is created or updated.
+                    // "$Latest" is a constant, so a new template version is not a change to the
+                    // environment -- CloudFormation updates nothing and Batch goes on handing instances a
+                    // stale merge, which is how the encoding fix above reached no instance at all.
+                    version: launchTemplate.attrLatestVersionNumber,
                 },
             },
         });
@@ -600,7 +624,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     "Gr00tFinetune-StateMachineLogGroup",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: RemovalPolicy.DESTROY,
         });
 
@@ -808,17 +832,6 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                 {
                     id: "AwsSolutions-IAM5",
                     reason: "ECS Containers require access to objects in asset buckets, model cache, and EFS for Gr00t model weights",
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            batchServiceRole,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Service uses AWSBatchServiceRole managed policy which is required for batch operations",
                 },
             ],
             true

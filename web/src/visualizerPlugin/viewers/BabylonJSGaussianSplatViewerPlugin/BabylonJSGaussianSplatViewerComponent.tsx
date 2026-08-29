@@ -53,6 +53,12 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         if (!assetKey || initializationRef.current) return;
         initializationRef.current = true;
 
+        // A re-run means a different file: go back to the loading state so the
+        // panel and HUD don't stay mounted against the disposed scene.
+        setSceneReady(false);
+        setIsLoading(true);
+        setLoadingMessage("Initializing viewer...");
+
         // Add CSS to hide any unwanted UI elements (Spectrum color pickers)
         const style = document.createElement("style");
         style.id = "babylonjs-gaussian-splat-viewer-hide-ui";
@@ -96,6 +102,15 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         // Set up periodic cleanup
         const cleanupInterval = setInterval(removeUnwantedElements, 1000);
 
+        // Owned by this effect run and released in its cleanup. Held here (rather
+        // than only inside initViewer) so the cleanup can reach them even when it
+        // runs while initViewer is still awaiting.
+        let cancelled = false;
+        let engineRef: any = null;
+        let sceneRef: any = null;
+        let canvasRef: HTMLCanvasElement | null = null;
+        let resizeObserverRef: ResizeObserver | null = null;
+
         const initViewer = async () => {
             try {
                 console.log("BabylonJS Gaussian Splat Viewer: Starting initialization");
@@ -103,11 +118,18 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
 
                 // Load BabylonJS dependencies
                 const BABYLON = await BabylonJSGaussianSplatDependencyManager.loadBabylonJS();
+                if (cancelled) return;
 
                 setLoadingMessage("Initializing viewer...");
 
                 // Create canvas directly in DOM
                 const canvas = document.createElement("canvas");
+                canvasRef = canvas;
+                canvas.setAttribute("role", "img");
+                canvas.setAttribute(
+                    "aria-label",
+                    `Gaussian splat 3D view${assetKey ? `: ${assetKey.split("/").pop()}` : ""}`
+                );
                 canvas.style.width = "100%";
                 canvas.style.height = "100%";
                 canvas.style.display = "block";
@@ -136,7 +158,9 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     stencil: true,
                     disableWebGL2Support: false,
                 });
+                engineRef = engine;
                 const scene = new BABYLON.Scene(engine);
+                sceneRef = scene;
                 scene.clearColor = new BABYLON.Color4(0.1, 0.1, 0.1, 1);
 
                 // Create camera with fine controls
@@ -194,6 +218,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
 
                 // Set up resize observer
                 const resizeObserver = new ResizeObserver(handleResize);
+                resizeObserverRef = resizeObserver;
                 if (containerRef.current) {
                     resizeObserver.observe(containerRef.current);
                 }
@@ -225,6 +250,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
+                if (cancelled) return;
 
                 if (response && Array.isArray(response) && response[0] !== false) {
                     console.log(
@@ -246,6 +272,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                             ".spz"
                         )
                             .then((result: any) => {
+                                if (cancelled) return;
                                 console.log(
                                     "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
                                 );
@@ -342,7 +369,56 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
 
         // Cleanup function
         return () => {
+            cancelled = true;
             clearInterval(cleanupInterval);
+
+            // Release the WebGL context and stop rendering. Without this the
+            // render loop keeps the Engine (and the whole scene) reachable, so
+            // neither the context nor the GPU buffers are ever reclaimed.
+            //
+            // The context is taken BEFORE disposing, because dispose detaches it from the engine and
+            // there is then no way back to it.
+            const glToRelease: WebGLRenderingContext | WebGL2RenderingContext | null = (() => {
+                try {
+                    const canvas = engineRef?.getRenderingCanvas?.() ?? canvasRef;
+                    return (
+                        (canvas?.getContext("webgl2") as WebGL2RenderingContext | null) ??
+                        (canvas?.getContext("webgl") as WebGLRenderingContext | null)
+                    );
+                } catch {
+                    return null;
+                }
+            })();
+
+            try {
+                resizeObserverRef?.disconnect();
+                engineRef?.stopRenderLoop();
+                sceneRef?.dispose();
+                engineRef?.dispose();
+            } catch (disposeErr) {
+                console.warn("BabylonJS Gaussian Splat Viewer: dispose error:", disposeErr);
+            }
+
+            // Disposing the engine is not sufficient to give the context back. Measured against a real
+            // 18 MB .spz, opening it repeatedly reached the browser's live-context ceiling on the EIGHTH
+            // mount — "Too many active WebGL contexts. Oldest context will be lost." — while the JS heap
+            // stayed flat, so the JavaScript side was being collected and only the GPU context was not.
+            // Losing it explicitly hands it back at unmount instead of waiting for a collection that
+            // does not come. The PlayCanvas splat viewer shows no such growth over the same test.
+            try {
+                glToRelease?.getExtension("WEBGL_lose_context")?.loseContext();
+            } catch (loseErr) {
+                // A context already lost or detached throws here; that is the desired end state anyway.
+                console.warn("BabylonJS Gaussian Splat Viewer: loseContext error:", loseErr);
+            }
+            resizeObserverRef = null;
+            engineRef = null;
+            sceneRef = null;
+            canvasRef?.remove();
+            canvasRef = null;
+            viewerInstanceRef.current = null;
+            initialCameraStateRef.current = null;
+            initializationRef.current = false;
 
             // Remove the CSS style
             const existingStyle = document.getElementById(

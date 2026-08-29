@@ -230,13 +230,21 @@ export async function ensureSessionValid(forceRefresh = false): Promise<boolean>
         }
         if (refreshTokenValid || (accessTokenValid && forceRefresh)) {
             try {
-                const client = getOAuth2ClientInstance();
-                const newToken = await client.refreshToken(getExternalOAuth2Token());
-                setExternalOauth2Token(newToken);
+                // Share the coalesced refresh (see refreshOAuth2AccessToken) rather than
+                // calling the client directly. Focus revalidation and the API layer both
+                // reach this function, and an IdP that rotates refresh tokens rejects the
+                // second request made with the same one.
+                await refreshOAuth2AccessToken();
                 return true;
             } catch (error) {
                 console.error("Failed to refresh OAuth2 token:", error);
-                return false;
+                // A failed refresh does not by itself end the session: the proactive refresh runs
+                // while the access token is still valid (a minute before expiry, and again on the
+                // one-hour timer cap), so a transient IDP failure here leaves a token that still
+                // authenticates every request. Reporting the access token's own validity keeps the
+                // user working and lets the re-armed timer retry; once the token really expires
+                // this is false and the caller signs them out.
+                return accessTokenValid;
             }
         }
         return accessTokenValid;
@@ -270,11 +278,12 @@ export const externalOAuthTokenProvider: TokenProvider = {
 
         if (forceRefresh && oauth2Token.refreshToken && oauth2ClientInstance) {
             try {
-                const newToken = await oauth2ClientInstance.refreshToken(oauth2Token);
-                localStorage.setItem("oauth2_token", JSON.stringify(newToken));
+                // Coalesced with every other refresh in the process — see
+                // refreshOAuth2AccessToken. It persists the new token itself.
+                const accessToken = await refreshOAuth2AccessToken();
                 return {
-                    accessToken: decodeJWT(newToken.accessToken),
-                    idToken: decodeJWT(newToken.accessToken),
+                    accessToken: decodeJWT(accessToken),
+                    idToken: decodeJWT(accessToken),
                 };
             } catch (error) {
                 console.error("Token refresh failed:", error);

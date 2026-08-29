@@ -13,6 +13,7 @@ Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA 
 | **Pipeline IDs**       | `isaaclab-training`, `isaaclab-evaluation`              |
 | **Configuration flag** | `app.pipelines.useIsaacLabTraining.enabled`             |
 | **Execution type**     | Lambda (asynchronous with callback)                     |
+| **Launch**             | Manual only -- neither workflow registers a trigger     |
 | **Compute**            | AWS Batch with GPU instances (G6, G6E, G5 families)     |
 | **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints |
 | **Training timeout**   | 8 hours                                                 |
@@ -137,7 +138,7 @@ The training mode trains new RL policies from scratch using the RSL-RL, RL Games
 
 ### Training input parameters
 
-Pass training configuration as `inputParameters` when triggering the pipeline:
+The training configuration is the configuration body of the pipeline template the run uses. Deployment registers the `isaaclab-training-cartpole` template with the body below, and the template permits per-run edits, so a run can substitute its own configuration on the execute screen:
 
 ```json
 {
@@ -185,6 +186,8 @@ When `computeConfig.numNodes` is greater than 1, the pipeline uses AWS Batch mul
 The evaluation mode runs a pre-trained policy against the simulation environment and captures metrics and video recordings.
 
 ### Evaluation input parameters
+
+The evaluation pipeline requires a template (`systemConfig.requireTemplate` is `true`), so a run cannot start without selecting one. Deployment registers `isaaclab-evaluation-cartpole`, whose configuration body follows this shape:
 
 ```json
 {

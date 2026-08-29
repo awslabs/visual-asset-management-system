@@ -14,7 +14,7 @@ Use VamsCLI when you need to automate asset management workflows, integrate VAMS
 | Terminal         | UTF-8 capable (Windows Terminal, VS Code terminal) |
 
 :::note[Windows Terminal Encoding]
-On Windows, use Windows Terminal or VS Code's integrated terminal. If you encounter encoding errors with Unicode characters, set the environment variable `PYTHONIOENCODING=utf-8` before running VamsCLI.
+VamsCLI writes UTF-8 output regardless of the system code page, so no environment variable is needed. Windows Terminal and VS Code's integrated terminal display its status indicators as intended; a legacy Command Prompt may draw one as a box without affecting the command.
 :::
 
 ## Quick Install
@@ -112,17 +112,13 @@ Override tokens do not support automatic refresh. When an override token expires
 
 ### API Key Authentication
 
-If you have a VAMS API key (created through the web UI or API), you can use it directly without a separate login step. Pass the API key as a token override on any command:
-
-```bash
-vamscli --token-override "your-api-key-value" database list
-```
-
-Or set it as a persistent override for the session:
+If you have a VAMS API key (created through the web UI or API), you can use it directly without a password login. Store the key as an override token, naming the user ID the key was created for:
 
 ```bash
 vamscli auth set-override -u api-key-user@example.com --token "your-api-key-value"
 ```
+
+The override persists in the profile and is used by every subsequent command until it is replaced by another `auth set-override` or `auth login`, or removed with `vamscli auth clear-override`.
 
 API keys impersonate the user ID they were created with and inherit that user's roles. See [API Key Management](../user-guide/api-keys.md) for details on creating and managing API keys.
 

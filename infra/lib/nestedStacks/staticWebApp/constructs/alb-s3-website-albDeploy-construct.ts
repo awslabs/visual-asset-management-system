@@ -21,12 +21,38 @@ import * as route53 from "aws-cdk-lib/aws-route53";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as route53targets from "aws-cdk-lib/aws-route53-targets";
 import * as Config from "../../../../config/config";
+import { Partition } from "../../../helper/service-helper";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import { NagSuppressions } from "cdk-nag";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
+
+// The /tmp budget of the CDK BucketDeployment Lambda that uploads the built web bundle. That
+// function downloads the bundle archive into /tmp and expands it there, holding the archive and the
+// extracted tree at once — roughly twice the size of web/dist, which is ~255 MB (about half of it
+// viewer plugins) and so already near the 512 MiB Lambda default. 4 GiB carries several times the
+// current bundle and needs raising only once web/dist grows past ~2 GB (10 GiB is the Lambda
+// maximum); ephemeral storage is billed per GB-second of the function's own runtime, so one upload
+// per deployment costs a fraction of a cent. The CloudFront path deploys the same bundle — keep
+// this equal to the constant in cloudfront-s3-website-construct.ts.
+const WEB_DEPLOYMENT_EPHEMERAL_STORAGE = cdk.Size.gibibytes(4);
+
+// Content-Type for the bundle's `.mjs` files, which the main deployment cannot set.
+//
+// `BucketDeployment` applies `contentType` to EVERY object in that deployment, so the extension can
+// only be handled by a deployment of its own. Left to the default, the uploader derives the type from
+// the extension using Python's `mimetypes`, which has no `.mjs` entry and falls back to `text/plain`.
+// Browsers enforce strict MIME checking on module scripts and the bucket also sends
+// `X-Content-Type-Options: nosniff`, so such a file is refused with "Failed to load module script"
+// however valid its contents.
+//
+// This path is affected exactly as the CloudFront one is: the ALB forwards to an S3 VPC endpoint
+// rather than rewriting anything, so the object's stored Content-Type is what reaches the browser.
+// Keep this equal to the constant in cloudfront-s3-website-construct.ts, where the full reasoning is
+// recorded.
+const ES_MODULE_CONTENT_TYPE = "text/javascript";
 
 export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     /**
@@ -103,6 +129,17 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
         const listener = alb.addListener("WebAppDistroALBListener", {
             port: 443, // The port on which the ALB listens
             certificates: [acmDomainCertificate], // The certificate to use for the listener
+            // Minimum TLS version + cipher suite for the web front. The ELB default policy still
+            // negotiates TLS 1.0 and TLS 1.1; ELBSecurityPolicy-TLS13-1-2-2021-06 (the CDK
+            // `RECOMMENDED_TLS` value) raises the floor to TLS 1.2 while still accepting TLS 1.3.
+            //
+            // A named policy is asserted only in the commercial partition, because ELB does not
+            // publish the same set of policy names everywhere and an unknown name is rejected at
+            // deploy time. The gate is the literal partition rather than the `app.govCloud`
+            // restricted-partition flag, which is operator-set and unvalidated against
+            // `env.partition` — it can be false while deploying into a restricted partition. Left
+            // unset elsewhere, which keeps the listener on whatever default its partition applies.
+            sslPolicy: Partition() === "aws" ? elbv2.SslPolicy.RECOMMENDED_TLS : undefined,
         });
 
         //Setup target group to point to Special S3 VPC Endpoint Interface
@@ -360,12 +397,35 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
             );
         }
 
-        //Deploy website to Bucket
-        new s3deployment.BucketDeployment(this, "DeployWithInvalidation", {
+        // ES module workers, uploaded on their own so their Content-Type can be declared. See
+        // ES_MODULE_CONTENT_TYPE for why this cannot be folded into the main deployment.
+        const esModuleDeployment = new s3deployment.BucketDeployment(this, "DeployEsModules", {
             sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
             destinationBucket: props.webAppBucket,
-            memoryLimit: 1024,
+            contentType: ES_MODULE_CONTENT_TYPE,
+            exclude: ["*"],
+            include: ["*.mjs"],
+            prune: false,
+            memoryLimit: Config.LAMBDA_MEMORY_SIZE,
+            ephemeralStorageSize: WEB_DEPLOYMENT_EPHEMERAL_STORAGE,
         });
+
+        //Deploy website to Bucket
+        const mainDeployment = new s3deployment.BucketDeployment(this, "DeployWithInvalidation", {
+            sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
+            destinationBucket: props.webAppBucket,
+            memoryLimit: Config.LAMBDA_MEMORY_SIZE,
+            ephemeralStorageSize: WEB_DEPLOYMENT_EPHEMERAL_STORAGE,
+            exclude: ["*.mjs"],
+        });
+
+        // The two deployments write disjoint key sets and the only one that prunes excludes `*.mjs`,
+        // which per BucketDeployment's `exclude` contract also protects those objects from its
+        // `--delete` pass — so neither can remove the other's files whichever order they run in.
+        // Ordering them anyway keeps that outcome from depending on that subtlety, and stops two
+        // Lambdas expanding the same multi-hundred-MB bundle concurrently. Mirrors the CloudFront
+        // construct, where the order additionally has to precede the `/*` invalidation.
+        mainDeployment.node.addDependency(esModuleDeployment);
 
         // assign public properties
         this.endPointURL = `https://${props.config.app.useAlb.domainHost}`;

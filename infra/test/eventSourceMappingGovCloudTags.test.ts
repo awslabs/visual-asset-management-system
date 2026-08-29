@@ -16,6 +16,8 @@ import * as Service from "../lib/helper/service-helper";
 import { storageResources } from "../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import { buildWorkflowTriggerDispatchFunction } from "../lib/lambdaBuilder/workflowFunctions";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
+import { batchSizeOffenders } from "./support/sqsEventSourceBounds";
 
 /**
  * GovCloud and EU Sovereign Lambda reject Tags on AWS::Lambda::EventSourceMapping
@@ -84,7 +86,7 @@ const buildStorageResources = (stack: cdk.Stack): storageResources => {
 };
 
 const synthDispatchFunction = (govCloud: boolean): Template => {
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, "TestStack", {
         env: { account: "123456789012", region: govCloud ? "us-gov-west-1" : "us-east-1" },
     });
@@ -125,6 +127,16 @@ const synthDispatchFunction = (govCloud: boolean): Template => {
 const eventSourceMappings = (template: Template) =>
     Object.values(template.findResources("AWS::Lambda::EventSourceMapping"));
 
+/** Logical id an `Fn::GetAtt`-shaped value points at, or undefined for any other shape. */
+const getAttTarget = (value: any): string | undefined =>
+    value && typeof value === "object" && Array.isArray(value["Fn::GetAtt"])
+        ? String(value["Fn::GetAtt"][0])
+        : undefined;
+
+/** Logical id a `Ref`-shaped value points at, or undefined for any other shape. */
+const refTarget = (value: any): string | undefined =>
+    value && typeof value === "object" && typeof value.Ref === "string" ? value.Ref : undefined;
+
 describe("workflowTriggerDispatch SQS event source mapping", () => {
     test("omits Tags when govCloud is enabled", () => {
         const mappings = eventSourceMappings(synthDispatchFunction(true));
@@ -135,21 +147,73 @@ describe("workflowTriggerDispatch SQS event source mapping", () => {
         // The mapping must still be wired up, not merely untagged.
         expect(mappings[0].Properties.EventSourceArn).toBeDefined();
         expect(mappings[0].Properties.FunctionName).toBeDefined();
-        expect(mappings[0].Properties.BatchSize).toBe(10);
-        expect(mappings[0].Properties.MaximumBatchingWindowInSeconds).toBe(3);
+        // Batch size is bounded from ABOVE rather than pinned: a smaller batch is a strictly safer
+        // change, while a larger one widens the whole-batch failure this mapping has (it declares no
+        // FunctionResponseTypes, so one failing record redelivers the batch and re-fires the triggers
+        // of every record in it). See support/sqsEventSourceBounds.ts. The batching window is left
+        // unasserted there for a reason worth not rediscovering: CDK's own 300 s cap guarantees any
+        // upper bound that could be written for it, and a bound nothing can fail asserts nothing.
+        expect(
+            batchSizeOffenders([
+                { at: "govCloud dispatch mapping", properties: mappings[0].Properties },
+            ])
+        ).toEqual([]);
     });
 
     test("keeps the commercial mapping intact, proving the govCloud assertion is load-bearing", () => {
-        const mappings = eventSourceMappings(synthDispatchFunction(false));
+        const template = synthDispatchFunction(false);
+        const mappings = eventSourceMappings(template);
 
         expect(mappings).toHaveLength(1);
         // Positive control: CDK really does propagate the stack tags onto this mapping, so the
         // govCloud test above is asserting the absence of something that would otherwise be there.
         expect(mappings[0].Properties).toHaveProperty("Tags");
-        expect(mappings[0].Properties.EventSourceArn).toBeDefined();
-        expect(mappings[0].Properties.FunctionName).toBeDefined();
-        expect(mappings[0].Properties.BatchSize).toBe(10);
-        expect(mappings[0].Properties.MaximumBatchingWindowInSeconds).toBe(3);
+
+        // Asserted through the REFERENCE rather than with a defined-ness check on EventSourceArn /
+        // FunctionName. On this branch the mapping comes from `addEventSource(new SqsEventSource(q))`,
+        // which gives CDK no way to omit either property -- so `toBeDefined()` on them is an
+        // assertion no implementation of this branch could fail. Consuming the wrong queue is a
+        // mistake it CAN make, and the dispatch buffer's dead-letter queue sits right beside the
+        // source queue in the same template.
+        const queues = template.findResources("AWS::SQS::Queue");
+        const sourceQueueId = getAttTarget(mappings[0].Properties.EventSourceArn);
+        expect(Object.keys(queues).filter((id) => id === sourceQueueId)).toHaveLength(1);
+        // The SOURCE queue, not its DLQ: only the queue that redrives carries a RedrivePolicy, so
+        // this distinguishes the two rather than merely finding "some queue".
+        expect(queues[sourceQueueId as string].Properties).toHaveProperty("RedrivePolicy");
+
+        const functions = template.findResources("AWS::Lambda::Function");
+        const targetFunctionId = refTarget(mappings[0].Properties.FunctionName);
+        expect(Object.keys(functions).filter((id) => id === targetFunctionId)).toHaveLength(1);
+        // The dispatch Lambda, not the executeWorkflowV2 function this builder is handed: both are
+        // Lambdas in this template, so an unqualified "it is a function" check would pass either way.
+        expect(functions[targetFunctionId as string].Properties.Handler).toBe(
+            "handlers.workflows.sfn.workflowTriggerDispatch.lambda_handler"
+        );
+
+        // Same bound on the branch that builds the mapping the other way, because the two branches
+        // configure it separately and only the emitted template shows they agree.
+        expect(
+            batchSizeOffenders([
+                { at: "commercial dispatch mapping", properties: mappings[0].Properties },
+            ])
+        ).toEqual([]);
+    });
+
+    test("both branches configure the mapping identically apart from Tags", () => {
+        // The two branches restate batchSize and maxBatchingWindow separately, so they can drift
+        // silently: a change made to one is invisible in the other partition until deploy. Compared
+        // as whole property sets rather than field by field, so a property added to only one branch
+        // is caught as well.
+        const govCloud = eventSourceMappings(synthDispatchFunction(true))[0].Properties;
+        const commercial = { ...eventSourceMappings(synthDispatchFunction(false))[0].Properties };
+        delete commercial.Tags;
+
+        // Anti-vacuity: an empty pair of property sets would satisfy the comparison below.
+        expect(Object.keys(govCloud).sort()).toEqual(
+            expect.arrayContaining(["BatchSize", "EventSourceArn", "FunctionName"])
+        );
+        expect(commercial).toEqual(govCloud);
     });
 
     test("grants the dispatch function SQS consume permissions in both partitions", () => {

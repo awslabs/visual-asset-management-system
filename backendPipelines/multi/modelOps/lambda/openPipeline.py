@@ -90,6 +90,10 @@ def lambda_handler(event, context):
     # Orchestration event prefix for optional sub-process registration
     orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
 
+    # The asset the input file belongs to, threaded from the manifest by the vamsExecute lambda.
+    # constructPipeline uses it to locate the file's subdirectory within the asset.
+    asset_id = event.get('assetId', '')
+
     # Get any given additional outer/external task token to report back to (when using this pipeline as part of another state machine)
     if ('sfnExternalTaskToken' in event):
         external_sfn_task_token = event['sfnExternalTaskToken']
@@ -142,7 +146,8 @@ def lambda_handler(event, context):
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
-        "outputFileType": output_file_type
+        "outputFileType": output_file_type,
+        "assetId": asset_id
     }
 
     try:

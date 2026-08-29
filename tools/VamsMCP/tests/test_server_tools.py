@@ -77,6 +77,211 @@ def test_search_files_entity_type(mock_client):
     assert request["entityTypes"] == ["file"]
 
 
+# --- Database-scoped search must not over-match sibling databases ------------
+#
+# S6-TOOLS-003. The filter was `str_databaseid:"{database_id}"` on the ANALYZED field, so the standard
+# analyzer split on hyphens and the quoted phrase matched the adjacent token sequence [smoke, db] —
+# which smoke-db-2 ([smoke, db, 2]) also contains. Verified against a deployed index: 24 smoke-db
+# assets PLUS one from smoke-db-2. The same defect was fixed at four web call sites by targeting
+# `.keyword`; this builder was missed, and it is shared by search_assets, search_files and
+# find_and_summarize, so all three leaked.
+
+
+def _search_filter_query(mock_client):
+    request = mock_client.api.search_query.call_args.args[0]
+    return request["filters"][0]["query_string"]["query"]
+
+
+@pytest.fixture
+def searching_client(mock_client):
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    return mock_client
+
+
+@pytest.mark.parametrize("tool", ["search_assets", "search_files"])
+def test_database_filter_targets_the_keyword_subfield(searching_client, tool):
+    getattr(server, tool)(query="x", database_id="smoke-db")
+    query = _search_filter_query(searching_client)
+    assert query == 'str_databaseid.keyword:"smoke-db"'
+    # Stated separately: the exact-string assertion above would still pass if someone "fixed" it by
+    # dropping the quotes, which re-tokenizes a hyphenated id.
+    assert ".keyword" in query
+
+
+def test_find_and_summarize_uses_the_same_scoped_filter(searching_client):
+    """`_build_search_request` is shared, so this is the third caller that leaked."""
+    server.find_and_summarize("x", database_id="smoke-db")
+    assert ".keyword" in _search_filter_query(searching_client)
+
+
+def test_database_filter_escapes_an_embedded_quote(searching_client):
+    """An agent-supplied id must not be able to close the phrase and alter the query syntax."""
+    server.search_assets(query="x", database_id='a"b')
+    assert _search_filter_query(searching_client) == 'str_databaseid.keyword:"a\\"b"'
+
+
+def test_database_filter_escapes_a_backslash(searching_client):
+    server.search_assets(query="x", database_id="a\\b")
+    assert _search_filter_query(searching_client) == 'str_databaseid.keyword:"a\\\\b"'
+
+
+def test_global_is_treated_as_unscoped(searching_client):
+    """There is no asset database called GLOBAL — it is the unscoped keyword for the shared
+    pipeline/workflow catalogs — so filtering on it returns zero rows while other tool docstrings
+    actively teach the agent that GLOBAL is a valid database id."""
+    server.search_assets(query="x", database_id="GLOBAL")
+    request = searching_client.api.search_query.call_args.args[0]
+    assert "filters" not in request
+
+
+def test_no_database_id_adds_no_filter(searching_client):
+    """Negative control: unscoped must stay unscoped."""
+    server.search_assets(query="x")
+    assert "filters" not in searching_client.api.search_query.call_args.args[0]
+
+
+# --- Search paging and ordering ---------------------------------------------
+#
+# S6-TOOLS-008. `from` and `sort` were literals, so results past `size` were unreachable except by
+# re-issuing with a huge `size` (the unbounded response the server otherwise avoids), and
+# "the 10 most recently created assets" was inexpressible.
+
+
+def test_search_forwards_the_offset(searching_client):
+    server.search_assets(query="x", from_offset=25)
+    assert searching_client.api.search_query.call_args.args[0]["from"] == 25
+
+
+def test_search_defaults_to_relevance_ordering(searching_client):
+    server.search_assets(query="x")
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == ["_score"]
+
+
+@pytest.mark.parametrize("descending,expected", [(True, "desc"), (False, "asc")])
+def test_search_orders_by_a_named_field(searching_client, descending, expected):
+    server.search_assets(query="x", sort_field="dateCreated", sort_desc=descending)
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == [
+        {"dateCreated": {"order": expected}}
+    ]
+
+
+def test_search_negative_offset_is_clamped(searching_client):
+    server.search_assets(query="x", from_offset=-5)
+    assert searching_client.api.search_query.call_args.args[0]["from"] == 0
+
+
+def test_search_trims_to_the_clamped_size_not_the_raw_one(searching_client):
+    """`trim_search_results(raw, max_hits=size)` received the RAW value, so size=0 or a negative
+    truncated the hit list to nothing while the request itself asked for one hit."""
+    server.search_assets(query="x", size=0)
+    request = searching_client.api.search_query.call_args.args[0]
+    assert request["size"] == 1
+    assert searching_client.trim_search_results.call_args.kwargs["max_hits"] == 1
+
+
+# --- find_and_summarize fan-out ---------------------------------------------
+#
+# S6-TOOLS-012. `size` was passed through unclamped and each hit ran a paginated version walk with no
+# max_items, so `find_and_summarize(query, size=500)` issued 1 search plus up to 500 x max_pages
+# requests — thousands of authenticated calls and minutes of wall clock from one tool call that the
+# README's autoApprove sample includes.
+
+
+def test_find_and_summarize_clamps_the_hit_count(mock_client):
+    hits = [
+        {"_id": f"a{i}", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": f"a{i}"}}
+        for i in range(100)
+    ]
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 100}, "hits": hits}}
+    mock_client.trim_search_results.side_effect = (
+        lambda raw, max_hits=50: server.VamsClient.trim_search_results(raw, max_hits=max_hits)
+    )
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+
+    result = server.find_and_summarize("q", size=100)
+
+    assert mock_client.api.search_query.call_args.args[0]["size"] <= 25
+    assert len(result["assets"]) <= 25
+    # One inner request per hit, and no more.
+    assert mock_client.paginate.call_count == len(result["assets"])
+    assert "note" in result, "a clamped size must be reported, or the count reads as the real total"
+
+
+def test_find_and_summarize_bounds_each_inner_version_walk_to_one_page(mock_client):
+    """Only `count` is read off the version walk, so the extra pages were fetched and discarded."""
+    hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 1}, "hits": hits}}
+    mock_client.trim_search_results.side_effect = (
+        lambda raw, max_hits=50: server.VamsClient.trim_search_results(raw, max_hits=max_hits)
+    )
+    mock_client.config = server.CONFIG
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+
+    server.find_and_summarize("q")
+
+    assert mock_client.paginate.call_args.kwargs["max_items"] == server.CONFIG.page_size
+
+
+def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
+    """Negative control: the note must mark a clamp that happened, not appear unconditionally."""
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    result = server.find_and_summarize("q", size=5)
+    assert "note" not in result
+
+
+# --- starting_token reaches the endpoint ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: server.list_databases(starting_token="tok"),
+        lambda: server.list_buckets(starting_token="tok"),
+        lambda: server.list_assets(starting_token="tok"),
+        lambda: server.list_asset_files("db1", "a1", starting_token="tok"),
+        lambda: server.list_asset_versions("db1", "a1", starting_token="tok"),
+        lambda: server.get_asset_metadata("db1", "a1", starting_token="tok"),
+        lambda: server.get_database_metadata("db1", starting_token="tok"),
+        lambda: server.get_asset_history("db1", "a1", starting_token="tok"),
+        lambda: server.list_metadata_schemas(starting_token="tok"),
+        lambda: server.list_workflows(starting_token="tok"),
+        lambda: server.list_workflow_executions("db1", "a1", starting_token="tok"),
+        lambda: server.list_tags(starting_token="tok"),
+        lambda: server.list_tag_types(starting_token="tok"),
+        lambda: server.list_pipelines(starting_token="tok"),
+        lambda: server.list_executions(starting_token="tok"),
+        lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
+    ],
+)
+def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
+    """A ceiling without a resumption path is a wall. Asserted on the value that reaches paginate(),
+    which is where it becomes the first page's startingToken."""
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    # list_executions routes through _paginate_with_page_metadata, which wraps paginate().
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    result = call()
+    assert not (isinstance(result, dict) and result.get("error_type")), result
+    assert mock_client.paginate.call_args.kwargs.get("starting_token") == "tok"
+
+
+def test_starting_token_becomes_the_first_pages_request_parameter(mock_client):
+    """End-to-end control for the parametrized test above: the token has to reach the endpoint, not
+    merely reach paginate()."""
+    mock_client.config = server.CONFIG
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.paginate = lambda *args, **kwargs: server.VamsClient.paginate(
+        mock_client, *args, **kwargs
+    )
+    mock_client.api.list_asset_files.return_value = {"items": [], "NextToken": None}
+
+    server.list_asset_files("db1", "a1", starting_token="resume-here")
+
+    params = mock_client.api.list_asset_files.call_args.kwargs["params"]
+    assert params["startingToken"] == "resume-here"
+
+
 def test_search_assets_passes_geo_search(mock_client):
     mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
     mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
@@ -277,8 +482,13 @@ def test_mutating_tools_live_inside_their_gate_block():
     main = _line_of("def main()")
 
     by_name = {name: line for line, name in _tool_definitions()}
-    # Representative tools that must be gated; a read tool must NOT be.
-    for name in ("create_pipeline", "execute_workflow", "update_workflow"):
+    # Representative tools that must be gated; a read tool must NOT be. `abort_execution` is
+    # deliberately write-tier rather than destructive (S6-TOOLS-014): it removes no stored data, so
+    # requiring VAMS_ENABLE_DESTRUCTIVE for it would force an operator who wants abort to also enable
+    # every delete. Its risk is compute, which the README caution paragraph and CLAUDE.md Rule 4 name
+    # alongside execute_workflow / rerun_execution, and its group fan-out takes an explicit
+    # confirmation argument.
+    for name in ("create_pipeline", "execute_workflow", "update_workflow", "abort_execution"):
         assert writes < by_name[name] < destructive, f"{name} is outside the writes block"
     for name in ("archive_pipeline", "permanent_delete_execution", "delete_asset"):
         assert destructive < by_name[name] < main, f"{name} is outside the destructive block"
@@ -387,6 +597,39 @@ def test_list_executions_surfaces_page_warnings_and_flags_truncated(real_paginat
     # Reported once even though both pages carried it.
     assert result["warnings"] == [_WITHHELD_WARNING]
     assert result["truncated"] is True
+
+
+_WORK_BUDGET_WARNING = (
+    "This page stopped at its per-request work budget after reading 20 pages of the execution "
+    "index, so executions that match may not be listed."
+)
+
+
+def test_list_executions_surfaces_the_work_budget_bound(real_paginate_client):
+    """The second bound that can shorten a page. It arrives as another `warnings` string rather than
+    a new key, so it needs no entry in `passthrough_keys` (which drops unknown scalars silently) —
+    this pins that it genuinely reaches the agent."""
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "NextToken": "t1", "warnings": [_WORK_BUDGET_WARNING]}},
+        {"message": {"Items": [{"workflowExecutionId": "e1"}]}},
+    ]
+
+    result = server.list_executions()
+
+    assert result["warnings"] == [_WORK_BUDGET_WARNING]
+    assert result["truncated"] is True
+
+
+def test_list_executions_keeps_both_bounds_in_the_order_they_fired(real_paginate_client):
+    # The distinct-asset bound is reported first by the service; collapsing the two or reordering them
+    # would leave an agent unable to say which limit it hit.
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "warnings": [_WITHHELD_WARNING, _WORK_BUDGET_WARNING]}},
+    ]
+
+    result = server.list_executions()
+
+    assert result["warnings"] == [_WITHHELD_WARNING, _WORK_BUDGET_WARNING]
 
 
 def test_list_executions_echoes_the_applied_date_window(real_paginate_client):
@@ -670,11 +913,22 @@ def test_get_execution_logs_docstring_scopes_the_token_to_the_events_list():
 
 @pytest.mark.parametrize(
     "fragment",
-    # A page can withhold rows; the docstring is where an agent learns a short list may be one.
-    ["warnings", "WITHHELD", "truncated", "filterStartDate"],
+    # A page can withhold rows; the docstring is where an agent learns a short list may be one. Two
+    # bounds can shorten it — the distinct-asset cap and the per-request work budget — and an agent
+    # told about only one will read the other as an absence of matches.
+    ["warnings", "WITHHELD", "truncated", "filterStartDate",
+     "distinct assets", "work budget"],
 )
 def test_list_executions_docstring_describes_withheld_rows(fragment):
     assert fragment in _docstring_of("list_executions")
+
+
+def test_list_executions_docstring_names_the_output_asset_gate():
+    """Visibility is filtered on the asset a run WROTE to as well as the assets it read, so a run can
+    be absent for a reason the date window and the filters do not explain. An agent that does not
+    know this reports the run as non-existent."""
+    docstring = _docstring_of("list_executions")
+    assert "wrote to" in docstring
 
 
 @pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline"])
@@ -684,6 +938,100 @@ def test_pipeline_save_docstrings_tell_the_agent_to_relay_warnings(tool):
 
 def test_list_workflows_docstring_mentions_archived_discovery():
     assert "include_archived" in _docstring_of("list_workflows")
+
+
+# --- Every paginated read tool must describe its bound ----------------------
+#
+# S6b-mcp#9. `paginate()` emitted `truncated` and `note`, but only list_executions and
+# page_execution_detail_metadata mentioned a bound in their docstrings. The rest were one-liners that
+# assert completeness — "List files belonging to an asset (auto-paginated)." — so an agent that
+# received 2,000 of an asset's 12,000 files had nothing telling it not to report that as the count, or
+# not to answer "file X is not in this asset". Mandatory Rule 8: the docstring must say what the flag
+# means for the agent's CONCLUSION, not merely that the field exists.
+
+_PAGINATED_READ_TOOLS = (
+    "list_databases",
+    "list_buckets",
+    "list_assets",
+    "list_asset_files",
+    "get_asset_metadata",
+    "get_database_metadata",
+    "list_asset_versions",
+    "get_asset_history",
+    "list_metadata_schemas",
+    "list_workflows",
+    "list_workflow_executions",
+    "list_tags",
+    "list_tag_types",
+    "list_pipelines",
+    "list_executions",
+    "page_execution_detail_metadata",
+)
+
+
+@pytest.mark.parametrize("tool", _PAGINATED_READ_TOOLS)
+def test_paginated_read_docstrings_describe_the_bound(tool):
+    docstring = _docstring_of(tool)
+    assert docstring, f"{tool} has no docstring, so this assertion would be vacuous"
+    assert "truncated" in docstring, f"{tool} does not tell the agent a short list may be bounded"
+    assert "starting_token" in docstring, f"{tool} does not say how to continue the walk"
+
+
+@pytest.mark.parametrize("tool", _PAGINATED_READ_TOOLS)
+def test_paginated_read_tools_accept_a_starting_token(tool):
+    """The docstring promise above has to be backed by a real parameter.
+
+    Read off the live signature rather than the source text: a docstring that describes a parameter
+    the function does not take is worse than silence — the agent's call is rejected by the schema.
+    """
+    import inspect
+
+    parameters = inspect.signature(getattr(server, tool)).parameters
+    assert "starting_token" in parameters, f"{tool} documents starting_token but does not accept it"
+    assert parameters["starting_token"].default is None
+
+
+def test_the_docstring_bound_check_would_fire_on_a_one_liner():
+    """Positive control for the two tests above.
+
+    `_docstring_of` resolves by AST over the file, so a renamed helper or a changed decorator order
+    would make it raise rather than silently pass — but a tool whose docstring simply lacks the
+    sentence must fail, and this proves the assertion is capable of failing. `get_search_fields` is a
+    non-paginated read tool: it is a genuine one-liner and correctly says nothing about a bound.
+    """
+    one_liner = _docstring_of("get_search_fields")
+    assert one_liner
+    assert "truncated" not in one_liner
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # generate_download_url sits in the unconditional read gate, so it hands out an S3 bearer
+    # credential on a deployment with writes and destructive operations both disabled. The docstring
+    # is the only place the operator reading the tool list, and the agent deciding whether to call
+    # it, learn what the returned string is, how long it stays usable, where it ends up, and the one
+    # deployment setting that bounds it. Matched on identifiers and one exact phrase rather than
+    # prose, so a copy-edit does not fail the suite.
+    [
+        "bearer credential",
+        "presignedUrlTimeoutSeconds",
+        "24 hours",
+        "transcript",
+        "presignedUrlNetworkRestrictions",
+        "allowedIpRanges",
+        "allowedVpceIds",
+    ],
+)
+def test_generate_download_url_docstring_names_the_credential_exposure(fragment):
+    assert fragment in _docstring_of("generate_download_url")
+
+
+def test_generate_download_url_docstring_positive_control():
+    """Control for the assertions above: prove the helper read this tool's real docstring rather
+    than an empty one, by pinning text that predates them."""
+    docstring = _docstring_of("generate_download_url")
+    assert docstring, "no docstring was read, so every fragment assertion above is vacuous"
+    assert "presigned download URL for an asset file" in docstring
 
 
 # Every pipeline/workflow/execution APIClient method returns the handler's raw
@@ -828,3 +1176,59 @@ def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
     source = _source_of(tool)
     assert "_unwrap_message_with_warnings" not in source
     assert "unwrap_message" in source
+
+
+# --- The compute cautions must name the same three tools everywhere ----------
+#
+# S6-TOOLS-014. `abort_execution` sat in the writes gate — correctly, since it removes no stored data
+# — but its own docstring says "Aborting is not reversible" and the group form terminates every active
+# run in a group. `CLAUDE.md` Rule 4 and the README's autoApprove caution named only
+# `execute_workflow` and `rerun_execution`, so an operator who enabled writes while deliberately
+# leaving destructive off had nothing telling them the writes gate included an irreversible group-wide
+# kill of running AWS compute. The classification is now stated in all three places, so the risk of
+# drift moves to keeping them in step — which is what this asserts.
+
+_COMPUTE_CAUTION_TOOLS = ("execute_workflow", "rerun_execution", "abort_execution")
+
+
+def _sibling_doc(name):
+    return (SOURCE_PATH.resolve().parents[1] / name).read_text(encoding="utf-8")
+
+
+def _readme_compute_caution_paragraph():
+    """The README paragraph that tells the reader what to keep out of `autoApprove`.
+
+    Located by content rather than by an offset from one phrase: an offset window silently excludes
+    whichever tool happens to be named before the anchor, which is how a green assertion can cover
+    two of the three names.
+    """
+    paragraphs = [p for p in _sibling_doc("README.md").split("\n\n")
+                  if "autoApprove" in p and "incur cost" in p]
+    assert len(paragraphs) == 1, (
+        f"expected exactly one compute-caution paragraph in README.md, found {len(paragraphs)}")
+    return paragraphs[0]
+
+
+@pytest.mark.parametrize("tool", _COMPUTE_CAUTION_TOOLS)
+def test_readme_autoapprove_caution_names_every_compute_tool(tool):
+    paragraph = _readme_compute_caution_paragraph()
+    assert f"`{tool}`" in paragraph, f"the README autoApprove caution does not name {tool}"
+
+
+@pytest.mark.parametrize("tool", _COMPUTE_CAUTION_TOOLS)
+def test_steering_rule_4_names_every_compute_tool(tool):
+    steering = _sibling_doc("CLAUDE.md")
+    assert f"`{tool}`" in steering, f"CLAUDE.md Rule 4 does not classify {tool}"
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # An operator who enables writes while deliberately leaving destructive off has to be able to
+    # learn from the tool description that this one irreversibly stops running compute and fans out
+    # across a group. Read from the source docstring because the tool is absent at the default gates.
+    ["NOT reversible", "STOPS running AWS compute", "fans out", "autoApprove"],
+)
+def test_abort_execution_docstring_states_the_compute_risk(fragment):
+    docstring = _docstring_of("abort_execution")
+    assert docstring, "no docstring was read, so this assertion would be vacuous"
+    assert fragment in docstring

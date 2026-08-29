@@ -237,6 +237,9 @@ export interface PipelineInputConstraints {
     label: string;
     systemConfig?: PipelineSystemConfig;
     templateOverrides?: Record<string, any>;
+    /** False while this step requires a template that has not been chosen yet, so its overrides may
+     *  still narrow the resolution. */
+    templateKnown?: boolean;
 }
 
 /**
@@ -351,21 +354,26 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     const pipelineDbIds = effectiveWorkflow.specifiedPipelines.map(
         (p) => p.pipelineDatabaseId || databaseId
     );
-    const { data: allPipelines, isLoading: pipelinesLoading } = useAllPipelines();
+    // Archived pipelines are included so an existing workflow's reference to one still resolves —
+    // otherwise an archived step is indistinguishable from a deleted one and reports "not found",
+    // which names neither the real reason nor the way to fix it (mirrors WorkflowBuilder).
+    const { data: allPipelines, isLoading: pipelinesLoading } = useAllPipelines(undefined, true);
 
     // The workflow definition (and thus its pipeline references) and the pipeline catalog both
     // load asynchronously. Until both resolve we cannot know the pipeline list, so the wizard shows
     // a loading state rather than prematurely rendering "no pipelines"/"pipeline not found".
     const dataLoading = workflowLoading || pipelinesLoading || !allPipelines;
 
+    // Aligned 1:1 with `specifiedPipelines`, holding `undefined` where a reference did not resolve.
+    // Three consumers read this positionally (the step labels, renderStage and WizardReviewStage), so
+    // compacting it would slide every later step onto the previous one's record — labelling step 2
+    // with its own id while handing it step 3's templates and systemConfig.
     const pipelines = useMemo(() => {
         if (!allPipelines) return [];
-        return pipelineIds
-            .map((id, idx) => {
-                const dbId = pipelineDbIds[idx];
-                return allPipelines.find((p) => p.pipelineId === id && p.databaseId === dbId);
-            })
-            .filter(Boolean);
+        return pipelineIds.map((id, idx) => {
+            const dbId = pipelineDbIds[idx];
+            return allPipelines.find((p) => p.pipelineId === id && p.databaseId === dbId);
+        });
     }, [allPipelines, pipelineIds, pipelineDbIds]);
 
     const executeWorkflow = useExecuteWorkflow();
@@ -546,8 +554,8 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     const pipelineInputConstraints = useMemo(
         () =>
             effectiveWorkflow.specifiedPipelines.map((ref) => {
-                // Match on identity, not position: `pipelines` drops refs that did not resolve, so an
-                // index would attach another pipeline's systemConfig to this ref.
+                // Matched on identity rather than on the index into `pipelines`, so this reference
+                // carries its own pipeline's systemConfig whatever the catalogue returned.
                 const pipeline = pipelines.find(
                     (p) =>
                         p?.pipelineId === ref.pipelineId &&
@@ -558,6 +566,12 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                     label: `Pipeline "${pipeline?.pipelineName || ref.pipelineId}"`,
                     systemConfig: pipeline?.systemConfig,
                     templateOverrides: pipelineData[compositeKey]?.templateOverrides,
+                    // A require-template step with nothing chosen yet can still be narrowed by that
+                    // template's overrides, so the Input step's summary says it is indicative rather
+                    // than presenting the pipeline's own rules as the final answer.
+                    templateKnown:
+                        !pipeline?.systemConfig?.requireTemplate ||
+                        !!pipelineData[compositeKey]?.templateId,
                 };
             }),
         [effectiveWorkflow.specifiedPipelines, pipelines, pipelineData, databaseId]
@@ -765,6 +779,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                         metadataSourceDatabaseId={metadataSourceDatabaseId}
                         outputAssetId={outputAssetId}
                         outputDatabaseId={outputDatabaseId}
+                        outputPathPrefix={outputPathPrefix}
                         validationErrors={validationErrors}
                     />
                 </>

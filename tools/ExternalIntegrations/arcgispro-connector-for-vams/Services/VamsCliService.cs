@@ -18,36 +18,123 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using VamsDatabaseExplorer.Models;
 
 namespace VamsDatabaseExplorer.Services
 {
+    /// <summary>Thrown when the vamscli executable cannot be launched: not installed, or not on PATH.</summary>
+    public class VamsCliNotFoundException : InvalidOperationException
+    {
+        public VamsCliNotFoundException(string message, Exception inner = null)
+            : base(message, inner) { }
+    }
+
+    /// <summary>Thrown when vamscli reports that the named profile does not exist.</summary>
+    public class VamsProfileNotFoundException : InvalidOperationException
+    {
+        public VamsProfileNotFoundException(string profileName, string message, Exception inner = null)
+            : base(message, inner)
+        {
+            ProfileName = profileName;
+        }
+
+        public string ProfileName { get; }
+    }
+
+    /// <summary>
+    /// Thrown when a file-transfer command reports failed files. A transfer command writes its full
+    /// report to stdout and THEN exits non-zero when <c>overall_success</c> is false, so a partial
+    /// transfer stays distinguishable from a total one. <see cref="Report"/> carries that report.
+    /// </summary>
+    public class VamsTransferException : InvalidOperationException
+    {
+        public VamsTransferException(string message, AssetDownloadResponse report)
+            : base(message)
+        {
+            Report = report;
+        }
+
+        public AssetDownloadResponse Report { get; }
+    }
+
     public class VamsCliService : IDisposable
     {
+        /// <summary>The vamscli profile used when none is configured.</summary>
+        public const string DefaultProfileName = "default";
+
+        /// <summary>Environment variable naming the vamscli profile this connector runs against.</summary>
+        public const string ProfileEnvironmentVariable = "VAMS_CLI_PROFILE";
+
+        /// <summary>The <c>error_type</c> vamscli reports for a profile that does not exist. In JSON
+        /// mode the field carries the CLI exception's class name.</summary>
+        private const string ProfileNotFoundErrorType = "ProfileNotFoundError";
+
+        /// <summary>How many failed file keys a transfer-failure message names before summarizing.</summary>
+        private const int MaxNamedTransferFailures = 5;
+
+        /// <summary>
+        /// Bound on a metadata, auth or listing command. Every wait needs one: a child that fills its
+        /// redirected stderr buffer never exits, and without a bound the ArcGIS Pro operation hangs
+        /// until the add-in is unloaded.
+        /// </summary>
+        private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
+
+        /// <summary>
+        /// Bound on a download. Far longer than <see cref="CommandTimeout"/>, because a recursive
+        /// download of a real asset moves thousands of files and a bound that cut it short would
+        /// break working transfers.
+        /// </summary>
+        private static readonly TimeSpan TransferCommandTimeout = TimeSpan.FromHours(4);
+
         private readonly JsonSerializerOptions _jsonOptions;
+        private readonly string _profileName;
         private bool _disposed = false;
-        
+
         // Cached credentials for automatic re-authentication
         private static string _cachedUsername;
         private static string _cachedPassword;
-        
+
         // Cached web deployed URL from auth status
         private static string _webDeployedUrl;
-        
+
         // Cached auth type (once per session)
         private static string _cachedAuthType;
         private static bool _profileInfoFetched = false;
 
-        public VamsCliService()
+        public VamsCliService() : this(null)
         {
+        }
+
+        /// <param name="profileName">
+        /// The vamscli profile every command runs against. When null or blank it is read from
+        /// <see cref="ProfileEnvironmentVariable"/>, and falls back to <see cref="DefaultProfileName"/>.
+        /// </param>
+        public VamsCliService(string profileName)
+        {
+            _profileName = ResolveProfileName(profileName);
+
             _jsonOptions = new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true,
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             };
+        }
+
+        private static string ResolveProfileName(string profileName)
+        {
+            if (!string.IsNullOrWhiteSpace(profileName))
+            {
+                return profileName.Trim();
+            }
+
+            var configured = Environment.GetEnvironmentVariable(ProfileEnvironmentVariable);
+            return string.IsNullOrWhiteSpace(configured) ? DefaultProfileName : configured.Trim();
         }
 
         public async Task<string> LoginAsync(string username, string passwordOrToken)
@@ -62,15 +149,17 @@ namespace VamsDatabaseExplorer.Services
             
             if (authType == "Cognito")
             {
-                // Use regular Cognito login
+                // --password-stdin keeps the password out of the argument vector, which the OS
+                // process table exposes to every other local account for the lifetime of the login.
                 var arguments = new List<string> { "auth", "login", "--json-output", "-u", username };
+                string stdinPayload = null;
                 if (!string.IsNullOrEmpty(passwordOrToken))
                 {
-                    arguments.Add("-p");
-                    arguments.Add(passwordOrToken);
+                    arguments.Add("--password-stdin");
+                    stdinPayload = passwordOrToken;
                 }
 
-                output = await ExecuteCommandAsync("vamscli", arguments);
+                output = await ExecuteCommandAsync("vamscli", arguments, stdinPayload);
                 System.Diagnostics.Debug.WriteLine($"LoginAsync: Cognito output: {output}");
                 
                 // Parse success message
@@ -88,14 +177,16 @@ namespace VamsDatabaseExplorer.Services
             }
             else
             {
-                // Use auth login with token override for external auth (JWT token or VAMS API key)
+                // Use auth login with token override for external auth (JWT token or VAMS API key).
+                // The token goes to stdin for the same reason the password does.
                 var arguments = new List<string>
                 {
                     "auth", "login", "--user-id", username,
-                    "--token-override", passwordOrToken ?? string.Empty, "--json-output"
+                    "--token-override-stdin", "--json-output"
                 };
 
-                output = await ExecuteCommandAsync("vamscli", arguments);
+                output = await ExecuteCommandAsync(
+                    "vamscli", arguments, passwordOrToken ?? string.Empty);
                 System.Diagnostics.Debug.WriteLine($"LoginAsync: External auth output: {output}");
                 
                 // Parse JSON response to check success
@@ -164,42 +255,60 @@ namespace VamsDatabaseExplorer.Services
                 return _cachedAuthType;
             }
 
+            System.Diagnostics.Debug.WriteLine(
+                $"VamsCliService: Fetching profile info for auth type (profile '{_profileName}')");
+
+            ProfileInfoResponse profileInfo;
             try
             {
-                System.Diagnostics.Debug.WriteLine("VamsCliService: Fetching profile info for auth type");
                 var output = await ExecuteCommandAsync(
-                    "vamscli", new List<string> { "profile", "info", "default", "--json-output" });
-                
-                var profileInfo = JsonSerializer.Deserialize<ProfileInfoResponse>(output, _jsonOptions);
-                
-                if (profileInfo?.ProfileInfo != null)
-                {
-                    _cachedAuthType = profileInfo.ProfileInfo.AuthType ?? "Cognito"; // Default to Cognito
-                    _profileInfoFetched = true;
-                    
-                    System.Diagnostics.Debug.WriteLine($"VamsCliService: Auth type: {_cachedAuthType}");
-                    
-                    // Also cache web URL if available
-                    if (!string.IsNullOrEmpty(profileInfo.ProfileInfo.WebDeployedUrl))
-                    {
-                        _webDeployedUrl = profileInfo.ProfileInfo.WebDeployedUrl;
-                        System.Diagnostics.Debug.WriteLine($"VamsCliService: Cached web URL from profile: {_webDeployedUrl}");
-                    }
-                    
-                    return _cachedAuthType;
-                }
-                
+                    "vamscli", new List<string> { "profile", "info", _profileName, "--json-output" });
+                profileInfo = JsonSerializer.Deserialize<ProfileInfoResponse>(output, _jsonOptions);
+            }
+            catch (VamsCliNotFoundException)
+            {
+                // Already names the install step. Restating it as a profile problem would send the
+                // user to a command their machine does not have.
+                throw;
+            }
+            catch (VamsProfileNotFoundException ex)
+            {
+                // A missing profile is reported as its own failure, so it is distinguishable from a
+                // profile that exists but cannot be read.
                 throw new InvalidOperationException(
-                    "Profile may not be set up.\n\n" +
-                    "Please run 'vamscli setup' in a terminal to configure your VAMS profile before using this tool.");
+                    $"The vamscli profile '{_profileName}' does not exist.\n\n" +
+                    $"Create it with:\n  vamscli setup <api-gateway-url> --profile {_profileName}\n\n" +
+                    $"Or set the {ProfileEnvironmentVariable} environment variable to a profile that " +
+                    "does exist. Run 'vamscli profile list' to see which are configured.", ex);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"VamsCliService: Error fetching profile info: {ex.Message}");
                 throw new InvalidOperationException(
-                    "Failed to fetch profile information.\n\n" +
-                    "Please ensure 'vamscli setup' has been run to configure your VAMS profile.", ex);
+                    $"Failed to read the vamscli profile '{_profileName}'.\n\n{ex.Message}", ex);
             }
+
+            if (profileInfo?.ProfileInfo == null)
+            {
+                throw new InvalidOperationException(
+                    $"The vamscli profile '{_profileName}' is not fully set up.\n\n" +
+                    "Please run 'vamscli setup <api-gateway-url>' in a terminal to configure it " +
+                    "before using this tool.");
+            }
+
+            _cachedAuthType = profileInfo.ProfileInfo.AuthType ?? "Cognito"; // Default to Cognito
+            _profileInfoFetched = true;
+
+            System.Diagnostics.Debug.WriteLine($"VamsCliService: Auth type: {_cachedAuthType}");
+
+            // Also cache web URL if available
+            if (!string.IsNullOrEmpty(profileInfo.ProfileInfo.WebDeployedUrl))
+            {
+                _webDeployedUrl = profileInfo.ProfileInfo.WebDeployedUrl;
+                System.Diagnostics.Debug.WriteLine($"VamsCliService: Cached web URL from profile: {_webDeployedUrl}");
+            }
+
+            return _cachedAuthType;
         }
 
         public static string GetWebDeployedUrl()
@@ -422,7 +531,13 @@ namespace VamsDatabaseExplorer.Services
                 "--file-key", "/", "--recursive", "--json-output"
             };
 
-            var output = await ExecuteCommandAsync("vamscli", arguments);
+            // allowTransferReport: a recursive download exits non-zero as soon as any one file
+            // fails, but its report survives on stdout. Returning it lets the caller show "900 of
+            // 1000 downloaded" and name the failures, which the summary window already does;
+            // treating the exit code as fatal would report a mostly-successful download as a total
+            // failure with an empty message.
+            var output = await ExecuteCommandAsync(
+                "vamscli", arguments, timeout: TransferCommandTimeout, allowTransferReport: true);
             System.Diagnostics.Debug.WriteLine($"VamsCliService: Recursive download output: {output}");
 
             // Parse the JSON response
@@ -486,7 +601,10 @@ namespace VamsDatabaseExplorer.Services
                 "--file-key", fileKey, "--json-output"
             };
 
-            var output = await ExecuteCommandAsync("vamscli", arguments);
+            // A single-file download has no partial outcome to report, so a failure is left to throw
+            // as VamsTransferException — whose message names the file and the reported reason.
+            var output = await ExecuteCommandAsync(
+                "vamscli", arguments, timeout: TransferCommandTimeout);
             System.Diagnostics.Debug.WriteLine($"VamsCliService: Download output: {output}");
 
             // The CLI behavior:
@@ -577,11 +695,28 @@ namespace VamsDatabaseExplorer.Services
         /// double-quote or a leading dash reaches the CLI intact. Only the subcommand path (the
         /// leading tokens before the first option) is traced; the remaining tokens can carry a
         /// password or override token, so they are never written to the log or an exception message.
+        /// <para>
+        /// The configured profile is prepended here rather than at each call site: --profile is a
+        /// group-level option, so it has to precede the subcommand, and an omitted flag resolves to
+        /// whatever profile `vamscli profile switch` last recorded.
+        /// </para>
+        /// <para>
+        /// <paramref name="stdinPayload"/> carries a credential to the CLI's stdin. It is never an
+        /// argument, because the OS process table exposes arguments to every other local account.
+        /// </para>
+        /// <para>
+        /// <paramref name="allowTransferReport"/> returns the output of a transfer command that
+        /// exited non-zero but still reported which files succeeded, instead of throwing.
+        /// </para>
         /// </summary>
-        private async Task<string> ExecuteCommandAsync(string command, IReadOnlyList<string> arguments)
+        private async Task<string> ExecuteCommandAsync(
+            string command, IReadOnlyList<string> arguments, string stdinPayload = null,
+            TimeSpan? timeout = null, bool allowTransferReport = false)
         {
             var commandLabel = DescribeCommand(command, arguments);
-            System.Diagnostics.Debug.WriteLine($"VamsCliService: Executing command: {commandLabel}");
+            var commandTimeout = timeout ?? CommandTimeout;
+            System.Diagnostics.Debug.WriteLine(
+                $"VamsCliService: Executing command: {commandLabel} (profile '{_profileName}')");
 
             try
             {
@@ -590,9 +725,20 @@ namespace VamsDatabaseExplorer.Services
                     FileName = command,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
+                    RedirectStandardInput = stdinPayload != null,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+
+                if (stdinPayload != null)
+                {
+                    // The CLI decodes a piped credential as UTF-8; the console code page the
+                    // default writer would use is not it.
+                    processStartInfo.StandardInputEncoding = new UTF8Encoding(false);
+                }
+
+                processStartInfo.ArgumentList.Add("--profile");
+                processStartInfo.ArgumentList.Add(_profileName);
 
                 foreach (var argument in arguments)
                 {
@@ -600,12 +746,58 @@ namespace VamsDatabaseExplorer.Services
                 }
 
                 using var process = new Process { StartInfo = processStartInfo };
-                process.Start();
 
-                var output = await process.StandardOutput.ReadToEndAsync();
-                var error = await process.StandardError.ReadToEndAsync();
+                try
+                {
+                    process.Start();
+                }
+                catch (System.ComponentModel.Win32Exception ex)
+                {
+                    // FileName is resolved through PATH, so a missing executable surfaces here and
+                    // nowhere else. It is the most common first-run failure, and pointing the user
+                    // at 'vamscli setup' would name a command they do not have.
+                    throw new VamsCliNotFoundException(
+                        $"The VAMS CLI ('{command}') was not found on PATH.\n\n" +
+                        "Install it with:\n  pip install vamscli\n\n" +
+                        "Then restart ArcGIS Pro so it picks up the updated PATH.", ex);
+                }
 
-                await process.WaitForExitAsync();
+                if (stdinPayload != null)
+                {
+                    // Written and closed before the output is read: the CLI blocks on stdin, and
+                    // reading stdout first would deadlock.
+                    await process.StandardInput.WriteLineAsync(stdinPayload);
+                    process.StandardInput.Close();
+                }
+
+                // Both pipes are drained CONCURRENTLY. Reading stdout to completion first deadlocks
+                // as soon as the child fills the redirected stderr buffer — a long traceback or an
+                // SSL warning burst is enough: the child blocks writing stderr, so it never exits
+                // and never closes stdout, and the awaited stdout read never returns.
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+
+                string output = null;
+                string error = null;
+                using (var expiry = new CancellationTokenSource(commandTimeout))
+                {
+                    try
+                    {
+                        await process.WaitForExitAsync(expiry.Token);
+                        output = await outputTask;
+                        error = await errorTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Killing the child closes both pipes, which completes the two reads.
+                        KillQuietly(process);
+                        ObserveQuietly(outputTask);
+                        ObserveQuietly(errorTask);
+                        throw new InvalidOperationException(
+                            $"'{commandLabel}' did not finish within " +
+                            $"{commandTimeout.TotalMinutes:F0} minute(s) and was cancelled.");
+                    }
+                }
 
                 System.Diagnostics.Debug.WriteLine($"VamsCliService: Command exit code: {process.ExitCode}");
                 System.Diagnostics.Debug.WriteLine($"VamsCliService: Command output: {output}");
@@ -616,9 +808,26 @@ namespace VamsDatabaseExplorer.Services
                     // Try to parse as error JSON first
                     if (TryParseError(output, out var errorMsg, out var errorType))
                     {
+                        if (string.Equals(errorType, ProfileNotFoundErrorType, StringComparison.Ordinal))
+                        {
+                            throw new VamsProfileNotFoundException(_profileName, errorMsg);
+                        }
                         throw new InvalidOperationException($"{errorType}: {errorMsg}");
                     }
-                    
+
+                    // A transfer command writes its report to stdout and THEN exits non-zero when
+                    // overall_success is false, so the report survives and still names which files
+                    // failed. Under --json-output stderr is empty, so falling straight through to it
+                    // would produce a message carrying nothing at all.
+                    if (TryParseTransferReport(output, out var report))
+                    {
+                        if (allowTransferReport)
+                        {
+                            return output;
+                        }
+                        throw new VamsTransferException(DescribeTransferFailure(report), report);
+                    }
+
                     // Fall back to stderr
                     throw new InvalidOperationException($"Command failed with exit code {process.ExitCode}: {error}");
                 }
@@ -631,11 +840,109 @@ namespace VamsDatabaseExplorer.Services
 
                 return output;
             }
+            catch (VamsCliNotFoundException)
+            {
+                // These three already describe the failure and the action that fixes it. Wrapping
+                // them in "Error executing command ..." would bury the guidance the caller keys off.
+                throw;
+            }
+            catch (VamsProfileNotFoundException)
+            {
+                throw;
+            }
+            catch (VamsTransferException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"VamsCliService: Exception executing command: {ex}");
                 throw new InvalidOperationException($"Error executing command '{commandLabel}': {ex.Message}", ex);
             }
+        }
+
+        /// <summary>Kill a process that overran its timeout, reporting rather than raising a failure to do so.</summary>
+        private static void KillQuietly(Process process)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"VamsCliService: could not kill the timed-out process: {ex.Message}");
+            }
+        }
+
+        /// <summary>Attach a no-op continuation so an abandoned pipe read is never an unobserved exception.</summary>
+        private static void ObserveQuietly(Task task)
+        {
+            _ = task.ContinueWith(
+                completed => { _ = completed.Exception; },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        /// <summary>
+        /// The transfer report on the stdout of a command that exited non-zero, or false when stdout
+        /// carries none. Keyed on <c>overall_success</c> being present and exactly false: presence
+        /// keeps every other response shape out of this path, and testing for false rather than
+        /// falsiness keeps a report with no such field from being read as a failure.
+        /// </summary>
+        private bool TryParseTransferReport(string output, out AssetDownloadResponse report)
+        {
+            report = null;
+
+            if (string.IsNullOrWhiteSpace(output)) return false;
+
+            try
+            {
+                using var document = JsonDocument.Parse(output);
+                if (document.RootElement.ValueKind != JsonValueKind.Object) return false;
+                if (!document.RootElement.TryGetProperty("overall_success", out var flag)) return false;
+                if (flag.ValueKind != JsonValueKind.False) return false;
+
+                report = JsonSerializer.Deserialize<AssetDownloadResponse>(output, _jsonOptions);
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+
+            return report != null;
+        }
+
+        /// <summary>A one-line summary of a transfer report, distinguishing a partial from a total failure.</summary>
+        private static string DescribeTransferFailure(AssetDownloadResponse report)
+        {
+            var failedKeys = (report.FailedDownloads ?? new List<FailedDownload>())
+                .Select(failed => string.IsNullOrEmpty(failed.RelativeKey)
+                    ? failed.LocalPath
+                    : failed.RelativeKey)
+                .Where(key => !string.IsNullOrEmpty(key))
+                .ToList();
+
+            var summary = report.SuccessfulFiles > 0 && report.SuccessfulFiles < report.TotalFiles
+                ? $"Transfer partially failed: {report.SuccessfulFiles} of {report.TotalFiles} " +
+                  $"file(s) succeeded, {report.FailedFiles} failed"
+                : $"Transfer failed: {report.FailedFiles} of {report.TotalFiles} file(s) failed";
+
+            if (failedKeys.Count > 0)
+            {
+                var named = string.Join(", ", failedKeys.Take(MaxNamedTransferFailures));
+                if (failedKeys.Count > MaxNamedTransferFailures)
+                {
+                    named += $", ... (+{failedKeys.Count - MaxNamedTransferFailures} more)";
+                }
+                summary = $"{summary} ({named})";
+            }
+
+            return summary;
         }
 
         /// <summary>

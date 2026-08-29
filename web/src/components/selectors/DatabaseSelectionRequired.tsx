@@ -6,6 +6,7 @@
 import React from "react";
 import Box from "@cloudscape-design/components/box";
 import Container from "@cloudscape-design/components/container";
+import FormField from "@cloudscape-design/components/form-field";
 import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import DatabaseSelector from "./DatabaseSelector";
@@ -53,7 +54,12 @@ export default function DatabaseSelectionRequired({
                                 ? ` Choose GLOBAL for entries shared by every ${Synonyms.database}.`
                                 : ""}
                         </Box>
-                        <DatabaseSelector onChange={onSelect} showGlobal={showGlobal} />
+                        {/* The container heading is not programmatically tied to the control, and
+                            this selector is the page's only interactive element until a choice is
+                            made — a FormField label associates one. */}
+                        <FormField label={Synonyms.Database}>
+                            <DatabaseSelector onChange={onSelect} showGlobal={showGlobal} />
+                        </FormField>
                     </SpaceBetween>
                 </Container>
             </SpaceBetween>

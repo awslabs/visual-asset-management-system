@@ -97,6 +97,22 @@ export class SearchBuilderNestedStack extends NestedStack {
         let assetIndexingFunction: lambda.Function | undefined = undefined;
         let reindexerFunction: lambda.Function | undefined = undefined;
 
+        // The dead-letter queues of the two indexer source queues. Held in the outer scope so the
+        // CDK Nag suppression at the end of this method can be scoped to them rather than to the
+        // whole stack, which would also cover a source queue added later without a redrive policy.
+        let fileIndexerSqsDlq: sqs.Queue | undefined = undefined;
+        let assetIndexerSqsDlq: sqs.Queue | undefined = undefined;
+
+        // Deliveries a message gets before its source queue moves it to the dead-letter queue.
+        // A record the indexer rejects alone is redelivered alone, but a failure it cannot pin
+        // on one record reports the WHOLE batch, and a timeout reports none of it, so the count
+        // is not per-message in the failure mode that matters: three deliveries spaced by the
+        // 960 s visibility timeout below is ~45 minutes before a persistent fault dead-letters
+        // a batch's healthy records too, which then need a DLQ redrive inside its 14-day
+        // retention. Raising the count costs only later dead-lettering, as indexing is an
+        // idempotent upsert keyed by document id.
+        const indexerQueueMaxReceiveCount = 3;
+
         if (config.app.openSearch.useServerless.enabled) {
             //Serverless Deployment
             const aoss = new OpensearchServerlessConstruct(scope, "AOSS", {
@@ -148,6 +164,17 @@ export class SearchBuilderNestedStack extends NestedStack {
             this.reindexerFunctionName = reindexerFunction.functionName;
 
             // Create SQS queues for indexers and subscribe to SNS topics
+            // File indexer dead-letter queue. Encryption mirrors the source queue below: a message
+            // moved into a DLQ the indexer's role cannot decrypt is unreadable dead letter.
+            fileIndexerSqsDlq = new sqs.Queue(scope, "FileIndexerSqsDLQ", {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: storageResources.encryption.kmsKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: storageResources.encryption.kmsKey,
+                enforceSSL: true,
+            });
+
             // File indexer SQS queue
             const fileIndexerSqsQueue = new sqs.Queue(scope, "FileIndexerSqsQueue", {
                 queueName: `${config.name}-${config.app.baseStackName}-fileIndexer`,
@@ -157,6 +184,10 @@ export class SearchBuilderNestedStack extends NestedStack {
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: storageResources.encryption.kmsKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: fileIndexerSqsDlq,
+                    maxReceiveCount: indexerQueueMaxReceiveCount,
+                },
             });
             fileIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
@@ -177,6 +208,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                         target: fileIndexingFunction,
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     }
                 );
                 const cfnEsmFileIndexer = esmFileIndexer.node
@@ -187,9 +219,21 @@ export class SearchBuilderNestedStack extends NestedStack {
                     new eventsources.SqsEventSource(fileIndexerSqsQueue, {
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     })
                 );
             }
+
+            // Asset indexer dead-letter queue. One per source queue, so the file indexer's poison
+            // records stay distinguishable from the asset indexer's.
+            assetIndexerSqsDlq = new sqs.Queue(scope, "AssetIndexerSqsDLQ", {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: storageResources.encryption.kmsKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: storageResources.encryption.kmsKey,
+                enforceSSL: true,
+            });
 
             // Asset indexer SQS queue
             const assetIndexerSqsQueue = new sqs.Queue(scope, "AssetIndexerSqsQueue", {
@@ -200,6 +244,10 @@ export class SearchBuilderNestedStack extends NestedStack {
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: storageResources.encryption.kmsKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: assetIndexerSqsDlq,
+                    maxReceiveCount: indexerQueueMaxReceiveCount,
+                },
             });
             assetIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
@@ -220,6 +268,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                         target: assetIndexingFunction,
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     }
                 );
                 const cfnEsmAssetIndexer = esmAssetIndexer.node
@@ -230,6 +279,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                     new eventsources.SqsEventSource(assetIndexerSqsQueue, {
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     })
                 );
             }
@@ -312,6 +362,17 @@ export class SearchBuilderNestedStack extends NestedStack {
             this.reindexerFunctionName = reindexerFunction.functionName;
 
             // Create SQS queues for indexers and subscribe to SNS topics
+            // File indexer dead-letter queue. Encryption mirrors the source queue below: a message
+            // moved into a DLQ the indexer's role cannot decrypt is unreadable dead letter.
+            fileIndexerSqsDlq = new sqs.Queue(scope, "FileIndexerSqsDLQ", {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: storageResources.encryption.kmsKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: storageResources.encryption.kmsKey,
+                enforceSSL: true,
+            });
+
             // File indexer SQS queue
             const fileIndexerSqsQueue = new sqs.Queue(scope, "FileIndexerSqsQueue", {
                 queueName: `${config.name}-${config.app.baseStackName}-fileIndexer`,
@@ -321,6 +382,10 @@ export class SearchBuilderNestedStack extends NestedStack {
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: storageResources.encryption.kmsKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: fileIndexerSqsDlq,
+                    maxReceiveCount: indexerQueueMaxReceiveCount,
+                },
             });
             fileIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
@@ -341,6 +406,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                         target: fileIndexingFunction,
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     }
                 );
                 const cfnEsmFileIndexer = esmFileIndexer.node
@@ -351,9 +417,21 @@ export class SearchBuilderNestedStack extends NestedStack {
                     new eventsources.SqsEventSource(fileIndexerSqsQueue, {
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     })
                 );
             }
+
+            // Asset indexer dead-letter queue. One per source queue, so the file indexer's poison
+            // records stay distinguishable from the asset indexer's.
+            assetIndexerSqsDlq = new sqs.Queue(scope, "AssetIndexerSqsDLQ", {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: storageResources.encryption.kmsKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: storageResources.encryption.kmsKey,
+                enforceSSL: true,
+            });
 
             // Asset indexer SQS queue
             const assetIndexerSqsQueue = new sqs.Queue(scope, "AssetIndexerSqsQueue", {
@@ -364,6 +442,10 @@ export class SearchBuilderNestedStack extends NestedStack {
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: storageResources.encryption.kmsKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: assetIndexerSqsDlq,
+                    maxReceiveCount: indexerQueueMaxReceiveCount,
+                },
             });
             assetIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
@@ -384,6 +466,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                         target: assetIndexingFunction,
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     }
                 );
                 const cfnEsmAssetIndexer = esmAssetIndexer.node
@@ -394,6 +477,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                     new eventsources.SqsEventSource(assetIndexerSqsQueue, {
                         batchSize: 10,
                         maxBatchingWindow: cdk.Duration.seconds(3),
+                        reportBatchItemFailures: true,
                     })
                 );
             }
@@ -455,16 +539,23 @@ export class SearchBuilderNestedStack extends NestedStack {
         });
 
         //Nag supressions
-        NagSuppressions.addResourceSuppressions(
-            scope,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Files easily redriven based on the logic of assets.",
-                },
-            ],
-            true
+        // Scoped to the two DLQ resources rather than the stack: both indexer source queues carry a
+        // redrive policy, so a source queue added here later without one is still reported.
+        const indexerDlqs = [fileIndexerSqsDlq, assetIndexerSqsDlq].filter(
+            (queue): queue is sqs.Queue => queue !== undefined
         );
+        if (indexerDlqs.length > 0) {
+            NagSuppressions.addResourceSuppressions(
+                indexerDlqs,
+                [
+                    {
+                        id: "AwsSolutions-SQS3",
+                        reason: "This queue IS the dead-letter queue for an indexer source queue. A DLQ is the terminal destination for records the indexer could not process, so giving it a redrive policy of its own would only defer the same failure to a further queue.",
+                    },
+                ],
+                true
+            );
+        }
 
         NagSuppressions.addResourceSuppressions(
             scope,

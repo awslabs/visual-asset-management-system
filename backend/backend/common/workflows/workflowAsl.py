@@ -86,10 +86,16 @@ def to_asl_pipeline_dict(pipeline_record, job_name=""):
     generator + task builders consume. `name` uses the workflow ref's job name when provided, else
     the pipeline id (the generator uses `name` for state/job names + output-path templates)."""
     execution_config = pipeline_record.get("executionConfig", {}) or {}
+    system_config = pipeline_record.get("systemConfig", {}) or {}
     return {
         "name": job_name or pipeline_record.get("pipelineId", ""),
         "pipelineId": pipeline_record.get("pipelineId", ""),
         "databaseId": pipeline_record.get("databaseId", ""),
+        # The pipeline's own viewer subfolder. The generator threads it into the interim payload so a
+        # step after the first resolves the same aux preview location the execute handler gives the
+        # first step; without it here the generator has nothing to read and every later step's
+        # manifest carries an empty suffix.
+        "auxPreviewPipelineSuffix": system_config.get("auxPreviewPipelineSuffix", "") or "",
         "pipelineExecutionType": execution_config.get("executionType", "Lambda"),
         "waitForCallback": execution_config.get("waitForCallback", "Disabled"),
         "taskTimeout": execution_config.get("taskTimeout", ""),

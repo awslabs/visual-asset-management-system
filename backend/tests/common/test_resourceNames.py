@@ -3,6 +3,9 @@
 
 import importlib
 import os
+import re
+from pathlib import Path
+
 import pytest
 import boto3
 from moto import mock_aws
@@ -97,12 +100,119 @@ class TestSsmResolution:
         assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "v1"
 
 
+# Canonical SSM key registry that ResourceKeys in common/resourceNames.py mirrors.
+CANONICAL_KEYS_TS = (
+    Path(__file__).resolve().parents[3] / "infra" / "common" / "resourceParamKeys.ts"
+)
+
+# Categories only deployment and data-migration tooling resolves (through
+# infra/deploymentDataMigration/tools/ssm_resource_lookup.py), so no handler mirrors them.
+TOOLING_ONLY_PREFIXES = ("lambdaFunctions/",)
+
+# Deprecated tables whose only consumer is a migration script. Named one by one rather than by
+# the dynamoTables/legacy/ prefix: a legacy key added upstream must be classified deliberately,
+# not excused for sitting under that prefix.
+TOOLING_ONLY_LEGACY_KEYS = {
+    "dynamoTables/legacy/assetVersionsStorageV1",
+    "dynamoTables/legacy/assetFileVersionsStorageV1",
+    "dynamoTables/legacy/assetLinksStorage",
+    "dynamoTables/legacy/metadataStorage",
+    "dynamoTables/legacy/metadataSchemaStorage",
+}
+
+# Legacy keys the mirror carries. No handler resolves either one -- the per-database tag
+# namespacing migration reads them through ssm_resource_lookup.py -- so in ResourceKeys they are
+# declared but unused. They stay mirrored because dropping them is a three-way contract change
+# (registry, mirror, migration lookup) and an owner decision, not a cleanup.
+MIRRORED_LEGACY_KEYS = {
+    "dynamoTables/legacy/tagStorage",
+    "dynamoTables/legacy/tagTypeStorage",
+}
+
+# A `name: "value"` entry in a TypeScript object literal.
+TS_ASSIGNMENT = re.compile(r'[A-Za-z][A-Za-z0-9_]*\s*:\s*"([^"]+)"')
+# A param key suffix: two or more '/'-joined alphanumeric segments.
+PARAM_KEY_SHAPE = re.compile(r"^[A-Za-z0-9]+(?:/[A-Za-z0-9]+)+$")
+
+
+def _canonical_param_keys():
+    """Every param key published by infra/common/resourceParamKeys.ts.
+
+    Reads the registry's values without naming its categories, so a category added upstream (a
+    `sqsQueues` block, say) is compared against the mirror rather than skipped.
+    """
+    source = CANONICAL_KEYS_TS.read_text(encoding="utf-8")
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    source = re.sub(r"//[^\n]*", "", source)
+    return {v for v in TS_ASSIGNMENT.findall(source) if PARAM_KEY_SHAPE.match(v)}
+
+
+def _canonical_categories(keys):
+    """Leading path segment of each key -- the registry's category names."""
+    return {key.split("/", 1)[0] for key in keys}
+
+
+def _is_tooling_only(key):
+    return key.startswith(TOOLING_ONLY_PREFIXES) or key in TOOLING_ONLY_LEGACY_KEYS
+
+
+def _mirror_keys(rn):
+    """Every ResourceParamKey declared on ResourceKeys."""
+    return [v for v in vars(rn.ResourceKeys).values() if isinstance(v, rn.ResourceParamKey)]
+
+
 @pytest.mark.unit
 class TestConstantsCompleteness:
     def test_all_keys_have_param_key_and_env_names(self, rn):
-        keys = [v for k, v in vars(rn.ResourceKeys).items() if isinstance(v, rn.ResourceParamKey)]
-        # 41 base resources + 10 workflow-execution V2 tables + 6 pipeline/workflow V2 tables
-        # + 2 legacy tag tables (tag/tagType migration sources for per-database namespacing)
-        assert len(keys) == 59
+        keys = _mirror_keys(rn)
+        assert keys
         assert all(k.param_key and k.env_var_names for k in keys)
-        assert len({k.param_key for k in keys}) == 59
+
+    def test_param_keys_are_unique(self, rn):
+        keys = _mirror_keys(rn)
+        # Checked on its own: a duplicated constant leaves the set comparison below intact.
+        assert len({k.param_key for k in keys}) == len(keys)
+
+    def test_canonical_registry_reads_as_a_multi_category_union(self):
+        canonical = _canonical_param_keys()
+        # Control for one side of the comparison below: a parser that stops matching, or one that
+        # reads a single category, would make the set equality trivially satisfiable.
+        assert len(canonical) > 50
+        categories = _canonical_categories(canonical)
+        assert len(categories) >= 4
+        assert {"dynamoTables", "s3Buckets", "cloudwatchLogGroups"} <= categories
+        assert TOOLING_ONLY_PREFIXES[0].rstrip("/") in categories
+        # Named samples across the mirrored categories, so the floor above cannot be met by one
+        # block of the registry alone.
+        assert {
+            "dynamoTables/assetStorage",
+            "s3Buckets/assetAuxiliary",
+            "cloudwatchLogGroups/auditErrors",
+        } <= canonical
+
+    def test_mirrors_the_canonical_param_key_registry(self, rn):
+        canonical = _canonical_param_keys()
+        mirrored = {k.param_key for k in _mirror_keys(rn)}
+        # A parser or an attribute filter that stops matching would compare two empty sets and
+        # report success, so floor both sides before comparing them.
+        assert len(canonical) > 50
+        assert len(mirrored) > 50
+        assert mirrored == {key for key in canonical if not _is_tooling_only(key)}
+
+    def test_omitted_keys_are_tooling_only_and_still_published(self, rn):
+        canonical = _canonical_param_keys()
+        omitted = {key for key in canonical if _is_tooling_only(key)}
+        # A stale omission entry (renamed or deleted upstream) is itself drift.
+        assert TOOLING_ONLY_LEGACY_KEYS <= canonical
+        assert MIRRORED_LEGACY_KEYS <= canonical
+        # Every prefix-based exclusion must still cover a live key, or it excuses nothing.
+        for prefix in TOOLING_ONLY_PREFIXES:
+            assert any(key.startswith(prefix) for key in canonical)
+        assert omitted
+        assert omitted < canonical
+        assert not omitted & {k.param_key for k in _mirror_keys(rn)}
+
+    def test_mirrors_both_legacy_tag_keys(self, rn):
+        # Pinned rather than derived: no handler resolves them (see MIRRORED_LEGACY_KEYS), so
+        # removing them is a deliberate registry + mirror + ssm_resource_lookup.py change.
+        assert MIRRORED_LEGACY_KEYS <= {k.param_key for k in _mirror_keys(rn)}

@@ -1038,3 +1038,141 @@ describe("ExecutionDetailPage", () => {
         ).toBeInTheDocument();
     });
 });
+
+/**
+ * The tab strip declares role="tablist"/role="tab", which promises a named panel and arrow-key
+ * navigation. Declaring the roles without them tells a screen-reader user the widget behaves in a way
+ * it does not, on the screen someone reaches to diagnose a failed run.
+ */
+describe("ExecutionDetailPage tab strip", () => {
+    let queryClient: QueryClient;
+
+    const renderTabs = () => {
+        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetailMetadata.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            isError: false,
+            error: null,
+            hasNextPage: false,
+            isFetchingNextPage: false,
+            fetchNextPage: jest.fn(),
+        });
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-tabs",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                inputFiles: [],
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+        return render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-tabs" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    beforeEach(() => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        jest.clearAllMocks();
+    });
+
+    it("names the panel from the selected tab", () => {
+        renderTabs();
+
+        const panel = screen.getByRole("tabpanel");
+        const inputsTab = screen.getByRole("tab", { name: "Inputs" });
+        expect(inputsTab).toHaveAttribute("aria-controls", panel.getAttribute("id"));
+        expect(panel).toHaveAttribute("aria-labelledby", inputsTab.getAttribute("id"));
+        // Control: an id that is present but empty would satisfy the pair above vacuously.
+        expect(panel.getAttribute("id")).toBeTruthy();
+        expect(inputsTab.getAttribute("id")).toBeTruthy();
+    });
+
+    it("moves between tabs with the arrow keys and keeps one tab stop", async () => {
+        renderTabs();
+
+        const inputsTab = screen.getByRole("tab", { name: "Inputs" });
+        const pipelinesTab = screen.getByRole("tab", { name: "Pipelines" });
+        // Roving tab stop: only the selected tab is reachable with Tab.
+        expect(inputsTab).toHaveAttribute("tabindex", "0");
+        expect(pipelinesTab).toHaveAttribute("tabindex", "-1");
+
+        inputsTab.focus();
+        await userEvent.keyboard("{ArrowRight}");
+
+        expect(screen.getByRole("tab", { name: "Pipelines" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        expect(screen.getByRole("tab", { name: "Inputs" })).toHaveAttribute(
+            "aria-selected",
+            "false"
+        );
+        expect(screen.getByRole("tabpanel")).toHaveAttribute(
+            "aria-labelledby",
+            screen.getByRole("tab", { name: "Pipelines" }).getAttribute("id")
+        );
+    });
+
+    it("wraps from the last tab back to the first", async () => {
+        renderTabs();
+
+        screen.getByRole("tab", { name: "Inputs" }).focus();
+        await userEvent.keyboard("{End}");
+        expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
+
+        await userEvent.keyboard("{ArrowRight}");
+        expect(screen.getByRole("tab", { name: "Inputs" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+    });
+
+    it("names each table on the page, so they are distinguishable", async () => {
+        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetailMetadata.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            isError: false,
+            error: null,
+            hasNextPage: false,
+            isFetchingNextPage: false,
+            fetchNextPage: jest.fn(),
+        });
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-named",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                inputFiles: [{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/f.glb" }],
+                inputMetadata: [{ assetId: "a1", metadata: { k: "v" } }],
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-named" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(await screen.findByRole("table", { name: /input files/i })).toBeInTheDocument();
+        // Control: an unnamed table would match neither of these, and the miss must be specific.
+        expect(screen.queryByRole("table", { name: /output files/i })).not.toBeInTheDocument();
+    });
+});

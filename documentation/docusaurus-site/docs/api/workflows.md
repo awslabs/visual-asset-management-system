@@ -320,7 +320,7 @@ Set `enabled` to `true` or `false` to enable or disable a workflow without chang
 :::
 
 :::tip[Restore an archived workflow]
-`PUT` with `\{"archived": false\}` returns an archived workflow to the active listings under its original identifier, together with every execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the workflow.
+`PUT` with `{"archived": false}` returns an archived workflow to the active listings under its original identifier, together with every execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the workflow.
 :::
 
 :::warning[`specifiedPipelines` and `systemConfig` replace the stored value]
@@ -408,7 +408,7 @@ A raw `#` in a URL is the fragment delimiter, so a request path carrying one nev
 
 A response also reports `triggerBaseType` (the plain type, for grouping and display) and `triggerId` (empty for the first trigger of a type), so a client never has to parse the key.
 
-Two conditions are rejected with `400`:
+Two conditions on an additional trigger of a type are rejected with `400`; the headless-template rejections are described under [Set a trigger](#set-a-trigger):
 
 -   **A workflow that serializes runs per asset supports only one trigger of a type.** When `concurrencyRestriction` is `perAsset`, several triggers firing the same workflow would contend on that asset. `perInputFile` is not restricted this way — overlapping filters there are caught by the execution's own per-file check, which fails that trigger's execution rather than the save.
 -   **Two triggers of one type may not name the same default templates.** The templates are what distinguish them, so the same set twice is the same trigger declared twice. This includes two triggers that both name no templates: naming none is a valid choice when no pipeline requires one, which makes it a comparable value.
@@ -565,8 +565,8 @@ PUT /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 Returns the stored trigger, in the same shape as [Get a trigger](#get-a-trigger).
 
-:::note[Trigger default templates must be headless-runnable]
-A trigger fires headless executions, which cannot supply template tags interactively. When a template named in `defaultTemplateIds` has a required tag with no default value, the request is rejected with `400` and a `triggerTemplateErrors` list under `message`, identifying each offending template, its pipeline, and the tag keys at fault. Give each such tag a default value or make it optional, or choose a different default template. `defaultTemplateIds` is optional — a trigger need not name a default template for a pipeline.
+:::note[A trigger's templates must be headless-runnable]
+A trigger fires headless executions, which cannot supply template tags interactively. When a template named in `defaultTemplateIds` has a required tag with no default value, the request is rejected with `400` and a `triggerTemplateErrors` list under `message`, identifying each offending template, its pipeline, and the tag keys at fault. Give each such tag a default value or make it optional, or choose a different default template. `defaultTemplateIds` may be omitted, and a trigger need not name a default template for every pipeline. The one exception is described below: a pipeline that requires a template and receives none from any other source.
 
 ```json
 {
@@ -578,16 +578,29 @@ A trigger fires headless executions, which cannot supply template tags interacti
 }
 ```
 
+The same headless constraint applies to the template **choice**. `requireTemplate` is a **pipeline** `systemConfig` field (see [System configuration](pipelines.md#system-configuration) in the Pipelines API) rather than one of the workflow keys listed under [System configuration](#system-configuration) on this page. A pipeline of the parent workflow that sets it runs only with a template named for it, and a triggered execution has nobody to choose one. When such a pipeline has no template from any of the three sources — this trigger's `defaultTemplateIds`, the workflow reference's `defaultTemplateId`, or the pipeline's own default template (see [Default templates](#default-templates)) — the request is rejected with `400` and the same `triggerTemplateErrors` list, naming the pipeline. Any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them.
+
+```json
+{
+    "message": {
+        "triggerTemplateErrors": [
+            "pipeline '3d-conversion-pipeline' requires a template but no default template is set for it. A triggered (headless) execution cannot choose one, so pick a default template for this pipeline in the trigger."
+        ]
+    }
+}
+```
+
+This second check is best-effort: a step whose pipeline record cannot be read, or whose default template cannot be queried, is skipped rather than rejected, so the trigger saves with the missing template undetected. A trigger saved that way leaves nothing to inspect afterwards. Template resolution runs **before** the execution record is written, so each triggered launch is rejected with a `400` carrying `templateResolutionErrors` and no execution is created — no entry appears in the workflow's execution list for the attempt. The only trace is in Amazon CloudWatch Logs: the trigger dispatcher logs a warning naming the workflow and the status it received, and the rejected launch logs its `templateResolutionErrors` list naming the pipeline that requires a template (that entry also reaches the audit errors log group). Setting a default template for that pipeline is what makes the trigger run.
 :::
 
 #### Error responses
 
-| Status | Description                                                                                                        |
-| ------ | ------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Validation error, or a chosen default template has a required tag with no default value (`triggerTemplateErrors`). |
-| `403`  | Not authorized                                                                                                     |
-| `404`  | Workflow not found                                                                                                 |
-| `500`  | Internal server error                                                                                              |
+| Status | Description                                                                                                                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error; a chosen default template has a required tag with no default value; or a pipeline of the workflow requires a template and no default template is set for it. Both template rejections report `triggerTemplateErrors`. |
+| `403`  | Not authorized                                                                                                                                                                                                                          |
+| `404`  | Workflow not found                                                                                                                                                                                                                      |
+| `500`  | Internal server error                                                                                                                                                                                                                   |
 
 ### Delete a trigger
 
@@ -667,16 +680,16 @@ The value carries the identifier character set, at most 64 characters.
 
 The `systemConfig` object describes how a workflow consumes input, which asset selections it accepts, and where it writes output.
 
-| Field                                         | Type    | Description                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`                              | string  | Number of input files the workflow consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                                                                                                                                                                                                                                                                      |
-| `assetScope`                                  | object  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted asset selections. See [Asset scope](#asset-scope).                                                                                                                                                                                                                                                                        |
-| `metadataInputs`                              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipelines. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                    |
-| `inputFileFilters`                            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path (`/models/x.glb`), file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. See [Input-file filters](#input-file-filters).                                                                                                                                                     |
-| `concurrencyRestriction`                      | string  | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                                                                                                                                                                                                                                                                            |
-| `outputTarget`                                | object  | Where the workflow writes its output. See [Output target](#output-target).                                                                                                                                                                                                                                                                                                                                                               |
-| `allowWorkflowTriggerChaining`                | boolean | Whether a file written by **another** workflow's execution may fire this workflow's triggers -- for example generating a preview or metadata from a conversion pipeline's output. A workflow never fires on output it wrote itself, whatever this is set to, so it cannot re-trigger itself in a loop. A chained file must still match the trigger's `inputFileFilters`. Defaults to `false`. See [Trigger chaining](#trigger-chaining). |
-| `defaultOutputFileBaseExecutionPathExtension` | string  | The output path prefix an execution uses when its request supplies none. Stored **unresolved**, so `{{tag}}` placeholders resolve per run — one stored `/{{jobName}}/` gives every execution its own output folder. Empty means no default. See [Output path prefix](#output-path-prefix).                                                                                                                                               |
+| Field                                         | Type    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`                              | string  | Number of input files the workflow consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `assetScope`                                  | object  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted asset selections. See [Asset scope](#asset-scope).                                                                                                                                                                                                                                                                                                                                                         |
+| `metadataInputs`                              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipelines. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                                                                                     |
+| `inputFileFilters`                            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path (`/models/x.glb`), file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. See [Input-file filters](#input-file-filters).                                                                                                                                                                                                                                      |
+| `concurrencyRestriction`                      | string  | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `outputTarget`                                | object  | Where the workflow writes its output. See [Output target](#output-target).                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `allowWorkflowTriggerChaining`                | boolean | Whether a file written by **another** workflow's execution may fire this workflow's triggers -- for example generating a preview or metadata from a conversion pipeline's output. A file whose recorded provenance names this workflow never re-triggers it, whatever this is set to; that check is narrower than it reads, and nothing bounds a chain of workflows firing one another. A chained file must still match the trigger's `inputFileFilters`. Defaults to `false`. See [Trigger chaining](#trigger-chaining). |
+| `defaultOutputFileBaseExecutionPathExtension` | string  | The output path prefix an execution uses when its request supplies none. Stored **unresolved**, so `{{tag}}` placeholders resolve per run — one stored `/{{jobName}}/` gives every execution its own output folder. Empty means no default. See [Output path prefix](#output-path-prefix).                                                                                                                                                                                                                                |
 
 ### Input-file filters
 
@@ -808,15 +821,26 @@ and other direct writes. This keeps automated output from re-entering the trigge
 `allowWorkflowTriggerChaining` opts a workflow in to running on **another** workflow's output, which is
 what lets a preview or metadata workflow act on a conversion pipeline's result:
 
-| `allowWorkflowTriggerChaining` | File written by _this_ workflow | File written by _another_ workflow |
-| ------------------------------ | ------------------------------- | ---------------------------------- |
-| `false` (default)              | does not fire                   | does not fire                      |
-| `true`                         | does not fire                   | fires when the filters match       |
+| `allowWorkflowTriggerChaining` | File recorded as written by _this_ workflow | File written by _another_ workflow |
+| ------------------------------ | ------------------------------------------- | ---------------------------------- |
+| `false` (default)              | does not fire                               | does not fire                      |
+| `true`                         | does not fire                               | fires when the filters match       |
 
-A workflow never fires on its own output in either case, so a single workflow cannot loop on files it
-produces. Enabling the setting on two or more workflows that each write a file the others accept can
-still make them trigger one another indefinitely, so review the `inputFileFilters` of every workflow in
-a chain before turning it on.
+A file whose recorded provenance names this workflow never re-triggers it in either case, so a workflow
+does not loop directly on output attributed to itself.
+
+:::warning[Chained workflows can trigger one another indefinitely]
+That self-output rule compares a file only against the workflow recorded as writing it, never against
+the chain of runs that led to it, and VAMS applies no depth limit and performs no cycle detection. Two
+workflows that each enable `allowWorkflowTriggerChaining` and each write a file the other accepts
+therefore trigger one another indefinitely.
+
+The rule also depends on what the file records. A workflow-written file whose provenance does not name
+the workflow that produced it counts as another workflow's output, because it cannot be shown to be
+self-output, so a workflow with chaining enabled can fire on a file it wrote itself. Review the
+`inputFileFilters` and the output file types of every workflow in a chain before enabling it, so that no
+group of them accepts one another's output in a cycle.
+:::
 
 The built-in Potree point-cloud preview, 3D preview thumbnail, and GenAI 3D metadata labeling workflows
 ship with chaining enabled, so a converted mesh or point cloud still receives a preview and metadata.
@@ -1069,7 +1093,7 @@ All executions are returned, both completed and running. Completed executions us
 
 ## List all executions (global)
 
-Lists executions across all assets, not scoped to one asset. Results are permission-filtered: an execution is visible when the caller has `GET` on its workflow **and** `GET` on **every** asset the run read — each input file's asset plus each asset named as a metadata source — since the list and the details endpoint return the metadata of all of them. A run with no inputs of either kind is associated with the asset it wrote to, so that asset carries the check instead; a results-only run has no asset at all, and workflow `GET` is the whole gate.
+Lists executions across all assets, not scoped to one asset. Results are permission-filtered: an execution is visible when the caller has `GET` on its workflow, `GET` on **every** asset the run read — each input file's asset plus each asset named as a metadata source — since the list and the details endpoint return the metadata of all of them, **and** `GET` on the asset the run wrote to whenever the run wrote to one. The output asset carries the check on the same footing as the assets the run read, and independently of them: the list and the details endpoint return that asset's identity, the inventory of files written into it, the metadata produced against it, and the pipelines' results text. A results-only run writes to no asset and reads none, so workflow `GET` is its whole gate.
 
 An asset that has been permanently deleted is authorized on the database it lived in, under the same action. Deleting an asset does not delete the executions that ran against it, and a database is never removed — deleting one archives the record — so the history of a deleted asset stays reachable by whoever can read that database. An **archived** asset is not affected: its record is retained, so it is still authorized on its own attributes and any asset-level constraint on it still applies.
 
@@ -1127,8 +1151,15 @@ are empty strings for a results-only run. They are read from the execution's con
 which the endpoint loads at most once per listed row and shares with the output-asset visibility check,
 so reporting them costs no extra lookup.
 
-:::note[A page resolves at most 500 distinct assets for its permission checks]
-Deciding whether a row is visible means resolving every asset the run read, so one page is bounded by the number of distinct assets it resolves. A page that reaches the bound withholds the executions it did not evaluate rather than listing them unchecked, and returns a `warnings` array naming the bound. The withheld rows are deferred, not lost: a `NextToken` accompanies the warning whenever the walk can continue, and the next request resolves its own entities. Narrow the filters to reach them in fewer pages.
+:::note[A short page is a stated bound, not an absence of matches]
+Both the equality filters and the per-execution visibility check drop rows after a query's limit is spent, so the endpoint walks its query — repeating from its own continuation — until the page is full or the index is exhausted. A walk spanning several queries can return slightly more rows than `pageSize`.
+
+Two bounds can stop the walk before the page fills, and each names itself in the `warnings` array:
+
+-   **Distinct assets resolved for permission checks (at most 500 per page).** Deciding whether a row is visible means resolving every asset the run read and the asset it wrote to. A page that reaches the bound withholds the executions it did not evaluate rather than listing them unchecked.
+-   **The per-request work budget.** A narrow filter, or a narrowly scoped caller, can leave the walk reading many rows for few visible ones. The budget ends the request with what it has rather than letting it run into the API Gateway integration timeout, which would discard the whole response.
+
+Withheld rows are deferred, not lost: a `NextToken` accompanies the warning whenever the walk can continue, and the next request starts with a fresh budget and resolves its own entities. Narrow the filters to reach them in fewer pages. When both bounds fire, the distinct-asset entry is reported first.
 :::
 
 ### Error responses
@@ -1205,7 +1236,7 @@ When `groupId` is supplied, every active execution in the group is aborted and t
 `skippedInaccessibleCount` (members the caller is not authorized on, counted but not identified) and `moreRemaining` (more active authorized members remain beyond this request's cap — re-invoke to continue) are present only when non-zero/applicable.
 
 :::note[Authorization]
-Aborting an execution requires `GET` permission on the execution's workflow, `POST` permission on every asset the run read (and, for a run with no input files, the asset it wrote to), and `GET` on every database whose metadata the run captured. Because the abort does not modify the workflow definition, only read access to the workflow is required; because it changes the run's effect on the processed assets, write (`POST`) access to those assets is required.
+Aborting an execution requires `GET` permission on the execution's workflow, `POST` permission on every asset the run read **and** on the asset it wrote to whenever the run wrote to one, and `GET` on every database whose metadata the run captured. Because the abort does not modify the workflow definition, only read access to the workflow is required; because it changes the run's effect on the processed assets, write (`POST`) access to those assets is required — the output asset included, since aborting the run changes what ends up written into it.
 :::
 
 ### Error responses
@@ -1245,7 +1276,7 @@ POST /workflows/executions/{executionId}/rerun
 The response of the launch itself, in the same shape as [Execute a workflow](#execute-a-workflow) — the new `executionId`, the `executionGroupId` when one is set, and any launch `warnings`.
 
 :::note[Authorization]
-A re-run requires that the caller can view the original execution (`GET` on its workflow and on every asset it read) **and** hold API access to the workflow's execute route. The launch then runs the full execute authorization again as the calling user, so a re-run never exceeds what a direct execute would grant — including the caller's real MFA state.
+A re-run requires that the caller can view the original execution (`GET` on its workflow, on every asset it read, and on the asset it wrote to) **and** hold API access to the workflow's execute route. The launch then runs the full execute authorization again as the calling user, so a re-run never exceeds what a direct execute would grant — including the caller's real MFA state.
 :::
 
 ### Error responses
@@ -1289,7 +1320,7 @@ DELETE /workflows/executions/{executionId}/permanent
 ```
 
 :::note[Authorization]
-A permanent delete is authorized like an abort: `GET` on the execution's workflow, `POST` on every asset the run touched, and `GET` on every database whose metadata it captured. It is irreversible — after it, the execution's own records no longer evidence what the run did.
+A permanent delete is authorized like an abort: `GET` on the execution's workflow, `POST` on every asset the run read and on the asset it wrote to, and `GET` on every database whose metadata it captured. It is irreversible — after it, the execution's own records no longer evidence what the run did.
 :::
 
 ### Error responses
@@ -1560,7 +1591,7 @@ The `pipelines` array and `inputConfigurations` are charged against the response
 | Status | Description                                                                                                          |
 | ------ | -------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid or missing `executionId`                                                                                     |
-| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, or a captured metadata-source database) |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
 | `404`  | Execution not found                                                                                                  |
 | `500`  | Internal server error                                                                                                |
 
@@ -1633,7 +1664,7 @@ A token names a position in one collection's walk under one `pipelineId` filter.
 `input` and `inputDatabase` are the two `scope` halves of one stored collection, so a request for either reads past the other's rows. A single request scans at most 20,000 rows and then ends the page with a token at the last row scanned, so a sparse collection on a large execution is walked across several requests rather than in one.
 
 :::note[Same authorization as the detail view]
-This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for `GET`: `GET` on the execution's workflow, `GET` on every input-file asset tied to the execution, `GET` on every asset named as a metadata source, and `GET` on every database in the execution's `metadataSourceDatabases`. Exactly the callers who can open an execution's detail view can page its metadata, and no others.
+This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for `GET`: `GET` on the execution's workflow, `GET` on every input-file asset tied to the execution, `GET` on every asset named as a metadata source, `GET` on the asset the run wrote to whenever it wrote to one, and `GET` on every database in the execution's `metadataSourceDatabases`. Exactly the callers who can open an execution's detail view can page its metadata, and no others.
 :::
 
 ### Error responses
@@ -1641,7 +1672,7 @@ This route enforces the rule [Get execution details](#get-execution-details) enf
 | Status | Description                                                                                                            |
 | ------ | ---------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid or missing `executionId`, an unknown `collection`, an invalid `pipelineId` or `pageSize`, or an unusable token |
-| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, or a captured metadata-source database)   |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database)   |
 | `404`  | Execution not found                                                                                                    |
 | `500`  | Internal server error                                                                                                  |
 
@@ -1756,7 +1787,7 @@ A full-mode CloudWatch search is always restricted to the requested execution wi
 | Status | Description                                                                                                          |
 | ------ | -------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid or missing `executionId`, an invalid `mode`, or a non-integer `limit`, `startTime`, or `endTime`             |
-| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, or a captured metadata-source database) |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
 | `404`  | Execution (or specified pipeline execution) not found                                                                |
 | `500`  | Internal server error                                                                                                |
 

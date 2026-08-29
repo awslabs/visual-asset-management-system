@@ -3,7 +3,7 @@
 Tags provide a flexible classification system for organizing and filtering assets. The VAMS tagging system consists of two components: **tag types** and **tags**.
 
 :::note[Asset tags versus template tags]
-The tags on this page classify assets. They are unrelated to a pipeline configuration template's `\{\{tagName\}\}` placeholders, which supply parameters to a processing run — see [System template tags](../api/pipelines.md#system-template-tags).
+The tags on this page classify assets. They are unrelated to a pipeline configuration template's `{{tagName}}` placeholders, which supply parameters to a processing run — see [System template tags](../api/pipelines.md#system-template-tags).
 :::
 
 ## Tag types

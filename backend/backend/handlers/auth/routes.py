@@ -16,6 +16,10 @@ Serves three endpoints:
   * ``GET /auth/routes/api/allowed`` -- returns the API routes (and the HTTP
     methods on each) that the requesting user is authorized to call, by
     feeding every route/method pair through the user's Casbin policy.
+
+Both route checks evaluate many route/method pairs within one request, so the
+authorization-denial audit records they produce are collected and written to
+CloudWatch in batches (one event per denial) rather than one write per denial.
 """
 
 import json
@@ -24,6 +28,8 @@ import os
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import API_AUTH_ROUTES, API_AUTH_ROUTES_API, API_AUTH_ROUTES_API_ALLOWED, get_public_api_routes
+from common.resourceNames import ResourceKeys, get_log_group_name
+from customLogging import auditLogging
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -44,10 +50,103 @@ logger = safeLogger(service_name="Routes")
 # Global variables for claims and roles
 claims_and_roles = {}
 
+# Path segment substituted for each ``{param}`` of a route template when the template is
+# probed against a user's policy. ':' is outside the VAMS identifier character set, so the
+# token cannot collide with a real resource id.
+API_ROUTE_PROBE_SEGMENT = "vams:any"
+
+# CloudWatch PutLogEvents accepts at most 10,000 events and 1,048,576 bytes per call,
+# counting 26 bytes of overhead per event, and rejects the whole batch past either limit.
+AUDIT_BATCH_MAX_EVENTS = 10000
+AUDIT_BATCH_MAX_BYTES = 1048576
+AUDIT_EVENT_OVERHEAD_BYTES = 26
+
 
 def _use_local_mocks() -> bool:
     """True when local-mock mode is enabled (all route checks auto-approve)."""
     return os.environ.get('USE_LOCAL_MOCKS', '').lower() == 'true'
+
+
+def _route_probe_path(path_template: str) -> str:
+    """Return the concrete request path a route template is probed with.
+
+    ``{param}`` and ``{param+}`` segments are replaced with a single placeholder segment,
+    so the ``route__path`` handed to Casbin has the shape of the concrete request path the
+    API authorization check evaluates on a real call.
+    """
+    if "{" not in path_template:
+        return path_template
+    return "/".join(
+        API_ROUTE_PROBE_SEGMENT if segment.startswith("{") and segment.endswith("}") else segment
+        for segment in path_template.split("/")
+    )
+
+
+class _DenialAuditBatch:
+    """Runs the Casbin checks of a bulk route check and batches the denial audit records.
+
+    ``CasbinEnforcer.enforce`` writes one CloudWatch audit record per denial, so evaluating
+    every route/method pair costs one synchronous write per denied pair. Checks run here
+    against the enforcer's service object and each denial is kept; :meth:`flush` writes them
+    through ``_write_batch_to_cloudwatch`` -- the same records, in the same authorization log
+    group, one event per denial.
+    """
+
+    def __init__(self, claims, casbin_enforcer):
+        tokens = claims.get("tokens") or []
+        self._claims = claims
+        self._user = tokens[0] if tokens else "UNKNOWN"
+        self._casbin_enforcer = casbin_enforcer
+        self._denials = []
+
+    def enforce(self, obj, act):
+        """Return the Casbin verdict for ``obj``/``act``, keeping a denial for the batch."""
+        allowed = self._casbin_enforcer.service_object.enforce(obj, act)
+        if not allowed:
+            self._denials.append((dict(obj), act))
+        return allowed
+
+    def _denial_record(self, obj, act):
+        """One denial record, in the format ``log_authorization`` writes."""
+        return " ".join([
+            "[AUTHORIZATION][authorized: False]",
+            f"[user: {self._user}]",
+            f"[roles: {json.dumps(self._claims.get('roles', []))}]",
+            f"[mfaEnabled: {self._claims.get('mfaEnabled', False)}]",
+            json.dumps({"action": act, "obj": obj}),
+        ])
+
+    def flush(self):
+        """Write every kept denial, chunked to stay inside the PutLogEvents batch limits."""
+        denials, self._denials = self._denials, []
+        if not denials:
+            return
+        try:
+            log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+            audit_event = {
+                'requestContext': {'authorizer': {'jwt': {'claims': {'sub': self._user}}}}
+            }
+            # The writer appends the audit event echo to every entry, so it counts against
+            # the batch byte budget once per event.
+            event_overhead = AUDIT_EVENT_OVERHEAD_BYTES + len(
+                f" --- [event: {json.dumps(audit_event)}]".encode('utf-8')
+            )
+            batch = []
+            batch_bytes = 0
+            for obj, act in denials:
+                record = self._denial_record(obj, act)
+                record_bytes = len(record.encode('utf-8')) + event_overhead
+                if batch and (len(batch) >= AUDIT_BATCH_MAX_EVENTS
+                              or batch_bytes + record_bytes > AUDIT_BATCH_MAX_BYTES):
+                    auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+                    batch = []
+                    batch_bytes = 0
+                batch.append(record)
+                batch_bytes += record_bytes
+            if batch:
+                auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+        except Exception as e:
+            logger.exception(f"Failed to write authorization denial audit records: {e}")
 
 
 def check_web_routes(event):
@@ -68,20 +167,24 @@ def check_web_routes(event):
 
     allowed_routes = []
     use_local_mocks = _use_local_mocks()
-    casbin_enforcer = None
+    denial_audit = None
     if not use_local_mocks and len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        denial_audit = _DenialAuditBatch(claims_and_roles, CasbinEnforcer(claims_and_roles))
 
-    for route in request_model.routes:
-        route_obj = {
-            "method": route.method,
-            "route__path": route.route__path,
-            "object__type": "web",
-        }
-        if use_local_mocks:
-            allowed_routes.append(AllowedWebRouteModel(**route_obj))
-        elif casbin_enforcer and casbin_enforcer.enforce(route_obj, route.method):
-            allowed_routes.append(AllowedWebRouteModel(**route_obj))
+    try:
+        for route in request_model.routes:
+            route_obj = {
+                "method": route.method,
+                "route__path": route.route__path,
+                "object__type": "web",
+            }
+            if use_local_mocks:
+                allowed_routes.append(AllowedWebRouteModel(**route_obj))
+            elif denial_audit and denial_audit.enforce(route_obj, route.method):
+                allowed_routes.append(AllowedWebRouteModel(**route_obj))
+    finally:
+        if denial_audit is not None:
+            denial_audit.flush()
 
     response_model = CheckWebRoutesResponseModel(
         allowedRoutes=allowed_routes,
@@ -109,33 +212,38 @@ def get_allowed_api_routes(event):
     """Return the API routes and methods the requesting user may call.
 
     Every public route/method pair is fed through the user's Casbin policy
-    (object__type ``api``, route__path = the route template). Routes served
-    without the authorizer (``unauthenticated=True``) are always included.
-    Routes with no allowed methods are omitted.
+    (object__type ``api``, route__path = the route's probe path, which is the
+    template with each ``{param}`` segment replaced -- the vocabulary the API
+    authorization check uses on a real request). Routes served without the
+    authorizer (``unauthenticated=True``) are always included. Routes with no
+    allowed methods are omitted. The ``path`` returned is the route template.
     """
-    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    denial_audit = _DenialAuditBatch(claims_and_roles, CasbinEnforcer(claims_and_roles))
     allowed_routes = []
 
-    for route in get_public_api_routes():
-        if route.unauthenticated:
-            allowed_methods = list(route.methods)
-        else:
-            request_object = {
-                "object__type": "api",
-                "route__path": route.path,
-            }
-            allowed_methods = [
-                method for method in route.methods
-                if casbin_enforcer.enforce(request_object, method)
-            ]
-        if allowed_methods:
-            allowed_routes.append(
-                AllowedApiRouteModel(
-                    path=route.path,
-                    methods=allowed_methods,
-                    category=route.category,
+    try:
+        for route in get_public_api_routes():
+            if route.unauthenticated:
+                allowed_methods = list(route.methods)
+            else:
+                request_object = {
+                    "object__type": "api",
+                    "route__path": _route_probe_path(route.path),
+                }
+                allowed_methods = [
+                    method for method in route.methods
+                    if denial_audit.enforce(request_object, method)
+                ]
+            if allowed_methods:
+                allowed_routes.append(
+                    AllowedApiRouteModel(
+                        path=route.path,
+                        methods=allowed_methods,
+                        category=route.category,
+                    )
                 )
-            )
+    finally:
+        denial_audit.flush()
 
     response_model = GetAllowedApiRoutesResponseModel(
         routes=allowed_routes,

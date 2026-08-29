@@ -10,8 +10,10 @@ Handles the per-workflow trigger endpoints:
   DELETE /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}   delete a trigger
 
 Triggers are a sub-resource of a workflow: Tier-1 gates the route; Tier-2 enforces on the OWNING
-workflow object. fileUpload is the only trigger type today; its config carries inputFileFilters
-(ext/path/name/wildcard) and defaultTemplateIds ({'<pipelineDatabaseId>:<pipelineId>': templateId}).
+workflow object, and a default template the trigger names is additionally scoped to a pipeline the
+workflow specifies and that the caller passes Tier-2 GET on. fileUpload is the only trigger type
+today; its config carries inputFileFilters (ext/path/name/wildcard) and defaultTemplateIds
+({'<pipelineDatabaseId>:<pipelineId>': templateId}).
 Trigger rows live in WorkflowTriggersStorageTable (PK workflowDatabaseId:workflowId, SK triggerType);
 records built by common.workflows.workflowRecords.
 """
@@ -21,6 +23,7 @@ from urllib.parse import unquote
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 
@@ -51,23 +54,39 @@ from common.workflows import workflowRecords as wr
 from common.workflows import pipelineRecords as pr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows.defaultBucket import resolve_default_bucket, default_bucket_key
-from common.workflows.triggerTemplateValidation import validate_trigger_default_templates
+from common.workflows.triggerTemplateValidation import (
+    validate_trigger_default_templates,
+    validate_trigger_required_templates,
+    trigger_supplied_pipeline_ids,
+)
 
 logger = safeLogger(service_name="WorkflowTriggerService")
 
 dynamodb = boto3.resource("dynamodb")
 s3_client = boto3.client("s3")
 
+# The headless-template checks read the parent workflow's pipeline records and their default templates
+# advisorily: an unreadable table skips the check. Those reads are bounded so an unreachable table
+# cannot hold a trigger save open on retries — this same save is what a CDK registration waits on.
+# The template SCOPE check shares this resource but not that latitude: it authorizes against the
+# pipeline record, so a failed read there refuses the save instead of skipping a check.
+lookup_retry_config = Config(retries={"max_attempts": 2, "mode": "standard"},
+                             connect_timeout=3, read_timeout=5)
+dynamodb_lookup = boto3.resource("dynamodb", config=lookup_retry_config)
+
 try:
     workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     triggers_table_name = get_table_name(ResourceKeys.WORKFLOW_TRIGGERS_STORAGE_TABLE)
     tag_schema_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE)
     buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    templates_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATES_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
 
 OBJECT_TYPE_WORKFLOW = "workflow"
+OBJECT_TYPE_PIPELINE = "pipeline"
 
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
 
@@ -98,6 +117,14 @@ def _tag_schema_table():
     return dynamodb.Table(tag_schema_table_name)
 
 
+def _pipelines_table():
+    return dynamodb_lookup.Table(pipeline_table_name)
+
+
+def _templates_table():
+    return dynamodb_lookup.Table(templates_table_name)
+
+
 def _load_template_tag_schema_fields(pipeline_database_id, pipeline_id, template_id):
     """Load a template's tag-schema fields (rehydrating from S3 when offloaded), or None. Used to
     check a trigger's chosen default templates for required-without-default tags.
@@ -126,6 +153,194 @@ def _load_template_tag_schema_fields(pipeline_database_id, pipeline_id, template
             f"Could not load tag schema for {pipeline_database_id}:{pipeline_id}:{template_id} "
             f"(skipping headless-template check): {e}")
         return None
+
+
+def _pipeline_default_template_id(pipeline_database_id, pipeline_id):
+    """The templateId of a pipeline's own default template (`isDefault`), or "" when it has none.
+
+    Mirrors executeWorkflow._get_default_template_id, which is the fallback a require-template pipeline
+    runs on when nothing names a template for it. A built-in that ships a single template has it
+    promoted to default at import, so this is the source that makes those bundles runnable headlessly
+    without their trigger naming anything."""
+    composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
+    kwargs = {"KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite)}
+    while True:
+        response = _templates_table().query(**kwargs)
+        for row in response.get("Items", []):
+            if row.get("isDefault"):
+                return row.get("templateId", "")
+        if "LastEvaluatedKey" not in response:
+            return ""
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def _load_workflow_pipeline_steps(database_id, workflow_item, default_template_ids):
+    """The parent workflow's pipeline steps in the shape validate_trigger_required_templates reads:
+    {pipelineDatabaseId, pipelineId, defaultTemplateId, systemConfig?, pipelineDefaultTemplateId?}.
+
+    A step the incoming trigger already names a template for, or whose workflow reference carries a
+    fallback template, is returned WITHOUT `systemConfig`: a template already reaches it, so whether
+    its pipeline requires one is immaterial and the pipeline record is never read. That keeps built-in
+    registration free of extra reads — every shipped bundle whose pipeline requires a template names
+    that template in its own trigger.
+
+    Best-effort: a step whose pipeline record is unreadable or absent, or whose default template cannot
+    be queried, is also returned without `systemConfig`, so a read failure skips the check for that step
+    instead of rejecting the save."""
+    supplied = trigger_supplied_pipeline_ids(default_template_ids)
+    steps = []
+    for ref in (workflow_item or {}).get("specifiedPipelines", []) or []:
+        pipeline_db = (ref or {}).get("pipelineDatabaseId") or database_id
+        pipeline_id = (ref or {}).get("pipelineId", "")
+        step = {
+            "pipelineDatabaseId": pipeline_db,
+            "pipelineId": pipeline_id,
+            "defaultTemplateId": (ref or {}).get("defaultTemplateId", "") or "",
+        }
+        steps.append(step)
+        if not pipeline_id or pipeline_id in supplied or step["defaultTemplateId"]:
+            continue
+        try:
+            record = _pipelines_table().get_item(
+                Key={"databaseId": pipeline_db, "pipelineId": pipeline_id}).get("Item")
+        except Exception as e:
+            logger.warning(
+                f"Could not read pipeline {pipeline_db}:{pipeline_id} (skipping required-template "
+                f"check for it): {e}")
+            continue
+        if not record:
+            logger.info(f"Workflow pipeline {pipeline_db}:{pipeline_id} not found")
+            continue
+        system_config = record.get("systemConfig") or {}
+        step["systemConfig"] = system_config
+        if system_config.get("requireTemplate"):
+            try:
+                step["pipelineDefaultTemplateId"] = _pipeline_default_template_id(
+                    pipeline_db, pipeline_id)
+            except Exception as e:
+                logger.warning(
+                    f"Could not read default template for {pipeline_db}:{pipeline_id} (skipping "
+                    f"required-template check for it): {e}")
+                step.pop("systemConfig", None)
+    return steps
+
+
+def _workflow_pipeline_composites(database_id, workflow_item):
+    """The `pipelineDatabaseId:pipelineId` keys the parent workflow's specifiedPipelines snapshot
+    names.
+
+    Each reference contributes both its stored composite attribute and the composite rebuilt from its
+    id parts, with the workflow's own database as the fallback for a reference carrying no
+    pipelineDatabaseId — the same resolution _load_workflow_pipeline_steps applies. A reference
+    written by the workflow save, the vamsSchema import, or the deployment migration therefore
+    resolves to the same set whichever of those shapes it is in."""
+    composites = set()
+    for ref in (workflow_item or {}).get("specifiedPipelines", []) or []:
+        pipeline_id = (ref or {}).get("pipelineId", "")
+        if not pipeline_id:
+            continue
+        stored = (ref or {}).get("pipelineDatabaseId:pipelineId")
+        if stored:
+            composites.add(stored)
+        pipeline_db = (ref or {}).get("pipelineDatabaseId") or database_id
+        composites.add(pr.pipeline_composite_key(pipeline_db, pipeline_id))
+    return composites
+
+
+class PipelineReadError(Exception):
+    """The pipeline record behind a referenced default template could not be READ.
+
+    Distinct from the record being absent: absence is a known state of the table, an unreadable row is
+    an unknown one, and the trigger scope check answers them differently."""
+
+
+def _pipeline_record(pipeline_database_id, pipeline_id):
+    """A pipeline record by composite key, or None when the record is absent.
+
+    Raises PipelineReadError when the read itself fails. The scope check authorizes the referenced
+    template against what this returns, so the two conditions cannot share an answer: reporting a
+    failed read as an absent record would authorize the caller against a synthesized placeholder and
+    turn throttling, a missing table grant, or a transient error into a pass.
+
+    Bounded read on the lookup resource, so an unreachable pipeline table cannot hold a trigger save
+    open on retries."""
+    try:
+        return _pipelines_table().get_item(
+            Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}).get("Item")
+    except Exception as e:
+        logger.warning(
+            f"Could not read pipeline {pipeline_database_id}:{pipeline_id} for the trigger "
+            f"template scope check: {e}")
+        raise PipelineReadError(f"{pipeline_database_id}:{pipeline_id}") from e
+
+
+def _authorize_referenced_templates(database_id, workflow_item, default_template_ids,
+                                    claims_and_roles, event=None):
+    """Scope the default templates a trigger may name. Returns an error response, or None when every
+    referenced template is in scope for this caller.
+
+    A template is in scope when the parent workflow SPECIFIES its pipeline and the caller passes
+    Tier-2 GET on that pipeline object. Both run before any tag schema is read, because the schema
+    row is addressed by the caller-supplied `<pipelineDatabaseId>:<pipelineId>:<templateId>`
+    composite: validating first reads a template in any database of the deployment and reports its
+    required tag NAMES, so Tier-2 on the parent workflow alone would turn one authorized PUT into a
+    probe over every other database's templates.
+
+    The pipeline read the second condition needs is fail-closed: a read that raises returns an error
+    response rather than an in-scope verdict, because the caller's permission on that pipeline is then
+    unknown.
+
+    The rejections name nothing they found (Rule 11) — the composite and the reason go to the log.
+    Templates that ARE in scope keep the specific `triggerTemplateErrors` report: their tag names are
+    already readable by a caller who passes pipeline GET, and naming the tag is what makes the error
+    actionable."""
+    if not default_template_ids:
+        return None
+    # An empty value means "no default template for this pipeline" and is skipped downstream, so such
+    # an entry addresses no template and needs no scope.
+    referenced = [composite for composite, template_id in default_template_ids.items()
+                  if template_id]
+    if not referenced:
+        return None
+    # Fail closed before any comparison: a caller with no authenticated identity learns neither the
+    # membership verdict nor the tag names behind it.
+    if not claims_and_roles or len(claims_and_roles.get("tokens") or []) == 0:
+        return authorization_error()
+    specified = _workflow_pipeline_composites(database_id, workflow_item)
+    for composite in referenced:
+        pipeline_db, _, pipeline_id = (composite or "").partition(":")
+        if not pipeline_id:
+            continue
+        if composite not in specified:
+            logger.info(
+                f"Rejected trigger save: a default template names pipeline {composite}, which "
+                f"workflow {database_id}:{(workflow_item or {}).get('workflowId', '')} does not "
+                f"specify")
+            return validation_error(body={"message": (
+                "A trigger may only choose default templates for pipelines this workflow specifies. "
+                "Remove the entries for pipelines that are not part of this workflow.")}, event=event)
+        # A read that FAILS decides nothing about this pipeline, so it refuses the save. The
+        # alternative — enforcing against a placeholder — is a check that passes on the strength of a
+        # throttle or a missing grant, which is worse than no check because it looks like one.
+        try:
+            record = _pipeline_record(pipeline_db, pipeline_id)
+        except PipelineReadError:
+            logger.warning(
+                f"Rejected trigger save: pipeline {composite} could not be read, so the default "
+                f"template named for it cannot be authorized")
+            return internal_error(event=event)
+        # A pipeline row that is genuinely ABSENT is a known state: it is enforced against a
+        # provisional object carrying only the composite ids (mirrors pipelineService._enforce_missing)
+        # so the check still runs — and still denies a name/category-scoped role — for a workflow whose
+        # snapshot names a pipeline that no longer exists, or one written so recently that this
+        # eventually-consistent read has not caught up with it.
+        obj = dict(record or {"databaseId": pipeline_db, "pipelineId": pipeline_id})
+        obj["object__type"] = OBJECT_TYPE_PIPELINE
+        pr.apply_pipeline_constraint_fields(obj, record or {})
+        if not CasbinEnforcer(claims_and_roles).enforce(obj, "GET"):
+            logger.info(f"Trigger default template denied: no pipeline GET on {composite}")
+            return authorization_error()
+    return None
 
 
 def _enforce_parent_workflow(database_id, workflow_id, action, claims_and_roles):
@@ -206,7 +421,14 @@ def _same_type_triggers(database_id, workflow_id, base_type):
 
 
 def set_trigger(database_id, workflow_id, trigger_type, request, event=None,
-                workflow_item=None):
+                workflow_item=None, claims_and_roles=None):
+    # Scope the templates this trigger names BEFORE anything reads them: the parent workflow must
+    # specify their pipeline and the caller must pass Tier-2 GET on it.
+    scope_error = _authorize_referenced_templates(
+        database_id, workflow_item, request.defaultTemplateIds or {}, claims_and_roles, event)
+    if scope_error:
+        return scope_error
+
     # A trigger runs headless, so any default template it names must be renderable with no
     # user-supplied tags: reject the save if a chosen default template has a required tag with no
     # default value. (A trigger never REQUIRES a template — defaultTemplateIds is optional; this only
@@ -215,6 +437,18 @@ def set_trigger(database_id, workflow_id, trigger_type, request, event=None,
         request.defaultTemplateIds or {}, _load_template_tag_schema_fields)
     if template_errors:
         return validation_error(body={"message": {"triggerTemplateErrors": template_errors}})
+
+    # The other half of the headless-template contract: a pipeline of the parent workflow whose
+    # systemConfig REQUIRES a template, with no template reaching it from the trigger, the workflow
+    # reference, or the pipeline's own default, can never run triggered. Reported under the same
+    # `triggerTemplateErrors` list the trigger form and the CLI already render.
+    required_template_errors = validate_trigger_required_templates(
+        request.defaultTemplateIds or {},
+        _load_workflow_pipeline_steps(database_id, workflow_item, request.defaultTemplateIds or {}))
+    if required_template_errors:
+        logger.info(f"Rejected {trigger_type} trigger: a required template has no default")
+        return validation_error(
+            body={"message": {"triggerTemplateErrors": required_template_errors}}, event=event)
 
     base_type, trigger_id = wr.split_trigger_sort_key(trigger_type)
     siblings = [row for row in _same_type_triggers(database_id, workflow_id, base_type)
@@ -370,7 +604,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={"message": "triggerType required"}, event=event)
             request = SetTriggerRequestModel(**json.loads(event.get("body") or "{}"))
             return set_trigger(database_id, workflow_id, trigger_type, request, event,
-                               workflow_item=workflow_item)
+                               workflow_item=workflow_item,
+                               claims_and_roles=claims_and_roles)
 
         if method == "DELETE":
             if not trigger_type:

@@ -15,14 +15,26 @@ use [`workflow execute`](workflows.md#workflow-execute); for a single asset's ex
 ## execution list
 
 List workflow executions globally, permission-filtered. You only see executions whose workflow you
-can read and every one of whose assets you can read — each input file's asset plus each asset named as
-a metadata source, or the output asset for a run with no inputs. An asset that has been permanently
-deleted is authorized on the database it lived in, so a run against a deleted asset stays listed for
-whoever can read that database; an archived asset is unaffected and stays authorized on its own record.
+can read and every one of whose assets you can read — each input file's asset, each asset named as
+a metadata source, and the asset the run wrote to whenever it wrote to one. A run that wrote into an
+asset you cannot read is therefore not listed, even when you can read every asset it read. A
+results-only run writes to no asset and reads none, so workflow access is its whole gate. An asset that
+has been permanently deleted is authorized on the database it lived in, so a run against a deleted
+asset stays listed for whoever can read that database; an archived asset is unaffected and stays
+authorized on its own record.
 
 Supports rich filters and pagination. By default only recent executions — those started within the last
 90 days — are listed; use `--filter-start-date` and `--filter-end-date` to query an explicit date range.
 The applied window is returned as `filterStartDate` (and `filterEndDate` when supplied) in the response.
+
+:::note[A short page reports why under `Warnings`]
+The service fills a page by walking its query, and two bounds can stop it early: the per-page limit on
+distinct assets it resolves for permission checks, and its per-request work budget. Whichever fired is
+named in a `Warnings` block (a `warnings` array under `--json-output`), and a next token accompanies it
+whenever the walk can continue. A page shorter than `--page-size`, or an empty page carrying a token, is
+therefore a stated bound rather than an absence of matching executions. `--auto-paginate` collects the
+bounds from every page it walked.
+:::
 
 Each execution reports its output target — `Output Type` (`asset`, or `none` for a results-only run)
 and `Output Asset` as `databaseId:assetId`. Both lines are omitted for a results-only execution, which
@@ -179,6 +191,11 @@ vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec 
 | `--start-time` / `--end-time` | (full) epoch-millisecond window             |
 | `--next-token`                | (full) CloudWatch pagination token          |
 
+The five `full`-mode options act on the live CloudWatch search only — `truncated` mode returns one
+joined blob of stored text and no continuation token, so there is nothing there for them to narrow.
+Supplying one without `--mode full` is rejected with a usage error rather than ignored, so a filtered
+search that silently returned an unfiltered log is not mistaken for "no matching events".
+
 ---
 
 ## execution abort
@@ -187,12 +204,20 @@ Abort a running execution, or an entire execution group with `--group-id`. When 
 pass any member execution ID (the route is keyed on an execution ID); the group abort is bounded per
 request and reports `moreRemaining` when more members remain.
 
+A group abort terminates every active execution the caller can reach in the group, so it is confirmed
+interactively unless `--yes` is passed. `--yes` is **required** with `--json-output`, where no prompt
+is possible: without it the command emits `{"error": "Confirmation required", ...}` and exits
+non-zero without aborting anything.
+
 ```bash
 # Abort one execution
 vamscli execution abort my-execution-id
 
 # Abort every active execution in a group
-vamscli execution abort my-execution-id --group-id batch-2026-01
+vamscli execution abort my-execution-id --group-id batch-2026-01 --yes
+
+# Non-interactive
+vamscli execution abort my-execution-id --group-id batch-2026-01 --yes --json-output
 ```
 
 ---
@@ -217,10 +242,13 @@ metadata could not be read, or metadata trimmed at the per-entity limit.
 
 Permanently delete an execution's DynamoDB records (admin only). This does not touch Step Functions
 history and requires the execution to not be in progress. It is irreversible; the CLI prompts for
-confirmation unless `--yes` (or `--json-output`) is passed.
+confirmation unless `--yes` is passed. `--yes` is **required** with `--json-output`, where no prompt
+is possible: without it the command emits `{"error": "Confirmation required", ...}` and exits
+non-zero without deleting anything.
 
 ```bash
 vamscli execution permanent-delete my-execution-id --yes
+vamscli execution permanent-delete my-execution-id --yes --json-output
 ```
 
 :::warning

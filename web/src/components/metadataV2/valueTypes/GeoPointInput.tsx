@@ -4,7 +4,9 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { FormField, Input, SpaceBetween } from "@cloudscape-design/components";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 
 interface GeoPointInputProps {
     value: string;

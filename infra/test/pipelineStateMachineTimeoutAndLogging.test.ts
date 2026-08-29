@@ -30,6 +30,7 @@ import { storageResources } from "../lib/nestedStacks/storage/storageBuilder-nes
 import { SplatToolboxConstruct } from "../lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct";
 import { IsaacLabTrainingConstruct } from "../lib/nestedStacks/pipelines/simulation/isaacLabTraining/constructs/isaacLabTraining-construct";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
@@ -66,7 +67,7 @@ const makeHarness = (id: string): Harness => {
     const config = createMockConfig();
     Service.SetConfig(config);
 
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, id, { env: { account: ACCOUNT, region: REGION } });
 
     const vpc = new ec2.Vpc(stack, "Vpc", { maxAzs: 2 });

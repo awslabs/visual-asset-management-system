@@ -282,8 +282,10 @@ def prepare_next_pipeline(body, current_output_files=None):
             file_base_execution_path_extension=body.get('outputFileBaseExecutionPathExtension', '/')),
         "auxBucket": aux_bucket,
         "auxTempPrefix": next_aux_temp_prefix,
-        # Per-pipeline viewer subfolder; empty until sourced from pipeline configuration.
-        "auxPreviewPipelineSuffix": "",
+        # The next pipeline's own viewer subfolder (its systemConfig.auxPreviewPipelineSuffix,
+        # threaded through the ASL), so the same pipeline resolves the same aux preview location at
+        # any step position — the execute handler supplies it identically for step 1.
+        "auxPreviewPipelineSuffix": body.get('nextPipelineAuxPreviewSuffix', '') or "",
         "systemConfig": er.build_manifest_system_config(
             orchestration_bus_arn=orchestration_bus_arn,
             orchestration_event_prefix=next_event_prefix),

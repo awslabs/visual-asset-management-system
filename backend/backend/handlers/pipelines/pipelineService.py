@@ -189,10 +189,9 @@ def _referencing_workflow_labels(database_id, pipeline_id):
                         break
                 if len(labels) >= MAX_REFERENCING_WORKFLOWS:
                     return labels
-            lek = resp.get("LastEvaluatedKey")
-            if not isinstance(lek, dict) or not lek:
+            if "LastEvaluatedKey" not in resp:
                 return labels
-            kwargs["ExclusiveStartKey"] = lek
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
         logger.warning(
             f"Referencing-workflow lookup for {composite} stopped after "
             f"{MAX_REFERENCING_WORKFLOW_PAGES} pages; the save warning may name fewer workflows "
@@ -243,10 +242,9 @@ def _template_count(database_id, pipeline_id):
         while True:
             resp = table.query(**kwargs)
             total += resp.get("Count", 0)
-            lek = resp.get("LastEvaluatedKey")
-            if not lek:
+            if "LastEvaluatedKey" not in resp:
                 break
-            kwargs["ExclusiveStartKey"] = lek
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
         return total
     except Exception as e:
         logger.warning(f"Template count failed for {composite}: {e}")
@@ -493,10 +491,9 @@ def find_pipeline_id_owner(pipeline_id, excluding_database_id=None):
             if not owner or owner == excluding_database_id:
                 continue
             return owner
-        last_key = response.get("LastEvaluatedKey")
-        if not isinstance(last_key, dict) or not last_key:
+        if "LastEvaluatedKey" not in response:
             return None
-        query_kwargs["ExclusiveStartKey"] = last_key
+        query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
     logger.warning(
         f"Pipeline id uniqueness lookup stopped after {MAX_ID_LOOKUP_PAGES} pages; "
         "treating the id as free.")

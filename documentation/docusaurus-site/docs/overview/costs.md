@@ -130,7 +130,7 @@ Each pipeline execution incurs AWS Batch Fargate compute costs, Amazon S3 data t
 
 ### Amazon OpenSearch Configuration
 
-The choice between Amazon OpenSearch Serverless and Provisioned significantly affects costs. Serverless charges by OCU-hour with a minimum of 4 OCUs. Provisioned charges by instance type and Amazon EBS volume. Both options represent the largest fixed cost component for most deployments.
+The choice between Amazon OpenSearch Serverless and Provisioned significantly affects costs. Serverless charges by OCU-hour, so the cost depends on the minimum OCUs the collection holds: a deployment that holds minimums above zero pays for at least 2 index and 2 search OCUs continuously, while next-generation Serverless with both minimums set to `0` scales to zero between uses. Provisioned charges by instance type and Amazon EBS volume regardless of activity. Either option is typically the largest fixed cost component of a deployment.
 
 ### VPC Endpoint Count
 

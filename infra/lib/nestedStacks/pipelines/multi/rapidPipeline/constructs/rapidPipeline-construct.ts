@@ -275,7 +275,7 @@ export class RapidPipelineConstruct extends NestedStack {
         //             "VAMSCloudWatchVPCLogsRapidPipeline",
         //             10
         //         ),
-        //     retention: RetentionDays.TEN_YEARS,
+        //     retention: RetentionDays.ONE_YEAR,
         //     removalPolicy: cdk.RemovalPolicy.DESTROY,
         // });
 
@@ -405,7 +405,7 @@ export class RapidPipelineConstruct extends NestedStack {
                         "RapidPipelineProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );

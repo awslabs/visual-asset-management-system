@@ -204,6 +204,16 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             next_aux_temp_prefix_uri = (
                 f"States.Format('{PIPELINES_PREFIX}{next_pipeline['name']}/{{}}/', "
                 f"$$.Execution.Name)")
+            # The NEXT pipeline's configured viewer subfolder, flattened onto the pipeline dict by
+            # workflowAsl.to_asl_pipeline_dict from its systemConfig. Its manifest must carry the
+            # same value the execute handler supplies for step 1, or the same pipeline writes its
+            # viewer data to a different aux location purely because of its position in the
+            # workflow. A raw pipeline record is also accepted, for a caller that skips the
+            # adapter; absent means no subfolder.
+            next_aux_preview_suffix = (
+                next_pipeline.get('auxPreviewPipelineSuffix')
+                or (next_pipeline.get('systemConfig') or {}).get('auxPreviewPipelineSuffix', '')
+                or "")
             interim_payload = {
                 "body": {
                     # --- Workflow-execution identity + I/O bucket (the aux bucket is resolved by
@@ -227,6 +237,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                         f"States.Format('{input_folder_template}pipeline{i + 2}/config.json', "
                         f"$$.Execution.Name)"),
                     "nextPipelineAuxTempPrefix.$": next_aux_temp_prefix_uri,
+                    "nextPipelineAuxPreviewSuffix": next_aux_preview_suffix,
                     # The NEXT step's own narrowed input-metadata key, or "" when that step reads the
                     # shared per-execution envelope. Resolved per execution (templates are chosen at
                     # execute time, the ASL is baked at save time), so only the index is static here.
@@ -274,11 +285,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             )
             states.append((interim_state_id, interim_state))
 
-    # Create SINGLE process output state (runs ONCE after ALL pipelines complete)
-    # Use the LAST pipeline's information for the process output
-    last_pipeline = pipelines[-1]
-    last_job_name = job_names[-1]
-
+    # Create SINGLE process output state (runs ONCE after ALL pipelines complete). Its body carries
+    # only keys processWorkflowExecutionOutput reads; the shared output-folder prefixes it lists are
+    # the FIRST pipeline's (all steps write into the same execution output folder).
     process_output_state_id = f"process-outputs-{uuid.uuid1().hex}"
     process_output_payload = {
         "body": {
@@ -289,8 +298,6 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             "endStatePipelineExecutionId.$": "$.endStatePipelineExecutionId",
             # All pipeline-execution ids for the end-state output diff baseline.
             "priorPipelineExecutionIds.$": "$.pipelineExecutionIds",
-            "pipeline": last_pipeline['name'],
-            "description": f'Output from {last_job_name}',
 
             # --- Shared output-folder prefixes the end-state lambda lists for produced files ---
             "filesPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $$.Execution.Name)",

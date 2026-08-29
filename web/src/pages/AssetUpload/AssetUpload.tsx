@@ -73,8 +73,6 @@ import {
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
-let tags: any[] = [];
-let tagTypes: TagType[] = [];
 const assetOptions: { label: string; value: string }[] = [];
 let assetTags: string[] = [];
 
@@ -343,12 +341,17 @@ const assetDetailReducer = (
     }
 };
 
-type AssetDetailContextType = {
+export type AssetDetailContextType = {
     assetDetailState: AssetDetail;
     assetDetailDispatch: Dispatch<AssetDetailAction>;
 };
 
-const AssetDetailContext = createContext<AssetDetailContextType | undefined>(undefined);
+/**
+ * The wizard's own asset-detail context, distinct from the one in `src/context/AssetDetailContext.ts`
+ * that the asset detail page uses. Exported so a step can be mounted against a controlled state
+ * rather than only through the whole wizard.
+ */
+export const AssetDetailContext = createContext<AssetDetailContextType | undefined>(undefined);
 
 const isDistributableOptions: OptionDefinition[] = [
     { label: "Yes", value: "true" },
@@ -395,7 +398,7 @@ interface AssetLinkingProps {
     showErrors: boolean;
 }
 
-const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
+export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
     const [validationText, setValidationText] = useState<{
@@ -412,6 +415,10 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     }>({});
     const [tagsValid, setTagsValid] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
+    // Component state rather than module-level `let`s: the picker options, the announced constraint
+    // and the validator all derive from the same fetch, so they have to change together.
+    const [tagTypes, setTagTypes] = useState<TagType[]>([]);
+    const [tagOptions, setTagOptions] = useState<any[]>([]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -451,52 +458,72 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         assetDetailState.databaseId,
         assetDetailState.description,
         assetDetailState.tags,
+        tagTypes,
     ]);
 
+    // Tag types and tags are both scoped to GLOBAL + the selected database, matching the backend's
+    // required-tag validation. An unscoped list announces required types from other databases that
+    // the correctly-scoped picker can never offer, which leaves the step permanently invalid.
+    //
+    // The database is chosen inside THIS component, so the fetch is keyed on it; a `[]` dependency
+    // list would only ever see the initial `undefined`. `requestSeq` drops a late reply from an
+    // earlier database — the unscoped/wider query is the slower one, so without it the picker can end
+    // up holding tags the create call will reject.
+    const selectedDatabaseId = assetDetailState?.databaseId;
+    const requestSeq = useRef(0);
     useEffect(() => {
-        // Get Tag Types to enforce when they are required
-        tagTypes = [];
+        const databaseId = selectedDatabaseId;
+        const seq = ++requestSeq.current;
 
-        // Scope to global + the selected database, matching the tag picker and the backend's
-        // required-tag validation; the unscoped list demanded tags this form cannot offer.
-        fetchTagTypesForAsset(
-            assetDetailState?.databaseId ? { databaseId: assetDetailState.databaseId } : undefined
-        ).then((res) => {
-            // The service returns an array on success, or an error message string / false
-            // on failure. Surface failures instead of silently leaving the form blank.
-            if (!Array.isArray(res)) {
-                tagTypes = [];
+        if (!databaseId) {
+            setTagTypes([]);
+            setTagOptions([]);
+            setConstraintText({});
+            return;
+        }
+
+        Promise.all([
+            fetchTagTypesForAsset({ databaseId }),
+            fetchTagsForAsset({ databaseId }),
+        ]).then(([typesRes, tagsRes]) => {
+            if (seq !== requestSeq.current) return;
+
+            // Each service returns an array on success, or an error message string / false on
+            // failure. Surface failures instead of silently leaving the form blank.
+            if (!Array.isArray(typesRes) || !Array.isArray(tagsRes)) {
+                const failed = !Array.isArray(typesRes) ? typesRes : tagsRes;
+                setTagTypes([]);
+                setTagOptions([]);
+                setConstraintText({});
                 setLoadError(
-                    typeof res === "string" && res.trim() !== ""
-                        ? res
-                        : "Failed to load tag types. Please try refreshing the page."
+                    typeof failed === "string" && failed.trim() !== ""
+                        ? failed
+                        : "Failed to load tags. Please try refreshing the page."
                 );
                 return;
             }
-            tagTypes = res;
 
-            if (tagTypes.length) {
-                // A required tag type with no tags cannot be satisfied, so it is not announced as a
-                // constraint either — the same set the validator enforces.
-                const requiredTagTypes = enforceableRequiredTagTypes(tagTypes);
+            setTagTypes(typesRes);
+            // Grouped, scope-labelled and ordered by the shared helper so this picker and the asset
+            // edit form present tags identically. The grouping metadata comes from the types just
+            // fetched: the `tagTypes` localStorage entry another page happens to write is absent on a
+            // fresh browser, which left every group ungrouped.
+            setTagOptions(buildTagOptionGroups(tagsRes, typesRes));
 
-                if (requiredTagTypes.length) {
-                    // Set constraint text if there are required tag types
-                    setConstraintText({
-                        tags:
-                            "The following tag types, listed in parentheses, require at least one selection: " +
-                            requiredTagTypes.map((tagType) => tagType.tagTypeName).join(", "),
-                    });
-
-                    // Set initial validation text
-                    setValidationText({
-                        ...validationText,
-                        tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes),
-                    });
-                }
+            // A required tag type with no tags cannot be satisfied, so it is not announced as a
+            // constraint either — the same set the validator enforces.
+            const requiredTagTypes = enforceableRequiredTagTypes(typesRes);
+            if (requiredTagTypes.length) {
+                setConstraintText({
+                    tags:
+                        "The following tag types, listed in parentheses, require at least one selection: " +
+                        requiredTagTypes.map((tagType) => tagType.tagTypeName).join(", "),
+                });
+            } else {
+                setConstraintText({});
             }
         });
-    }, []);
+    }, [selectedDatabaseId]);
 
     return (
         <Container header={<Header variant="h2">{Synonyms.Asset} Details</Header>}>
@@ -649,7 +676,7 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                             });
                         }}
                         placeholder="Tags"
-                        options={tags}
+                        options={tagOptions}
                     />
                 </FormField>
             </SpaceBetween>
@@ -1398,31 +1425,8 @@ const UploadForm = () => {
     const [isCancelVisible, setCancelVisible] = useState(false);
     const [showErrorsForPage, setShowErrorsForPage] = useState(-1);
     const [validSteps, setValidSteps] = useState([false, false, false]);
-    const [tagsLoadError, setTagsLoadError] = useState<string | null>(null);
 
     useEffect(() => {
-        tags = [];
-
-        // Scope to global + the asset's database so tags from other databases are hidden.
-        fetchTagsForAsset(
-            assetDetailState?.databaseId ? { databaseId: assetDetailState.databaseId } : undefined
-        ).then((res) => {
-            tags.length = 0; // Clear existing array without losing reference
-            if (!Array.isArray(res)) {
-                // Surface load failures (e.g. a 403) instead of leaving the tag list blank.
-                setTagsLoadError(
-                    typeof res === "string" && res.trim() !== ""
-                        ? res
-                        : "Failed to load tags. Please try refreshing the page."
-                );
-            }
-            if (res && Array.isArray(res)) {
-                // Grouped, scope-labelled and ordered by the shared helper so this picker and the
-                // asset edit form present tags identically.
-                const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
-                buildTagOptionGroups(res, storedTypes).forEach((group) => tags.push(group));
-            }
-        });
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
             assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: fileUploadTableItems });
             localforage
@@ -1508,16 +1512,6 @@ const UploadForm = () => {
 
     return (
         <Box padding={{ left: "l", right: "l" }}>
-            {tagsLoadError && (
-                <Alert
-                    type="error"
-                    dismissible
-                    onDismiss={() => setTagsLoadError(null)}
-                    header="Error loading form data"
-                >
-                    {tagsLoadError}
-                </Alert>
-            )}
             {isCancelVisible && (
                 <CancelButtonModal onDismiss={setCancelVisible} visible={isCancelVisible} />
             )}

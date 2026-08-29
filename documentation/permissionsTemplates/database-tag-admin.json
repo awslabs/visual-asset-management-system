@@ -33,6 +33,11 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
                 { "field": "route__path", "operator": "starts_with", "value": "/tags" },
                 { "field": "route__path", "operator": "starts_with", "value": "/tag-types" }
             ],

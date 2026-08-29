@@ -4,7 +4,11 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Box, Button, FormField, SpaceBetween, Textarea } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import FormField from "@cloudscape-design/components/form-field";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Textarea from "@cloudscape-design/components/textarea";
 
 interface GeoJSONInputProps {
     value: string;

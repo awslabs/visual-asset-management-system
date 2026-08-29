@@ -1,8 +1,9 @@
 """Role API models for VAMS."""
 
+import re
 from typing import Optional, Literal, List, Union
 from pydantic import Field
-from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, object_name_pattern
 from customLogging.logger import safeLogger
 
@@ -39,6 +40,19 @@ MAX_LIST_TOKEN_LENGTH = 4096
 # never about. `is_one_of` / `is_not_one_of` compile to a plain `in` test and are the operators that work
 # on a list.
 _REGEX_OPERATORS = ("equals", "contains", "does_not_contain", "starts_with", "ends_with")
+
+# Characters a criteria value may not carry, because Casbin's policy reader is structure-unaware:
+# `casbin.persist.adapter.load_policy_line` splits a policy line on ',' at bracket depth 0, and
+# `StringAdapter` splits the policy text on newlines. Neither honours quoting, so a value carrying
+# one of these characters changes the SHAPE of the line it is interpolated into rather than its
+# content, and a line whose field count does not match the `p` definition makes the enforcer fail as
+# a whole -- one such value denies every check for every user holding the role. The C0 range, DEL and
+# the C1 range are covered wholesale: a control character is never part of a database id, asset name
+# or tag name, and it also reaches the single-line audit records verbatim.
+#
+# Brackets are deliberately absent. '[...]' and '(...)' are regex syntax the pattern-matching
+# operators legitimately use, so the rule generator contains those at interpolation time instead.
+_CRITERIA_VALUE_FORBIDDEN_PATTERN = re.compile(r"[,\x00-\x1f\x7f-\x9f]")
 
 
 def _list_valued_constraint_fields():
@@ -77,6 +91,33 @@ class ConstraintCriteriaModel(BaseModel, extra='ignore'):
     field: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     operator: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     value: Union[str, List[str]] = Field(max_items=MAX_CRITERIA_VALUES)
+
+    @validator('value')
+    def reject_policy_line_separator_characters(cls, value):
+        """Refuse a criteria value that could change the shape of the Casbin policy line.
+
+        Dedicated to the character set rather than folded into the STRING_256 + REGEX pair below:
+        those two answer 'is it short enough' and 'does it compile', and a comma, a line break or a
+        NUL passes both. The value only misbehaves later, in the generated policy text, where a
+        separator character adds a field to the line and the mismatched width denies every check for
+        every holder of the role.
+
+        Runs per list element, since each element becomes its own clause in the emitted rule. The
+        regex metacharacters the pattern-matching operators depend on ('.*', '^', '$', '|',
+        parentheses, character classes) are untouched, as are spaces and the GLOBAL keyword.
+        """
+        for entry in (value if isinstance(value, list) else [value]):
+            if not isinstance(entry, str):
+                continue
+            if _CRITERIA_VALUE_FORBIDDEN_PATTERN.search(entry):
+                # Rule 11: the rejected value is not echoed back, only the character class it hit.
+                logger.error(
+                    "Constraint criteria value rejected: it carries a Casbin policy-line "
+                    "separator or a control character")
+                raise ValueError(
+                    "criteria value must not contain a comma, a line break or a control "
+                    "character")
+        return value
 
     @root_validator
     def validate_criteria_value(cls, values):

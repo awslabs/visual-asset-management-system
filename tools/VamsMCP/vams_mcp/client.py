@@ -123,6 +123,7 @@ class VamsClient:
         max_items: Optional[int] = None,
         items_key: str = "Items",
         page_size: Optional[int] = None,
+        starting_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Follow VAMS ``NextToken`` pagination up to configured limits.
 
@@ -131,11 +132,24 @@ class VamsClient:
         ``items_key`` names the list field, which differs per endpoint
         (``Items``, ``items``, ``versions``). Results are always returned under
         ``Items`` so every list tool has one shape.
+
+        ``starting_token`` resumes a walk a previous call stopped: it is sent as the FIRST page's
+        ``startingToken``. When the walk stops with a token still in hand, that token is returned as
+        ``NextToken`` — without it the ceiling below is a wall rather than a page size, and rows past
+        it are unreachable through this server no matter what the caller asks for.
+
+        Two independent bounds can stop the walk, and ``note`` names which fired:
+
+        * ``max_items`` (or ``max_pages * page_size`` when the caller gave none) caps the rows
+          returned. It can also cut a page that carried no token at all, which is still an
+          incomplete answer and is still flagged ``truncated``.
+        * ``max_pages`` caps the requests one tool call may issue. It is a work bound on the server
+          process, so a larger ``max_items`` does not raise it; resume with ``NextToken`` instead.
         """
         limit = max_items if max_items is not None else (self.config.max_pages * self.config.page_size)
         effective_page_size = page_size or self.config.page_size
         items: List[Any] = []
-        next_token: Optional[str] = None
+        next_token: Optional[str] = starting_token
         pages = 0
 
         while True:
@@ -151,13 +165,35 @@ class VamsClient:
             if not next_token or len(items) >= limit or pages >= self.config.max_pages:
                 break
 
-        result: Dict[str, Any] = {"Items": items[:limit], "count": len(items[:limit]), "pages": pages}
+        kept = items[:limit]
+        result: Dict[str, Any] = {"Items": kept, "count": len(kept), "pages": pages}
         if next_token:
+            result["NextToken"] = next_token
+        # `len(items) > limit` is the case a token-only check misses: a single page can return more
+        # rows than max_items and carry no NextToken, so the surplus is dropped while the result
+        # reports a clean count — the exact reading the `truncated` contract exists to prevent.
+        if next_token or len(items) > limit:
             result["truncated"] = True
+            if next_token and pages >= self.config.max_pages and len(kept) < limit:
+                reason = (
+                    f"stopped after {pages} page(s), the max_pages work bound on this server "
+                    f"(VAMS_MAX_PAGES={self.config.max_pages})"
+                )
+            elif next_token:
+                reason = f"stopped at the requested limit of {limit} item(s)"
+            else:
+                reason = (
+                    f"the last page returned more rows than the requested limit of {limit}; "
+                    f"{len(items) - limit} were dropped"
+                )
             result["note"] = (
-                f"Result truncated at {len(items[:limit])} items ({pages} page(s), "
-                f"limit {limit}, max_pages {self.config.max_pages}). "
-                "More items are available."
+                f"Result is INCOMPLETE: {reason}. Returned {len(kept)} item(s) over {pages} page(s)."
+                + (
+                    " More items are available — call this tool again with "
+                    f"starting_token={next_token!r} to continue."
+                    if next_token
+                    else " Raise max_items to see the rest."
+                )
             )
         return result
 

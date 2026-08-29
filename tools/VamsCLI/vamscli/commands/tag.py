@@ -103,6 +103,25 @@ def format_tags_list_output(tags_data: List[Dict[str, Any]], json_output: bool =
     return '\n'.join(output_lines)
 
 
+def filter_tags_by_type(result: Dict[str, Any], tag_type: str) -> Dict[str, Any]:
+    """Narrow an enveloped tags response to one tag type, in place.
+
+    The `/tags` handler accepts no tagType query parameter, so this is the only place the filter can
+    be applied — and it has to be applied to the payload rather than in the CLI formatter, which
+    JSON mode never runs.
+    """
+    message = result.get('message') if isinstance(result, dict) else None
+    if not isinstance(message, dict):
+        return result
+    wanted = tag_type.lower()
+    message['Items'] = [
+        tag for tag in (message.get('Items') or [])
+        # The listing marks a required tag type with a trailing " [R]"; strip it before comparing.
+        if tag.get('tagTypeName', '').replace(' [R]', '').lower() == wanted
+    ]
+    return result
+
+
 @click.group()
 def tag():
     """Tag management commands."""
@@ -432,34 +451,33 @@ def list(ctx: click.Context, tag_type: Optional[str], database_id: Optional[str]
 
     # Get the tags
     result = api_client.get_tags(database_id=database_id, scope=scope)
-    
+
+    # The tags API has no tagType query parameter, so the filter is applied here — in the command
+    # body, not in the CLI formatter. output_result never calls the formatter in JSON mode, so a
+    # formatter-side filter would leave --json-output consumers with the unfiltered superset.
+    if tag_type:
+        filter_tags_by_type(result, tag_type)
+
     def format_tags_result(data):
         """Format tags result for CLI display."""
-        # Extract tags from the response
-        tags_list = data.get('message', {}).get('Items', [])
-        
-        # Filter by tag type if specified
-        if tag_type:
-            filtered_tags = []
-            for tag in tags_list:
-                tag_type_name = tag.get('tagTypeName', '')
-                # Remove [R] indicator for comparison
-                clean_tag_type = tag_type_name.replace(' [R]', '')
-                if clean_tag_type.lower() == tag_type.lower():
-                    filtered_tags.append(tag)
-            tags_list = filtered_tags
-            
-            if not tags_list:
-                return f"No tags found for tag type '{tag_type}'."
-        
-        # Format for CLI display
+        message = data.get('message', {})
+        tags_list = message.get('Items', [])
+
+        if tag_type and not tags_list:
+            return f"No tags found for tag type '{tag_type}'."
+
         output = format_tags_list_output(tags_list, json_output)
-        
-        # Show pagination info if available
-        if data.get('message', {}).get('NextToken'):
-            output += "\n\nMore results available. Use pagination to see additional tags."
-        
+
+        # A NextToken means the listing hit the service's own 30,000-item bound. There is no
+        # continuation option to spend it on, and the two scoped forms drain their partition fully,
+        # so the advisory names those rather than a pagination flag that does not exist.
+        if message.get('NextToken'):
+            output += ("\n\nMore results available: this listing reached the service's item limit. "
+                       "Narrow it with --database <id> or --scope global, which return the whole "
+                       "scope.")
+
         return output
-    
+
     output_result(result, json_output, cli_formatter=format_tags_result)
+    return result
     return result

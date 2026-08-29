@@ -135,7 +135,9 @@ export const FileVersionsList: React.FC = () => {
             filtered = filtered.filter(
                 (item) =>
                     item.metadataKey.toLowerCase().includes(searchLower) ||
-                    item.metadataValue.toLowerCase().includes(searchLower) ||
+                    // A version snapshot taken from a row stored before the value was recorded reads
+                    // back as null, so the search treats it as empty text rather than throwing on it.
+                    (item.metadataValue ?? "").toLowerCase().includes(searchLower) ||
                     item.filePath.toLowerCase().includes(searchLower)
             );
         }

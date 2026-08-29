@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ExecutionLogViewer from "./ExecutionLogViewer";
 
@@ -71,6 +71,94 @@ describe("ExecutionLogViewer", () => {
         await userEvent.selectOptions(screen.getByLabelText("Log source"), "truncated");
 
         expect(await screen.findByText(/Switch Source to Live/)).toBeInTheDocument();
+    });
+});
+
+/**
+ * Out-of-order responses. The default `full` source is a live CloudWatch search taking seconds while a
+ * stored read returns at once, so the earlier request routinely lands last — and every write in
+ * fetchLogs is unconditional, so it would repaint the log, the Source badge and the spinner for a
+ * scope the controls no longer name.
+ */
+describe("ExecutionLogViewer superseded responses", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    const LIVE = [
+        true,
+        { mode: "full", events: [{ message: "LIVE TEXT" }], logsSource: "live" },
+    ] as const;
+    const STORED = [
+        true,
+        { mode: "truncated", executionLog: "STORED TEXT", logsSource: "stored" },
+    ] as const;
+
+    it("renders a live response that IS the current one", async () => {
+        // Control for the test below: this payload does reach the editor when it is not superseded, so
+        // its absence there is evidence of the guard rather than of a mock that renders nothing.
+        const { getExecutionLogs } = require("../api/executions");
+        getExecutionLogs.mockResolvedValue(LIVE);
+
+        render(<ExecutionLogViewer executionId="e1" pipelines={[]} />);
+
+        expect(await screen.findByTestId("editor")).toHaveTextContent("LIVE TEXT");
+    });
+
+    it("discards a slow earlier response instead of overwriting the newer scope's log", async () => {
+        const { getExecutionLogs } = require("../api/executions");
+        let landLiveResponse: (value: unknown) => void = () => undefined;
+        getExecutionLogs
+            .mockImplementationOnce(
+                () =>
+                    new Promise((resolve) => {
+                        landLiveResponse = resolve;
+                    })
+            )
+            .mockImplementationOnce(() => Promise.resolve(STORED));
+
+        render(<ExecutionLogViewer executionId="e1" pipelines={[]} />);
+
+        // Switch away while the live read is still in flight.
+        await userEvent.selectOptions(screen.getByLabelText("Log source"), "truncated");
+        expect(await screen.findByTestId("editor")).toHaveTextContent("STORED TEXT");
+        expect(screen.getByText("Source: Stored")).toBeInTheDocument();
+
+        // The live read now lands. It belongs to a selection the user has left.
+        await act(async () => {
+            landLiveResponse(LIVE);
+        });
+        await waitFor(() => expect(getExecutionLogs).toHaveBeenCalledTimes(2));
+
+        expect(screen.getByTestId("editor")).toHaveTextContent("STORED TEXT");
+        expect(screen.getByTestId("editor")).not.toHaveTextContent("LIVE TEXT");
+        // The badge is taken from the payload, so a stale write mislabels the text as well as
+        // replacing it.
+        expect(screen.getByText("Source: Stored")).toBeInTheDocument();
+        expect(screen.queryByText("Source: Live (CloudWatch)")).not.toBeInTheDocument();
+    });
+
+    it("does not clear the spinner for a request that is no longer current", async () => {
+        const { getExecutionLogs } = require("../api/executions");
+        let landFirst: (value: unknown) => void = () => undefined;
+        getExecutionLogs
+            .mockImplementationOnce(
+                () =>
+                    new Promise((resolve) => {
+                        landFirst = resolve;
+                    })
+            )
+            // The second request never settles, so the viewer must still be reported as loading.
+            .mockImplementationOnce(() => new Promise(() => undefined));
+
+        render(<ExecutionLogViewer executionId="e1" pipelines={[]} />);
+        await userEvent.selectOptions(screen.getByLabelText("Log source"), "truncated");
+
+        await act(async () => {
+            landFirst(LIVE);
+        });
+
+        expect(screen.getByText("Loading logs…")).toBeInTheDocument();
     });
 });
 

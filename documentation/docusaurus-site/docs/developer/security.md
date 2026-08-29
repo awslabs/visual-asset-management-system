@@ -72,13 +72,14 @@ The authorizer returns an IAM policy plus a flat string map of context values. T
 | `vams:authMethod`         | `"apiKey"` on the API key path                                    |
 
 :::note[Caching in the authorizer]
-The authorizer caches three separate things, each with its own lifetime, so that a per-request authorization does not re-read DynamoDB or refetch signing keys:
+The authorizer caches three separate things so that a per-request authorization does not re-read DynamoDB or refetch signing keys. The role cache carries two lifetimes, because an empty result means something different from a populated one:
 
-| Cached data       | Constant               | Value      | Scope    | Notes                                                                                        |
-| ----------------- | ---------------------- | ---------- | -------- | -------------------------------------------------------------------------------------------- |
-| User roles        | `USER_ROLES_CACHE_TTL` | 60 seconds | Per user | An empty role list is cached too, so a user with no roles does not re-query on every request |
-| API key records   | `API_KEY_CACHE_TTL`    | 15 seconds | Per key  | A not-found key is cached as `None`, preventing repeated lookups from invalid keys           |
-| JWKS signing keys | `CACHE_TTL`            | 1 hour     | Per pool | Applies to Amazon Cognito keys, external IDP keys, and resolved OpenID Connect JWKS URIs     |
+| Cached data            | Constant                     | Value      | Scope    | Notes                                                                                                                                                                                                                  |
+| ---------------------- | ---------------------------- | ---------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User roles (populated) | `USER_ROLES_CACHE_TTL`       | 60 seconds | Per user | Resolved role names for a user holding at least one role                                                                                                                                                               |
+| User roles (empty)     | `USER_ROLES_EMPTY_CACHE_TTL` | 5 seconds  | Per user | An empty role list is cached too, but for a shorter window: the API key path denies a caller that resolves to no roles, so a full-lifetime empty entry would keep denying a newly granted machine identity for a minute |
+| API key records        | `API_KEY_CACHE_TTL`          | 15 seconds | Per key  | A not-found key is cached as `None`, preventing repeated lookups from invalid keys                                                                                                                                      |
+| JWKS signing keys      | `CACHE_TTL`                  | 1 hour     | Per pool | Applies to Amazon Cognito keys, external IDP keys, and resolved OpenID Connect JWKS URIs                                                                                                                                |
 
 API Gateway caches the authorizer result itself on top of these, set through `authorizerResultTtlInSeconds` on each security scheme in `buildOpenApiSpec.ts`:
 
@@ -89,7 +90,12 @@ API Gateway caches the authorizer result itself on top of these, set through `au
 
 For a REQUEST authorizer the identity sources form the cache key, so authenticated results are cached per token and anonymous results per source IP. The cached entry holds the returned IAM policy **and** the context values, so `vams:roles`, `vams:tokens`, and `vams:mfaEnabled` are cached with the decision. Redeploying the API discards cached policy documents.
 
-Because the two layers compose, the worst-case staleness for a role change on an authenticated route is `USER_ROLES_CACHE_TTL` plus the authorizer result TTL (60 + 30 seconds) for the **logged** role names. The authorization decision is not affected by either cache — Casbin re-reads roles when it compiles policy, bounded by `CASBIN_REFRESH_POLICY_SECONDS`.
+Because the two layers compose, the staleness an operator observes is the relevant role-cache lifetime plus the authorizer result TTL, and which of the two dominates depends on what the previous lookup found:
+
+-   **The caller already held roles.** A role change reaches the **logged** role names within `USER_ROLES_CACHE_TTL` plus the result TTL — 60 + 30 seconds.
+-   **The caller resolved to no roles.** This is the case the API key path denies outright, and API Gateway caches that Deny like any other result. The role cache contributes only `USER_ROLES_EMPTY_CACHE_TTL` (5 seconds), so the 30-second result cache dominates and a first grant to a machine identity takes effect in roughly 30 seconds — not 5, and not 60. For that window API Gateway serves the cached Deny without invoking the authorizer at all, so lowering `USER_ROLES_EMPTY_CACHE_TTL` shortens nothing observable; raising it above 30 seconds puts the role cache back in charge.
+
+The authorization decision is not affected by either cache — Casbin re-reads roles when it compiles policy, bounded by `CASBIN_REFRESH_POLICY_SECONDS`.
 :::
 
 :::warning[Identity sources must always be present when caching is on]
@@ -155,7 +161,7 @@ Roles are resolved in exactly one place at request time — the authorizer — a
 Resolving roles in the authorizer rather than at token issuance has two consequences worth knowing:
 
 -   **Every authentication mechanism gets roles.** A Cognito pre-token-generation trigger only runs for Amazon Cognito, so an external OAuth IDP deployment would otherwise carry no roles at all and its audit records would show an empty role list for every event.
--   **Role changes take effect quickly.** A role assignment or revocation is picked up within `USER_ROLES_CACHE_TTL` (60 seconds) for the authorizer context and within `CASBIN_REFRESH_POLICY_SECONDS` (60 seconds) for the authorization decision, instead of persisting for the lifetime of an already-issued token.
+-   **Role changes take effect quickly.** A role assignment or revocation is picked up within `USER_ROLES_CACHE_TTL` (60 seconds — or `USER_ROLES_EMPTY_CACHE_TTL`, 5 seconds, when the previous lookup found no roles at all) for the authorizer context, and within `CASBIN_REFRESH_POLICY_SECONDS` (60 seconds) for the authorization decision, instead of persisting for the lifetime of an already-issued token. On an authenticated route the 30-second API Gateway authorizer result cache applies on top of both, and for a first grant to a roleless machine identity it is the term that dominates.
 
 The authorizer assigns `vams:roles` unconditionally, overwriting any `vams:roles` claim carried inside a presented token, so a token minted before a role change cannot reintroduce the old value. If the user roles table is unreachable, the lookup logs the failure and yields an empty list rather than denying the request — consistent with roles not being load-bearing for access, and matching how the MFA hook degrades to `false`.
 
@@ -225,6 +231,14 @@ The file also carries a commented-out example that calls an external IDP's `/idp
 | Customizable login profile hook                    | `backend/backend/customConfigCommon/customAuthLoginProfile.py`       |
 | Login profile handler                              | `backend/backend/handlers/auth/authLoginProfile.py`                  |
 | Casbin policy model and constraint fields          | `backend/backend/common/constants.py`                                |
+
+## What the two tiers do not cover: notification recipients
+
+Both tiers evaluate the **caller** against an **object**. Where a handler accepts a value that names a third party, that value is outside the model, and asset notification subscriptions are the case to know about.
+
+`POST /subscriptions` is gated normally — Tier 1 on the route and Tier 2 on a `POST` against the target asset — so a caller can only add subscriptions to assets it may already modify. The `subscribers` list it carries is validated for shape (`USERID_ARRAY`) and resolved to an email address, but a subscriber is not required to be a VAMS user: an entry that matches no user record is accepted when it is email-shaped, which is what allows a shared mailbox to receive notifications. Nothing bounds the length of the list. Amazon SNS confirms each new address before delivering anything, so an unrecognized address receives a confirmation request and no asset data.
+
+Recipient lists of arbitrary addresses are authored in one place — the administrative Subscription Management page, reachable only by a role granted the `/auth/subscriptions` `web` route, which the seeded `admin` role has and no shipped role template grants. The self-subscribe toggle on an asset submits the caller's own identifier only, while the API route places no such restriction on a role that holds it. See [Notification Subscriptions](./backend.md#notification-subscriptions) for the resolution order and the storage shape.
 
 ## Related topics
 

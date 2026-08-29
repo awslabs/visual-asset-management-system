@@ -21,6 +21,7 @@ import { VPCBuilderNestedStack } from "../lib/nestedStacks/vpc/vpcBuilder-nested
 import { setupSecurityAndLoggingEnvironmentAndPermissions } from "../lib/helper/security";
 import { storageResources } from "../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 /** Commercial-template config with a fixed synth environment. */
 const createMockConfig = (): Config.Config => {
@@ -49,7 +50,7 @@ const createMockConfig = (): Config.Config => {
 /** Synthesizes the VPC builder alone and returns its interface-endpoint service names. */
 const synthVpcEndpointServices = (config: Config.Config): string[] => {
     Service.SetConfig(config);
-    const app = new cdk.App();
+    const app = newTestApp();
     const parent = new cdk.Stack(app, "ParentStack", {
         env: { account: config.env.account, region: config.env.region },
     });
@@ -182,7 +183,7 @@ describe("core stack nested-stack dependencies", () => {
 
 describe("setupSecurityAndLoggingEnvironmentAndPermissions", () => {
     const buildLambdaWithAuthGrants = () => {
-        const app = new cdk.App();
+        const app = newTestApp();
         const stack = new cdk.Stack(app, "GrantStack");
         const table = (id: string) =>
             new dynamodb.Table(stack, id, {

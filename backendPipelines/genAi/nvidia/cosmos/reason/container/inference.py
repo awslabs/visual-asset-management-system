@@ -198,7 +198,9 @@ def run_inference(
             process.wait()
 
         if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, cmd)
+            raise subprocess.CalledProcessError(
+                process.returncode, cmd, output=_output_tail(stdout_file)
+            )
 
         logger.info("Inference completed successfully")
 
@@ -210,7 +212,35 @@ def run_inference(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Inference failed with exit code {e.returncode}")
-        raise RuntimeError(f"Inference failed with exit code {e.returncode}. Check CloudWatch logs for full error output.")
+        tail = e.output or ""
+        detail = f" Last output: {tail}" if tail else ""
+        raise RuntimeError(
+            f"Inference failed with exit code {e.returncode}.{detail} "
+            f"Check CloudWatch logs for full error output."
+        )
+
+
+def _output_tail(stdout_file: Path, lines: int = 5, max_chars: int = 400) -> str:
+    """
+    Last few meaningful lines of the child process output, for a failure message.
+
+    The combined output is already in CloudWatch, but the exception message is what reaches the
+    workflow execution record, and an exit code alone names neither the failing step nor the cause.
+    The final line is emitted first because the consumers of a failure cause truncate it from the
+    front, and the final line is the one carrying the exception.
+    """
+    import re
+
+    try:
+        text = stdout_file.read_text(errors="replace") if stdout_file.exists() else ""
+    except OSError:
+        return ""
+
+    ansi_pattern = re.compile(r"\x1b\[[0-9;]*m")
+    meaningful = [ansi_pattern.sub("", ln).strip() for ln in text.splitlines()]
+    meaningful = [ln for ln in meaningful if ln]
+    tail = " | ".join(reversed(meaningful[-lines:]))
+    return tail[:max_chars] if len(tail) > max_chars else tail
 
 
 def _extract_output(output_dir: str, stdout: str) -> dict:

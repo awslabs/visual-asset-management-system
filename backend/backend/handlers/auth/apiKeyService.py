@@ -1,6 +1,7 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import boto3
 import json
 import uuid
@@ -8,7 +9,8 @@ import secrets
 import hashlib
 from datetime import datetime, timedelta, timezone
 from botocore.config import Config
-from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Attr, Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import (
@@ -55,6 +57,193 @@ except Exception as e:
 
 api_key_table = dynamodb.Table(api_key_table_name) if api_key_table_name else None
 user_roles_table = dynamodb.Table(user_roles_table_name) if user_roles_table_name else None
+
+# GSI on the API key table partitioned by userId (storageBuilder-nestedStack.ts), so a
+# user's own keys are read from one partition instead of scanned out of the whole table.
+API_KEY_USER_ID_INDEX_NAME = 'userIdIndex'
+
+# Bounds on one API key listing response. The listings are user-facing GETs, so how many
+# records a response carries has to be decided here rather than by how many the table holds:
+# an API key record is a few hundred bytes, so accumulating every key of a large deployment
+# reaches the 6 MB Lambda response limit at roughly twelve thousand of them.
+#
+# MAX_ITEMS is the per-response record ceiling, and is both the default and a hard cap -- a
+# request asking for more is clamped to it, and the remainder is reachable through NextToken.
+# It is set high enough that no ordinary deployment reaches it (the admin listing covers every
+# key in the deployment) while keeping a several-fold margin under the response limit, matching
+# the page sizes the asset and metadata listings default to.
+# PAGE_SIZE is the Limit on each DynamoDB read behind one response, so a caller asking for a
+# small page does not pay to read more records than it can receive.
+API_KEY_LISTING_MAX_ITEMS = 3000
+API_KEY_LISTING_PAGE_SIZE = 1000
+
+
+def _resolve_page_bounds(query_params):
+    """(maxItems, pageSize) for one listing response, from the request's query parameters.
+
+    A parameter that is absent, non-numeric or below 1 falls back to its default: a listing is
+    a read, and a malformed page hint is not worth failing the request over. maxItems is capped
+    at API_KEY_LISTING_MAX_ITEMS so the response stays bounded whatever the caller asks for,
+    and pageSize is clamped to maxItems because reading past the response ceiling only spends
+    read capacity on records that will not be returned.
+    """
+    def _positive_int(name, default):
+        try:
+            value = int(query_params.get(name))
+        except (TypeError, ValueError):
+            return default
+        return value if value >= 1 else default
+
+    max_items = min(_positive_int('maxItems', API_KEY_LISTING_MAX_ITEMS),
+                    API_KEY_LISTING_MAX_ITEMS)
+    page_size = min(_positive_int('pageSize', API_KEY_LISTING_PAGE_SIZE), max_items)
+    return max_items, page_size
+
+
+#: Value types a DynamoDB cursor attribute can carry. A key attribute is S, N or B and the
+#: cursor travels as JSON, so a decoded value is a string or a number. ``bool`` is excluded
+#: explicitly because ``isinstance(True, int)`` is true in Python.
+_CURSOR_VALUE_TYPES = (str, int, float)
+
+#: Widest a legitimate cursor gets: a table key is one or two attributes, and an index cursor
+#: also carries the base table's key.
+_CURSOR_MAX_ATTRIBUTES = 4
+
+
+def _decoded_starting_token(starting_token):
+    """The DynamoDB cursor a caller's ``startingToken`` stands for.
+
+    Two ways the parameter can be wrong, and both are the caller's, so both are answered the
+    same way -- a 400. It can fail to base64/JSON decode, and it can decode to something that
+    is not a cursor at all (``[]``, ``null``, a bare string, an attribute whose value is a
+    nested object). Validating only the first leaves the second reaching the read, where
+    DynamoDB's rejection surfaces as an internal error 500 for a malformed request parameter.
+
+    Rule 11: neither the token nor its decoded content appears in the message the caller gets;
+    the specifics go to the log.
+    """
+    try:
+        decoded = json.loads(base64.b64decode(starting_token).decode('utf-8'))
+    except (json.JSONDecodeError, ValueError, TypeError, UnicodeDecodeError) as e:
+        logger.exception(f"Invalid startingToken format: {e}")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+    if not isinstance(decoded, dict) or not 1 <= len(decoded) <= _CURSOR_MAX_ATTRIBUTES or any(
+            not isinstance(name, str)
+            or isinstance(value, bool)
+            or not isinstance(value, _CURSOR_VALUE_TYPES)
+            for name, value in decoded.items()):
+        logger.warning(
+            f"Rejected a startingToken that decoded to something other than a DynamoDB "
+            f"cursor: {type(decoded).__name__} with "
+            f"{len(decoded) if isinstance(decoded, dict) else 'n/a'} attributes")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+    return decoded
+
+
+def _read_api_key_page(reader, base_kwargs, max_items, page_size, starting_token):
+    """One response worth of API key records, plus the cursor for the next one.
+
+    Reads through ``reader`` (the table's ``query`` or ``scan``), ``page_size`` records at a
+    time, until ``max_items`` records are in hand or the table is exhausted, and returns the
+    DynamoDB cursor to resume from when it stopped early. Both halves matter and neither alone
+    is enough:
+
+    * A single read is a partial answer that looks complete — DynamoDB returns at most 1 MB
+      per call and reports the rest only through ``LastEvaluatedKey`` — so stopping after one
+      read hides keys the owner holds (Rule 14).
+    * Reading to exhaustion instead accumulates the whole table in memory for a synchronous
+      response (Rule 15), so the accumulation stops at ``max_items`` and the remainder is
+      offered as a token rather than silently dropped.
+
+    Continuation is decided by the PRESENCE of ``LastEvaluatedKey``, which is how DynamoDB
+    reports the end of a listing and what keeps the loop finite against a stubbed reader whose
+    ``.get()`` answers every key with a truthy mock.
+    """
+    exclusive_start_key = None
+    if starting_token:
+        exclusive_start_key = _decoded_starting_token(starting_token)
+
+    items = []
+    next_key = None
+    # True until the caller's own cursor has been read from. A cursor that is shaped like one
+    # but names attributes this table has no key for is still the caller's malformed parameter,
+    # so DynamoDB's rejection of that first read is reported as a 400 rather than a 500. Later
+    # reads resume from cursors this function produced, where the same error is a real fault.
+    resuming_from_caller_cursor = exclusive_start_key is not None
+    while True:
+        read_kwargs = dict(base_kwargs)
+        read_kwargs['Limit'] = min(page_size, max_items - len(items))
+        if exclusive_start_key:
+            read_kwargs['ExclusiveStartKey'] = exclusive_start_key
+
+        try:
+            response = reader(**read_kwargs)
+        except ClientError as e:
+            if (resuming_from_caller_cursor
+                    and e.response.get('Error', {}).get('Code') == 'ValidationException'):
+                logger.exception(f"startingToken is not a cursor for this listing: {e}")
+                raise VAMSGeneralErrorResponse("Invalid pagination token")
+            raise
+        resuming_from_caller_cursor = False
+        items.extend(response.get('Items', []))
+
+        if 'LastEvaluatedKey' not in response:
+            next_key = None
+            break
+
+        next_key = response['LastEvaluatedKey']
+        if len(items) >= max_items:
+            break
+        exclusive_start_key = next_key
+
+    return items, next_key
+
+
+def _api_key_name_exists(api_key_name, user_id=None):
+    """True when a stored key already carries this name, within the scope asked for.
+
+    ``user_id`` narrows the check to that user's own keys, read through the userId GSI. The
+    self-service route passes it, so names are unique per owner there rather than across the
+    deployment. Two reasons, and the first is the security one:
+
+    * A deployment-wide check answers, to any unprivileged caller, whether some other user
+      holds a given key name — a membership oracle over other users' key names, probed one
+      create attempt at a time. It also lets any caller permanently deny a name to everyone
+      else.
+    * Nothing resolves an API key by name: authentication is by hash and every route addresses
+      a key by apiKeyId, so the name is a label for its owner and carries no cross-user
+      meaning.
+
+    With no ``user_id`` the check is deployment-wide, which is what the admin route has always
+    intended and what its callers (who can already see every key) expect.
+
+    Either scope pages to exhaustion. A filtered read applies its filter after reading up to
+    1 MB of items, so a match can sit on any page and no page is evidence about the others;
+    stopping at the first one reports "no match" for a name that does exist.
+    """
+    if user_id is not None:
+        reader = api_key_table.query
+        read_kwargs = {
+            'IndexName': API_KEY_USER_ID_INDEX_NAME,
+            'KeyConditionExpression': Key('userId').eq(user_id),
+            'FilterExpression': Attr('apiKeyName').eq(api_key_name),
+        }
+    else:
+        reader = api_key_table.scan
+        read_kwargs = {
+            'FilterExpression': 'apiKeyName = :name',
+            'ExpressionAttributeValues': {':name': api_key_name},
+        }
+
+    while True:
+        response = reader(**read_kwargs)
+        if response.get('Items'):
+            return True
+        if 'LastEvaluatedKey' not in response:
+            return False
+        read_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
 
 def _extract_api_key_id(event, path):
@@ -128,19 +317,51 @@ def handle_delete(event, path):
 
 
 def list_api_keys(event, user_scope=False):
+    query_params = event.get('queryStringParameters', {}) or {}
+    max_items, page_size = _resolve_page_bounds(query_params)
+
+    user_id = None
+    if user_scope:
+        # User scope: only the requesting user's own keys, read from the userId GSI
+        # rather than filtered out of a table-wide scan in Python.
+        user_id = _requesting_user_id()
+        if not user_id:
+            return authorization_error()
+        reader = api_key_table.query
+        base_kwargs = {
+            'IndexName': API_KEY_USER_ID_INDEX_NAME,
+            'KeyConditionExpression': Key('userId').eq(user_id),
+        }
+    else:
+        reader = api_key_table.scan
+        base_kwargs = {}
+
     try:
-        response = api_key_table.scan()
-        items = response.get('Items', [])
+        items, next_key = _read_api_key_page(
+            reader, base_kwargs, max_items, page_size, query_params.get('startingToken'))
 
         if user_scope:
-            # User scope: only the requesting user's own keys
-            user_id = _requesting_user_id()
+            # Ownership is already the key condition, so this drops nothing in normal
+            # operation. It is here so that a wrong index, a GSI whose projection ever
+            # changes, or a future edit to the read cannot turn into another user's key
+            # appearing in this response.
             items = [item for item in items if item.get('userId') == user_id]
 
         for item in items:
             item.pop('apiKeyHash', None)
 
-        return success(body={'Items': items})
+        result = {'Items': items}
+        if next_key:
+            # More keys remain. Reported as both a token and a flag, so a caller that does
+            # not follow the token can still tell the listing is incomplete.
+            result['NextToken'] = base64.b64encode(
+                json.dumps(next_key).encode('utf-8')).decode('utf-8')
+            result['truncated'] = True
+            logger.warning("API key listing truncated; more results available via NextToken")
+
+        return success(body=result)
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error listing API keys: {e}")
         return internal_error(event=event)
@@ -186,14 +407,11 @@ def create_api_key(event):
 
     request = parse(body, model=CreateApiKeyRequestModel)
 
-    # Check for duplicate API key name
-    existing_keys = api_key_table.scan(
-        FilterExpression='apiKeyName = :name',
-        ExpressionAttributeValues={':name': request.apiKeyName}
-    )
-    if existing_keys.get('Items'):
+    # Check for duplicate API key name across the deployment (admin scope)
+    if _api_key_name_exists(request.apiKeyName):
+        logger.info(f"Rejected duplicate API key name for user {request.userId}")
         return validation_error(
-            body={'message': f"An API key with the name '{request.apiKeyName}' already exists. Please choose a different name."},
+            body={'message': "An API key with that name already exists. Please choose a different name."},
             event=event
         )
 
@@ -284,14 +502,12 @@ def create_user_api_key(event):
     if error_response is not None:
         return error_response
 
-    # Check for duplicate API key name
-    existing_keys = api_key_table.scan(
-        FilterExpression='apiKeyName = :name',
-        ExpressionAttributeValues={':name': request.apiKeyName}
-    )
-    if existing_keys.get('Items'):
+    # Check for duplicate API key name among the caller's OWN keys. A name another user holds
+    # neither blocks this create nor is observable through its rejection (_api_key_name_exists).
+    if _api_key_name_exists(request.apiKeyName, user_id=user_id):
+        logger.info(f"Rejected duplicate API key name for user {user_id}")
         return validation_error(
-            body={'message': f"An API key with the name '{request.apiKeyName}' already exists. Please choose a different name."},
+            body={'message': "An API key with that name already exists for your user. Please choose a different name."},
             event=event
         )
 

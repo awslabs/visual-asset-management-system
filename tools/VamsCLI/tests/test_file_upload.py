@@ -897,8 +897,11 @@ class TestFileUploadCommandEdgeCases:
                         tmp_path
                     ])
                     
-                    # After Rule 16 fix: Command returns result instead of sys.exit(1)
-                    assert result.exit_code == 0  # Returns successfully with result
+                    # A partial upload must be distinguishable from a complete one at the exit-code
+                    # level (FIX for S6-TOOLS-009); the payload and the per-file detail are still
+                    # emitted first. Rule 16's `return result` still applies on the programmatic
+                    # path -- see test_upload_partial_failure_returns_result_when_invoked.
+                    assert result.exit_code != 0
                     assert '⚠️  Upload completed with some failures' in result.output
                     assert 'Successful files: 1/2' in result.output
                     assert 'Failed files: 1' in result.output
@@ -942,8 +945,8 @@ class TestFileUploadCommandEdgeCases:
                         tmp_path
                     ])
                     
-                    # After Rule 16 fix: Command returns result instead of sys.exit(1)
-                    assert result.exit_code == 0  # Returns successfully with result
+                    # A wholly failed upload must exit non-zero (FIX for S6-TOOLS-009).
+                    assert result.exit_code != 0
                     # With new output format, failed uploads show results without success message
                     assert 'Successful files: 0/1' in result.output
                     assert 'Failed files: 1' in result.output
@@ -1804,6 +1807,147 @@ class TestFileExtensionValidation:
                     assert 'Database has file extension restrictions' in result.output
         finally:
             Path(tmp_path).unlink()
+
+
+class TestFailedUploadExitCode:
+    """A failed transfer must be visible at the exit-code level, but only to the shell.
+
+    S6-TOOLS-009. `file upload` reported "⚠️ Upload completed with some failures" and exited 0 — and
+    with `successful_files == 0` the code comment claimed the result "will show as error" while
+    `output_result` merely omitted the success line and returned. A CI step written as
+    `vamscli file upload ... && vamscli workflow execute ...` therefore proceeded against an asset
+    missing files, and the external connectors, which check the exit code rather than the payload, saw
+    a clean success.
+
+    The counterweight is Rule 16 and the programmatic callers: `industry engineering bom`,
+    `industry engineering plm` and `industry spatial glb` all `ctx.invoke(upload_command, ...)` and read
+    `overall_success` off the returned result to decide for themselves. `SystemExit` derives from
+    `BaseException`, so PLM's `except Exception: pass` would NOT have caught an unconditional exit and
+    those flows would abort mid-run. `invoked_from_another_command()` is what separates the two, and
+    the ordered pair below is what proves the separation rather than assuming it.
+    """
+
+    FAILED_RESULT = {
+        "overall_success": False,
+        "total_files": 2,
+        "successful_files": 1,
+        "failed_files": 1,
+        "total_size": 24,
+        "total_size_formatted": "24B",
+        "upload_duration": 2.0,
+        "average_speed": 12.0,
+        "average_speed_formatted": "12B/s",
+        "sequence_results": [{"failed_files": ["failed_file.txt"]}],
+    }
+
+    SUCCESS_RESULT = dict(FAILED_RESULT, overall_success=True, successful_files=2, failed_files=0,
+                          sequence_results=[{"failed_files": []}])
+
+    @staticmethod
+    def _tmp_file():
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            return tmp.name
+
+    def _invoke(self, cli_runner, mocks, upload_result, argv_extra=()):
+        mocks['api_client'].get_database.return_value = {
+            'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+        path = self._tmp_file()
+        try:
+            with patch('vamscli.commands.file.asyncio.run',
+                       new_callable=CoroutineClosingMock) as mock_run:
+                mock_run.return_value = upload_result
+                return cli_runner.invoke(cli, [
+                    'file', 'upload', '-d', 'test-db', '-a', 'test-asset', path,
+                    *argv_extra])
+        finally:
+            Path(path).unlink()
+
+    def test_a_failed_upload_exits_non_zero(self, cli_runner, file_command_mocks):
+        with file_command_mocks as mocks:
+            result = self._invoke(cli_runner, mocks, self.FAILED_RESULT)
+            assert result.exit_code != 0
+
+    def test_a_successful_upload_still_exits_zero(self, cli_runner, file_command_mocks):
+        """Positive control: the non-zero exit must come from the failure, not from the command."""
+        with file_command_mocks as mocks:
+            result = self._invoke(cli_runner, mocks, self.SUCCESS_RESULT)
+            assert result.exit_code == 0, result.output
+
+    def test_the_json_payload_is_still_emitted_and_parseable_on_failure(self, cli_runner,
+                                                                       file_command_mocks):
+        """The exit code is ADDED to the payload, not substituted for it — a JSON consumer still needs
+        `failed_files` to report which files to retry."""
+        with file_command_mocks as mocks:
+            result = self._invoke(cli_runner, mocks, self.FAILED_RESULT,
+                                  argv_extra=('--json-output',))
+            assert result.exit_code != 0
+            payload = json.loads(result.output)
+            assert payload['overall_success'] is False
+            assert payload['failed_files'] == 1
+
+    def test_a_failed_upload_invoked_from_another_command_returns_instead_of_exiting(self):
+        """The Rule 16 path: a programmatic caller owns the decision, so no SystemExit reaches it.
+
+        Driven through a real `ctx.invoke` from a stand-in parent command, because the whole question
+        is what Click's context chain looks like under `ctx.invoke` — asserting the helper in isolation
+        would only restate my own assumption about that.
+        """
+        import click
+
+        from vamscli.commands.file import upload as upload_command
+
+        captured = {}
+
+        @click.group()
+        def parent_group():
+            pass
+
+        @parent_group.command('wrapper')
+        @click.pass_context
+        def wrapper(ctx):
+            captured['result'] = ctx.invoke(
+                upload_command,
+                files_or_directory=(captured['path'],),
+                database_id='test-db',
+                asset_id='test-asset',
+                directory=None,
+                asset_preview=False,
+                asset_location='/',
+                recursive=False,
+                parallel_uploads=10,
+                retry_attempts=3,
+                force_skip=False,
+                json_input=None,
+                json_output=True,
+                hide_progress=True,
+            )
+
+        runner = CliRunner()
+        captured['path'] = self._tmp_file()
+        try:
+            with patch('vamscli.commands.file.get_profile_manager_from_context') as get_pm, \
+                    patch('vamscli.commands.file.APIClient') as api_client_cls, \
+                    patch('vamscli.utils.decorators.get_profile_manager_from_context') as dec_pm, \
+                    patch('vamscli.commands.file.asyncio.run',
+                          new_callable=CoroutineClosingMock) as mock_run:
+                profile_manager = Mock()
+                profile_manager.has_config.return_value = True
+                profile_manager.load_config.return_value = {
+                    'api_gateway_url': 'https://api.example.com/api'}
+                get_pm.return_value = profile_manager
+                dec_pm.return_value = profile_manager
+                api_client_cls.return_value.get_database.return_value = {
+                    'databaseId': 'test-db', 'restrictFileUploadsToExtensions': ''}
+                mock_run.return_value = self.FAILED_RESULT
+
+                result = runner.invoke(parent_group, ['wrapper'])
+        finally:
+            Path(captured['path']).unlink()
+
+        assert result.exit_code == 0, result.output
+        assert captured['result']['overall_success'] is False, (
+            "the invoked upload did not return its result to the calling command")
 
 
 if __name__ == '__main__':

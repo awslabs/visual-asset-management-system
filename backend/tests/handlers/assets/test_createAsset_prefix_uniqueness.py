@@ -38,6 +38,8 @@ def _wire_create(m):
         "bucketId": "b1", "bucketName": "bucket", "baseAssetsPrefix": ""
     })
     m.assert_existing_key_not_owned = MagicMock()
+    m.assert_derived_asset_key_not_owned = MagicMock()
+    m.resolve_colocated_bucket_ids = MagicMock(return_value=["b1"])
     m.create_prefix_folder = MagicMock()
     m.create_initial_version_record = MagicMock(return_value="v0")
     m.create_sns_topic_for_asset = MagicMock(return_value="arn:sns")
@@ -64,7 +66,7 @@ class TestPrefixUniqueness:
         response = m.create_asset(_request_model(m), {"tokens": ["SYSTEM_USER"]}, True)
         assert response.assetId == "asset-1"
         # Ownership check ran; no folder marker written over existing files
-        m.assert_existing_key_not_owned.assert_called_once_with("b1", "asset-1/")
+        m.assert_existing_key_not_owned.assert_called_once_with(["b1"], "asset-1/")
         m.create_prefix_folder.assert_not_called()
 
     def test_s3_external_rejects_owned_prefix(self):

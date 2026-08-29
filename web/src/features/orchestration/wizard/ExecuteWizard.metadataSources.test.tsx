@@ -25,9 +25,7 @@ jest.mock("../api/queries", () => ({
     usePrefetchPipelineTemplates: jest.fn(),
     useExecuteWorkflow: jest.fn(),
     useDatabases: jest.fn(),
-    useAssets: jest.fn(),
     useAssetSearch: jest.fn(),
-    useAssetFiles: jest.fn(),
     useAssetFileSearch: jest.fn(),
     useFileVersions: jest.fn(),
 }));
@@ -79,7 +77,6 @@ function mountWizard(executeResult: any = { executionId: "exec-1" }) {
         data: [{ databaseId: "db1" }, { databaseId: "db2" }, { databaseId: "GLOBAL" }],
         isLoading: false,
     });
-    q.useAssets.mockReturnValue({ data: [], isLoading: false });
     q.useAssetSearch.mockReturnValue({
         data: {
             items: [{ databaseId: "db1", assetId: "asset-a", assetName: "Pump A" }],
@@ -88,7 +85,6 @@ function mountWizard(executeResult: any = { executionId: "exec-1" }) {
         },
         isFetching: false,
     });
-    q.useAssetFiles.mockReturnValue({ data: [], isLoading: false });
     q.useAssetFileSearch.mockReturnValue({
         data: { items: [], total: 0, listFallback: false },
         isFetching: false,

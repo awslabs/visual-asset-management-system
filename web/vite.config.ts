@@ -88,7 +88,11 @@ export default defineConfig({
     },
     build: {
         outDir: "dist",
-        sourcemap: true,
+        // No source maps in the production bundle. The built output is published to the web app
+        // bucket, which serves anonymous reads through both distributions (CloudFront and ALB), so
+        // a `.map` emitted beside a chunk exposes the original TypeScript to anyone who can load
+        // the page. Pass `--sourcemap` to `vite build` when a debuggable build is wanted locally.
+        sourcemap: false,
         target: "es2022",
         chunkSizeWarningLimit: 1500, // Large third-party libs: maplibre-gl (~1MB), pdf.worker (~1MB), jodit (~870KB)
         rollupOptions: {

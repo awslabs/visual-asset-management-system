@@ -14,7 +14,7 @@ VAMS supports the **Cosmos-Predict2.5** (v2, flow-matching) model family with 2B
 | **Pipeline ID (v2.5)**      | `cosmos-predict2-text2world-2b`, `cosmos-predict2-text2world-14b`, `cosmos-predict2-video2world-2b`, `cosmos-predict2-video2world-14b` |
 | **Configuration flag**      | `app.pipelines.useNvidiaCosmos.enabled`, per-model flags under `app.pipelines.useNvidiaCosmos.modelsPredict.*`                         |
 | **Execution type**          | Lambda (asynchronous with callback)                                                                                                    |
-| **Supported input formats** | Text2World: None (uses text prompt only), Video2World: `.jpg`, `.jpeg`, `.png`, `.gif`, `.mp4`, `.mov`, `.avi`, `.mkv`                 |
+| **Supported input formats** | Text2World: None (uses text prompt only), Video2World: `.mp4`, `.mov`, `.jpg`, `.jpeg`, `.png`, `.webp`                 |
 | **Output (v2.5)**           | MP4 video (1280x720, 16fps, ~4 seconds / 61 frames)                                                                                    |
 | **Timeout**                 | 8 hours (Batch job), 8 hours (VAMS workflow task token)                                                                                |
 
@@ -135,6 +135,10 @@ You must accept the NVIDIA Cosmos Predict model license on HuggingFace before us
 -   **VPC Configuration** -- The pipeline deploys into private subnets with NAT Gateway or public subnets for internet access (required for HuggingFace model downloads on first run). Ensure VPC endpoints are configured for Amazon S3, Amazon EFS, Amazon ECR, and Amazon Batch if running in a VPC-only environment.
 -   **Amazon EFS** -- The pipeline creates a shared Amazon EFS file system for model caching across AWS Batch instances.
 
+:::warning[Availability outside the commercial partition]
+The shipped `instanceTypes` values target commercial AWS Regions. Deployment configuration validation checks only that an enabled model variant names a non-empty `instanceTypes` array -- it does not check that those GPU instance families are offered in the deployment Region, or that the HuggingFace model download path is reachable from the partition. For AWS GovCloud and the AWS European Sovereign Cloud, compare the configured instance types against the GPU instances the target Region offers, adjust them where they differ, and evaluate the pipeline in a non-production deployment before enabling it.
+:::
+
 ## Configuration
 
 Add the following to your `config.json` under `app.pipelines`:
@@ -234,9 +238,9 @@ The v2.5 Text2World models generate videos from text prompts only.
 -   `cosmos-predict2-text2world-2b` (2B parameter model)
 -   `cosmos-predict2-text2world-14b` (14B parameter model)
 
-**Text Prompt:** Set the prompt via the `COSMOS_PREDICT_PROMPT` asset metadata key or pass it in the workflow `inputParameters` as `{"prompt": "your prompt text"}`.
+**Text Prompt:** Set the prompt as the selected template's `PROMPT` tag on the execute screen, or as the `COSMOS_PREDICT_PROMPT` asset metadata key.
 
-**Prompt Priority:** COSMOS_PREDICT_PROMPT metadata > inputParameters prompt > no prompt (uses model default).
+**Prompt Priority:** template `PROMPT` tag > `COSMOS_PREDICT_PROMPT` asset metadata. Text2World takes no input file, so the prompt is the whole input: a run fails when neither source supplies one.
 
 **Output:** MP4 video (1280x720, 16fps, 61 frames / ~4s) + `.previewFile.gif` thumbnail stored in the asset bucket.
 
@@ -251,14 +255,14 @@ The v2.5 Video2World models generate videos from input images or videos with opt
 -   `cosmos-predict2-video2world-2b` (2B parameter model)
 -   `cosmos-predict2-video2world-14b` (14B parameter model)
 
-**Input Formats:** `.jpg`, `.jpeg`, `.png`, `.gif`, `.mp4`, `.mov`, `.avi`, `.mkv`
+**Input Formats:** `.mp4`, `.mov`, `.jpg`, `.jpeg`, `.png`, `.webp`
 
 **Input Frame Handling:** The v2.5 model accepts either **1 frame** (image) or **2 frames** (video) as conditioning input.
 
-| Input Type | File Extensions                                           | Conditioning Frames | Behavior                                                                                  |
-| ---------- | --------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
-| Image      | `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.bmp`, `.tiff` | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
-| Video      | `.mp4`, `.mov`, `.avi`, `.mkv`                            | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
+| Input Type | File Extensions                        | Conditioning Frames | Behavior                                                                                  |
+| ---------- | -------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| Image      | `.jpg`, `.jpeg`, `.png`, `.webp`       | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
+| Video      | `.mp4`, `.mov`                         | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
 
 :::note[v2.5 Conditioning Frame Count]
 The v2.5 model uses **2 frames** for video conditioning, providing a short temporal context window. This design choice supports faster inference while still capturing temporal motion information from the input video.
@@ -266,13 +270,13 @@ The v2.5 model uses **2 frames** for video conditioning, providing a short tempo
 
 **Resolution Requirements:** The model expects input at **1280x720** resolution (16:9 aspect ratio). The model automatically handles resolution adjustment internally. For best quality, provide input at or near native resolution.
 
-**Text Prompt (Optional):** Set the prompt via the `COSMOS_PREDICT_PROMPT` file metadata key or pass it in the workflow `inputParameters` as `{"prompt": "your prompt text"}`. If no prompt is provided, the pipeline uses a default prompt: _"Continue the scene from the input video"_.
+**Text Prompt (Optional):** Set the prompt as the selected template's `PROMPT` tag on the execute screen, or as the `COSMOS_PREDICT_PROMPT` metadata key on the file or the asset. If no prompt is provided, the pipeline uses a default prompt: _"Continue the scene from the input video"_.
 
 :::note
 The Cosmos Video2World framework requires a text prompt internally. When no user prompt is provided, the pipeline supplies a generic default prompt. For best results, provide a descriptive prompt via the `COSMOS_PREDICT_PROMPT` file metadata key.
 :::
 
-**Prompt Priority:** COSMOS_PREDICT_PROMPT file metadata > inputParameters prompt > default prompt ("Continue the scene from the input video").
+**Prompt Priority:** template `PROMPT` tag > `COSMOS_PREDICT_PROMPT` file metadata > `COSMOS_PREDICT_PROMPT` asset metadata > default prompt ("Continue the scene from the input video").
 
 **Output:** MP4 video file named `{input_filename}_CosmosPredictVideo2World_{timestamp}.mp4`, stored in the asset bucket at the same relative path as the input file.
 
@@ -328,9 +332,9 @@ The v2.5 Text2World models generate videos from text prompts only.
 -   `cosmos-predict2-text2world-2b` (2B parameter model)
 -   `cosmos-predict2-text2world-14b` (14B parameter model)
 
-**Text Prompt:** Set via `COSMOS_PREDICT_PROMPT` asset metadata key or pass in workflow `inputParameters` as `{"prompt": "your prompt text"}`.
+**Text Prompt:** Set as the selected template's `PROMPT` tag on the execute screen, or as the `COSMOS_PREDICT_PROMPT` asset metadata key.
 
-**Prompt Priority:** COSMOS_PREDICT_PROMPT metadata > inputParameters prompt > no prompt (uses model default).
+**Prompt Priority:** template `PROMPT` tag > `COSMOS_PREDICT_PROMPT` asset metadata. A run fails when neither source supplies a prompt.
 
 **Output:** MP4 video (1280x720, 16fps, 61 frames / ~4s) + `.previewFile.gif` thumbnail stored in the asset bucket.
 
@@ -345,14 +349,14 @@ The v2.5 Video2World models generate videos from input images or videos with opt
 -   `cosmos-predict2-video2world-2b` (2B parameter model)
 -   `cosmos-predict2-video2world-14b` (14B parameter model)
 
-**Input Formats:** `.jpg`, `.jpeg`, `.png`, `.gif`, `.mp4`, `.mov`, `.avi`, `.mkv`
+**Input Formats:** `.mp4`, `.mov`, `.jpg`, `.jpeg`, `.png`, `.webp`
 
 **Input Frame Handling:** The v2.5 model accepts either **1 frame** (image) or **2 frames** (video) as conditioning input.
 
-| Input Type | File Extensions                                           | Conditioning Frames | Behavior                                                                                  |
-| ---------- | --------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
-| Image      | `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.bmp`, `.tiff` | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
-| Video      | `.mp4`, `.mov`, `.avi`, `.mkv`                            | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
+| Input Type | File Extensions                        | Conditioning Frames | Behavior                                                                                  |
+| ---------- | -------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| Image      | `.jpg`, `.jpeg`, `.png`, `.webp`       | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
+| Video      | `.mp4`, `.mov`                         | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
 
 :::note[v2.5 Conditioning Frame Count]
 The v2.5 model uses **2 frames** for video conditioning, providing a short temporal context window. This design choice supports faster inference while still capturing temporal motion information from the input video.
@@ -360,9 +364,9 @@ The v2.5 model uses **2 frames** for video conditioning, providing a short tempo
 
 **Resolution Requirements:** The model expects input at **1280x720** resolution (16:9 aspect ratio). The model automatically handles resolution adjustment internally. For best quality, provide input at or near native resolution.
 
-**Text Prompt (Optional):** Set via `COSMOS_PREDICT_PROMPT` file metadata key or pass in workflow `inputParameters`. Default prompt when not provided: _"Continue the scene from the input video"_.
+**Text Prompt (Optional):** Set as the selected template's `PROMPT` tag on the execute screen, or as the `COSMOS_PREDICT_PROMPT` metadata key on the file or the asset. Default prompt when not provided: _"Continue the scene from the input video"_.
 
-**Prompt Priority:** COSMOS_PREDICT_PROMPT file metadata > inputParameters prompt > default prompt.
+**Prompt Priority:** template `PROMPT` tag > `COSMOS_PREDICT_PROMPT` file metadata > `COSMOS_PREDICT_PROMPT` asset metadata > default prompt.
 
 **Output:** MP4 video file named `{input_filename}_CosmosPredictVideo2World_{timestamp}.mp4`, stored in the asset bucket at the same relative path as the input file.
 
@@ -511,10 +515,10 @@ The Cosmos Predict pipeline uses metadata keys to configure prompts. The metadat
 | **Video2World** | `COSMOS_PREDICT_PROMPT` | **File metadata**  | Text prompt for video generation from input. Set on the **specific video/image file** that the pipeline will process.                                  | `"Continue the scene from the input video"` |
 
 :::warning[Asset vs File metadata]
-**Text2World** reads the prompt from **asset-level metadata** because it does not operate on a specific file -- it generates a video from text only. **Video2World** reads the prompt from **file-level metadata** because it operates on a specific video or image file within the asset. Setting the metadata on the wrong scope will result in the prompt not being found.
+**Text2World** reads the prompt from **asset-level metadata** because it does not operate on a specific file -- it generates a video from text only. Setting it on a file leaves the prompt unfound. **Video2World** operates on a specific video or image file within the asset, so it reads **file-level metadata** first and falls back to the asset's value.
 :::
 
-If no metadata is set, the pipeline falls back to the `inputParameters` prompt (set at pipeline registration), and finally to a default prompt for Video2World. Text2World requires a prompt and will fail without one.
+The metadata value is a standing default: the selected template's `PROMPT` tag, supplied on the execute screen, takes precedence whenever it is filled in. When neither is set, Video2World uses a default prompt and Text2World fails, since the prompt is its only input.
 
 ---
 
@@ -538,19 +542,19 @@ If the pipeline fails to download models from HuggingFace:
 
 ### Invalidating model cache (force re-download)
 
-If a model has been updated on HuggingFace or the cached version on Amazon EFS is corrupted, you can force the pipeline to re-download all models by adding `INVALIDATE_COSMOS_MODELS` to the pipeline's input parameters:
+If a model has been updated on HuggingFace or the cached version on Amazon EFS is corrupted, you can force the pipeline to re-download all models by setting `INVALIDATE_COSMOS_MODELS` to `"true"` in the template configuration the run uses:
 
-1. In the VAMS UI, edit the pipeline's input parameters to include `{"INVALIDATE_COSMOS_MODELS": "true"}`.
+1. Set the value for one run only -- on the execute screen, choose the template and edit its configuration body so it reads `"INVALIDATE_COSMOS_MODELS": "true"`. Alternatively, edit the template itself under Pipeline Templates to change the value for every subsequent run.
 2. Run the pipeline. All cached models on Amazon EFS and Amazon S3 will be deleted and re-downloaded from HuggingFace.
-3. After the run completes successfully, remove the `INVALIDATE_COSMOS_MODELS` parameter to resume using the fast EFS cache path.
+3. If you changed the template rather than overriding it for one run, set the value back to `"false"` afterwards to resume using the fast EFS cache path.
 
 :::warning
 Invalidating the model cache triggers a full re-download of model weights from HuggingFace. This significantly increases the pipeline execution time.
 :::
 
-### Pipeline Input Parameters
+### Template configuration parameters
 
-The following input parameters can be set on the pipeline's `inputParameters` to control runtime behavior. These are set as defaults during CDK deployment and can be overridden per-execution in the VAMS UI.
+The following keys in the template configuration body control runtime behavior. Deployment registers one template per model with these defaults; a run can override them by editing the template body on the execute screen, and changing the template itself changes the defaults for every subsequent run.
 
 | Parameter                  | Default   | Description                                                                                                           |
 | -------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -562,7 +566,7 @@ The following input parameters can be set on the pipeline's `inputParameters` to
 | `INVALIDATE_COSMOS_MODELS` | `"false"` | Force re-download of all models from HuggingFace (clears EFS and S3 cache).                                           |
 
 :::tip[Disabling offloading for faster inference]
-On larger GPU instances (g6e.48xlarge with 8x L40S 48GB, or p5.48xlarge with 8x H100 80GB), you can disable all offloading flags for significantly faster inference. The models fit entirely in GPU VRAM without offloading. Set `OFFLOAD_TEXT_ENCODER`, `OFFLOAD_TOKENIZER`, and `OFFLOAD_DIFFUSION_MODEL` to `"false"` in the pipeline's input parameters.
+On larger GPU instances (g6e.48xlarge with 8x L40S 48GB, or p5.48xlarge with 8x H100 80GB), you can disable all offloading flags for significantly faster inference. The models fit entirely in GPU VRAM without offloading. Set `OFFLOAD_TEXT_ENCODER`, `OFFLOAD_TOKENIZER`, and `OFFLOAD_DIFFUSION_MODEL` to `"false"` in the template configuration body.
 :::
 
 ### Amazon EFS mount failures

@@ -57,7 +57,8 @@ const ImageViewerComponent: React.FC<ViewerPluginProps> = ({
                         console.error("Error downloading file:", response);
                         throw new Error("Failed to download file");
                     } else {
-                        console.log("Successfully loaded file URL:", response[1]);
+                        // Presigned URL — log the key, not the signed URL.
+                        console.log("Successfully loaded file:", assetKey);
                         setUrl(response[1]);
                         return;
                     }

@@ -378,4 +378,4 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 -   **Job Failures**: Check pod logs via `kubectl logs` or CloudWatch Container Insights
 -   **Workflow Hangs**: Verify Step Functions execution history and Lambda callback permissions
 -   **Network Issues**: Check VPC Flow Logs and security group rules
--   **Common Issues**: See [PR Remediation Summary](./PR-Remediation-Summary.md) for resolved issues
+-   **Common Issues**: See the [troubleshooting documentation](https://awslabs.github.io/visual-asset-management-system/troubleshooting/common-issues)

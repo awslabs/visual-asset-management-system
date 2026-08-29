@@ -638,7 +638,10 @@ def build_workflow_execution_record(
         "executionStartDate": execution_start_date,  # GSI SK, always set at launch
         "executionStopDate": "",
         "executionStatus": execution_status,
-        "triggeredByUserId": triggered_by_user_id or "system",
+        # SYSTEM_USER is the reserved identity for a system-initiated action, and the only value the
+        # user/user-roles tables and the triggeredByUserId filter resolve; a variant such as
+        # "system" matches no user and no filter.
+        "triggeredByUserId": triggered_by_user_id or "SYSTEM_USER",
         "triggerType": trigger_type,
         "executionLogGroupArn": execution_log_group_arn or "",
         # Timestamp of the last Step Functions describe_execution poll for this

@@ -30,7 +30,7 @@ Each metadata item declares a `metadataValueType`. Values are always supplied as
 | `string`  | Text values                      | `"My Asset"`                |
 | `number`  | Integers or floats               | `"42"`, `"3.14"`            |
 | `boolean` | True/false                       | `"true"`, `"false"`         |
-| `object`  | JSON object (stored as a string) | `"\{\"polygons\": 50000\}"` |
+| `object`  | JSON object (stored as a string) | `"{\"polygons\": 50000}"` |
 | `array`   | JSON array (stored as a string)  | `"[\"wood\", \"metal\"]"`   |
 
 File attributes (`--type attribute`) support only the `string` value type.

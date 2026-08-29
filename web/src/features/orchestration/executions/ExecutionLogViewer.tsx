@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getExecutionLogs } from "../api/executions";
 import ConfigEditor from "../components/ConfigEditor";
 import { findMatches, filterToMatches, stepIndex } from "./logSearch";
@@ -66,7 +66,15 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
     // Steps that carry a pipelineExecutionId can be scoped individually.
     const scopedPipelines = (pipelines || []).filter((p) => p && p.pipelineExecutionId);
 
+    // Token of the request whose result may still be rendered. Live CloudWatch reads take seconds
+    // while a stored read returns at once, so responses arrive out of order: without this the earlier
+    // one lands last and paints another scope's log under the current selection, with the Source badge
+    // and the spinner taken from the superseded response too.
+    const requestTokenRef = useRef(0);
+
     const fetchLogs = useCallback(async () => {
+        const token = ++requestTokenRef.current;
+        const isCurrent = () => token === requestTokenRef.current;
         setLoading(true);
         setErrorMsg(null);
         setEmptyReason(null);
@@ -75,6 +83,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
             const params: Record<string, string> = { mode: source };
             if (scope !== WHOLE_EXECUTION) params.pipelineExecutionId = scope;
             const [ok, data] = await getExecutionLogs(executionId, params);
+            if (!isCurrent()) return;
             if (!ok || typeof data !== "object" || data === null) {
                 setErrorMsg(typeof data === "string" ? data : "Failed to load logs");
                 setLogText("");
@@ -91,16 +100,22 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                 );
             }
         } catch (err: any) {
+            if (!isCurrent()) return;
             setErrorMsg(err?.message || "Unknown error");
             setLogText("");
         } finally {
-            setLoading(false);
+            // A superseded request must not clear the spinner for the one still in flight.
+            if (isCurrent()) setLoading(false);
         }
     }, [executionId, scope, source]);
 
-    // Fetch on mount and whenever the scope or source changes.
+    // Fetch on mount and whenever the scope or source changes. Advancing the token on teardown is
+    // what retires the request in flight, so a change of selection — or an unmount — discards it.
     useEffect(() => {
         fetchLogs();
+        return () => {
+            requestTokenRef.current += 1;
+        };
     }, [fetchLogs]);
 
     return (

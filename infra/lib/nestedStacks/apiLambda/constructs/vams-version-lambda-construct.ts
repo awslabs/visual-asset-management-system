@@ -7,7 +7,6 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { LAMBDA_NODE_RUNTIME } from "../../../../config/config";
 import { Construct } from "constructs";
-import { Service } from "../../../helper/service-helper";
 import * as Config from "../../../../config/config";
 import { VAMS_VERSION } from "../../../../config/config";
 import { suppressCdkNagLambda } from "../../../helper/security";
@@ -48,8 +47,11 @@ export class VamsVersionLambdaConstruct extends Construct {
             timeout: cdk.Duration.seconds(15),
         });
 
-        // add lambda policies
-        this.lambdaFn.grantInvoke(Service("APIGATEWAY").Principal);
+        // API Gateway invoke permission is granted by the REST API builder, which emits one
+        // CfnPermission per registered route Lambda scoped to this deployment's own execute-api
+        // source ARN. It cannot be granted here: the construct is created before the SpecRestApi
+        // (whose inline OpenAPI document names this function), so referring to the API id from here
+        // makes the two resources reference each other.
 
         suppressCdkNagLambda(this.lambdaFn);
     }

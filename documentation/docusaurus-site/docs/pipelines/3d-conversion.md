@@ -100,6 +100,8 @@ When executing the pipeline through a workflow, the following parameters are pro
 | `outputS3AssetFilesPath` | Yes      | Amazon S3 URI of the output directory (e.g., `s3://bucket/key/`)       |
 | `outputType`             | Yes      | Target file extension including the dot (e.g., `.glb`, `.obj`, `.ply`) |
 
+The Amazon S3 paths come from the workflow. `outputType` comes from the configuration body of the pipeline template the run uses. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`); deployment registers one template per target format -- `convert-to-glb`, `convert-to-gltf`, `convert-to-obj`, and `convert-to-stl`. To convert to another supported format, either register a pipeline template whose configuration body sets that `outputType`, or override the selected template's body for a single run -- the pipeline permits a per-run override (`systemConfig.allowCustomTemplateOverride` is `true`).
+
 ### Output Naming
 
 The output file retains the original filename but with the new extension. For example, converting `pump.stl` to GLB produces `pump.glb` in the output directory.

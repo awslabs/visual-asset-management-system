@@ -2,6 +2,14 @@
 
 VAMS includes a plugin-based viewer system that enables browser-based visualization of 3D models, point clouds, media files, documents, and data -- without requiring desktop software or specialized licenses. This page is the single source of truth for all built-in viewers and their supported file extensions.
 
+VAMS ships **20 built-in viewer plugins** across five categories. Fourteen are available in every deployment. The remaining six are conditional:
+
+-   **Two licensed viewers** — VNTANA and VEERUM — ship disabled and require both a vendor license and enabling them in the viewer configuration.
+-   **Three viewers require `app.webUi.allowUnsafeEvalFeatures`** — Needle USD, the SuperSplat Editor, and ThatOpen IFC BIM. Their loaders use `eval`, so VAMS does not offer them at all when a deployment has not enabled that setting.
+-   **The Physna Viewer** appears only when the Physna Sync add-on is enabled.
+
+The [master viewer table](#master-viewer-table) lists all 20; any other page quoting a viewer count is checked against this one.
+
 ## What are file viewers
 
 File viewers are browser-based rendering components that display asset files directly in the VAMS web interface. When you open a file from the file manager, VAMS automatically selects the best viewer based on the file extension and viewer priority. If multiple viewers support the same extension, you can switch between them using a dropdown in the viewer UI.
@@ -36,7 +44,7 @@ Rendering of PDF, HTML, and text-based files. The Text Viewer provides syntax hi
 
 ### Data
 
-Tabular display of columnar data formats such as CSV, RDS, and FCS files.
+Tabular display of columnar data formats: CSV and FCS files. Other tabular formats, including R serialization (`.rds`) and Apache Parquet (`.parquet`), have no dedicated viewer and fall back to the Preview Viewer.
 
 ### Preview
 
@@ -50,7 +58,7 @@ This table is the definitive reference for all built-in viewer plugins.
 
 | Viewer Name                          | Category | Supported Extensions                                                                                                                                                             | Priority | Multi-File | Notes                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Three.js Viewer**                  | 3D       | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.brep`                                                                       | 1        | Yes        | Primary mesh and CAD viewer. Scene graph, material editing, transform controls. CAD formats (`.stp`, `.step`, `.iges`, `.brep`) require WASM and `ALLOWUNSAFEEVAL`.                                                                                                                                                                                                  |
+| **Three.js Viewer**                  | 3D       | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`                                                               | 1        | No         | Primary mesh and CAD viewer. Scene graph, material editing, transform controls. Loads a glTF file's external dependencies, but renders one selected file at a time. CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) require WASM and `ALLOWUNSAFEEVAL`.                                                                                                       |
 | **Potree Viewer**                    | 3D       | `.e57`, `.las`, `.laz`, `.ply`                                                                                                                                                   | 1        | No         | Octree-based point cloud streaming. Requires the Potree preprocessing pipeline. Shows latest version only.                                                                                                                                                                                                                                                           |
 | **BabylonJS Gaussian Splat Viewer**  | 3D       | `.ply`, `.spz`                                                                                                                                                                   | 1        | No         | Gaussian splat visualization with WebXR support.                                                                                                                                                                                                                                                                                                                     |
 | **Needle USD Viewer (Experimental)** | 3D       | `.usd`, `.usda`, `.usdc`, `.usdz`                                                                                                                                                | 1        | No         | Universal Scene Description via WebAssembly. Requires `ALLOWUNSAFEEVAL`. Experimental -- may not display all USD files correctly or load all dependencies.                                                                                                                                                                                                           |
@@ -68,7 +76,7 @@ This table is the definitive reference for all built-in viewer plugins.
 | **PDF Viewer**                       | Document | `.pdf`                                                                                                                                                                           | 1        | No         | Navigation, zoom, and page management controls.                                                                                                                                                                                                                                                                                                                      |
 | **HTML Viewer**                      | Document | `.html`                                                                                                                                                                          | 1        | No         | Renders HTML presentations and documents.                                                                                                                                                                                                                                                                                                                            |
 | **Text Viewer**                      | Document | `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`          | 1        | No         | Syntax highlighting for 20+ text file types.                                                                                                                                                                                                                                                                                                                         |
-| **Columnar Data Viewer**             | Data     | `.rds`, `.fcs`, `.csv`                                                                                                                                                           | 2        | No         | Tabular data display with column headers.                                                                                                                                                                                                                                                                                                                            |
+| **Columnar Data Viewer**             | Data     | `.fcs`, `.csv`                                                                                                                                                                   | 2        | No         | Tabular data display with column headers.                                                                                                                                                                                                                                                                                                                            |
 | **Preview Viewer**                   | Preview  | `*` (all extensions)                                                                                                                                                             | 10       | No         | Displays generated preview thumbnails. Fallback viewer for files with no dedicated viewer.                                                                                                                                                                                                                                                                           |
 
 ---
@@ -91,14 +99,17 @@ This table provides a quick lookup from file extension to the viewer(s) that han
 | `.fbx`           | Three.js Viewer         | --                      |
 | `.glb`           | Three.js Viewer         | VNTANA 3D Viewer        |
 | `.gltf`          | Three.js Viewer         | --                      |
-| `.iges`          | Three.js Viewer         | --                      |
 | `.ifc`           | ThatOpen IFC BIM Viewer | --                      |
 | `.ifczip`        | ThatOpen IFC BIM Viewer | --                      |
+| `.iges`          | Three.js Viewer         | --                      |
+| `.igs`           | Three.js Viewer         | --                      |
 | `.obj`           | Three.js Viewer         | --                      |
 | `.off`           | Online 3D Viewer        | --                      |
 | `.step` / `.stp` | Three.js Viewer         | --                      |
 | `.stl`           | Three.js Viewer         | --                      |
 | `.wrl`           | Online 3D Viewer        | --                      |
+
+The tables in this section list the viewers available in every deployment. The Physna Viewer adds a further set of proprietary CAD formats -- `.asm`, `.catpart`, `.catproduct`, `.iam`, `.ipt`, `.jt`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.x_b`, `.x_t` -- and becomes an additional choice for several of the formats above, but only on a deployment with the Physna Sync add-on enabled. See [Add-on viewers](#add-on-viewers).
 
 ### Point cloud and Gaussian splat extensions
 
@@ -169,11 +180,9 @@ The Needle USD Viewer is experimental. It may not display all USD files correctl
 | `.json`          | Text Viewer          | Cesium 3D Tileset Viewer, VEERUM 3D Viewer |
 | `.log`           | Text Viewer          | --                                         |
 | `.md`            | Text Viewer          | --                                         |
-| `.parquet`       | Text Viewer          | --                                         |
 | `.pdf`           | PDF Viewer           | --                                         |
 | `.ps1`           | Text Viewer          | --                                         |
 | `.py`            | Text Viewer          | --                                         |
-| `.rds`           | Columnar Data Viewer | --                                         |
 | `.sh`            | Text Viewer          | --                                         |
 | `.sql`           | Text Viewer          | --                                         |
 | `.toml`          | Text Viewer          | --                                         |
@@ -222,9 +231,9 @@ The following viewers use WASM:
 Enabling `ALLOWUNSAFEEVAL` adds `unsafe-eval` to the Content Security Policy `script-src` directive. This is required by the SuperSplat Editor and by WASM loaders for OpenCascade, Needle USD, and web-ifc (the ThatOpen IFC BIM viewer). Review this setting with your organization's security team before enabling. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in the CDK `config.json` to enable.
 :::
 
-The Three.js Viewer works without `ALLOWUNSAFEEVAL` for standard mesh formats (`.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`). The WASM requirement applies only to CAD formats (`.stp`, `.step`, `.iges`, `.brep`) which use the OpenCascade library.
+The Three.js Viewer works without `ALLOWUNSAFEEVAL` for standard mesh formats (`.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`). The WASM requirement applies only to CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) which use the OpenCascade library.
 
-The ThatOpen IFC BIM Viewer uses the multithreaded `web-ifc-mt.wasm` build when cross-origin isolation is available (provided by the COI service worker) and transparently falls back to the single-threaded `web-ifc.wasm` otherwise. It does not require the `ALLOWUNSAFEEVAL` feature flag.
+The ThatOpen IFC BIM Viewer uses the multithreaded `web-ifc-mt.wasm` build when cross-origin isolation is available (provided by the COI service worker) and transparently falls back to the single-threaded `web-ifc.wasm` otherwise. Both builds require `ALLOWUNSAFEEVAL`: the flag gates whether the viewer registers at all, so the thread mode does not affect it.
 
 ---
 
@@ -237,7 +246,7 @@ Two viewer plugins are integrations with commercial products and require separat
 | **VNTANA 3D Viewer** | [VNTANA](https://www.vntana.com/) | `.glb`                                  | Yes              |
 | **VEERUM 3D Viewer** | [Veerum](https://veerum.com/)     | `.e57`, `.las`, `.laz`, `.ply`, `.json` | Yes              |
 
-Both licensed viewers are enabled in the viewer configuration by default but require a valid license from the respective vendor to function. Without a license, these viewers will not render content. Contact the vendor directly for licensing details.
+Both licensed viewers ship disabled in the viewer configuration, so neither appears in the viewer selector until it is enabled. Enabling one also requires a valid license from the respective vendor: without a license the viewer will not render content. Contact the vendor directly for licensing details.
 
 For more information on partner integrations, see [Partner Integrations](../additional/partner-integrations.md).
 
@@ -251,7 +260,7 @@ Some viewers are provided by optional VAMS add-ons and are gated by a feature fl
 | ----------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | -------------------------------------------- |
 | **Physna Viewer** | [Physna](https://www.physna.com/) | `.3ds`, `.asm`, `.catpart`, `.catproduct`, `.glb`, `.iam`, `.iges`, `.igs`, `.ipt`, `.jt`, `.obj`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.stl`, `.step`, `.stp`, `.x_b`, `.x_t` | `PHYSNA_ADDON` | `app.addons.usePhysnaSync.enabled` is `true` |
 
-The Physna Viewer renders the Physna-hosted 3D/CAD viewer inside VAMS through a VAMS-authorized proxy endpoint so Physna credentials never reach the browser. See the [Physna Integration](../developer/physna-integration.md) developer guide for architecture and configuration.
+The Physna Viewer renders the Physna-hosted 3D/CAD viewer inside VAMS. A VAMS-authorized endpoint applies both authorization tiers and returns a Physna viewer token to the browser, which then loads the viewer directly from Physna; the Physna client credentials stay in AWS Secrets Manager and never reach the browser. That token carries no asset scope, so Physna-hosted viewer access is flat across every synced database. See the [Physna Integration](../developer/physna-integration.md#physna-viewer) developer guide for architecture, configuration, and the side effects of that limitation.
 
 ---
 

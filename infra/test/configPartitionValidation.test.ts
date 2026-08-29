@@ -27,12 +27,12 @@
  * policy JSON that `getConfig()` also loads) falls through to the real implementation.
  */
 
-import * as cdk from "aws-cdk-lib";
 import * as fs from "fs";
 import * as Config from "../config/config";
 import commercialTemplate from "../config/config.template.commercial.json";
 import eusovereignTemplate from "../config/config.template.eusovereign.json";
 import govcloudTemplate from "../config/config.template.govcloud.json";
+import { newTestApp } from "./support/testApp";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -76,7 +76,7 @@ const loadConfig = (base: unknown, region: string, mutate?: (c: any) => void) =>
     const config = templateFor(base, region);
     mutate?.(config);
     serveConfig(config);
-    return () => Config.getConfig(new cdk.App());
+    return () => Config.getConfig(newTestApp());
 };
 
 const SERVERLESS_EUSC_MESSAGE =

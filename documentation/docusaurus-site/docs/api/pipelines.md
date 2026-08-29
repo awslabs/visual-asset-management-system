@@ -321,7 +321,7 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 :::
 
 :::tip[Restore an archived pipeline]
-`PUT` with `\{"archived": false\}` returns an archived pipeline to the active listings under its original identifier, together with every workflow reference and execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the pipeline.
+`PUT` with `{"archived": false}` returns an archived pipeline to the active listings under its original identifier, together with every workflow reference and execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the pipeline.
 :::
 
 ### Request body example
@@ -749,7 +749,7 @@ As with [Create a template](#create-a-template), when the template is referenced
 :::
 
 :::note[A tag's type is validated against the stored body]
-A tag schema and a configuration body are one contract: a tag's declared type determines whether its placeholder renders into a valid document. `\{"steps": \{\{PARAM\}\}\}` is valid JSON when `PARAM` is an integer and invalid when it is a string, because the substituted value lands in an unquoted position.
+A tag schema and a configuration body are one contract: a tag's declared type determines whether its placeholder renders into a valid document. `{"steps": {{PARAM}}}` is valid JSON when `PARAM` is an integer and invalid when it is a string, because the substituted value lands in an unquoted position.
 
 Supplying `tagSchema` therefore re-checks the schema against the body currently stored, even when the request changes no body of its own, and a retype that would invalidate it is rejected with `400`. [Set a template's tag schema](#set-a-templates-tag-schema) applies the same check, so both routes reach the same verdict for the same change. Send the new `configBody` alongside `tagSchema` when a retype requires the body to change with it.
 :::
@@ -947,10 +947,10 @@ When `configFormat` is `json`, the declared `type` determines where a tag's `{{t
 
 | Tag type                                      | Renders                          | Placement in the body                                    |
 | --------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
-| `integer`, `number`, `boolean`, `string-list` | A JSON number, boolean, or array | The whole value, unquoted: `"steps": \{\{STEPS\}\}`      |
-| `string`, `enum`                              | Text                             | Inside the string it fills: `"prompt": "\{\{PROMPT\}\}"` |
+| `integer`, `number`, `boolean`, `string-list` | A JSON number, boolean, or array | The whole value, unquoted: `"steps": {{STEPS}}`      |
+| `string`, `enum`                              | Text                             | Inside the string it fills: `"prompt": "{{PROMPT}}"` |
 
-A body is validated against its own `tagSchema` when it is saved, and the reverse of either placement is rejected. Quoting a typed placeholder is the case worth knowing: `"steps": "\{\{STEPS\}\}"` is valid JSON, so nothing downstream complains — the pipeline simply receives the string `"150"` where its schema promised the number `150`. A quoted `string-list` is worse, rendering a body that does not parse at all.
+A body is validated against its own `tagSchema` when it is saved, and the reverse of either placement is rejected. Quoting a typed placeholder is the case worth knowing: `"steps": "{{STEPS}}"` is valid JSON, so nothing downstream complains — the pipeline simply receives the string `"150"` where its schema promised the number `150`. A quoted `string-list` is worse, rendering a body that does not parse at all.
 
 The same check applies to a `customTemplateOverride` supplied at execute time, since that body reaches the pipeline without having passed through a template save.
 

@@ -4,7 +4,7 @@
 import os
 import boto3
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -21,7 +21,11 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download, log_file_download_bulk
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType
+from common.s3 import (
+    validateS3AssetExtensionsAndContentType,
+    validateUnallowedFileExtensionAndContentType,
+    list_all_objects,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     DownloadAssetRequestModel, DownloadAssetResponseModel, DownloadAssetFileUrlModel
@@ -48,7 +52,8 @@ s3 = boto3.client('s3', region_name=region, config=s3_config)
 dynamodb = boto3.resource('dynamodb')
 logger = safeLogger(service_name="DownloadAsset")
 
-# Worker pool size for per-file S3 checks and URL generation in bulk requests.
+# Worker pool size for per-file S3 checks and URL generation in bulk requests and
+# for the per-object checks of a whole-asset prefix download.
 # Each key costs one HeadObject; 1500 keys must finish well inside the API
 # Gateway 29s window, so this pool is wider than the usual 10-worker pools.
 # Tunable via env var so it can be dialed down without a code change if S3
@@ -212,6 +217,45 @@ def check_s3_object_exists(bucket, key, version_id=None):
         logger.warning(f"Error checking if object exists: {e}")
         raise
         
+def validate_prefix_content_types(bucket, prefix):
+    """Validate every object under an S3 prefix against the file blocklists
+
+    Args:
+        bucket: S3 bucket name
+        prefix: S3 key prefix covering the objects to validate
+
+    Returns:
+        True when every object under the prefix is allowed, False when any object
+        carries an unallowed extension or content type
+
+    Raises:
+        The underlying botocore error when a HeadObject fails, so a failed check
+        is never read as a pass
+    """
+    objects = list_all_objects(bucket, prefix, client=s3)
+    if not objects:
+        return True
+
+    def _check_one(key):
+        head = s3.head_object(Bucket=bucket, Key=key)
+        return validateUnallowedFileExtensionAndContentType(key, head.get('ContentType', ''))
+
+    # One HeadObject per object, fanned out over a bounded worker pool: an asset
+    # prefix holds thousands of objects and serial round trips exceed the API
+    # Gateway integration timeout. The first disallowed object fails the whole
+    # prefix and the remaining queued checks are cancelled.
+    max_workers = min(MAX_PARALLEL_S3_WORKERS, len(objects))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_check_one, obj['Key']) for obj in objects]
+        try:
+            for future in as_completed(futures):
+                if not future.result():
+                    return False
+        finally:
+            for future in futures:
+                future.cancel()
+    return True
+
 def normalize_s3_path(base_path, relative_path):
     """
     Normalize S3 path to ensure there's only a single slash between components.
@@ -261,14 +305,26 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         (downloadUrl, versionId) tuple
 
     Raises:
-        VAMSGeneralErrorResponse for per-file failures (missing, archived, disallowed type)
+        VAMSGeneralErrorResponse for per-file failures (missing, archived, disallowed
+        type, key outside the asset's own prefix)
     """
+    # The asset's own prefix, always slash-terminated. A bucket-root key is only
+    # inside this asset when it sits under '<base>/', so the base 'assets/pfx'
+    # does not cover the sibling prefix 'assets/pfxOTHER/secret.txt'.
+    asset_base_prefix = asset_base_key.rstrip('/')
+    asset_prefix = asset_base_prefix + '/'
+
     # Determine final S3 key
     if raw_key:
         # Check if the key already starts with the asset base key to avoid duplication
-        if raw_key.startswith(asset_base_key):
-            # Key already includes the base path, use it as-is
+        if raw_key == asset_base_key or raw_key.startswith(asset_prefix):
+            # Key is the asset's own base key or already includes the base path, use it as-is
             final_key = raw_key
+        elif not raw_key.startswith('/') and raw_key.startswith(asset_base_prefix):
+            # Bucket-root key that shares the base key's characters without sitting
+            # under the asset prefix - a different asset's or database's object.
+            # Asset-relative keys carry a leading '/' and are never in this shape.
+            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
         else:
             # Key is relative, combine with base path
             final_key = normalize_s3_path(asset_base_key, raw_key)
@@ -283,9 +339,8 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         # Compute relative key by stripping asset_base_key from final_key
         # This matches how fileKey is stored in version records (relative to asset prefix)
         relative_file_key = final_key
-        normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
-        if relative_file_key.startswith(normalized_base):
-            relative_file_key = relative_file_key[len(normalized_base):]
+        if relative_file_key.startswith(asset_prefix):
+            relative_file_key = relative_file_key[len(asset_prefix):]
         relative_file_key = relative_file_key.lstrip('/')
 
         if asset_version_alias:
@@ -296,7 +351,7 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
 
     if final_key.endswith('/'):
         # Prefix download (asset base location): validate every object under it
-        if not validateS3AssetExtensionsAndContentType(asset_bucket, final_key):
+        if not validate_prefix_content_types(asset_bucket, final_key):
             raise VAMSGeneralErrorResponse("Unallowed file extension or content type in asset file")
         if not check_s3_object_exists(asset_bucket, final_key):
             raise VAMSGeneralErrorResponse("File not found in S3")

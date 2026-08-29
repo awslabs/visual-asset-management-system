@@ -975,23 +975,60 @@ s3_asset_buckets_table = (
 )
 
 
+# Safety cap on the number of DynamoDB pages a single metadata read will pull. A
+# query page is capped at 1 MB, so this admits far more metadata/attribute rows
+# than any asset carries while keeping the loop bounded inside a per-file sync,
+# where a real asset has thousands of files. Reaching the cap is logged.
+_METADATA_QUERY_MAX_PAGES = 100
+
+
+def _query_metadata_index_all_pages(table, composite_key: str) -> list:
+    """Return every row for ``composite_key`` from ``DatabaseIdAssetIdFilePathIndex``.
+
+    Pages the query to exhaustion so rows beyond DynamoDB's 1 MB page limit are
+    read. Each call owns its own cursor, so a caller reading two tables pages them
+    independently.
+    """
+    query_kwargs = {
+        "IndexName": "DatabaseIdAssetIdFilePathIndex",
+        "KeyConditionExpression": Key("databaseId:assetId:filePath").eq(composite_key),
+    }
+    items = []
+    pages = 0
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get("Items", []))
+        pages += 1
+        # Presence, not value: DynamoDB omits the key entirely on the final
+        # page, and a reader stubbed with a bare mock answers every ``get`` with
+        # a truthy child, which a value test never terminates against.
+        if "LastEvaluatedKey" not in response:
+            break
+        last_evaluated = response["LastEvaluatedKey"]
+        if pages >= _METADATA_QUERY_MAX_PAGES:
+            logger.warning(
+                f"Metadata index query stopped at the {_METADATA_QUERY_MAX_PAGES}-page "
+                f"cap with pages remaining for {composite_key}"
+            )
+            break
+        query_kwargs["ExclusiveStartKey"] = last_evaluated
+    return items
+
+
 def get_file_metadata(
     database_id: str, asset_id: str, file_path: str
 ):
     """Return (metadata, attributes) dicts for a specific file.
 
     Each dict has shape ``{key: {"value": str, "type": str}}``. System records
-    (``REINDEX_METADATA_RECORD``) are filtered out.
+    (``REINDEX_METADATA_RECORD``) are filtered out. Both tables paginate fully and
+    independently.
     """
     composite_key = f"{database_id}:{asset_id}:{file_path}"
     metadata: Dict[str, Dict[str, str]] = {}
     attributes: Dict[str, Dict[str, str]] = {}
 
-    meta_response = asset_file_metadata_table.query(
-        IndexName="DatabaseIdAssetIdFilePathIndex",
-        KeyConditionExpression=Key("databaseId:assetId:filePath").eq(composite_key),
-    )
-    for item in meta_response.get("Items", []):
+    for item in _query_metadata_index_all_pages(asset_file_metadata_table, composite_key):
         key = item.get("metadataKey")
         value = item.get("metadataValue")
         if not key or not value or is_excluded_metadata_record(key):
@@ -1001,11 +1038,7 @@ def get_file_metadata(
             "type": item.get("metadataValueType", "string"),
         }
 
-    attr_response = file_attribute_table.query(
-        IndexName="DatabaseIdAssetIdFilePathIndex",
-        KeyConditionExpression=Key("databaseId:assetId:filePath").eq(composite_key),
-    )
-    for item in attr_response.get("Items", []):
+    for item in _query_metadata_index_all_pages(file_attribute_table, composite_key):
         key = item.get("attributeKey")
         value = item.get("attributeValue")
         if not key or not value:
@@ -1019,14 +1052,13 @@ def get_file_metadata(
 
 
 def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Dict[str, str]]:
-    """Return the asset-level metadata dict (composite key ends in ':/')."""
+    """Return the asset-level metadata dict (composite key ends in ':/').
+
+    Paginates fully.
+    """
     composite_key = f"{database_id}:{asset_id}:/"
     metadata: Dict[str, Dict[str, str]] = {}
-    response = asset_file_metadata_table.query(
-        IndexName="DatabaseIdAssetIdFilePathIndex",
-        KeyConditionExpression=Key("databaseId:assetId:filePath").eq(composite_key),
-    )
-    for item in response.get("Items", []):
+    for item in _query_metadata_index_all_pages(asset_file_metadata_table, composite_key):
         key = item.get("metadataKey")
         value = item.get("metadataValue")
         if not key or not value or is_excluded_metadata_record(key):

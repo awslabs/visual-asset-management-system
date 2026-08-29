@@ -20,8 +20,23 @@ interface WizardReviewStageProps {
     metadataSourceDatabaseId?: string;
     outputAssetId?: string;
     outputDatabaseId?: string;
+    /** The prefix every output file lands under. `undefined` = untouched, so the workflow's own
+     *  default applies; `""` is a deliberate "write at the asset root". */
+    outputPathPrefix?: string;
     validationErrors: Record<string, string[]>;
 }
+
+/**
+ * The output path prefix as the review screen states it. An empty value or a bare "/" both mean the
+ * asset root, and an untouched field means the workflow's stored default is what the run will use —
+ * three cases a blank line cannot distinguish. Mirrors the execution detail view's wording.
+ */
+const outputPathPrefixText = (prefix?: string): string =>
+    prefix === undefined
+        ? "(workflow default)"
+        : !prefix || prefix === "/"
+        ? "None (asset root)"
+        : prefix;
 
 const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
     workflow,
@@ -33,8 +48,11 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
     metadataSourceDatabaseId,
     outputAssetId,
     outputDatabaseId,
+    outputPathPrefix,
     validationErrors,
 }) => {
+    // Results-only runs write no asset output, so there is no destination to confirm.
+    const isResultsOnly = workflow.systemConfig?.outputTarget?.locationType === "none";
     // Only complete rows are sent, so only they are summarized — a half-filled picker row would read
     // as a selection the run does not carry.
     const completeSourceAssets = metadataSourceAssets.filter((s) => s.databaseId && s.assetId);
@@ -90,12 +108,17 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                 </div>
             )}
 
-            {/* Output target */}
-            {(outputAssetId || outputDatabaseId) && (
+            {/* Output target. Shown for every asset-output run, not only one that overrode the ids:
+                the path prefix decides where each file lands and is the hardest input to undo after
+                the fact, so it has to be confirmable before launch even when the ids are defaults. */}
+            {(!isResultsOnly || outputAssetId || outputDatabaseId) && (
                 <div className="p-3 bg-surface-secondary rounded">
                     <h4 className="text-md font-semibold text-text-primary mb-2">Output Target</h4>
                     <p className="text-sm text-text-primary">
                         Asset: {outputDatabaseId || "(default)"} / {outputAssetId || "(default)"}
+                    </p>
+                    <p className="text-sm text-text-primary">
+                        Path prefix: {outputPathPrefixText(outputPathPrefix)}
                     </p>
                 </div>
             )}

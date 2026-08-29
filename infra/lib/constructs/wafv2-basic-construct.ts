@@ -19,6 +19,11 @@ const WAF_RATE_LIMIT_BODY_CONTENT = JSON.stringify({
     message: "Rate limit exceeded. Please retry shortly.",
 });
 
+// The aggregation key every rate-based rule counts on, in both the CLOUDFRONT-scoped and the
+// REGIONAL ACL: the request-origin address, which WAF takes from the connection and is therefore
+// present on every request and not settable by the caller.
+const WAF_RATE_LIMIT_AGGREGATE_KEY_TYPE = "IP";
+
 /**
  * WAF policy configuration loaded from config/policy/wafPolicyConfig.json.
  * When absent (undefined), the construct applies the legacy default rules.
@@ -41,14 +46,19 @@ export interface WafPolicyConfig {
         name: string;
         priority: number;
         limit: number; // requests per 5-minute window per aggregate key
-        aggregateKeyType?: string; // "IP" (default) or "FORWARDED_IP"
-        // Required when aggregateKeyType is "FORWARDED_IP" so the rule keys on the real
-        // client IP (from the X-Forwarded-For header) rather than the immediate TCP source.
-        // Use FORWARDED_IP for CloudFront-fronted or behind-proxy deployments where the
-        // regional WAF (on the ALB/API GW) would otherwise see the CloudFront/proxy IP.
+        // Counter aggregation key. "IP" — the request-origin address — is the only key the
+        // construct emits, for every ACL scope; any other value is replaced by "IP" and reported
+        // as a synth warning. A forwarded-IP key is not usable in either VAMS topology: WAF reads
+        // the FIRST address of the named header, while CloudFront and the ALB append the
+        // connection address to a caller-supplied X-Forwarded-For rather than replacing it, so
+        // the first address is whatever the caller sent. WAF also omits a request that carries no
+        // such header from the rule's evaluation altogether — a missing header does not reach the
+        // fallback behavior, which covers only a malformed address in a header that is present.
+        aggregateKeyType?: string;
+        // Accepted but not emitted, for the reason described on aggregateKeyType.
         forwardedIPConfig?: {
-            headerName?: string; // default "X-Forwarded-For"
-            fallbackBehavior?: string; // "MATCH" or "NO_MATCH" (default) when the header is absent
+            headerName?: string;
+            fallbackBehavior?: string;
         };
         // HTTP status returned when the rate rule blocks. Defaults to 429 (Too Many Requests)
         // — the correct throttle semantic, distinguishable from a 403 Casbin permission denial.
@@ -90,9 +100,14 @@ const legacyDefaultRules: Array<wafv2.CfnWebACL.RuleProperty> = [
 
 /**
  * Build WAF rules from a policy config: managed rule groups (block or count-only per
- * `block`) plus rate-based rules for L7 DDoS / brute-force throttling.
+ * `block`) plus rate-based rules for L7 DDoS / brute-force throttling. `wafScopeString` is
+ * the ACL scope the rules are being built for, reported alongside any policy warning.
  */
-function buildRulesFromPolicy(policy: WafPolicyConfig): Array<wafv2.CfnWebACL.RuleProperty> {
+function buildRulesFromPolicy(
+    policy: WafPolicyConfig,
+    scope: Construct,
+    wafScopeString: string
+): Array<wafv2.CfnWebACL.RuleProperty> {
     const rules: Array<wafv2.CfnWebACL.RuleProperty> = [];
 
     for (const group of policy.managedRuleGroups || []) {
@@ -129,16 +144,23 @@ function buildRulesFromPolicy(policy: WafPolicyConfig): Array<wafv2.CfnWebACL.Ru
     }
 
     for (const rateRule of policy.rateBasedRules || []) {
-        const aggregateKeyType = rateRule.aggregateKeyType || "IP";
-        // FORWARDED_IP requires a forwardedIPConfig so WAF knows which header carries the
-        // real client IP (X-Forwarded-For by default). Omit the block entirely for plain IP.
-        const forwardedIPConfig =
-            aggregateKeyType === "FORWARDED_IP"
-                ? {
-                      headerName: rateRule.forwardedIPConfig?.headerName || "X-Forwarded-For",
-                      fallbackBehavior: rateRule.forwardedIPConfig?.fallbackBehavior || "NO_MATCH",
-                  }
-                : undefined;
+        // Every rate rule counts on the request-origin IP address. A policy that names a
+        // different aggregation still gets the origin address, and the substitution is reported
+        // at synth: a header-derived key is caller-controlled behind both CloudFront and the ALB,
+        // and it exempts every request that omits the header — which is every direct
+        // execute-api caller — from the rule.
+        const requestedKeyType = rateRule.aggregateKeyType || WAF_RATE_LIMIT_AGGREGATE_KEY_TYPE;
+        if (requestedKeyType !== WAF_RATE_LIMIT_AGGREGATE_KEY_TYPE) {
+            cdk.Annotations.of(scope).addWarningV2(
+                `VAMS:WafPolicy:rateBasedRules:${rateRule.name}:aggregateKeyType`,
+                `WAF policy rate-based rule "${rateRule.name}" sets aggregateKeyType ` +
+                    `"${requestedKeyType}" for the ${wafScopeString} web ACL. The rule is built ` +
+                    `with "${WAF_RATE_LIMIT_AGGREGATE_KEY_TYPE}" instead, because a ` +
+                    `header-derived client address can be set by the caller and leaves requests ` +
+                    `without that header uncounted. Remove the aggregateKeyType override from ` +
+                    `config/policy/wafPolicyConfig.json to clear this warning.`
+            );
+        }
 
         // Throttle blocks return a real throttle status (429) with a JSON body, not the WAF
         // default 403 — so clients can tell rate-limiting apart from an auth/permission denial.
@@ -158,8 +180,7 @@ function buildRulesFromPolicy(policy: WafPolicyConfig): Array<wafv2.CfnWebACL.Ru
             statement: {
                 rateBasedStatement: {
                     limit: rateRule.limit,
-                    aggregateKeyType,
-                    ...(forwardedIPConfig ? { forwardedIpConfig: forwardedIPConfig } : {}),
+                    aggregateKeyType: WAF_RATE_LIMIT_AGGREGATE_KEY_TYPE,
                 },
             },
             visibilityConfig: {
@@ -210,7 +231,9 @@ export class Wafv2BasicConstruct extends Construct {
         // config falls back to the legacy count-only Common Rule Set.
         const resolvedRules =
             props.rules ||
-            (props.wafPolicy ? buildRulesFromPolicy(props.wafPolicy) : legacyDefaultRules);
+            (props.wafPolicy
+                ? buildRulesFromPolicy(props.wafPolicy, this, wafScopeString)
+                : legacyDefaultRules);
 
         /*
         if (props.wafScope === WAFScope.CLOUDFRONT && props.env?.region !== "us-east-1") {

@@ -9,9 +9,16 @@ would otherwise fail at render (`validate_tags` -> 'tag X is required'). Interac
 unaffected: the person supplies the value, and the execute path already rejects a missing required
 tag at run time.
 
+The same absence of a person applies to the template CHOICE. A pipeline whose systemConfig sets
+`requireTemplate` runs only with a template named for it, and a headless run can take one from just
+three places: the trigger's own map, the workflow reference's `defaultTemplateId`, or the pipeline's
+default template. A pipeline that requires no template needs none of them, so a template-less
+pipeline — and a trigger that names no templates at all — stays valid.
+
 This module centralizes the three guards so the trigger, template, and pipeline services stay
 consistent:
-  - trigger save:  reject if a referenced default template has a required-without-default tag.
+  - trigger save:  reject if a referenced default template has a required-without-default tag, or if
+    a require-template pipeline of the workflow has no default template from any of the three.
   - template save: reject if the template is referenced by any trigger AND now has such a tag.
   - pipeline save: WARN (non-blocking) if a require-template pipeline is in an auto-triggered
     workflow whose trigger picked no default template for it.
@@ -28,6 +35,27 @@ from common.workflows import workflowRecords as wr
 from common.workflows.templateTagSchema import required_tags_without_default
 
 logger = safeLogger(service_name="TriggerTemplateValidation")
+
+# Bounds on the workflows walk behind the pipeline-save trigger-template warning. The walk runs
+# synchronously on every save of a require-template pipeline, so the page cap keeps one save from
+# reading an arbitrarily large workflow table and the page size bounds each individual read.
+# Stopping at the cap leaves part of the table unread, which the returned list reports explicitly:
+# the walk produces WARNINGS, so a shortened list must not read as "nothing is misconfigured".
+# Mirrors pipelineService.MAX_REFERENCING_WORKFLOW_PAGES / REFERENCING_WORKFLOW_PAGE_SIZE.
+WORKFLOW_WALK_PAGE_SIZE = 200
+MAX_WORKFLOW_WALK_PAGES = 20
+
+# Bounds on the two costs the page cap does not bound. Each workflow the scan MATCHES costs one
+# further sequential read (the caller's get_trigger_row is a single get_item), and each match whose
+# trigger picked no default template adds one multi-line string to a list the pipeline save returns
+# inline in its response body. Paging alone therefore still permits thousands of sequential get_item
+# calls and a warning list far larger than the response is meant to carry, on a synchronous save.
+# 200 trigger reads cap the added latency at roughly one to two seconds; 25 reported workflows are
+# enough to act on and mirror pipelineService.MAX_REFERENCING_WORKFLOWS. Hitting either cap stops the
+# walk and is reported the same way the page cap is: this function produces WARNINGS, so a shortened
+# list must not read as "nothing is misconfigured".
+MAX_TRIGGER_ROW_LOOKUPS = 200
+MAX_TRIGGER_TEMPLATE_WARNINGS = 25
 
 
 def _trigger_default_template_ids(trigger_row):
@@ -61,6 +89,67 @@ def validate_trigger_default_templates(default_template_ids, load_tag_schema_fie
     return errors
 
 
+def trigger_supplied_pipeline_ids(default_template_ids):
+    """The pipelineIds a trigger's `defaultTemplateIds` map supplies a template for.
+
+    The map is keyed by the composite `pipelineDatabaseId:pipelineId`, but a headless run resolves it
+    by pipelineId alone: triggerMatching._default_template_params keys the execute request's
+    pipelineExecutionParameters by the part after the last ':' and drops the database half, and
+    executeWorkflow._resolve_pipeline_configs then looks those parameters up by the pipeline record's
+    own pipelineId. So the database half of a key does not have to agree with the workflow step for the
+    template to reach it, and matching on the whole composite would reject a run that works."""
+    supplied = set()
+    for composite, template_id in (default_template_ids or {}).items():
+        if not template_id:
+            continue
+        key = composite or ""
+        supplied.add(key.split(":")[-1] if ":" in key else key)
+    supplied.discard("")
+    return supplied
+
+
+def validate_trigger_required_templates(default_template_ids, workflow_pipelines):
+    """For a trigger being saved, return a list of human-readable errors — one per pipeline of the
+    parent workflow that REQUIRES a template while nothing would supply one to a headless run.
+
+    A trigger never has to name a template, so this is deliberately narrow: it says nothing about a
+    pipeline that requires no template, nothing about a template-less pipeline, and nothing about
+    whether a named template is a good choice. The single unrunnable combination is a pipeline whose
+    systemConfig sets `requireTemplate` and for which NO template is named anywhere — the trigger
+    picks none, the workflow reference carries no fallback, and the pipeline has no default template of
+    its own — because a triggered execution has nobody to choose one and template resolution rejects
+    the run ('this pipeline requires a template (templateId) for execution').
+
+    `default_template_ids` is the trigger's {`dbId:pipelineId`: templateId} map, read the way a
+    headless run reads it (see trigger_supplied_pipeline_ids).
+    `workflow_pipelines` is the parent workflow's ordered pipeline references, one dict per step:
+    {pipelineDatabaseId, pipelineId, systemConfig, defaultTemplateId?, pipelineDefaultTemplateId?}.
+    The two template keys are the other two sources executeWorkflow._resolve_pipeline_configs falls
+    back to when the trigger names none for that step — the workflow reference's own
+    `defaultTemplateId`, then the pipeline's own default template (`isDefault`, which the vamsSchema
+    importer promotes a lone shipped template to for a require-template pipeline). Any one of the three
+    satisfies the requirement. A step whose `systemConfig` is absent is skipped rather than read as
+    requiring a template, so a caller that could not load a pipeline record never turns an unknown into
+    a rejection."""
+    errors = []
+    supplied = trigger_supplied_pipeline_ids(default_template_ids)
+    for ref in workflow_pipelines or []:
+        system_config = (ref or {}).get("systemConfig") or {}
+        if not system_config.get("requireTemplate"):
+            continue
+        pipeline_id = (ref or {}).get("pipelineId", "")
+        if (pipeline_id in supplied
+                or (ref or {}).get("defaultTemplateId")
+                or (ref or {}).get("pipelineDefaultTemplateId")):
+            continue
+        errors.append(
+            f"pipeline '{pipeline_id}' requires a template but no default template is set for it. A "
+            f"triggered (headless) execution cannot choose one, so pick a default template for this "
+            f"pipeline in the trigger."
+        )
+    return errors
+
+
 def triggers_referencing_template(triggers_table, pipeline_database_id, pipeline_id, template_id):
     """Return the list of (workflowDatabaseId, workflowId, triggerType) tuples whose trigger picks
     this template as a default for this pipeline. Queries TriggersByBaseTypeGSI once per trigger type
@@ -90,10 +179,10 @@ def triggers_referencing_template(triggers_table, pipeline_database_id, pipeline
                             row.get("workflowId", ""),
                             row.get("triggerType", ""),
                         ))
-                lek = resp.get("LastEvaluatedKey")
-                if not lek:
+                # Paged on the PRESENCE of the key, which is how DynamoDB signals the last page.
+                if "LastEvaluatedKey" not in resp:
                     break
-                kwargs["ExclusiveStartKey"] = lek
+                kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
     except Exception as e:
         logger.exception(
             f"Error reading triggers referencing template {pipeline_database_id}:{pipeline_id}:"
@@ -140,23 +229,54 @@ def pipeline_trigger_template_warnings(workflows_table, get_trigger_row, pipelin
     it — a triggered run would fail because no template is selected and none can be chosen headlessly.
 
     Authoritative membership: scans the workflows table for workflows whose specifiedPipelines
-    include this pipeline (bounded, low-frequency save-path scan), then for each such workflow reads
+    include this pipeline, then for each such workflow reads
     its trigger via `get_trigger_row(workflowDatabaseId, workflowId)` (returns the fileUpload trigger
     row or None) and checks whether it picked a default template for this pipeline. Best-effort:
-    returns [] on any read error or when the pipeline requires no template."""
+    returns [] on any read error or when the pipeline requires no template.
+
+    The walk is bounded on all three of its costs, because it runs on the synchronous save path:
+    MAX_WORKFLOW_WALK_PAGES pages of WORKFLOW_WALK_PAGE_SIZE items scanned, MAX_TRIGGER_ROW_LOOKUPS
+    `get_trigger_row` reads across those pages, and MAX_TRIGGER_TEMPLATE_WARNINGS reported workflows.
+    A walk that stops at any of the three has not seen the whole table, and says so as one further
+    warning in the returned list: every other outcome of this function is "no warning" (a read error,
+    a clean deployment, a projection that dropped an attribute), so a truncated walk with no signal
+    would be indistinguishable from a correctly configured one. The returned list is therefore at
+    most MAX_TRIGGER_TEMPLATE_WARNINGS + 1 strings long.
+
+    The scan projects only the three attributes the membership test and the message use, which cuts
+    the bytes transferred and deserialized per save rather than the read capacity consumed - DynamoDB
+    charges a Scan on the size of the items it EVALUATES, so read capacity still scales with the
+    whole table. Reducing that would take a different access pattern, not a projection.
+    It stays a table scan: the constant-partition `WorkflowsByDateGSI` is
+    sparse, so a workflow row written without `allListPartition` would be invisible to it — exactly
+    the row most likely to be misconfigured."""
     if not require_template:
         return []
     composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
     warnings = []
     try:
-        kwargs = {}
-        while True:
-            resp = workflows_table.scan(**kwargs)
+        kwargs = {"ProjectionExpression": "databaseId, workflowId, specifiedPipelines",
+                  "Limit": WORKFLOW_WALK_PAGE_SIZE}
+        read_every_page = False
+        incomplete_reason = None
+        trigger_lookups = 0
+        for _ in range(MAX_WORKFLOW_WALK_PAGES):
+            resp = workflows_table.scan(**kwargs) or {}
             for wf in resp.get("Items", []):
                 if not _workflow_includes_pipeline(wf, composite):
                     continue
+                if len(warnings) >= MAX_TRIGGER_TEMPLATE_WARNINGS:
+                    incomplete_reason = (
+                        f"names only the first {MAX_TRIGGER_TEMPLATE_WARNINGS} affected workflows")
+                    break
+                if trigger_lookups >= MAX_TRIGGER_ROW_LOOKUPS:
+                    incomplete_reason = (
+                        f"read the trigger of only the first {MAX_TRIGGER_ROW_LOOKUPS} workflows "
+                        f"that use this pipeline")
+                    break
                 wf_db = wf.get("databaseId", "")
                 wf_id = wf.get("workflowId", "")
+                trigger_lookups += 1
                 trigger_row = get_trigger_row(wf_db, wf_id)
                 if not trigger_row:
                     continue  # No auto-trigger → interactive runs supply the template; no warning.
@@ -169,10 +289,25 @@ def pipeline_trigger_template_warnings(workflows_table, get_trigger_row, pipelin
                         f"default template for it. Triggered executions will fail until the trigger "
                         f"picks a default template for this pipeline."
                     )
-            lek = resp.get("LastEvaluatedKey")
-            if not lek:
+            if incomplete_reason:
                 break
-            kwargs["ExclusiveStartKey"] = lek
+            # Paged on the PRESENCE of the key, which is how DynamoDB signals the last page.
+            if "LastEvaluatedKey" not in resp:
+                read_every_page = True
+                break
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+        if incomplete_reason is None and not read_every_page:
+            incomplete_reason = (
+                f"read only the first {MAX_WORKFLOW_WALK_PAGES} pages of workflows")
+        if incomplete_reason:
+            logger.warning(
+                f"Trigger-template warning walk for {composite} stopped early: "
+                f"{incomplete_reason}.")
+            warnings.append(
+                f"the check for auto-triggered workflows needing a default template for this "
+                f"pipeline {incomplete_reason}, so this list may be incomplete. Review the "
+                f"file-upload triggers of the workflows that use this pipeline directly."
+            )
     except Exception as e:
         logger.exception(
             f"Error reading workflows referencing pipeline {pipeline_database_id}:{pipeline_id}: {e}")

@@ -62,8 +62,9 @@ def validate_asset_file_path(field_name: str, value: str) -> str:
     required here. What is enforced is that the path cannot escape the asset
     prefix once combined with the asset base key: no '..' traversal segments, no
     backslashes (a Windows-style separator S3 treats as a literal key character),
-    and a length within the S3 key limit. Spaces and unicode are legitimate
-    file-name characters and stay accepted.
+    no control characters, and a length within the S3 key limit. Spaces and
+    unicode are legitimate file-name characters and stay accepted, so the charset
+    rule here is narrower than the ASCII set bucketExistingKey allows.
     """
     (valid, message) = validate({
         field_name: {'value': [value], 'validator': 'DOWNLOAD_KEY_ARRAY'}
@@ -73,6 +74,10 @@ def validate_asset_file_path(field_name: str, value: str) -> str:
         raise ValueError(message)
     if '\\' in value:
         message = f"{field_name} cannot contain backslashes"
+        logger.error(message)
+        raise ValueError(message)
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        message = f"{field_name} cannot contain control characters"
         logger.error(message)
         raise ValueError(message)
     return value
@@ -490,14 +495,14 @@ class CompleteUploadResponseModel(BaseModel, extra='ignore'):
 ######################## Create Folder API Models ##########################
 class CreateFolderRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a folder in S3 for an asset"""
-    relativeKey: str = Field(min_length=1, strip_whitespace=True)
-    
+    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+
     @validator('relativeKey')
     def validate_relative_key(cls, v):
         """Ensure the relative key ends with a slash (folder prefix)"""
         if not v.endswith('/'):
             raise ValueError("Relative key must end with a slash to represent a folder")
-        return v
+        return validate_asset_file_path('relativeKey', v)
 
 class CreateFolderResponseModel(BaseModel, extra='ignore'):
     """Response model for creating a folder in S3"""
@@ -897,6 +902,8 @@ class UpdateAssetRequestModel(BaseModel, extra='ignore'):
 
 class ArchiveAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for archiving an asset (soft delete)"""
+    # Optional intent signal, not an interlock: archiving is reversible and the operation is
+    # gated by authorization alone, so the field carries no validator (see api/assets.md).
     confirmArchive: bool = Field(default=False)
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for archiving
 
@@ -912,7 +919,9 @@ class UnarchiveAssetRequestModel(BaseModel, extra='ignore'):
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for unarchiving
     unarchiveFiles: bool = Field(default=False)
 
-    @validator('confirmUnarchive')
+    # always=True so the guard fires even when confirmUnarchive is omitted (a plain @validator
+    # only runs on supplied values, which would let an omitted field bypass the confirmation).
+    @validator('confirmUnarchive', always=True)
     def validate_confirmation(cls, v):
         """Ensure confirmation is provided for unarchiving"""
         if not v:
@@ -924,7 +933,10 @@ class DeleteAssetRequestModel(BaseModel, extra='ignore'):
     confirmPermanentDelete: bool = Field(default=False)  # Stronger confirmation required
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for deletion
     
-    @validator('confirmPermanentDelete')
+    # always=True so the guard fires even when confirmPermanentDelete is omitted (a plain
+    # @validator only runs on supplied values, which would let an omitted field bypass the
+    # confirmation and leave the handler check as the only interlock).
+    @validator('confirmPermanentDelete', always=True)
     def validate_confirmation(cls, v):
         """Ensure confirmation is provided for permanent deletion"""
         if not v:
@@ -1111,6 +1123,14 @@ class DownloadAssetRequestModel(BaseModel, extra='ignore'):
     versionId: Optional[str] = None  # For assetFile only, get specific S3 version
     assetVersionId: Optional[str] = None  # Resolve S3 versionId from asset version snapshot
     assetVersionIdAlias: Optional[str] = None  # Resolve via version alias
+
+    @validator('key')
+    def validate_key(cls, v):
+        # An absent or null key downloads the asset's base location, so only a
+        # supplied path is checked — against the same rules the bulk keys use.
+        if v is None:
+            return v
+        return validate_asset_file_path('key', v)
 
     @root_validator
     def validate_fields(cls, values):

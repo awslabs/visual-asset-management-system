@@ -66,11 +66,17 @@ export interface ApiBuilder2NestedStackProps {
 /**
  * ApiBuilder2NestedStack
  *
- * Secondary backend API nested stack. The primary ApiBuilderNestedStack is approaching the
- * CloudFormation per-stack resource limit (500 resources), so some API domains are
- * relocated here to free up headroom. New API endpoints should be added to this stack going
- * forward until it too approaches the limit.
+ * Secondary backend API nested stack. API domains are split across this stack and the primary
+ * ApiBuilderNestedStack so each carries its own budget against the two per-template CloudFormation
+ * ceilings: 500 resources and a 1 MB template body. Resource counts are comfortable (the primary
+ * stack emits 106, this one 69), but the primary template is already ~0.40 MB, so body size fills
+ * well ahead of resource count and is what the split actually buys headroom against. New API
+ * endpoints belong here.
  *
+ * The REST API is materialized once, from what both stacks register into RouteRegistry, so its path
+ * tree counts against a single API Gateway quota — resources per REST API, 122 of a default 300 —
+ * that splitting the CDK stacks does not relieve. That quota is adjustable; the per-template
+ * CloudFormation ceilings are not. Figures are asserted in test/apiStackCeilings.test.ts.
  */
 export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
@@ -169,8 +175,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             registry: registry,
         });
 
-        // Auth constraints service and its routes (relocated here from ApiBuilder to keep
-        // the primary stack under the CFN per-stack resource limit).
+        // Auth constraints service and its routes.
         const authConstraintsService = buildAuthConstraintsFunction(
             this,
             lambdaCommonBaseLayer,
@@ -250,7 +255,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
                     "vamsPipelineWorkflowsV2",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 

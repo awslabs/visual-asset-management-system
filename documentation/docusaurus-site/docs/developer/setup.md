@@ -116,7 +116,7 @@ pip install -r requirements-dev.txt
 | Package                 | Version | Purpose                   |
 | ----------------------- | ------- | ------------------------- |
 | `aws-lambda-powertools` | 2.36.0  | Logger, Parser, BaseModel |
-| `boto3`                 | 1.34.84 | AWS SDK                   |
+| `boto3`                 | 1.43.45 | AWS SDK                   |
 | `pydantic`              | 1.10.13 | Data validation (v1 only) |
 | `casbin`                | 1.33.0  | ABAC/RBAC authorization   |
 | `moto`                  | 5.1.0   | AWS service mocking (dev) |
@@ -180,6 +180,10 @@ npx cdk deploy --all --require-approval never
 
 :::info[Docker Required]
 Docker must be running before deployment. CDK builds container images for Lambda layers and processing pipeline containers during synthesis.
+:::
+
+:::warning[Wait for every stack to complete before using the deployment]
+The solution is usable only after `cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish.
 :::
 
 ### Configuration

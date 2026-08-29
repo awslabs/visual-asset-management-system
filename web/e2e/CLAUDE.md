@@ -12,8 +12,10 @@ Playwright drives the **deployed** application, so it is the only layer that pro
 reached users. Jest proves a component behaves; Playwright proves the built, published bundle behaves.
 
 :::danger[A source-only fix proves nothing here]
-These specs run against `E2E_BASE_URL` (default `https://vams5.scheurik.people.aws.dev`). A fix that
-exists only in `web/src/` will still fail — the front end must be rebuilt and published:
+These specs run against `E2E_BASE_URL`, which is **required** — `playwright.config.ts` throws when it
+is unset rather than falling back to a hard-coded host, so a run cannot silently target the wrong
+deployment. A fix that exists only in `web/src/` will still fail — the front end must be rebuilt and
+published:
 
 ```bash
 cd web && npm run build     # then deploy: cd infra && npx cdk deploy --all
@@ -190,12 +192,18 @@ expect(hit).toBe(true);
 
 ```bash
 cd web
-export E2E_USERNAME=<user> E2E_PASSWORD=<pass>   # never hardcode credentials
-npm run e2e                                       # all specs
-npm run e2e:headed                                # watch a run
+export E2E_BASE_URL=https://<your-deployment-host>   # required; the config throws without it
+export E2E_USERNAME=<user> E2E_PASSWORD=<pass>       # never hardcode credentials
+npm run e2e                                           # all specs
+npm run e2e:headed                                    # watch a run
 npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
-E2E_BASE_URL=http://localhost:3001 npm run e2e    # against a local dev server
+E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev server
 ```
+
+`retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —
+and Playwright's own exit code counts flaky as success. Read the summary line, not the exit status:
+wrapping the run in a shell pipeline makes the exit code the _pipeline's_, which is how a run with
+25 failures can appear to have exited 0.
 
 `auth.setup.ts` logs in once through the Amplify Authenticator and saves `storageState` to
 `e2e/.auth/admin.json`; every other spec reuses it. The state is reused for 45 minutes — repeated

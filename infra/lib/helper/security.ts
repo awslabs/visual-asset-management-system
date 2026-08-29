@@ -17,6 +17,7 @@ import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedS
 import * as s3AssetBuckets from "./s3AssetBuckets";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { INDEX_HTML_INLINE_SCRIPT_HASHES } from "./cspInlineScriptHashes";
 
 /**
  * Interface for additional CSP configuration
@@ -30,6 +31,28 @@ interface CSPAdditionalConfig {
     fontSrc?: string[];
     styleSrc?: string[];
     frameSrc?: string[];
+}
+
+/**
+ * `'unsafe-inline'` spellings refused in a `script-src` addition. Inline scripts are allowed
+ * by SHA-256 hash, and a source list carrying a hash source never allows all inline script —
+ * browsers ignore the keyword in that list — so the keyword grants nothing while making the
+ * emitted policy read as though it did. Sources that widen `script-src` without touching the
+ * hash sources are merged as given, including script origins and `'unsafe-eval'`, which
+ * `app.webUi.allowUnsafeEvalFeatures` also controls.
+ */
+const SCRIPT_SRC_UNSAFE_INLINE_TOKENS = ["'unsafe-inline'", "unsafe-inline"];
+
+/**
+ * Returns the `'unsafe-inline'` token in a `script-src` addition, or undefined when it carries
+ * none. An entry may hold a whole space-separated source list, each token of which the browser
+ * parses on its own, so every token is checked; CSP keyword sources are ASCII case-insensitive.
+ */
+function findUnsafeInlineToken(entry: string): string | undefined {
+    return entry
+        .trim()
+        .split(/\s+/)
+        .find((token) => SCRIPT_SRC_UNSAFE_INLINE_TOKENS.includes(token.toLowerCase()));
 }
 
 /**
@@ -65,6 +88,18 @@ function loadCSPAdditionalConfig(): CSPAdditionalConfig | undefined {
             if (Array.isArray(value)) {
                 const validEntries = value.filter((entry) => {
                     if (typeof entry === "string" && entry.trim().length > 0) {
+                        const unsafeInline =
+                            key === "scriptSrc" ? findUnsafeInlineToken(entry) : undefined;
+                        if (unsafeInline) {
+                            console.warn(
+                                `CSP additional config: ${unsafeInline} in scriptSrc is not accepted, ` +
+                                    `skipping entry "${entry}". Inline scripts are allowed by SHA-256 hash, ` +
+                                    `and browsers ignore ${unsafeInline} in a source list that carries a hash, ` +
+                                    `so the keyword permits nothing. Hash the script instead ` +
+                                    `(web/scripts/cspInlineScriptHashes.js).`
+                            );
+                            return false;
+                        }
                         return true;
                     } else {
                         console.warn(
@@ -105,7 +140,8 @@ function loadCSPAdditionalConfig(): CSPAdditionalConfig | undefined {
 }
 
 /**
- * Merges additional CSP sources with existing sources, avoiding duplicates
+ * Merges additional CSP sources with existing sources, avoiding duplicates.
+ * Additional sources arrive already screened by loadCSPAdditionalConfig().
  * @param existingSources Current CSP sources array
  * @param additionalSources Additional sources to merge
  * @returns Merged array without duplicates
@@ -461,16 +497,36 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3", false).Endpoint}/`,
     ];
 
-    // `'unsafe-inline'` is used intentionally here instead of per-script SHA
-    // hashes or a nonce. External viewer plugins (Physna's hosted viewer,
-    // etc.) embed inline `<script>` blocks whose contents we do not control
-    // and which rev frequently. Maintaining a rolling SHA allowlist for
-    // those blocks is unsustainable, and a CSP nonce requires propagating a
-    // new value on every page render (which the viewers cannot cooperate
-    // with). Note that modern browsers ignore `'unsafe-inline'` whenever a
-    // hash or nonce source is present, so this directive only takes effect
-    // when neither is used.
-    let scriptSrc = ["'self'", "'unsafe-hashes'", "'unsafe-inline'"];
+    // Inline scripts in index.html are allowed by SHA-256 hash rather than by
+    // `'unsafe-inline'`, so an injected inline script is still blocked. The
+    // hashes cover the exact bytes of each block's text content, including
+    // indentation, so they are generated rather than hand-written:
+    //
+    //     cd web && npm run build && node scripts/cspInlineScriptHashes.js --ts
+    //
+    // Regenerate whenever an inline block in web/index.html changes — a
+    // Prettier run over that file is enough to invalidate them. The value is
+    // asserted against the built HTML by web/scripts/cspInlineScriptHashes.js
+    // and by the CSP hash test, so drift fails a test rather than the browser.
+    //
+    // The list covers web/index.html only. This policy is a response header on
+    // the whole distribution, so it governs every HTML document served from
+    // web/public as well; an inline block in one of those (the SuperSplat
+    // viewer's upstream service-worker registration) has no hash here and does
+    // not run. A served document that needs its own inline script needs its own
+    // hashes, taken from that document.
+    //
+    // `'wasm-unsafe-eval'` permits WebAssembly compilation for the WASM-based
+    // viewer plugins. It is not an inline-script keyword, so it neither relies
+    // on nor competes with the hash sources; the broader `'unsafe-eval'`, which
+    // those viewers' JavaScript loaders still require, stays gated on
+    // `allowUnsafeEvalFeatures` below.
+    let scriptSrc = [
+        "'self'",
+        "'unsafe-hashes'",
+        "'wasm-unsafe-eval'",
+        ...INDEX_HTML_INLINE_SCRIPT_HASHES,
+    ];
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
@@ -482,11 +538,15 @@ export function generateContentSecurityPolicy(
     let styleSrc = ["'self'", "'unsafe-inline'"];
 
     // frame-src controls what URLs can be loaded into <iframe>s. Without an
-    // explicit directive the browser falls back to default-src ('none'),
-    // which blocks blob:-URL iframes used by add-on viewers (e.g., the
-    // Physna Viewer wraps the Physna-hosted HTML in a sandboxed Blob URL).
-    // 'self' plus blob: covers both same-origin iframes and blob-URL iframes.
-    let frameSrc = ["'self'", "blob:"];
+    // explicit directive the browser falls back to default-src ('none'), which
+    // blocks every iframe. 'self' covers the VAMS-hosted iframe viewers (e.g.
+    // the SuperSplat editor under /viewers/supersplat/) and blob: covers
+    // blob-URL iframes. The Amazon S3 endpoint is here for the same reason it is
+    // on img-src and media-src above: the HTML viewer frames an asset file by its
+    // presigned S3 URL, and without the origin the frame is blocked and the panel
+    // renders empty. A viewer that frames a third-party document needs that
+    // document's origin added, as the Physna add-on branch below does.
+    let frameSrc = ["'self'", "blob:", `https://${Service("S3", false).Endpoint}/`];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
@@ -529,6 +589,14 @@ export function generateContentSecurityPolicy(
             // Config validation in getConfig() already rejects invalid URLs,
             // so this is defensive — never raise during CSP generation.
         }
+
+        // The add-on relaxes no script-src source. The viewer's `<iframe src>`
+        // is Physna's own HTTPS origin, so that document loads under Physna's
+        // CSP and its inline scripts are outside this policy's reach — the
+        // frame-src and connect-src origins above are all it needs from here.
+        // `'unsafe-inline'` would have no effect on it, and none on a VAMS page
+        // either: a source list that carries a hash source never allows all
+        // inline script, so browsers ignore the keyword wherever it appears.
     }
 
     // Merge additional CSP sources if configuration is loaded

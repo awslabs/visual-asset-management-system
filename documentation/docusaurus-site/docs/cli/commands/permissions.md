@@ -306,28 +306,21 @@ When `--json-input` is provided, `--constraint-id` overrides the `identifier` fi
     "description": "Constraint description",
     "objectType": "asset",
     "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "db1" }],
-    "criteriaOr": [{ "field": "tags", "operator": "in", "value": ["tag1", "tag2"] }],
-    "groupPermissions": [{ "groupId": "admin", "permission": "read", "permissionType": "allow" }],
+    "criteriaOr": [{ "field": "tags", "operator": "is_one_of", "value": ["tag1", "tag2"] }],
+    "groupPermissions": [{ "groupId": "admin", "permission": "GET", "permissionType": "allow" }],
     "userPermissions": [
-        { "userId": "user@example.com", "permission": "write", "permissionType": "allow" }
+        { "userId": "user@example.com", "permission": "PUT", "permissionType": "allow" }
     ]
 }
 ```
 
 -   `criteriaAnd` — array of conditions that must all match.
 -   `criteriaOr` — array of conditions where at least one must match.
--   `groupPermissions` / `userPermissions` — `permissionType` is `allow` or `deny`.
+-   `groupPermissions` / `userPermissions` — `permission` is the HTTP action `GET`, `PUT`, `POST`, or `DELETE`, and `permissionType` is `allow` or `deny`.
 
 ### Criteria operators
 
-| Operator     | Description              |
-| ------------ | ------------------------ |
-| `equals`     | Exact match              |
-| `contains`   | Substring match          |
-| `in`         | Value in array           |
-| `startsWith` | Prefix match             |
-| `endsWith`   | Suffix match             |
-| `regex`      | Regular expression match |
+Criteria conditions use one of seven operators: `equals`, `contains`, `does_not_contain`, `starts_with`, `ends_with`, `is_one_of`, and `is_not_one_of`. Use the membership operators (`is_one_of`, `is_not_one_of`) for the list-valued `tags` field and the pattern-matching operators for every other field. A constraint that names an operator outside this set, or pairs a pattern-matching operator with `tags`, is rejected when it is saved. For each operator's matching behavior and the criteria fields available per object type, see [Permissions Model](../../concepts/permissions-model.md).
 
 :::tip
 Use `role constraint permission-objects` to retrieve the deployment's valid object types, criteria fields, operators, permissions, and permission types before authoring a constraint.
@@ -408,7 +401,7 @@ vamscli role constraint permission-objects --json-output
 
 ## role constraint template import
 
-Import multiple constraints from a pre-defined JSON permission template. Templates use variable placeholders (e.g., `\{\{DATABASE_ID\}\}`) that are substituted with the values you provide in `variableValues`.
+Import multiple constraints from a pre-defined JSON permission template. Templates use variable placeholders (e.g., `{{DATABASE_ID}}`) that are substituted with the values you provide in `variableValues`.
 
 ```bash
 vamscli role constraint template import [OPTIONS]
@@ -432,13 +425,14 @@ The template must include a `variableValues` object containing `ROLE_NAME` and a
 
 Pre-built templates are available in `documentation/permissionsTemplates/`:
 
-| Template                  | Description                               |
-| ------------------------- | ----------------------------------------- |
-| `database-admin.json`     | Full admin access to a specific database  |
-| `database-user.json`      | Standard user access (create, edit, view) |
-| `database-readonly.json`  | Read-only access to a specific database   |
-| `global-readonly.json`    | Read-only access across all databases     |
-| `deny-tagged-assets.json` | Deny access to assets with specific tags  |
+| Template                   | Description                                                      |
+| -------------------------- | ---------------------------------------------------------------- |
+| `database-admin.json`      | Full admin access to a specific database                         |
+| `database-user.json`       | Standard user access (create, edit, view)                        |
+| `database-readonly.json`   | Read-only access to a specific database                          |
+| `database-tag-admin.json`  | Manage tags and tag types scoped to a database; read all others  |
+| `global-readonly.json`     | Read-only access across all databases                            |
+| `deny-tagged-assets.json`  | Deny access to assets with specific tags                         |
 
 ### Template JSON format
 

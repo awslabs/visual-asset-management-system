@@ -389,9 +389,14 @@ class SearchRequestModel(BaseModel, extra='ignore'):
 ######################## Search Response Models ##########################
 
 class SearchHitSourceModel(BaseModel, extra='allow'):
-    """Model for search hit source data"""
+    """Documents the `_source` shape an indexed asset or file record carries.
+
+    The indexer writes many more keys than these (`MD_*` metadata, `AB_*` attributes,
+    `geo_MD_location`), so the shape stays open: a hit's `_source` reaches the client
+    verbatim.
+    """
     # Core fields that should always be present
-    _rectype: str  # 'asset' or 'file'
+    str_rectype: Optional[str] = None  # 'asset' or 'file'
     str_databaseid: Optional[str] = None
     str_assetid: Optional[str] = None
     str_assetname: Optional[str] = None
@@ -418,14 +423,18 @@ class SearchHitExplanationModel(BaseModel, extra='ignore'):
     score_breakdown: Optional[Dict[str, Union[int, float]]] = None
 
 class SearchHitModel(BaseModel, extra='allow'):
-    """Model for individual search hit"""
-    _index: str
-    _id: str
-    _score: Optional[float] = None
-    _source: SearchHitSourceModel
+    """Model for individual search hit.
+
+    OpenSearch names the hit envelope with leading underscores (`_index`, `_id`,
+    `_score`, `_source`, plus the `_index_type` this service adds). Pydantic v1 drops a
+    leading-underscore annotation from `__fields__` entirely, so those keys cannot be
+    declared here -- `extra='allow'` carries them through verbatim instead. `_source`
+    therefore reaches the client as the raw indexed document; `SearchHitSourceModel`
+    documents its shape. Declaring them anyway produces an annotation that validates
+    nothing.
+    """
     highlight: Optional[Dict[str, List[str]]] = None
     explanation: Optional[SearchHitExplanationModel] = None  # Match explanation
-    _index_type: Optional[str] = None  # Custom field we add for dual-index tracking
 
 class SearchHitsModel(BaseModel, extra='ignore'):
     """Model for search hits container"""
@@ -449,11 +458,17 @@ class AggregationModel(BaseModel, extra='ignore'):
     filtered_databaseid: Optional[Dict[str, Any]] = None
     filtered_tags: Optional[Dict[str, Any]] = None
 
-class SearchResponseModel(BaseModel, extra='ignore'):
-    """Response model for search operations"""
+class SearchResponseModel(BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """Response model for search operations.
+
+    `_shards` is the OpenSearch shard tally, summed across the asset and file indexes.
+    Pydantic v1 drops a leading-underscore annotation from `__fields__`, so the field is
+    declared as `shards` with `alias="_shards"`; serialize with `dict(by_alias=True)` so
+    the response carries the OpenSearch key the clients read.
+    """
     took: int  # Time in milliseconds
     timed_out: bool
-    _shards: Dict[str, int]
+    shards: Dict[str, int] = Field(..., alias="_shards")
     hits: SearchHitsModel
     aggregations: Optional[Dict[str, AggregationModel]] = None
     aggregationTotal: Optional[int] = None  # True total from aggregation bucket sums

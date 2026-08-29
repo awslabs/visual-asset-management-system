@@ -168,6 +168,138 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 
 ---
 
+### Ingest Asset
+
+`POST /ingest-asset`
+
+Creates an asset and uploads its files in one call, combining [Create Asset](#create-asset) with the [upload endpoints](files.md#upload-file). Use it to bring an asset and its complete file set into VAMS without orchestrating the two APIs separately. If the asset already exists, its files are added to it; otherwise the asset is created first.
+
+The endpoint runs in two stages against the same path, distinguished by the presence of `uploadId` in the request body:
+
+1. **Initialize** — describe the asset and the files to upload. The response returns an `uploadId` and presigned part-upload URLs.
+2. **Complete** — after uploading every part to its presigned URL, send the same asset fields plus the `uploadId` and each file's part ETags.
+
+Both stages require `PUT` permission on the asset (`objectType: "asset"`) in addition to route access.
+
+#### Initialize request body
+
+| Field             | Type          | Required | Description                                                                                                              |
+| ----------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `databaseId`      | string        | Yes      | Target database identifier (4-256 characters).                                                                           |
+| `assetId`         | string        | Yes      | Asset identifier (1-256 characters). Every file's `relativeKey` must begin with `{assetId}/`.                             |
+| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                           |
+| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                    |
+| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                                    |
+| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                                 |
+| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                              |
+
+Each entry in `files` is an object:
+
+| Field         | Type    | Required | Description                                                                           |
+| ------------- | ------- | -------- | ------------------------------------------------------------------------------------- |
+| `relativeKey` | string  | Yes      | Relative file path for the upload. Must begin with `{assetId}/`.                      |
+| `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
+| `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
+
+```json
+{
+    "databaseId": "my-database",
+    "assetId": "building-model-001",
+    "assetName": "New Building Model",
+    "description": "A detailed 3D model of the new building",
+    "isDistributable": true,
+    "tags": ["architecture"],
+    "files": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "file_size": 15728640
+        }
+    ]
+}
+```
+
+#### Initialize response
+
+```json
+{
+    "message": "Upload initialized successfully",
+    "uploadId": "upload-12345",
+    "files": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "uploadIdS3": "multipart-upload-id",
+            "numParts": 1,
+            "partUploadUrls": [
+                {
+                    "PartNumber": 1,
+                    "UploadUrl": "https://bucket.s3.amazonaws.com/...?X-Amz-..."
+                }
+            ]
+        }
+    ]
+}
+```
+
+#### Complete request body
+
+Repeat the asset fields from the initialize request, and add:
+
+| Field      | Type   | Required | Description                                                                    |
+| ---------- | ------ | -------- | ------------------------------------------------------------------------------ |
+| `uploadId` | string | Yes      | Identifier returned by the initialize stage. Its presence selects this stage.   |
+| `files`    | array  | Yes      | Completed files, each with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. At least one part per file. |
+
+```json
+{
+    "databaseId": "my-database",
+    "assetId": "building-model-001",
+    "assetName": "New Building Model",
+    "description": "A detailed 3D model of the new building",
+    "uploadId": "upload-12345",
+    "files": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "uploadIdS3": "multipart-upload-id",
+            "parts": [
+                {
+                    "PartNumber": 1,
+                    "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\""
+                }
+            ]
+        }
+    ]
+}
+```
+
+#### Complete response
+
+```json
+{
+    "message": "Multipart upload and asset ingestion completed successfully.",
+    "uploadId": "upload-12345",
+    "assetId": "building-model-001",
+    "fileResults": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "uploadIdS3": "multipart-upload-id",
+            "success": true
+        }
+    ],
+    "overallSuccess": true,
+    "largeFileAsynchronousHandling": false
+}
+```
+
+**Error Responses:**
+
+| Status | Description                                                                                                          |
+| ------ | -------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
+| `403`  | Not authorized to write this asset.                                                                                  |
+| `500`  | Internal server error.                                                                                               |
+
+---
+
 ### Get Asset
 
 `GET /database/{databaseId}/assets/{assetId}`
@@ -611,8 +743,25 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 }
 ```
 
-:::info[Response Compression]
-Responses exceeding 100KB are automatically gzip-compressed. The `Content-Encoding: gzip` header indicates compression.
+:::info[Large Export Payloads Are Delivered by Presigned URL]
+A serialized payload of 100KB or less is returned inline with status `200`, as shown above. A larger payload is staged as a JSON object in the VAMS auxiliary Amazon S3 bucket, and the endpoint responds with status `303` redirecting to a presigned URL for it:
+
+```json
+{
+    "message": "Export payload exceeds the inline response size and is available at the redirect target",
+    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/assetExports/...",
+    "presignedExportPayloadExpiresIn": 3600
+}
+```
+
+The presigned URL is also returned in the `Location` header. Fetching it yields exactly the response body documented above, so a client that follows redirects — which most HTTP clients, including the VAMS CLI, do by default — sees no difference between the two cases. Clients that disable redirect following must read `presignedExportPayloadUrl` from the body and request it separately.
+
+Two constraints apply to the redirect target:
+
+-   **Send no `Authorization` header to the presigned URL.** It carries its own authorization in the query string, and Amazon S3 rejects a request presenting two authorization mechanisms. Standard clients strip the header automatically on a cross-host redirect.
+-   **Issue a `GET`, not a `POST`.** The status is `303` rather than `307` precisely so that redirect-following clients switch the method; the URL is signed for a `GET` and rejects any other verb.
+
+`presignedExportPayloadExpiresIn` reports the URL lifetime in seconds, taken from the deployment's presigned-URL timeout. Request the payload before it elapses.
 :::
 
 **Error Responses:**
@@ -702,3 +851,14 @@ The `assetSnapshot` object is open-schema: snapshot fields may grow over time, a
 | `403`  | Not authorized to view this asset's history. |
 | `404`  | Asset not found.                             |
 | `500`  | Internal server error.                       |
+
+---
+
+## Related resources
+
+-   [Databases API](databases.md) -- Manage the databases assets belong to
+-   [Files API](files.md) -- Upload, move, and stream an asset's files
+-   [Asset Versions API](asset-versions.md) -- Create, inspect, and revert asset versions
+-   [Comments API](comments.md) -- Attach review comments to an asset version
+-   [Metadata API](metadata.md) -- Manage asset and file metadata
+-   [Asset Links API](asset-links.md) -- Relate assets to one another

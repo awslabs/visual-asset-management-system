@@ -103,13 +103,16 @@ Yes. VAMS supports AWS GovCloud (US) regions with specific configuration require
 2. Set `app.useGlobalVpc.enabled: true` (required for GovCloud).
 3. Set `app.useCloudFront.enabled: false` (CloudFront is not available in GovCloud).
 4. Set `app.useLocationService.enabled: false` (Location Service is not available in GovCloud).
-5. Use the ALB deployment mode for the web interface.
+5. Set `app.pipelines.deadlineCloudExecutionTypeEnabled: false` (AWS Deadline Cloud is offered only in the commercial partition).
+6. Set `app.authProvider.useCognito.useSaml: false` and `useOidc: false` (both use the Amazon Cognito hosted UI, which is not available). Use `app.authProvider.useExternalOAuthIdp` for federated sign-in.
+7. Set `app.openSearch.useServerless.nextGen: false` (next-generation Serverless collections are not available).
+8. Use the ALB deployment mode for the web interface.
 
-A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`.
+Configuration validation rejects a deployment that violates any of these, naming the field. A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`, and the full per-field list is in [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints).
 
 ### Can I deploy to the AWS European Sovereign Cloud?
 
-Yes. VAMS supports the AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`). Deploy it using the GovCloud guardrails: set `app.govCloud.enabled: true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service). The Region exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`.
+Yes. VAMS supports the AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`). Deploy it using the GovCloud guardrails: set `app.govCloud.enabled: true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service, no AWS Deadline Cloud, no Amazon Cognito SAML or OIDC federation). The Region exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`. Amazon OpenSearch Serverless has no endpoint in the partition, so set `app.openSearch.useServerless.enabled: false` and use `app.openSearch.useProvisioned`.
 
 A dedicated configuration template is provided at `infra/config/config.template.eusovereign.json`. See the [Configuration Reference](../deployment/configuration-reference.md) for the full deployment notes.
 
@@ -129,7 +132,18 @@ These restrictions apply only to the upload API. Files placed directly into Amaz
 
 ### How do I connect VAMS to my existing authentication system?
 
-VAMS supports external OAuth 2.0 identity providers as an alternative to Amazon Cognito. To configure external authentication:
+VAMS offers two paths. Federating an Amazon Cognito user pool with your identity provider is the lighter one and is the recommended starting point; bringing your own OAuth 2.0 provider without Amazon Cognito is the fallback for deployments that cannot use a Cognito user pool at all.
+
+**Amazon Cognito federation (SAML or OIDC).** VAMS keeps the Amazon Cognito user pool and adds your IdP as a federated provider, so Cognito-managed session tokens and the native username/password sign-in remain available:
+
+1. Keep `app.authProvider.useCognito.enabled: true`.
+2. Set `app.authProvider.useCognito.useSaml: true` **or** `useOidc: true` (they are mutually exclusive).
+3. Configure the provider details outside `config.json` — in `infra/config/saml-config.ts` for SAML, or `infra/config/oidc-config.ts` for OIDC (provider name, Cognito domain prefix, client ID, client secret ARN, issuer URL, scopes, and attribute mapping).
+4. Deploy the stack.
+
+Cognito federation uses the Amazon Cognito hosted UI, which is available only in the commercial `aws` partition.
+
+**External OAuth identity provider.** Use this when the deployment cannot rely on an Amazon Cognito user pool, including AWS GovCloud and AWS European Sovereign Cloud deployments:
 
 1. Set `app.authProvider.useCognito.enabled: false` in your configuration.
 2. Set `app.authProvider.useExternalOAuthIdp.enabled: true`.
@@ -143,7 +157,7 @@ VAMS supports external OAuth 2.0 identity providers as an alternative to Amazon 
     - `lambdaAuthorizorJWTAudience` -- Expected JWT audience
 4. Deploy the stack with the updated configuration.
 
-Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete list of required external OAuth fields.
+Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete field list for both paths, and to [Plan your deployment](../deployment/plan-your-deployment.md) for the authentication decision table.
 
 ---
 

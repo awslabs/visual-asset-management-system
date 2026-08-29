@@ -48,6 +48,7 @@ import {
     isViewableExtension,
     reconcileViewerSelection,
 } from "./utils/searchRowToFileInfo";
+import { isFileHitSource } from "./utils/recordType";
 import { areFilenamesViewableTogether } from "../../visualizerPlugin/core/viewableExtensions";
 
 let tagTypes: any;
@@ -974,7 +975,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 header: "Map",
                 cell: (item: any) => {
                     const source = item?._source ?? item;
-                    const isFile = source?._rectype === "file";
+                    const isFile = isFileHitSource(source, isFileMode);
                     const expandHeader =
                         source?.str_assetname ||
                         (isFile ? source?.str_key : undefined) ||

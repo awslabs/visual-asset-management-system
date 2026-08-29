@@ -25,6 +25,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { VamsSchemaRegistration } from "../lib/nestedStacks/pipelines/constructs/vamsSchemaRegistration-construct";
+import { newTestApp } from "./support/testApp";
 
 /** A minimal on-disk bundle: the two required files plus one template and its webform companion. */
 function writeBundle(): string {
@@ -39,7 +40,7 @@ function writeBundle(): string {
 
 /** Synthesizes one registration and returns the schemaHash CloudFormation would diff. */
 function synthHash(bundleDir: string, fillerFunctions: number): string {
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, "S", {
         env: { account: "111122223333", region: "us-west-2" },
     });
@@ -95,7 +96,7 @@ describe("VamsSchemaRegistration schemaHash", () => {
     test("the raw token text does drift, so the check above can detect a regression", () => {
         // Positive control. Without it, a hash that ignored the overrides entirely would also pass.
         const tokenText = (fillers: number) => {
-            const app = new cdk.App();
+            const app = newTestApp();
             const stack = new cdk.Stack(app, "C");
             for (let i = 0; i < fillers; i++) {
                 new lambda.Function(stack, `F${i}`, {

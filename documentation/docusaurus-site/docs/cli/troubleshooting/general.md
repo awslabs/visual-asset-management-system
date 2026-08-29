@@ -30,7 +30,7 @@ Logs rotate at 10 MB with up to five backups (`vamscli.log`, `vamscli.log.1`, an
 Add `--verbose` to any command for detailed console output, including the active profile, API Gateway URL, CLI version, per-request timing, and full stack traces on failure:
 
 ```bash
-vamscli --verbose assets get my-db my-asset
+vamscli --verbose assets get my-asset -d my-db
 ```
 
 :::tip
@@ -59,19 +59,19 @@ Select-String -Path "$env:APPDATA\vamscli\logs\vamscli.log" -Pattern "ERROR"
 
 ## Terminal Encoding on Windows
 
-VamsCLI prints Unicode status indicators (for example, `✓` and `✗`). The default Windows console encoding cannot render these characters and raises an encoding error.
+VamsCLI prints Unicode status indicators (for example, `✓` and `✗`) and sets its own output encoding to UTF-8, so the system code page does not affect whether a command succeeds. This applies to redirected output as well as to a console.
 
 **Symptoms:**
 
--   `UnicodeEncodeError` or `charmap codec can't encode character` when running any command on Windows
+-   `UnicodeEncodeError` or `charmap codec can't encode character` in place of a command's output
 
 **Cause:**
 
-The console is using a legacy code page (such as `cp1252`) rather than UTF-8.
+An older VamsCLI release left the output encoding to the operating system. On Windows that resolves to the ANSI code page (typically `cp1252`) whenever output is not going to a console, so redirecting or piping a command that printed a status indicator failed instead of producing output — `vamscli profile list > profiles.txt` wrote a single line naming a codec error.
 
 **Resolution:**
 
-Use a UTF-8 capable terminal (Windows Terminal or the Visual Studio Code terminal), or set the encoding before invoking the CLI:
+Upgrade to VamsCLI 2.6.0 or later, which sets the encoding itself. On an earlier release, set the encoding before invoking the CLI:
 
 ```bash
 export PYTHONIOENCODING=utf-8
@@ -82,7 +82,7 @@ $env:PYTHONIOENCODING = "utf-8"
 ```
 
 :::note
-Linux and macOS terminals are UTF-8 by default and do not require this setting.
+A legacy Command Prompt may draw a character its font does not contain as a box or a question mark. That is a font limitation rather than an error, and the command still completes with its normal exit code.
 :::
 
 ---

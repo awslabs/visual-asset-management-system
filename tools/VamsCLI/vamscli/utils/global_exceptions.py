@@ -177,13 +177,10 @@ def handle_global_exceptions():
                 elif isinstance(e, click.ClickException):
                     # Let Click handle its own exceptions
                     raise
-                elif isinstance(e, KeyboardInterrupt):
-                    if _is_json_output():
-                        import json
-                        click.echo(json.dumps({"error": "Operation cancelled by user"}, indent=2))
-                    else:
-                        click.echo("\nOperation cancelled by user.")
-                    sys.exit(1)
+                # An interrupt cannot arrive here: KeyboardInterrupt derives from BaseException, so
+                # `except Exception` above never binds it. Click converts it to `Abort` under
+                # standalone_mode=False, and `main()` is the only wrapper that sees it — the
+                # cancellation payload is emitted there.
                 else:
                     # Unexpected error
                     if _is_json_output():

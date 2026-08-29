@@ -39,8 +39,13 @@ const Drawer: React.FC<DrawerProps> = ({
                         {title}
                     </RadixDialog.Title>
                     <div className="text-text-primary">{children}</div>
-                    <RadixDialog.Close className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
-                        <span className="text-xl">×</span>
+                    <RadixDialog.Close
+                        aria-label="Close panel"
+                        className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                    >
+                        <span aria-hidden="true" className="text-xl">
+                            ×
+                        </span>
                     </RadixDialog.Close>
                 </RadixDialog.Content>
             </RadixDialog.Portal>

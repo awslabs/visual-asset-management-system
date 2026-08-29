@@ -16,8 +16,10 @@ See the [Physna Integration](../developer/physna-integration.md) developer guide
 
 Returns a JSON envelope describing whether the Physna viewer can currently be rendered for a given asset file, and — when it can — the values the frontend needs to embed Physna's hosted viewer in an `<iframe>` directly.
 
-:::info
-The `viewerToken` field in the `ready` response is short-lived and scoped by Physna. It is returned to the browser so the iframe can load Physna's hosted viewer directly, which avoids the Lambda response-size limits and URL-rewriting complexity of proxying the full viewer payload. VAMS's object-tier authorization runs on every call to this endpoint — a user who cannot see the asset cannot obtain a viewer token for it.
+:::warning[The viewer token is not scoped to an asset]
+The `viewerToken` field in the `ready` response carries no asset scope. `POST /viewer/token` accepts no asset parameter, so Physna issues the token at tenant scope, and every synced database and asset lives under the single tenant named in `tenantId`. Physna sets the token's lifetime; VAMS reads no expiry and mints a fresh token on each `ready` response.
+
+The token is returned to the browser so the iframe can load Physna's hosted viewer directly, which avoids the Lambda response-size limits and URL-rewriting complexity of proxying the full viewer payload. VAMS's object-tier authorization runs on every call to this endpoint — a user who cannot see the asset cannot obtain a viewer token for it, but the token they receive is not restricted to it. See [Physna Viewer](../developer/physna-integration.md#physna-viewer) for the limitation and its side effects.
 :::
 
 #### Query parameters
@@ -42,6 +44,7 @@ All responses have `Content-Type: application/json`. The body always includes `s
 | `not_found`            | `404` | —                                                           | Asset does not exist in VAMS.                                             |
 | `forbidden`            | `403` | —                                                           | Caller lacks API- or object-level access.                                 |
 | `invalid_request`      | `400` | —                                                           | Query parameters failed validation.                                       |
+| `request_failed`       | `400` | —                                                           | The request could not be completed against Physna.                        |
 | `method_not_allowed`   | `405` | —                                                           | Non-`GET` request.                                                        |
 | `upstream_unavailable` | `502` | —                                                           | Physna API could not be reached, or the viewer token could not be minted. |
 | `internal_error`       | `500` | —                                                           | Unexpected server error.                                                  |

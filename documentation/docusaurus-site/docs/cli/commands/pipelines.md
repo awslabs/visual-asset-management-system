@@ -19,15 +19,25 @@ List pipelines in a database, or all pipelines you can access.
 ```bash
 vamscli pipeline list
 vamscli pipeline list -d my-database
+vamscli pipeline list -d my-database --include-archived --auto-paginate
 vamscli pipeline list -d my-database --include-archived --json-output
 ```
 
-| Option                             | Description                                         |
-| ---------------------------------- | --------------------------------------------------- |
-| `-d, --database-id`                | Database ID (omit to list all accessible pipelines) |
-| `--include-archived`               | Include archived pipelines                          |
-| `--page-size` / `--starting-token` | Pagination                                          |
-| `--json-output`                    | Emit the raw JSON response                          |
+A page may come back empty and still carry a continuation token: archived and unauthorized pipelines
+are filtered after the page limit is applied, so later pages can still hold matches. `--auto-paginate`
+follows the token through those pages. It stops early once `--max-items` items have been collected or
+after 200 pages, and reports the outstanding token so the walk can be resumed with
+`--starting-token`.
+
+| Option               | Description                                                        |
+| -------------------- | ------------------------------------------------------------------ |
+| `-d, --database-id`  | Database ID (omit to list all accessible pipelines)                |
+| `--include-archived` | Include archived pipelines                                         |
+| `--page-size`        | Items per page                                                     |
+| `--auto-paginate`    | Fetch all pages automatically (up to `--max-items`, default 10000) |
+| `--max-items`        | Maximum total items to fetch (only with `--auto-paginate`)         |
+| `--starting-token`   | Continuation token for manual pagination                           |
+| `--json-output`      | Emit the raw JSON response                                         |
 
 ---
 

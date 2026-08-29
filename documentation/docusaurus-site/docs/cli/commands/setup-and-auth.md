@@ -8,7 +8,7 @@ title: Setup and Authentication Commands
 This page documents VamsCLI commands for initial setup, authentication, profile management, and feature switch inspection.
 
 :::note[JSON output and profile selection]
-Every command on this page accepts `--json-output` to emit a machine-readable JSON response instead of formatted text. The global `--profile <name>` option selects which profile a command runs against (default: `default`). These are omitted from individual Options tables unless they affect a command's behavior.
+Every command on this page accepts `--json-output` to emit a machine-readable JSON response instead of formatted text. The global `--profile <name>` option selects which profile a command runs against; when it is omitted, the command uses the profile selected by [`profile switch`](#profile-switch), and the `default` profile only when no selection has been made. These are omitted from individual Options tables unless they affect a command's behavior.
 :::
 
 ## setup
@@ -67,7 +67,7 @@ vamscli setup https://vams.example.com --skip-version-check
 ```
 
 :::tip[Profile-Specific Behavior]
-Configuration is saved to `~/.config/vamscli/profiles/\{profile_name\}/`. Each profile maintains separate configuration and authentication. The profile becomes active after successful setup.
+Configuration is saved to `~/.config/vamscli/profiles/{profile_name}/`. Each profile maintains separate configuration and authentication. The profile becomes active after successful setup.
 :::
 
 :::note[Amazon API Gateway stage path]
@@ -75,7 +75,7 @@ The VAMS backend is an Amazon API Gateway REST API served under the fixed stage 
 :::
 
 :::warning[Re-run setup after a deployment endpoint change]
-If a profile was configured against a VAMS deployment whose backend used the previous Amazon API Gateway HTTP API, the stored Amazon API Gateway URL no longer points to a valid endpoint after the deployment is updated to the REST API. Re-run `vamscli setup <BASE_URL> --force` for that profile to fetch the current endpoint. Profiles that target a Amazon CloudFront/ALB/custom-domain front are unaffected as long as the front URL is unchanged.
+A profile stores the Amazon API Gateway URL it was set up against. If the deployment's API Gateway identifier or invoke URL changes — which an update that replaces the API does — the stored URL stops resolving to a valid endpoint and every request from that profile fails. Re-run `vamscli setup <BASE_URL> --force` for the profile to pick up the current endpoint. A profile that targets an Amazon CloudFront, ALB, or custom-domain front is unaffected as long as the front's URL is unchanged.
 :::
 
 ---
@@ -90,38 +90,67 @@ vamscli auth login [OPTIONS]
 
 ### Options
 
-| Option                 | Type | Required    | Description                                                                              |
-| ---------------------- | ---- | ----------- | ---------------------------------------------------------------------------------------- |
-| `-u`, `--username`     | TEXT | Conditional | Username for Amazon Cognito authentication                                               |
-| `-p`, `--password`     | TEXT | No          | Password (prompts securely if not provided)                                              |
-| `--new-password`       | TEXT | No          | New password to set when Amazon Cognito requires a password change                       |
-| `--save-credentials`   | Flag | No          | Save credentials for automatic re-authentication                                         |
-| `--user-id`            | TEXT | Conditional | User ID for token override authentication                                                |
-| `--token-override`     | TEXT | Conditional | Pre-generated token to use directly, mostly for external IDP auth (requires `--user-id`) |
-| `--expires-at`         | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)                          |
-| `--skip-version-check` | Flag | No          | Skip version mismatch confirmation prompts                                               |
-| `--json-output`        | Flag | No          | Output raw JSON response                                                                 |
+| Option                   | Type | Required    | Description                                                                          |
+| ------------------------ | ---- | ----------- | ------------------------------------------------------------------------------------ |
+| `-u`, `--username`       | TEXT | Conditional | Username for Amazon Cognito authentication                                           |
+| `-p`, `--password`       | TEXT | No          | Password, passed on the command line. Discouraged — see the note below               |
+| `--password-stdin`       | Flag | No          | Read the password from stdin. The recommended non-interactive form                   |
+| `--new-password`         | TEXT | No          | New password to set when Amazon Cognito requires a password change. Discouraged      |
+| `--new-password-stdin`   | Flag | No          | Read the new password from stdin. The recommended non-interactive form               |
+| `--save-credentials`     | Flag | No          | Save credentials for automatic re-authentication                                     |
+| `--user-id`              | TEXT | Conditional | User ID for token override authentication                                            |
+| `--token-override`       | TEXT | Conditional | Pre-generated token, mostly for external IDP auth (requires `--user-id`). Discouraged |
+| `--token-override-stdin` | Flag | Conditional | Read the pre-generated token from stdin (requires `--user-id`). The recommended form  |
+| `--expires-at`           | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)                      |
+| `--skip-version-check`   | Flag | No          | Skip version mismatch confirmation prompts                                           |
+| `--json-output`          | Flag | No          | Output raw JSON response                                                             |
+
+:::warning[Credentials on the command line are readable by other local accounts]
+Every argument of a running process appears in the OS process table — `/proc/<pid>/cmdline` and `ps -ef` on Linux, the command-line column of Task Manager on Windows. A credential supplied with `-p` or `--token-override` is therefore readable for the lifetime of the command by any other account on the machine, including one with no VAMS access.
+
+Use `--password-stdin`, `--new-password-stdin` or `--token-override-stdin` for non-interactive logins, or omit the credential entirely to be prompted. `-p`, `--new-password` and `--token-override` continue to work for existing scripts and integrations, but are discouraged.
+
+A process has one stdin, so `--password-stdin` and `--new-password-stdin` share it: with both set, stdin carries two newline-separated values in this order - the current password, then the new one. `--token-override-stdin` cannot share stdin with a password and is rejected in combination with either.
+:::
 
 ### Amazon Cognito examples
 
 ```bash
 vamscli auth login -u john.doe@example.com
-vamscli auth login -u john.doe@example.com -p mypassword
 vamscli auth login -u john.doe@example.com --save-credentials
 
-# First login when Amazon Cognito forces a password change
+# Non-interactive: the password is read from stdin, never from the command line
+cat password.txt | vamscli auth login -u john.doe@example.com --password-stdin
+printenv VAMS_PASSWORD | vamscli auth login -u john.doe@example.com --password-stdin --json-output
+
+# Discouraged: the password is visible in the OS process table
+vamscli auth login -u john.doe@example.com -p mypassword
+
+# First login when Amazon Cognito forces a password change: two lines on stdin,
+# the temporary password first, then the new one
+printf '%s
+%s
+' "$TEMP_PASSWORD" "$NEW_PASSWORD" | vamscli auth login -u john.doe@example.com --password-stdin --new-password-stdin --json-output
+
+# Discouraged: both passwords are visible in the OS process table
 vamscli auth login -u john.doe@example.com -p temporary-password --new-password new-password
 ```
 
+Only a trailing carriage return and line feed are stripped from a piped credential, so a password ending in a space is preserved. The bytes are decoded as UTF-8.
+
 :::note[Forced Password Change on Login]
-Amazon Cognito can require a password change before the first successful sign-in (for example, for a newly created account). In interactive mode, VamsCLI prompts for the new password when one is required. With `--json-output`, supply the new password using `--new-password`; if a change is required and `--new-password` is not provided, the command returns an error rather than prompting.
+Amazon Cognito can require a password change before the first successful sign-in (for example, for a newly created account). In interactive mode, VamsCLI prompts for the new password when one is required. With `--json-output`, supply the new password using `--new-password-stdin` (or `--new-password`); if a change is required and neither is provided, the command returns an error rather than prompting.
 :::
 
 ### Token override examples
 
 ```bash
+# Recommended: the token is read from stdin, never from the command line
+echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin
+echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin --expires-at "+3600"
+
+# Discouraged: the token is visible in the OS process table
 vamscli auth login --user-id john.doe@example.com --token-override "eyJhbGciOiJIUzI1NiIs..."
-vamscli auth login --user-id john.doe@example.com --token-override "token123" --expires-at "+3600"
 vamscli auth login --user-id john.doe@example.com --token-override "token123" --expires-at "2025-12-31T23:59:59Z"
 ```
 
@@ -165,23 +194,36 @@ vamscli auth change-password [OPTIONS]
 
 ### Options
 
-| Option             | Type | Required    | Description                                   |
-| ------------------ | ---- | ----------- | --------------------------------------------- |
-| `-u`, `--username` | TEXT | Yes         | Username for Amazon Cognito authentication    |
-| `--old-password`   | TEXT | Conditional | Current password (prompts if not provided)    |
-| `--new-password`   | TEXT | Conditional | New password to set (prompts if not provided) |
-| `--json-output`    | Flag | No          | Output raw JSON response                      |
+| Option                  | Type | Required    | Description                                                            |
+| ----------------------- | ---- | ----------- | ---------------------------------------------------------------------- |
+| `-u`, `--username`      | TEXT | Yes         | Username for Amazon Cognito authentication                             |
+| `--old-password`        | TEXT | Conditional | Current password (prompts if not provided). Discouraged — see below    |
+| `--old-password-stdin`  | Flag | No          | Read the current password from stdin instead of the command line       |
+| `--new-password`        | TEXT | Conditional | New password to set (prompts if not provided). Discouraged — see below |
+| `--new-password-stdin`  | Flag | No          | Read the new password from stdin instead of the command line           |
+| `--json-output`         | Flag | No          | Output raw JSON response                                               |
 
 ### Examples
 
 ```bash
 vamscli auth change-password -u john.doe@example.com
+
+# Recommended non-interactive form: neither password reaches the process table.
+# With both stdin flags, stdin carries two lines - current password, then new.
+printf '%s\n%s\n' "$OLD_PASSWORD" "$NEW_PASSWORD" | vamscli auth change-password -u john.doe@example.com --old-password-stdin --new-password-stdin --json-output
+echo "$NEW_PASSWORD" | vamscli auth change-password -u john.doe@example.com --new-password-stdin
+
+# Discouraged: the passwords are visible in the OS process table
 vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
 vamscli auth change-password -u john.doe@example.com --old-password old --new-password new --json-output
 ```
 
+:::warning[Passwords on the Command Line]
+A password passed as an option value is published by the OS process table — `/proc/<pid>/cmdline` and `ps -ef` on Linux, the command-line column in Task Manager on Windows — to any other local account, and is recorded in shell history and in CI job logs. Use `--old-password-stdin` and `--new-password-stdin` for any scripted invocation.
+:::
+
 :::note[Amazon Cognito Only]
-This command is available only for deployments that use Amazon Cognito authentication. In interactive mode, VamsCLI prompts for any password not provided on the command line (the new password is confirmed). With `--json-output`, both `--old-password` and `--new-password` are required.
+This command is available only for deployments that use Amazon Cognito authentication. In interactive mode, VamsCLI prompts for any password not provided on the command line (the new password is confirmed). With `--json-output`, both passwords must be supplied up front, by option or on stdin.
 :::
 
 ---
@@ -200,12 +242,13 @@ vamscli auth forgot-password [OPTIONS]
 
 ### Options
 
-| Option             | Type | Required    | Description                                                |
-| ------------------ | ---- | ----------- | ---------------------------------------------------------- |
-| `-u`, `--username` | TEXT | Yes         | Username for Amazon Cognito authentication                 |
-| `--code`           | TEXT | Conditional | Verification code emailed by Amazon Cognito (confirm step) |
-| `--new-password`   | TEXT | Conditional | New password to set (confirm step)                         |
-| `--json-output`    | Flag | No          | Output raw JSON response                                   |
+| Option                 | Type | Required    | Description                                                             |
+| ---------------------- | ---- | ----------- | ----------------------------------------------------------------------- |
+| `-u`, `--username`     | TEXT | Yes         | Username for Amazon Cognito authentication                              |
+| `--code`               | TEXT | Conditional | Verification code emailed by Amazon Cognito (confirm step)              |
+| `--new-password`       | TEXT | Conditional | New password to set (confirm step). Discouraged — see the warning below |
+| `--new-password-stdin` | Flag | No          | Read the new password from stdin instead of the command line            |
+| `--json-output`        | Flag | No          | Output raw JSON response                                                |
 
 ### How it works
 
@@ -222,12 +265,19 @@ In interactive mode, after the code is requested VamsCLI prompts for the verific
 # Step 1: request a verification code
 vamscli auth forgot-password -u john.doe@example.com
 
-# Step 2: confirm with the emailed code and a new password
+# Step 2 (recommended): the password never reaches the process table
+echo "$NEW_PASSWORD" | vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password-stdin
+
+# Step 2, discouraged: the password is visible in the OS process table
 vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
 
 # JSON output (request a code only)
 vamscli auth forgot-password -u john.doe@example.com --json-output
 ```
+
+:::warning[Passwords on the Command Line]
+`--new-password` is readable from the OS process table by any other local account and is recorded in shell history and CI logs. Use `--new-password-stdin` for any scripted invocation.
+:::
 
 :::note[After a Reset]
 A successful reset does not sign you in. Authenticate afterward with `vamscli auth login` using the new password.
@@ -275,17 +325,29 @@ Set an override token for external authentication systems.
 vamscli auth set-override [OPTIONS]
 ```
 
-| Option            | Type | Required | Description                                                     |
-| ----------------- | ---- | -------- | --------------------------------------------------------------- |
-| `-u`, `--user-id` | TEXT | Yes      | User ID associated with the override token                      |
-| `--token`         | TEXT | Yes      | Override token to use for authentication                        |
-| `--expires-at`    | TEXT | No       | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`) |
-| `--json-output`   | Flag | No       | Output raw JSON response                                        |
+| Option            | Type | Required    | Description                                                                 |
+| ----------------- | ---- | ----------- | --------------------------------------------------------------------------- |
+| `-u`, `--user-id` | TEXT | Yes         | User ID associated with the override token                                   |
+| `--token`         | TEXT | Conditional | Override token to use for authentication. Discouraged — see the warning below |
+| `--token-stdin`   | Flag | Conditional | Read the override token from stdin instead of the command line               |
+| `--expires-at`    | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)             |
+| `--json-output`   | Flag | No          | Output raw JSON response                                                    |
+
+Exactly one of `--token` or `--token-stdin` is required.
 
 ```bash
+# Recommended: the token never reaches the process table
+echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin
+echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin --expires-at "+3600"
+
+# Discouraged: the token is visible in the OS process table
 vamscli auth set-override -u john.doe@example.com --token "eyJhbGciOiJIUzI1NiIs..."
 vamscli auth set-override -u john.doe@example.com --token "token123" --expires-at "+3600"
 ```
+
+:::warning[Tokens on the Command Line]
+An override token is a bearer credential. Passed as an option value it is readable from the OS process table by any other local account and is recorded in shell history and CI logs. Use `--token-stdin` for any scripted invocation.
+:::
 
 ---
 
@@ -357,7 +419,7 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
 | `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                        |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
 
@@ -473,6 +535,8 @@ vamscli profile delete <PROFILE_NAME> [--force]
 | `--force`, `-f` | Flag | No       | Force deletion without confirmation |
 | `--json-output` | Flag | No       | Output raw JSON response            |
 
+Naming a profile that does not exist is reported as an error and exits non-zero, so a cleanup script cannot read a typo'd name as "already removed".
+
 ---
 
 ## profile info
@@ -482,6 +546,8 @@ Show detailed information about a specific profile, including Amplify configurat
 ```bash
 vamscli profile info <PROFILE_NAME>
 ```
+
+Naming a profile that does not exist is reported as an error and exits non-zero.
 
 ---
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 import time
+from builtins import list as builtin_list  # Avoid namespace collision with the 'list' command
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -13,7 +14,9 @@ from ..constants import (
     API_DATABASE_ASSETS, API_ASSETS, API_ASSET_EXPORT, DEFAULT_PARALLEL_DOWNLOADS, 
     DEFAULT_DOWNLOAD_RETRY_ATTEMPTS, DEFAULT_DOWNLOAD_TIMEOUT
 )
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.decorators import (
+    requires_setup_and_auth, get_profile_manager_from_context, invoked_from_another_command
+)
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ..utils.exceptions import (
@@ -1228,6 +1231,9 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
     --asset-version-alias. These options are mutually exclusive and cannot be combined
     with --asset-preview.
 
+    Exits non-zero when any file failed to download, so a partial transfer is distinguishable from a
+    complete one. The response still reports `overall_success` and `failed_downloads`.
+
     Examples:
         # Download whole asset
         vamscli assets download /local/path -d my-db -a my-asset
@@ -1420,7 +1426,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                 # Determine what to download
                 files_to_download = []
                 streamed_download_done = False
-                
+                # Files the API would not mint a presigned URL for. These are genuine failures, not
+                # skips: the caller asked for them and does not get them. They are collected here and
+                # folded into the result below so they reach `failed_downloads` and the exit code —
+                # `output_warning` alone is suppressed under --json-output, so a JSON consumer saw a
+                # wholly-empty transfer reported as a complete success.
+                unavailable_downloads: List[Dict[str, str]] = []
+
                 if asset_preview:
                     # Download asset preview only
                     output_status("Fetching asset preview...", json_output)
@@ -1530,9 +1542,9 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                             lp = Path(local_path) / rp.lstrip('/')
                                             url_entry = url_map.get(rp, {})
                                             if not url_entry.get('downloadUrl'):
-                                                output_warning(f"Skipping file {rp}: "
-                                                               f"{url_entry.get('error', 'URL generation failed')}",
-                                                               json_output)
+                                                reason = url_entry.get('error', 'URL generation failed')
+                                                output_warning(f"Skipping file {rp}: {reason}", json_output)
+                                                unavailable_downloads.append({'relative_key': rp, 'error': reason})
                                                 continue
                                             await queue.put(DownloadFileInfo(
                                                 relative_key=rp, local_path=lp,
@@ -1577,9 +1589,9 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
 
                                 url_entry = url_map.get(relative_path, {})
                                 if not url_entry.get('downloadUrl'):
-                                    output_warning(f"Skipping file {relative_path}: "
-                                                   f"{url_entry.get('error', 'URL generation failed')}",
-                                                   json_output)
+                                    reason = url_entry.get('error', 'URL generation failed')
+                                    output_warning(f"Skipping file {relative_path}: {reason}", json_output)
+                                    unavailable_downloads.append({'relative_key': relative_path, 'error': reason})
                                     continue
                                 files_to_download.append(DownloadFileInfo(
                                     relative_key=relative_path,
@@ -1687,9 +1699,9 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                     lp = Path(local_path) / rp.lstrip('/')
                                     url_entry = url_map.get(rp, {})
                                     if not url_entry.get('downloadUrl'):
-                                        output_warning(f"Skipping file {rp}: "
-                                                       f"{url_entry.get('error', 'URL generation failed')}",
-                                                       json_output)
+                                        reason = url_entry.get('error', 'URL generation failed')
+                                        output_warning(f"Skipping file {rp}: {reason}", json_output)
+                                        unavailable_downloads.append({'relative_key': rp, 'error': reason})
                                         continue
                                     await queue.put(DownloadFileInfo(
                                         relative_key=rp, local_path=lp,
@@ -1718,6 +1730,19 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     streamed_download_done = True
                 
                 if not files_to_download and not streamed_download_done:
+                    # Say WHY when the reason is known. "No files to download" is indistinguishable
+                    # from an empty asset, whereas the usual cause is that every file was refused a
+                    # presigned URL — most often because the asset is not distributable.
+                    if unavailable_downloads:
+                        detail = '; '.join(
+                            f"{u['relative_key']}: {u['error']}" for u in unavailable_downloads[:3]
+                        )
+                        if len(unavailable_downloads) > 3:
+                            detail += f" (and {len(unavailable_downloads) - 3} more)"
+                        raise FileDownloadError(
+                            f"No files could be downloaded — {len(unavailable_downloads)} file(s) "
+                            f"could not be prepared for download. {detail}"
+                        )
                     raise FileDownloadError("No files to download")
 
                 # Check for conflicts if flattening
@@ -1726,7 +1751,12 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     if len(filenames) != len(set(filenames)):
                         # Conflicts detected
                         conflicts = [name for name in filenames if filenames.count(name) > 1]
-                        unique_conflicts = list(set(conflicts))
+                        # builtin_list, not list: `assets list` is defined in this module as
+                        # `def list(...)`, shadowing the builtin. A Click command is callable, so
+                        # `list(set(conflicts))` ran the entire `assets list` command as a nested CLI
+                        # program — printing an asset listing in the middle of a download and then
+                        # failing on the unsubscriptable result.
+                        unique_conflicts = builtin_list(set(conflicts))
                         
                         if not json_output:
                             output_warning(f"Filename conflicts detected: {', '.join(unique_conflicts)}", False)
@@ -1798,7 +1828,32 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                             return await manager.download_files(files_to_download)
 
                     result = asyncio.run(download_files_async())
-                
+
+                # Fold the files that could not be presigned into the result. Without this a download
+                # in which EVERY file was refused still reported `overall_success: true`,
+                # `total_files: 0` and exit 0 — a caller got an empty directory and a success. The
+                # clearest case is a non-distributable asset: the listing returns its files, the bulk
+                # presign rejects all of them with "Asset not distributable", and each one took the
+                # `continue` above. In CLI mode that printed a warning per file and then
+                # "Download completed successfully!"; under --json-output the warnings are suppressed,
+                # so nothing at all recorded the refusal.
+                #
+                # They are counted as failures rather than a separate category so the exit-code rule
+                # below applies to them: an incomplete local copy must not read as a complete one.
+                # NOTE: do not call the builtin `list()` in this module. `assets list` is defined here
+                # as `def list(...)`, which shadows the builtin at module scope, and a Click command is
+                # callable — so `list(x)` runs the whole `assets list` command as a nested CLI program.
+                # The symptom is bizarre: the download prints "Listing all assets..." and an asset
+                # listing instead of its own result, and exits 0.
+                if unavailable_downloads:
+                    result['failed_downloads'] = [
+                        *(result.get('failed_downloads') or []),
+                        *unavailable_downloads,
+                    ]
+                    result['failed_files'] = result.get('failed_files', 0) + len(unavailable_downloads)
+                    result['total_files'] = result.get('total_files', 0) + len(unavailable_downloads)
+                    result['overall_success'] = False
+
                 # Verify downloaded files (skip for streamed downloads — already verified by manager)
                 verified_files = []
                 verification_failures = []
@@ -1914,9 +1969,16 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                 success_message="✓ Shareable links generated successfully!",
                 cli_formatter=format_shareable_links
             )
-        
+
+        # A partial or wholly failed download must not exit 0: the exit code is the only signal a
+        # `set -e` script or a connector can act on, and an incomplete local copy then reads as a
+        # complete one. Tested for False rather than falsiness, so the shareable-links result — which
+        # carries no `overall_success` at all — is not swept in.
+        if result.get('overall_success') is False and not invoked_from_another_command(ctx):
+            sys.exit(1)
+
         return result
-        
+
     except (FileDownloadError, DownloadError, AssetDownloadError, PreviewNotFoundError,
             AssetNotDistributableError, DownloadTreeError) as e:
         # Handle download-specific business logic errors

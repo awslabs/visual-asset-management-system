@@ -334,7 +334,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                         "VAMSCloudWatchVPCLogs",
                         10
                     ),
-                retention: RetentionDays.TEN_YEARS,
+                retention: RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             });
 
@@ -532,6 +532,19 @@ export class VPCBuilderNestedStack extends NestedStack {
                 vpc: this.vpc,
                 privateDnsEnabled: true,
                 service: ec2.InterfaceVpcEndpointAwsService.EVENTBRIDGE,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for Secrets Manager. Part of the core endpoint set rather than
+            // gated on any one feature, since secrets are read by add-on lambdas and by the
+            // pipeline container execution roles that inject tokens into batch jobs. Only the
+            // standard endpoint is created — VAMS lambdas and batch task execution roles resolve
+            // the default regional endpoint, not the secretsmanager-fips variant.
+            new ec2.InterfaceVpcEndpoint(this, "SecretsManagerEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
                 subnets: { subnets: this.isolatedSubnets },
                 securityGroups: [vpceSecurityGroup],
             });

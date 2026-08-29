@@ -86,6 +86,7 @@ vamscli metadata-schema list -d my-database -e assetMetadata
 
 ```bash
 vamscli pipeline list -d my-database
+vamscli pipeline list --auto-paginate --json-output
 vamscli workflow list -d my-database
 vamscli workflow execute --workflow-database-id global -w workflow-123 --input-file my-db:asset1:/model.glb
 vamscli execution list --status RUNNING

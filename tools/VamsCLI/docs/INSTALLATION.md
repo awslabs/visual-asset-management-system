@@ -335,7 +335,7 @@ rm -rf ~/Library/Application\ Support/vamscli
 
 If you encounter installation issues:
 
-1. Check the [Troubleshooting Guide](TROUBLESHOOTING.md)
+1. Check the [CLI troubleshooting](https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth)
 2. Verify your Python version: `python --version`
 3. Check pip version: `pip --version`
 4. Try installing in a fresh virtual environment
@@ -347,7 +347,7 @@ After successful installation and setup:
 
 1. **Authenticate**: Run `vamscli auth login -u <username>` to authenticate
 2. **Explore Commands**: Use `vamscli --help` to see available commands
-3. **Read Documentation**: Check the [Command Reference](COMMANDS.md) for detailed usage
-4. **Get Support**: See [Troubleshooting](TROUBLESHOOTING.md) if you encounter issues
+3. **Read Documentation**: Check the [Command Reference](https://awslabs.github.io/visual-asset-management-system/cli/command-reference) for detailed usage
+4. **Get Support**: See [Troubleshooting](https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth) if you encounter issues
 
-For complete usage instructions, see the [Command Reference](COMMANDS.md).
+For complete usage instructions, see the [Command Reference](https://awslabs.github.io/visual-asset-management-system/cli/command-reference).

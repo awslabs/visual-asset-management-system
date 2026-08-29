@@ -322,12 +322,25 @@ class TestDeadlineCloudJobCallback:
             mock_sfn.send_task_success.assert_not_called()
             mock_sfn.send_task_failure.assert_not_called()
 
-    def test_non_terminal_status_skips_get_job(self):
+    def test_non_terminal_status_registers_the_job_and_leaves_the_token_open(self):
+        """S2-BACKEND-045: an in-flight status must REGISTER the job, not be discarded.
+
+        Registration is what makes the farm job visible to the abort path, and abort can only cancel a
+        job that is still running — so the previous behaviour (return before GetJob for any
+        non-terminal status) meant the job was registered exactly when there was nothing left to stop.
+        The token stays outstanding: only a terminal status resolves it."""
         with patch.object(cb, "deadline_client") as mock_dl, \
-             patch.object(cb, "sfn_client") as mock_sfn:
+             patch.object(cb, "sfn_client") as mock_sfn, \
+             patch.object(cb, "events_client") as mock_events, \
+             patch.object(cb, "orchestration_bus_arn", "arn:bus"):
+            mock_dl.get_job.return_value = _get_job_response()
             cb.lambda_handler({"detail": _job_event_detail("RUNNING")}, MagicMock())
-            mock_dl.get_job.assert_not_called()
+            mock_events.put_events.assert_called_once()
+            detail = json.loads(
+                mock_events.put_events.call_args.kwargs["Entries"][0]["Detail"])
+            assert detail["subExecution"]["resourceType"] == "deadlineCloudJob"
             mock_sfn.send_task_success.assert_not_called()
+            mock_sfn.send_task_failure.assert_not_called()
 
     def test_missing_identifiers_ignored(self):
         with patch.object(cb, "deadline_client") as mock_dl:

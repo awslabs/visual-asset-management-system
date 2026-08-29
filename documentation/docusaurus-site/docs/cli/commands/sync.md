@@ -7,6 +7,10 @@ title: Sync Commands
 
 Synchronize files between a local directory and an asset, transferring only the differences. Sync compares each file's size and modified timestamp (similar to `aws s3 sync`) and supports separate upstream (`push`) and downstream (`pull`) directions, dry-run previews, gitignore-style exclusion patterns, and explicit safeguards for modifying or deleting files.
 
+:::note
+`--asset-location` takes an asset-relative path that begins with a single `/`. On Windows, Git Bash and other MSYS2 shells rewrite such an argument into a Windows path before the CLI receives it — see [Asset-relative paths on Windows](files.md) on the File Commands page.
+:::
+
 ---
 
 ## sync file push

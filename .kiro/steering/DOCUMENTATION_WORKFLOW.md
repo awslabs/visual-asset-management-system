@@ -117,7 +117,7 @@ Additional (5 pages)
 #### **Step 5: Cross-Reference Accuracy**
 
 -   [ ] **Verify against source code**: Configuration options match `config.ts`
--   [ ] **Verify API endpoints**: Match `apiBuilder-nestedStack.ts` and `VAMS_API.yaml`
+-   [ ] **Verify API endpoints**: Match `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then the registrations in **both** `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`, and `VAMS_API.yaml`. Enumerating only `apiBuilder-nestedStack.ts` misses the routes registered in `apiBuilder2`, which is where new endpoints go
 -   [ ] **Verify CLI commands**: Match `tools/VamsCLI/vamscli/commands/`
 -   [ ] **Verify feature flags**: Match `infra/common/vamsAppFeatures.ts`
 -   [ ] **No hardcoded versions**: Reference source of truth files instead
@@ -234,8 +234,8 @@ VAMS requires Python 3.12.
 5. **Code blocks**: Always include language tags
 6. **Tables**: Use for comparisons, feature lists, field references
 7. **Never reference other AWS solutions** by name
-8. **Match the surrounding page's level of detail and form**: When adding to an existing page, mirror its density and structure. If the section uses descriptive prose, describe how the behavior works rather than introducing "requirement"/"must" line-item checklists. Reserve upgrade/migration framing for the upgrade and revision-history pages; do not narrate "upgrades" on conceptual or architecture pages.
-9. **Use present-tense framing — describe current behavior, not history**: Document what VAMS does **now**. Do not reference past behavior, version-relative changes, or how something used to work. Avoid phrasings such as "previously", "earlier releases", "no longer", "now defaults to", "used to", "as of version X", "prior to vX", "matches the historical layout", "changed from … to …", or "this used to". State the current behavior directly and, where relevant, the action the reader should take. The **only** exceptions are the upgrade and revision-history pages, where change/version framing is expected: `deployment/update-the-solution.md` (the migration guide) and `additional/revisions.md` (the document revision history). Everywhere else (overview, concepts, architecture, configuration reference, deployment, user guide, CLI, pipelines, API, developer, troubleshooting) must read as if the current behavior had always been the behavior.
+8. **Match the surrounding page's level of detail and form**: When adding to an existing page, mirror its density and structure. If the section uses descriptive prose, describe how the behavior works rather than introducing "requirement"/"must" line-item checklists. Reserve upgrade/migration framing for the pages whose subject is a change, listed in rule 9; do not narrate "upgrades" on conceptual or architecture pages.
+9. **Use present-tense framing — describe current behavior, not history**: Document what VAMS does **now**. Do not reference past behavior, version-relative changes, or how something used to work. Avoid phrasings such as "previously", "earlier releases", "no longer", "now defaults to", "used to", "as of version X", "prior to vX", "matches the historical layout", "changed from … to …", or "this used to". State the current behavior directly and, where relevant, the action the reader should take. The exceptions are the pages whose **subject is a change** — an upgrade path, a migration, or a version history — where naming versions and describing prior behavior is required rather than merely tolerated, because a reader cannot act on a migration without knowing which side of it they are on. The pages of that kind today: `deployment/update-the-solution.md` (the migration guide), `additional/revisions.md` (the document revision history), and `pipelines/migrating-pipelines-v25-to-v26.md` (the custom-pipeline porting guide). A new page of the same kind — any upgrade, migration, or version-history guide — is covered by that reasoning and belongs on the list; add it when you create it. The test is whether the page's purpose is to get the reader **across** a version boundary; a page that merely mentions a recent feature is not such a page. Everywhere else (overview, concepts, architecture, configuration reference, deployment, user guide, CLI, pipelines, API, developer, troubleshooting) must read as if the current behavior had always been the behavior.
 
     ```text
     # WRONG (architecture/config/reference page) — references the past
@@ -245,10 +245,12 @@ VAMS requires Python 3.12.
     A VPC is required for these features; set app.useGlobalVpc.enabled to true. availabilityZoneCount
     defaults to 2 and must be 2 or 3.
 
-    # ALLOWED only in update-the-solution.md / revisions.md
+    # ALLOWED only on a page whose subject is the change itself (see the list above)
     availabilityZoneCount now defaults to 2 (earlier releases built 3 AZs); on upgrade the unused
     third AZ subnet is removed.
     ```
+
+    Beware two false positives when sweeping for these phrasings. **Runtime state is not history:** "files that no longer exist locally", "a previously issued presigned URL", and "a previously archived file" describe a state the system moves through, not a release change — leave them. **A version number may not be VAMS's:** "the Cosmos-Predict 2.5 models are self-contained" names a third-party model family, so a mechanical replace on a version string corrupts it. Triage by hand; this sweep cannot be scripted safely.
 
 ### **Rule 7: Include Language Tags in All Code Blocks**
 
@@ -387,22 +389,22 @@ When documentation standards, patterns, or structure change, update all affected
 
 When writing or verifying documentation, cross-reference these source files to ensure accuracy:
 
-| Documentation Topic                                       | Source Files                                                                                                                                                                       |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Config options                                            | `infra/config/config.ts` (ConfigPublic interface)                                                                                                                                  |
-| ConfigBuilder component (`src/components/ConfigBuilder/`) | `infra/config/config.ts` (`ConfigPublic` + `getConfig()`), `infra/config/config.template.{commercial,govcloud}.json` — mirror is guarded by `infra/test/configBuilderSync.test.ts` |
-| API endpoints                                             | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml`                                                                                                      |
-| DynamoDB tables                                           | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                                                                                                     |
-| Feature flags                                             | `infra/common/vamsAppFeatures.ts`                                                                                                                                                  |
-| Backend handlers                                          | `backend/backend/handlers/`                                                                                                                                                        |
-| Pydantic models                                           | `backend/backend/models/`                                                                                                                                                          |
-| CLI commands                                              | `tools/VamsCLI/vamscli/commands/`                                                                                                                                                  |
-| Viewer plugins                                            | `web/src/visualizerPlugin/config/viewerConfig.json`                                                                                                                                |
-| Lambda builders                                           | `infra/lib/lambdaBuilder/`                                                                                                                                                         |
-| Pipeline configs                                          | `infra/lib/nestedStacks/pipelines/`                                                                                                                                                |
-| Frontend routes                                           | `web/src/routes.tsx`                                                                                                                                                               |
-| Synonyms                                                  | `web/src/synonyms.tsx`                                                                                                                                                             |
-| Permission templates                                      | `documentation/permissionsTemplates/`                                                                                                                                              |
+| Documentation Topic                                       | Source Files                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config options                                            | `infra/config/config.ts` (ConfigPublic interface)                                                                                                                                                                                                                                |
+| ConfigBuilder component (`src/components/ConfigBuilder/`) | `infra/config/config.ts` (`ConfigPublic` + `getConfig()`), `infra/config/config.template.{commercial,govcloud,eusovereign}.json` — `infra/test/configBuilderSync.test.ts` guards `schema.ts` and `defaults.ts` only; `validation.ts` and `derived.ts` are kept in sync by review |
+| API endpoints                                             | `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`), then `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` **and** `apiBuilder2-nestedStack.ts`, plus `VAMS_API.yaml`                                                                                           |
+| DynamoDB tables                                           | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                                                                                                                                                                                                   |
+| Feature flags                                             | `infra/common/vamsAppFeatures.ts`                                                                                                                                                                                                                                                |
+| Backend handlers                                          | `backend/backend/handlers/`                                                                                                                                                                                                                                                      |
+| Pydantic models                                           | `backend/backend/models/`                                                                                                                                                                                                                                                        |
+| CLI commands                                              | `tools/VamsCLI/vamscli/commands/`                                                                                                                                                                                                                                                |
+| Viewer plugins                                            | `web/src/visualizerPlugin/config/viewerConfig.json`                                                                                                                                                                                                                              |
+| Lambda builders                                           | `infra/lib/lambdaBuilder/`                                                                                                                                                                                                                                                       |
+| Pipeline configs                                          | `infra/lib/nestedStacks/pipelines/`                                                                                                                                                                                                                                              |
+| Frontend routes                                           | `web/src/routes.tsx`                                                                                                                                                                                                                                                             |
+| Synonyms                                                  | `web/src/synonyms.tsx`                                                                                                                                                                                                                                                           |
+| Permission templates                                      | `documentation/permissionsTemplates/`                                                                                                                                                                                                                                            |
 
 ---
 
@@ -455,7 +457,6 @@ More detailed content.
 # Example command
 command --flag value
 ```
-````
 
 ## Configuration
 
@@ -467,12 +468,11 @@ command --flag value
 
 -   [Related Page 1](../section/page1.md)
 -   [Related Page 2](../section/page2.md)
-
 ````
 
 ### **New Pipeline Documentation Template**
 
-```markdown
+````markdown
 ---
 title: Pipeline Name Pipeline
 sidebar_label: Pipeline Name
@@ -494,6 +494,7 @@ flowchart LR
     A[Input] --> B[Lambda]
     B --> C[AWS Batch Container]
     C --> D[Output]
+```
 ````
 
 ## Configuration

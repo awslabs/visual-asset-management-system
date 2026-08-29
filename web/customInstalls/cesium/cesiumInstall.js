@@ -38,22 +38,6 @@ const npmInstall = async () => {
     }
 };
 
-// Best-effort: apply safe (non-breaking) npm audit fixes before building/packaging.
-// Non-fatal — `npm audit fix` exits non-zero when unfixable vulnerabilities remain
-// (those need --force/manual review, which we do NOT apply) and a registry hiccup
-// must not break the viewer install.
-const auditFix = async () => {
-    console.log("Cesium: Running npm audit fix (safe fixes only)...");
-    try {
-        await execSync("npm audit fix", { cwd: npmPackageDir, stdio: "inherit" });
-        console.log("Cesium: npm audit fix complete");
-    } catch (err) {
-        console.warn(
-            "Cesium: npm audit fix reported unresolved/unfixable vulnerabilities (continuing)."
-        );
-    }
-};
-
 // Function to bundle @cesium/engine into a browser global (window.Cesium)
 const bundleEngine = async () => {
     try {
@@ -154,7 +138,6 @@ const main = async () => {
         }
 
         await npmInstall();
-        await auditFix();
         await bundleEngine();
         await copyFiles();
 

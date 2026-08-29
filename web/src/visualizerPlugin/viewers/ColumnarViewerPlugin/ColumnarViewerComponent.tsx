@@ -10,6 +10,7 @@ import FCS from "fcs";
 import arrayBufferToBuffer from "arraybuffer-to-buffer";
 import { downloadAsset } from "../../../services/APIService";
 import { ViewerPluginProps } from "../../core/types";
+import { extensionOfFilename } from "../../core/viewableExtensions";
 import LoadingSpinner from "../../components/LoadingSpinner";
 
 interface Column {
@@ -21,14 +22,20 @@ interface Row {
     [key: string]: any;
 }
 
+/** Extensions this component actually has a parser for. */
+const FCS_EXTENSION = ".fcs";
+const CSV_EXTENSION = ".csv";
+
 const readFcsFile = (
     remoteFileUrl: string,
     setColumns: (columns: Column[]) => void,
-    setRows: (rows: Row[]) => void
+    setRows: (rows: Row[]) => void,
+    onFailure: (message: string) => void
 ) => {
     const request = new XMLHttpRequest();
     request.open("GET", remoteFileUrl, true);
     request.responseType = "arraybuffer";
+    request.onerror = () => onFailure("Unable to download this FCS file");
     request.onload = function () {
         const buffer = arrayBufferToBuffer(request.response);
         const fcs = new (FCS as any)({}, buffer);
@@ -60,6 +67,10 @@ const readFcsFile = (
             }
             setColumns(newColumns);
             setRows(newRows);
+        } else {
+            // No parsable columns: this is not an FCS file, or it is one this
+            // parser cannot read. Either way it never becomes a table.
+            onFailure("Unable to read this file as FCS data");
         }
     };
     request.send();
@@ -68,15 +79,18 @@ const readFcsFile = (
 const readCsvFile = (
     remoteFileUrl: string,
     setColumns: (columns: Column[]) => void,
-    setRows: (rows: Row[]) => void
+    setRows: (rows: Row[]) => void,
+    onFailure: (message: string) => void
 ) => {
     readRemoteFile(remoteFileUrl, {
         download: true,
+        error: (err: any) =>
+            onFailure(`Unable to read this file as delimited text: ${err?.message || err}`),
         complete: (results: any) => {
             const { data } = results;
             const newRows: Row[] = [];
             let newColumns: Column[] = [];
-            for (let i = 0; i < data.length; i++) {
+            for (let i = 0; i < (data?.length || 0); i++) {
                 if (i === 0) {
                     newColumns = data[i].map((column: string) => {
                         return {
@@ -91,6 +105,13 @@ const readCsvFile = (
                     }, {});
                     newRows.push(newRow);
                 }
+            }
+            if (newColumns.length === 0) {
+                // Parsed, but there is nothing to show — an empty file, or bytes
+                // that are not delimited text at all. Without this the viewer
+                // sits on its loading spinner forever.
+                onFailure("This file contains no readable columns");
+                return;
             }
             setColumns(newColumns);
             setRows(newRows);
@@ -140,22 +161,32 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                         console.error("Error downloading data file:", response);
                         throw new Error("Failed to download data file");
                     } else {
-                        if (assetKey.indexOf(".fcs") !== -1) {
+                        // Anchored, case-insensitive extension match. A substring
+                        // test routes "report.fcs.csv" to the FCS parser and
+                        // "DATA.FCS" to the CSV one.
+                        const extension = (extensionOfFilename(assetKey) || "").toLowerCase();
+                        if (extension === FCS_EXTENSION) {
                             try {
-                                readFcsFile(response[1], setColumns, setRows);
+                                readFcsFile(response[1], setColumns, setRows, setError);
                                 setLoaded(true);
                             } catch (error) {
                                 console.error("Error reading FCS file:", error);
                                 setError("Failed to read FCS file format");
                             }
-                        } else {
+                        } else if (extension === CSV_EXTENSION) {
                             try {
-                                readCsvFile(response[1], setColumns, setRows);
+                                readCsvFile(response[1], setColumns, setRows, setError);
                                 setLoaded(true);
                             } catch (error) {
                                 console.error("Error reading CSV file:", error);
                                 setError("Failed to read CSV file format");
                             }
+                        } else {
+                            setError(
+                                `${
+                                    extension || "This file type"
+                                } is not supported by the columnar data viewer`
+                            );
                         }
                     }
                 } else {

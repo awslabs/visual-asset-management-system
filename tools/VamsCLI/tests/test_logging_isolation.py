@@ -16,6 +16,12 @@ Each guard here is an ORDERED PAIR: `test_a_*` turns verbose on the way a real t
 `test_b_*` asserts the next test does not inherit it. Both halves are required — an assertion
 made inside a single test cannot observe a missing teardown, and `test_a` doubles as the positive
 control that the leak is still reproducible.
+
+A second, separate vector used to sit alongside it: `_is_verbose_mode()` also matched the literal
+`--verbose` anywhere in `sys.argv`, so pytest's own flag switched verbose mode on session-wide no
+matter what the globals held, and `conftest.py` had to strip that argument before collection to keep
+the suite honest. The reader now consults only the global, and
+`test_verbosity_does_not_depend_on_process_argv` below pins that.
 """
 
 import json
@@ -26,17 +32,29 @@ import pytest
 from vamscli.main import cli
 from vamscli.utils import logging as vamscli_logging
 
-# `_is_verbose_mode()` returns True when the literal string '--verbose' appears anywhere in
-# `sys.argv`, so pytest's own flag would otherwise switch verbose mode on for the whole session no
-# matter what the globals hold — a property of the production helper rather than a leak between
-# tests, and one no fixture can reach, because the helper is consulted per call. `tests/conftest.py`
-# removes that argument from `sys.argv` before collection, which is why this evaluates False even
-# under `pytest --verbose`.
-#
-# The guard below is kept rather than deleted: it is the assertion that would catch the hazard
-# returning (say, if the strip were removed or the reader started matching `-v` as well), and it
-# costs one comparison. `-v` never matched the literal, so it was always clean.
-_ARGV_FORCES_VERBOSE = '--verbose' in sys.argv
+
+def test_verbosity_does_not_depend_on_process_argv(monkeypatch):
+    """The reader must consult only the global Click writes, never raw argv.
+
+    While `_is_verbose_mode()` matched the literal `--verbose` anywhere in `sys.argv`, the suite's
+    result depended on how pytest was invoked: pytest's own flag turned VAMS verbose logging on for
+    the whole session, every `log_*` call also wrote to stderr, `CliRunner` merged stderr into
+    `result.output`, and the ~113 tests that parse it as JSON failed on text wrapped around their
+    document — in tests that never touched logging. `tests/conftest.py` used to hide that by
+    stripping the flag out of `sys.argv` at import, which is a process global no test owns.
+
+    It bit production too: the literal matched as an option VALUE, so
+    `vamscli search assets -q "--verbose"` turned on full request/response logging.
+    """
+    monkeypatch.setattr(vamscli_logging, "_verbose_mode", False)
+    monkeypatch.setattr(sys, "argv", ["vamscli", "--verbose", "database", "list"])
+    assert vamscli_logging._is_verbose_mode() is False
+
+    # Positive control: the global the CLI actually sets still governs, so the assertion above is
+    # about where verbosity is read FROM, not about verbosity being unreachable.
+    monkeypatch.setattr(vamscli_logging, "_verbose_mode", True)
+    monkeypatch.setattr(sys, "argv", ["vamscli", "database", "list"])
+    assert vamscli_logging._is_verbose_mode() is True
 
 
 class TestVerboseModeDoesNotLeakAcrossTests:
@@ -81,10 +99,6 @@ class TestJsonOutputSurvivesAPriorVerboseTest:
         assert result.exit_code == 0
         assert vamscli_logging._verbose_mode is True, "positive control failed: verbose not set"
 
-    @pytest.mark.skipif(
-        _ARGV_FORCES_VERBOSE,
-        reason="run as `pytest --verbose`: _is_verbose_mode() reads sys.argv, so verbose stderr "
-               "reaches result.output regardless of the globals this fixture restores")
     def test_b_json_output_is_still_a_single_parseable_document(self, cli_runner,
                                                                generic_command_mocks):
         with generic_command_mocks('database') as mocks:

@@ -1,6 +1,6 @@
 # VAMS Web Frontend Steering (Kiro)
 
-This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent. When front-end standards change, update both this file and `web/CLAUDE.md`.
+This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent, and its viewer plugin sections are also the Kiro counterpart for `web/src/visualizerPlugin/CLAUDE.md`. When front-end standards change, update both this file and the matching `CLAUDE.md`.
 
 ---
 
@@ -252,7 +252,7 @@ The existing app uses AWS Cloudscape Design System. The orchestration module (`s
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind is scoped to the `src/features/orchestration/**` content glob).
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page, so a Cloudscape page using a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (examples verified in the built CSS; the emitted set depends on what the orchestration module uses). Outside the orchestration module, use a VAMS-defined class or no class at all.
 
 Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
@@ -344,6 +344,61 @@ import MyNewPage from "./pages/MyNewPage";
 -   All source files are TypeScript (`.ts`/`.tsx`) -- new files MUST also be TypeScript
 -   Only `src/__mocks__/*.js` files remain as `.js` (Jest CommonJS requirement)
 -   Use `any` sparingly but pragmatically (the codebase uses it extensively)
+
+### Rule 9: Regenerate the CSP Hashes After Touching an Inline Script in `index.html`
+
+`index.html` contains inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer`
+probe, and the pre-render theme application). The CDK Content-Security-Policy allows them by
+**SHA-256 hash**, not by `'unsafe-inline'`, so an injected inline script is still blocked.
+
+A CSP hash covers the **exact text content** of the element -- every byte between the opening and
+closing tag, indentation included. Adding a line, renaming a variable, or letting Prettier reindent
+the block invalidates its hash. The browser then silently refuses to run that script and the app
+breaks at runtime, with nothing failing at build time.
+
+**Any edit to an inline `<script>` block in `web/index.html` -- including a reformat -- requires
+regenerating the hashes and updating the CDK constant in the same change:**
+
+```bash
+# 1. Build, so the hashes are taken from the HTML that is actually served
+cd web && npm run build
+
+# 2. Emit the TypeScript constant
+node scripts/cspInlineScriptHashes.js --ts
+
+# 3. Paste the output over INDEX_HTML_INLINE_SCRIPT_HASHES in
+#    infra/lib/helper/cspInlineScriptHashes.ts
+
+# 4. Confirm the drift guard passes
+cd ../infra && npx jest test/cspInlineScriptHashes.test.ts
+```
+
+Run the generator with no `--ts` for a human-readable listing of each block and its hash.
+
+| File                                        | Role                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                            | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`      | Generator -- hashes every inline block (skips any with `src`)            |
+| `infra/lib/helper/cspInlineScriptHashes.ts` | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`              | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/cspInlineScriptHashes.test.ts`  | Recomputes from `index.html` and fails on drift                          |
+
+**A hash and `'unsafe-inline'` are mutually exclusive.** A CSP may allow inline script by hash **or**
+by the `'unsafe-inline'` keyword, never both -- when a hash source is present browsers ignore
+`'unsafe-inline'` entirely. The two are not additive, so `'unsafe-inline'` cannot be left in as a
+safety net.
+
+Because of that, `generateContentSecurityPolicy()` adds `'unsafe-inline'` **only** when the Physna
+add-on is enabled: that viewer renders Physna-hosted HTML in a `blob:` iframe, a `blob:` document
+inherits the parent page's CSP, and its inline scripts are not ours to hash. Enabling that add-on
+trades hash protection for viewer compatibility, scoped to deployments that opt in.
+
+If a **new** viewer plugin needs inline script, widen that condition (or add a dedicated
+`app.webUi` flag) rather than moving `'unsafe-inline'` back into the base `script-src` list -- the
+base list is what keeps a default deployment protected.
+
+Adding a `<script src="...">` (external) needs no hash; it is matched by host-source instead. It may
+still need its origin added to `script-src`/`connect-src`.
 
 ---
 
@@ -499,9 +554,12 @@ const header = await getDualAuthorizationHeader();
 ```typescript
 // User is stored in localStorage as JSON
 const user = JSON.parse(localStorage.getItem("user"));
-// Email is stored separately
-const email = localStorage.getItem("email");
 ```
+
+There is no separate `email` key. Nothing writes one and nothing reads one — the signed-in user's
+identity comes from the `user` entry above. Storing it a second time under its own key put a user
+identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
+was no signed-in user.
 
 ---
 

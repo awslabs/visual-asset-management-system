@@ -48,7 +48,9 @@ describe("apiClient backstop", () => {
         expect(mockLogout).toHaveBeenCalledTimes(1);
     });
 
-    it("on 403 with an ALIVE session: surfaces error, no logout, no retry", async () => {
+    it("on 403 with an ALIVE session: surfaces error, no logout, no refresh, no retry", async () => {
+        // Negative control for the 401 retry below: a Casbin denial is a decision on an
+        // accepted token, so it must never be refreshed or double-sent.
         const fetchMock = jest
             .fn()
             .mockResolvedValue(jsonResponse(403, { message: "Not Authorized" }));
@@ -56,6 +58,7 @@ describe("apiClient backstop", () => {
         mockEnsure.mockResolvedValue(true);
         await expect(apiClient.get("thing")).rejects.toMatchObject({ status: 403 });
         expect(mockLogout).not.toHaveBeenCalled();
+        expect(mockEnsure).toHaveBeenCalledWith(false); // no forced refresh
         expect(fetchMock).toHaveBeenCalledTimes(1); // surfaced, not retried
     });
 
@@ -99,15 +102,40 @@ describe("apiClient backstop", () => {
         expect(global.fetch as any).not.toHaveBeenCalled(); // never reached fetch
     });
 
-    it("on 401 with an ALIVE session: surfaces error, no logout, no retry (symmetry with 403)", async () => {
+    it("on 401 with an ALIVE session: forces a refresh and retries once with a rebuilt header", async () => {
+        // The token was valid when the header was built and expired by the time the
+        // authorizer validated it. ensureValidSession must be asked to FORCE a refresh
+        // (the stored expiry still reads valid), and the retry must carry the new token.
+        mockHeader.mockReset();
+        mockHeader
+            .mockResolvedValueOnce("Bearer stale")
+            .mockResolvedValueOnce("Bearer fresh")
+            .mockResolvedValue("Bearer fresh");
         const fetchMock = jest
             .fn()
-            .mockResolvedValue(jsonResponse(401, { message: "Not Authorized" }));
+            .mockResolvedValueOnce(jsonResponse(401, { message: "Unauthorized" }))
+            .mockResolvedValueOnce(jsonResponse(200, { ok: 4 }));
+        (global.fetch as any) = fetchMock;
+        mockEnsure.mockResolvedValue(true);
+
+        await expect(apiClient.get("thing")).resolves.toEqual({ ok: 4 });
+        expect(mockEnsure).toHaveBeenCalledWith(true); // forced refresh, not a plain check
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer stale");
+        expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh");
+        expect(mockLogout).not.toHaveBeenCalled();
+    });
+
+    it("on a repeated 401 with an ALIVE session: surfaces after exactly one retry", async () => {
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse(401, { message: "Expired" }));
         (global.fetch as any) = fetchMock;
         mockEnsure.mockResolvedValue(true);
         await expect(apiClient.get("thing")).rejects.toMatchObject({ status: 401 });
+        expect(fetchMock).toHaveBeenCalledTimes(2); // initial + one retry, then surfaced
+        // The second pass must not force another refresh — that would be one refresh per
+        // attempt on a genuinely unauthorized request.
+        expect(mockEnsure).toHaveBeenNthCalledWith(2, false);
         expect(mockLogout).not.toHaveBeenCalled();
-        expect(fetchMock).toHaveBeenCalledTimes(1); // surfaced, not retried
     });
 
     it("on 429 (WAF/API-GW throttle): retries once after Retry-After, never touches the session", async () => {

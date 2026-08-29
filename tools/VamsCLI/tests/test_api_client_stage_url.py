@@ -117,6 +117,65 @@ class TestStageInclusiveBaseUrl:
                 f"Expected trailing slash to be handled, got {called_url}"
 
 
+class TestRequestTimeoutIsApplied:
+    """Every API call carries a per-request timeout.
+
+    `requests` reads a timeout only from the call keyword, never from an attribute on the Session, so
+    assigning `session.timeout` left every call with no cut-off at all: a black-holed socket hung the
+    command indefinitely, and an auto-paginating list walks up to 200 pages behind one process.
+    """
+
+    def _client(self):
+        mock_profile_manager = MagicMock()
+        mock_profile_manager.is_override_token.return_value = False
+        mock_profile_manager.load_auth_profile.return_value = {}
+        return APIClient("https://x.execute-api.us-east-1.amazonaws.com/api",
+                         profile_manager=mock_profile_manager)
+
+    @staticmethod
+    def _response():
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b"{}"
+        resp.headers = {}
+        resp.json.return_value = {}
+        return resp
+
+    def test_every_request_carries_a_connect_and_read_timeout(self):
+        client = self._client()
+        with patch.object(client.session, "request", return_value=self._response()) as mock_req:
+            client._make_request("GET", "/workflows/executions", include_auth=False)
+
+        timeout = mock_req.call_args.kwargs.get("timeout")
+        assert isinstance(timeout, tuple) and len(timeout) == 2, \
+            f"Expected a (connect, read) pair so each leg is bounded separately, got {timeout!r}"
+        connect, read = timeout
+        assert connect > 0 and read > 0
+
+    def test_the_read_leg_clears_the_api_gateway_ceiling(self):
+        """A deployment may raise app.api.apiGatewayRest.apiGatewayTimeoutTime to 300 s (the ceiling
+        getConfig() allows). A read timeout at or below that would cut off a legitimately slow
+        response, turning a working call into a client-side failure."""
+        from vamscli.constants import DEFAULT_READ_TIMEOUT
+
+        assert DEFAULT_READ_TIMEOUT > 300
+
+    def test_a_caller_supplied_timeout_wins(self):
+        """The availability probe deliberately uses a short timeout; the default must not override
+        it."""
+        client = self._client()
+        with patch.object(client.session, "request", return_value=self._response()) as mock_req:
+            client._make_request("GET", "/api/version", include_auth=False, timeout=10)
+
+        assert mock_req.call_args.kwargs.get("timeout") == 10
+
+    def test_the_session_attribute_is_not_relied_on(self):
+        """Guards the regression directly: a future edit that goes back to `session.timeout` reads as
+        configured while bounding nothing."""
+        client = self._client()
+        assert getattr(client.session, "timeout", None) is None
+
+
 class TestListWorkflowExecutionsHttpMethod:
     """The asset-scoped execution list route is GET-only, and its workflow filter travels as QUERY
     parameters.
@@ -453,3 +512,4 @@ class TestPweErrorMessageFlattening:
     def test_top_level_list_message_flattened(self):
         err = self._http_error({"message": ["line one", "line two"]})
         assert APIClient._pwe_error_message(err) == "line one\nline two"
+

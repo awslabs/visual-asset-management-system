@@ -1074,7 +1074,7 @@ class TestTagTypeUtilityFunctions:
         ]
         
         result = format_tag_types_list_output(tag_types_data, json_output=True)
-        
+
         # Should be valid JSON
         parsed = json.loads(result)
         assert parsed == tag_types_data

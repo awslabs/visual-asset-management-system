@@ -228,8 +228,11 @@ export class AmplifyConfigLambdaConstruct extends Construct {
             timeout: cdk.Duration.seconds(15),
         });
 
-        // add lambda policies
-        this.lambdaFn.grantInvoke(Service("APIGATEWAY").Principal);
+        // API Gateway invoke permission is granted by the REST API builder, which emits one
+        // CfnPermission per registered route Lambda scoped to this deployment's own execute-api
+        // source ARN. It cannot be granted here: the construct is created before the SpecRestApi
+        // (whose inline OpenAPI document names this function), so referring to the API id from here
+        // makes the two resources reference each other.
 
         suppressCdkNagLambda(this.lambdaFn);
     }

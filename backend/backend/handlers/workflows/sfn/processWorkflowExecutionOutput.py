@@ -6,7 +6,6 @@ import boto3
 import json
 import uuid
 from botocore.config import Config
-from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
@@ -18,7 +17,11 @@ from common.s3MetadataKeys import (
     UPLOAD_ID_METADATA_KEY,
 )
 from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS
-from common.apiRoutes import API_UPLOAD_COMPLETE_EXTERNAL
+from common.apiRoutes import (
+    API_ASSET_METADATA,
+    API_FILE_METADATA,
+    API_UPLOAD_COMPLETE_EXTERNAL,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -37,6 +40,27 @@ UPLOAD_EXPIRATION_DAYS = 1  # TTL for upload records for pipeline output
 # key). Bounds the sequential DynamoDB writes a metadata-heavy run performs within the lambda
 # timeout; rows past the cap are dropped from the provenance record.
 MAX_RECORDED_OUTPUT_METADATA_ROWS = 2000
+# Cap on PipelineExecutionOutputFiles rows the end-state lambda records for one execution (one row
+# per produced file). The rows are written in batches, so this ceiling is ~400 batched requests --
+# well inside the lambda timeout -- while keeping an unbounded output block from consuming the whole
+# budget. Rows past the cap are dropped and the omission is noted on the execution's log row.
+MAX_RECORDED_OUTPUT_FILE_ROWS = 10000
+# Cap on PipelineExecutionOutputResults rows recorded for one execution (one row per result file).
+MAX_RECORDED_OUTPUT_RESULT_ROWS = 2000
+# Aggregate ceiling on result-file CONTENT read into memory for one execution. A results row stores a
+# whole file's text, so the row cap alone does not bound memory; collection stops once this budget is
+# consumed. Sized well under the lambda's memory so a pipeline that stages large artefacts under
+# results/ (rather than files/) cannot exhaust it.
+MAX_RECORDED_OUTPUT_RESULT_CONTENT_BYTES = 32 * 1024 * 1024
+# Bytes read from one result file: the results row stores at most MAX_TEXT_FIELD_BYTES, so anything
+# past that is read and discarded. The margin is one whole UTF-8 character (4 bytes) so the read
+# still exceeds the row's budget after a multi-byte character split at the range boundary is
+# dropped -- otherwise the stored row would report itself complete when it is not.
+RESULT_CONTENT_READ_BYTES = er.MAX_TEXT_FIELD_BYTES + 4
+# Note appended to the execution's result log when a recording cap dropped provenance rows, so the
+# record says it is partial rather than reading as the complete output set.
+OUTPUT_ROWS_TRUNCATED_NOTE = (
+    "Some output provenance rows were not recorded: the per-execution recording cap was reached.")
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
@@ -543,14 +567,12 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                 request_body['filePath'] = file_path
                 request_body['type'] = metadata_type
             
-            # Build Lambda event for metadata service PUT endpoint
-            if file_path:
-                # File metadata/attribute endpoint
-                path = f"/database/{database_id}/assets/{asset_id}/metadata/file"
-            else:
-                # Asset metadata endpoint
-                path = f"/database/{database_id}/assets/{asset_id}/metadata"
-            
+            # Build Lambda event for metadata service PUT endpoint. The synthetic route is built
+            # from the master ApiRoute constants metadataService dispatches on, so a template
+            # rename cannot silently stop matching.
+            route = API_FILE_METADATA if file_path else API_ASSET_METADATA
+            path = route.path.replace("{databaseId}", database_id).replace("{assetId}", asset_id)
+
             event = {
                 'requestContext': {
                     'http': {
@@ -653,6 +675,66 @@ def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
     return descriptors
 
 
+def _read_result_content(bucket_name, result_key, listed_size=None):
+    """Read one pipeline result file as the text its results row stores.
+
+    Never reads more than RESULT_CONTENT_READ_BYTES: an object the listing reports as larger than the
+    row's text budget is fetched with a ranged GET, since everything past the budget is discarded by
+    build_output_result_record anyway. The ranged read can split a multi-byte character at the
+    boundary, so only that path decodes tolerantly; a whole-object read still surfaces a genuinely
+    undecodable file as a failure."""
+    if listed_size is not None and listed_size <= er.MAX_TEXT_FIELD_BYTES:
+        return s3c.get_object(Bucket=bucket_name, Key=result_key)['Body'].read().decode("utf-8")
+    body = s3c.get_object(
+        Bucket=bucket_name, Key=result_key,
+        Range=f"bytes=0-{RESULT_CONTENT_READ_BYTES - 1}")['Body'].read()
+    return body.decode("utf-8", errors="ignore")
+
+
+def _collect_result_outputs(bucket_name, results_path_key, objects_found):
+    """Read the structured result files under the execution's results folder into output-result
+    descriptors. Returns (descriptors, failures).
+
+    Bounded three ways so a results folder holding large or numerous artefacts cannot exhaust the
+    end-state lambda: each file is read only up to the row's stored text budget, at most
+    MAX_RECORDED_OUTPUT_RESULT_ROWS rows are collected, and collection stops once
+    MAX_RECORDED_OUTPUT_RESULT_CONTENT_BYTES of content has been read. Shared by the normal and the
+    results-only terminal paths so both are bounded identically."""
+    descriptors = []
+    failures = []
+    content_bytes = 0
+    capped = False
+    for obj in objects_found.get('Contents', []):
+        result_key = obj['Key']
+        if result_key.endswith('/'):
+            continue
+        if (len(descriptors) >= MAX_RECORDED_OUTPUT_RESULT_ROWS
+                or content_bytes >= MAX_RECORDED_OUTPUT_RESULT_CONTENT_BYTES):
+            capped = True
+            break
+        try:
+            content = _read_result_content(bucket_name, result_key, obj.get('Size'))
+        except Exception as e:
+            logger.exception(f"Error reading result file {result_key}: {e}")
+            failures.append("Reading a pipeline results file failed.")
+            continue
+        content_bytes += len(content.encode("utf-8"))
+        # Path relative to the results folder, asset-relative with a leading slash.
+        relative_file_path = "/" + result_key[len(results_path_key):].lstrip("/")
+        descriptors.append({
+            "relativeFilePath": relative_file_path,
+            "resultsContent": content,
+            "s3Key": result_key,
+        })
+    if capped:
+        logger.warning(
+            f"Reached the output-results recording cap "
+            f"({MAX_RECORDED_OUTPUT_RESULT_ROWS} rows / "
+            f"{MAX_RECORDED_OUTPUT_RESULT_CONTENT_BYTES} content bytes) under {results_path_key}; "
+            f"the remaining result files are not recorded")
+    return descriptors, failures
+
+
 def _log_group_name_from_arn(log_group_arn):
     """Extract the CloudWatch log group NAME from its ARN.
     ARN shape: arn:partition:logs:region:acct:log-group:NAME(:*). Returns '' if unparseable.
@@ -718,6 +800,11 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     written to the main row's executionError field so the UI/CLI surface why the run did not
     fully succeed.
 
+    The output/metadata/result rows are written in batches, so recording time scales with the number
+    of BATCHES rather than with the row count, and output-file rows are capped at
+    MAX_RECORDED_OUTPUT_FILE_ROWS. A run whose output is large enough to be truncated says so on its
+    log row rather than presenting a partial set as complete.
+
     No-op when no execution context is present (non-workflow/direct invocations).
     """
     if not workflow_execution_id or not end_state_pipeline_execution_id:
@@ -725,47 +812,64 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         return
 
     stop_date = er.iso_now()
+    rows_truncated = False
 
     # Output files (file + preview)
     if output_files:
+        recorded_files = output_files[:MAX_RECORDED_OUTPUT_FILE_ROWS]
+        if len(output_files) > len(recorded_files):
+            rows_truncated = True
+            logger.warning(
+                f"Reached the {MAX_RECORDED_OUTPUT_FILE_ROWS}-row output-file recording cap; "
+                f"{len(output_files) - len(recorded_files)} rows are not recorded")
         of_table = dynamo.Table(pipeline_execution_output_files_table)
-        for f in output_files:
-            of_table.put_item(Item=er.build_output_file_record(
-                pipeline_execution_id=end_state_pipeline_execution_id,
-                file_type=f.get("fileType", "file"),
-                relative_file_path=f.get("relativeFilePath", ""),
-                s3_bucket=f.get("s3Bucket") or bucket_name, s3_key=f.get("s3Key", ""),
-                file_size=f.get("fileSize", 0), content_type=f.get("contentType", ""),
-                s3_version_id=f.get("s3VersionId", ""),
-            ))
+        # overwrite_by_pkeys keeps the last write for a repeated key, matching what the per-item
+        # put_item did; without it a duplicate key inside one batch is rejected by DynamoDB and the
+        # whole recording is lost.
+        with of_table.batch_writer(
+                overwrite_by_pkeys=["pipelineExecutionId", "fileType:relativeFilePath"]) as batch:
+            for f in recorded_files:
+                batch.put_item(Item=er.build_output_file_record(
+                    pipeline_execution_id=end_state_pipeline_execution_id,
+                    file_type=f.get("fileType", "file"),
+                    relative_file_path=f.get("relativeFilePath", ""),
+                    s3_bucket=f.get("s3Bucket") or bucket_name, s3_key=f.get("s3Key", ""),
+                    file_size=f.get("fileSize", 0), content_type=f.get("contentType", ""),
+                    s3_version_id=f.get("s3VersionId", ""),
+                ))
 
     # Output metadata
     if output_metadata:
         om_table = dynamo.Table(pipeline_execution_output_metadata_table)
-        for m in output_metadata:
-            om_table.put_item(Item=er.build_output_metadata_record(
-                pipeline_execution_id=end_state_pipeline_execution_id,
-                target_file_path=m.get("targetFilePath", "/"),
-                metadata_key=m.get("metadataKey", ""), metadata_value=m.get("metadataValue", ""),
-                source_metadata_file_relative_path=m.get("sourceMetadataFileRelativePath", ""),
-            ))
+        with om_table.batch_writer(
+                overwrite_by_pkeys=["pipelineExecutionId", "targetFilePath:metadataKey"]) as batch:
+            for m in output_metadata:
+                batch.put_item(Item=er.build_output_metadata_record(
+                    pipeline_execution_id=end_state_pipeline_execution_id,
+                    target_file_path=m.get("targetFilePath", "/"),
+                    metadata_key=m.get("metadataKey", ""), metadata_value=m.get("metadataValue", ""),
+                    source_metadata_file_relative_path=m.get("sourceMetadataFileRelativePath", ""),
+                ))
 
     # Output results (structured pipeline result files)
     if output_results:
         or_table = dynamo.Table(pipeline_execution_output_results_table)
-        for r in output_results:
-            or_table.put_item(Item=er.build_output_result_record(
-                pipeline_execution_id=end_state_pipeline_execution_id,
-                relative_file_path=r.get("relativeFilePath", ""),
-                results_content=r.get("resultsContent", ""),
-                s3_key=r.get("s3Key", ""),
-            ))
+        with or_table.batch_writer(
+                overwrite_by_pkeys=["pipelineExecutionId", "relativeFilePath"]) as batch:
+            for r in output_results:
+                batch.put_item(Item=er.build_output_result_record(
+                    pipeline_execution_id=end_state_pipeline_execution_id,
+                    relative_file_path=r.get("relativeFilePath", ""),
+                    results_content=r.get("resultsContent", ""),
+                    s3_key=r.get("s3Key", ""),
+                ))
 
     # Logs summary row (per-pipeline logs table)
     logs_table = dynamo.Table(pipeline_execution_logs_table)
     logs_table.put_item(Item=er.build_log_record(
         pipeline_execution_id=end_state_pipeline_execution_id, log_type="summary",
-        result_log=result_log, error_log=execution_log,
+        result_log=f"{result_log} {OUTPUT_ROWS_TRUNCATED_NOTE}" if rows_truncated else result_log,
+        error_log=execution_log,
         log_group_arn=log_group_arn, log_stream_name=log_stream_name,
     ))
 
@@ -783,11 +887,7 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     if execution_error:
         expression += ", executionError = :er"
         values[":er"] = execution_error
-    terminal_values = {f":term{index}": terminal
-                       for index, terminal in enumerate(eo.TERMINAL_STATUSES)}
-    values.update(terminal_values)
-    condition = ("attribute_not_exists(executionStatus) OR NOT executionStatus IN ("
-                 + ", ".join(terminal_values) + ")")
+    condition = eo.not_terminal_condition(values)
     try:
         main_table.update_item(
             Key={"workflowExecutionId": workflow_execution_id,
@@ -796,8 +896,8 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
             ConditionExpression=condition,
             ExpressionAttributeValues=values,
         )
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+    except Exception as e:
+        if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
 
@@ -810,6 +910,22 @@ def _terminal_status(output_failures):
         return "SUCCEEDED", ""
     unique = list(dict.fromkeys(output_failures))
     return "FAILED", " ".join(unique)
+
+
+def _validation_failure(event, message):
+    """Answer an input/lookup validation failure in the form the invoker acts on. RAISES for a
+    workflow-execution invocation.
+
+    An event carrying a workflowExecutionId arrives from the ProcessOutput state of a workflow state
+    machine, which invokes this lambda as a plain task and does not inspect the returned payload: a
+    returned error records the run SUCCEEDED with no outputs ingested and the execution rows left
+    non-terminal. Such a failure is raised so the state's Catch routes to the error-handler state,
+    which stamps executionStatus FAILED with the error. A direct invocation carries no execution
+    context and no Catch to route to, so it keeps the 400 payload."""
+    logger.error(message)
+    if event.get('workflowExecutionId'):
+        raise VAMSGeneralErrorResponse(message)
+    return validation_error(body={"message": message})
 
 
 def _process_results_only(event):
@@ -830,22 +946,9 @@ def _process_results_only(event):
         except Exception as e:
             logger.exception(f"Error listing result objects: {e}")
             output_failures.append("Listing the pipeline results output failed.")
-        for obj in objects_found.get('Contents', []):
-            result_key = obj['Key']
-            if result_key.endswith('/'):
-                continue
-            try:
-                results_content = s3c.get_object(
-                    Bucket=source_bucket, Key=result_key)['Body'].read().decode("utf-8")
-                relative_file_path = "/" + result_key[len(results_path_key):].lstrip("/")
-                collected_output_results.append({
-                    "relativeFilePath": relative_file_path,
-                    "resultsContent": results_content,
-                    "s3Key": result_key,
-                })
-            except Exception as e:
-                logger.exception(f"Error reading result file {result_key}: {e}")
-                output_failures.append("Reading a pipeline results file failed.")
+        collected_output_results, read_failures = _collect_result_outputs(
+            source_bucket, results_path_key, objects_found)
+        output_failures.extend(read_failures)
 
     try:
         log_group_arn = workflow_execution_log_group_arn
@@ -907,24 +1010,16 @@ def lambda_handler(event, context):
 
         #Input validation
         if not event['databaseId']:
-            message = "No outputDatabaseId in API Call"
-            logger.error(message)
-            return validation_error(body={"message": message})
+            return _validation_failure(event, "No outputDatabaseId in API Call")
 
         if not event['assetId']:
-            message = "No outputAssetId in API Call"
-            logger.error(message)
-            return validation_error(body={"message": message})
+            return _validation_failure(event, "No outputAssetId in API Call")
 
         if 'executingRequestContext' not in event:
-            message = "No executingRequestContext in API Call"
-            logger.error(message)
-            return validation_error(body={"message": message})
+            return _validation_failure(event, "No executingRequestContext in API Call")
 
         if 'executingUserName' not in event:
-            message = "No executingUserName in API Call"
-            logger.error(message)
-            return validation_error(body={"message": message})
+            return _validation_failure(event, "No executingUserName in API Call")
 
 
         logger.info("Validating parameters")
@@ -959,8 +1054,7 @@ def lambda_handler(event, context):
             }
         })
         if not valid:
-            logger.error(message)
-            return validation_error(body={"message": message})
+            return _validation_failure(event, message)
 
         requestContext = event['executingRequestContext']
         event["requestContext"] = requestContext
@@ -970,7 +1064,7 @@ def lambda_handler(event, context):
         asset = lookup_existing_asset(event['databaseId'], event['assetId'])
         if not asset:
             logger.error(f"Asset {event['assetId']} not found in database {event['databaseId']}")
-            return validation_error(body={"message": "Asset not found in database"})
+            return _validation_failure(event, "Asset not found in database")
 
         #ABAC Checks for Asset
         #ABAC Implementation Deviation - Not called through API. Username passed through Pipeline Execution Call.
@@ -1344,21 +1438,10 @@ def lambda_handler(event, context):
                     output_failures.append("Listing the pipeline results output failed.")
 
                 if 'Contents' in objectsFound:
-                    result_files = [obj['Key'] for obj in objectsFound['Contents'] if obj['Key'][-1] != '/']
-                    for result_key in result_files:
-                        try:
-                            results_content = s3c.get_object(
-                                Bucket=source_bucket, Key=result_key)['Body'].read().decode("utf-8")
-                            # Path relative to the results folder, asset-relative with a leading slash.
-                            relative_file_path = "/" + result_key[len(resultsPathKey):].lstrip("/")
-                            collected_output_results.append({
-                                "relativeFilePath": relative_file_path,
-                                "resultsContent": results_content,
-                                "s3Key": result_key,
-                            })
-                        except Exception as e:
-                            logger.exception(f"Error reading result file {result_key}: {e}")
-                            output_failures.append("Reading a pipeline results file failed.")
+                    result_descriptors, read_failures = _collect_result_outputs(
+                        source_bucket, resultsPathKey, objectsFound)
+                    collected_output_results.extend(result_descriptors)
+                    output_failures.extend(read_failures)
 
 
             # Record end-state pipeline outputs + completion status.

@@ -13,6 +13,10 @@ VAMS supports four pipeline execution types. Each type determines how the pipeli
 | **EventBridge**   | Amazon EventBridge event | Async only | Loosely coupled integrations, cross-account pipelines               |
 | **DeadlineCloud** | AWS Deadline Cloud job   | Async only | Render-farm and batch job submission (callback always required)     |
 
+:::warning[Execution targets are shape-validated only, and pipeline authoring is administrator-equivalent]
+VAMS validates the form of the target a pipeline names -- an AWS Lambda function ARN or function name, an Amazon SQS queue URL, an Amazon EventBridge bus ARN -- and does not check that the resource exists or that it belongs to the deployment. IAM is the boundary. The shared VAMS workflow role that the generated AWS Step Functions state machines assume allows `lambda:InvokeFunction` and `sqs:SendMessage` on functions and queues in the deployment's own account and Region whose names contain the top-level `name` configuration value (default `vams`), plus Lambda functions matching `vams-*`, and `events:PutEvents` on event buses matching the same name pattern together with the account's `default` bus. A target outside those patterns is accepted when the pipeline is saved and the execution fails at invoke time with an access-denied error. Treat creating and updating pipelines as an administrator-equivalent capability and grant those routes only to roles trusted with that reach -- see [Pipeline permissions](../concepts/pipelines-and-workflows.md#pipeline-permissions).
+:::
+
 ### Synchronous vs. asynchronous execution
 
 -   **Synchronous (Lambda only)** -- The VAMS workflow invokes the Lambda function and waits for a response. Suitable for operations that complete within the Lambda timeout (15 minutes).
@@ -35,6 +39,14 @@ flowchart TD
 ## Creating a Lambda pipeline
 
 The most common pipeline type uses AWS Lambda for orchestration with AWS Batch or Amazon ECS for heavy compute. Follow these steps to create a new pipeline.
+
+:::tip[An AI coding agent can scaffold these steps for you]
+The steps below touch several components at once — handler code, a CDK nested stack, Lambda builders, the configuration interface and all three configuration templates, the pipeline builder, and the VPC endpoint conditions. Missing one of the later steps typically surfaces at deployment rather than at `cdk synth`, which makes it an expensive place to work by hand.
+
+If you are developing in a clone of this repository with [Claude Code](../developer/agentic-development.md), the **`/add-pipeline`** slash command scaffolds that set of files and wires the registration points, following the same conventions this page describes. It is also the quickest way to wrap an **existing** processing service as a VAMS pipeline, since the work is mostly the `vamsExecute` and `constructPipeline` handlers described below rather than the service itself. If your integration additionally needs a new VAMS API route — uncommon, but it happens when a pipeline is driven by something other than a workflow — **`/add-api-endpoint`** covers that separate set of files.
+
+The command scaffolds; it does not decide. You still own the output path conventions, the `assetId` threading, and the input contract described in the rest of this page, and the generated code is a starting point to review rather than a finished pipeline. See [Agentic development](../developer/agentic-development.md#claude-code-slash-commands) for the full list of available commands, and note they are repository-local development aids — they are not part of a deployed VAMS instance.
+:::
 
 ### Step 1: Create the pipeline handler code
 
@@ -495,14 +507,29 @@ own file convention:
 | File previews  | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
 | Asset preview  | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
 | File metadata  | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
-| Asset metadata | `outputS3AssetMetadataPath`   | `asset.metadata.json`                                      |
+| File attributes | `outputS3AssetMetadataPath`  | `{targetFilePath}.attribute.json`                          |
+| Asset metadata | `outputS3AssetMetadataPath`   | `asset.metadata.json` (reserved basename)                  |
 | Results        | The manifest's results prefix | Any name                                                   |
 
-Metadata files use the body
+Metadata and attribute files share one body:
 `{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
-`"type": "metadata"` for file-level metadata. Only keys ending in `.metadata.json` are consumed -- a
+`"type": "metadata"` or `"type": "attribute"`. The file-name suffix decides where the values land and
+`type` is corrected to match it, so the file name is authoritative. `updateType` is `update` (upsert)
+or `replace_all`. Only keys ending in `.metadata.json` or `.attribute.json` are consumed -- a
 differently-named file is ignored silently, which looks like a pipeline that simply produced no
-metadata.
+metadata. `asset.metadata.json` is reserved for asset-level values: any other `*.metadata.json` is
+read as file-level, with its target path taken from the file name.
+
+:::tip[A pipeline can annotate a file it produces in the same run]
+Files written to `outputS3AssetFilesPath` are ingested onto the asset **before** the metadata path is
+read, so metadata naming a newly produced file is applied to a file that already exists. Write both in
+one execution; no second pass is required.
+
+Name the metadata file after the file's final **asset-relative** path, which includes the workflow's
+output base-execution path extension -- not the absolute Amazon S3 key. Metadata naming a file whose
+ingestion failed is rejected and the execution is recorded as failed, so metadata values never
+accumulate against files that did not land.
+:::
 
 ## Callbacks
 
@@ -925,6 +952,24 @@ is checked against, and it is authored rather than derived from the pipeline:
     whose filters exclude a type its own pipeline requires produces a workflow that can never satisfy
     that pipeline — the API rejects such an execution, and the workflow editor warns while saving.
 
+-   **`outputTarget`** is `{ "locationType": "asset" | "none", "allowOverride": boolean }` and decides
+    where a run writes. `asset` (the default) writes the run's output files and metadata to a VAMS asset.
+    `none` is **results-only**: the run writes no asset files or metadata and records only results text
+    and logs against the execution — an analysis workflow that emits a report rather than a file. A
+    results-only workflow may still take input files, so its `inputFileArity` can be any of `none`, `one`
+    or `multi`. `allowOverride` gates redirecting the destination at execute time: with one input asset
+    the output is locked to that asset unless override is allowed.
+
+    :::warning[`locationType: "asset"` with `inputFileArity: "none"` needs `allowOverride: true`]
+    A run that selects no input file has no input asset to lock its output to, so a destination has to be
+    choosable per execution. Registration runs the same validation as the API and **fails the deployment**
+    on a bundle declaring `asset` + `none` + `allowOverride: false`, rather than storing a workflow whose
+    every execution would fail. Author it as results-only (`"locationType": "none"`) or as
+    `{"locationType": "asset", "allowOverride": true}`.
+    :::
+
+    See [Output target](../api/workflows.md#output-target) for the full override semantics.
+
 -   **`allowWorkflowTriggerChaining`** (default `false`) lets another workflow's _output_ fire this
     workflow's triggers — how a preview or metadata workflow runs on a conversion's result. A workflow
     never fires on output it wrote itself whatever the value, so it cannot loop on its own files, and a
@@ -1026,7 +1071,7 @@ pipeline is responsible for calling `SendTaskSuccess` or `SendTaskFailure` with 
 
 ## Input-configuration template tags
 
-A pipeline's input configuration (the input parameters supplied when the pipeline is registered or overridden at execute time) may contain `{{tagName}}` template tags. VAMS substitutes these tags with values from the running execution before the pipeline receives its configuration, so a pipeline can ship a fixed configuration file with placeholders instead of building it field-by-field. Tags are replaced **per pipeline run**, and — in a multi-pipeline workflow — **per pipeline step**, so each step's tags reflect its own inputs.
+A pipeline's input configuration (the configuration body of the template the run uses, or a per-run override of it) may contain `{{tagName}}` template tags. VAMS substitutes these tags with values from the running execution before the pipeline receives its configuration, so a pipeline can ship a fixed configuration file with placeholders instead of building it field-by-field. Tags are replaced **per pipeline run**, and — in a multi-pipeline workflow — **per pipeline step**, so each step's tags reflect its own inputs.
 
 Two kinds of tag resolve in a configuration body, and the difference is who supplies the value:
 

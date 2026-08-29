@@ -73,16 +73,37 @@ POST paths (`/auth/routes`, `/search`, `/check-subscription`), and management of
 keys.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
-(`GET /workflows/executions/\{executionId\}/logs`) and execution permanent delete
-(`DELETE /workflows/executions/\{executionId\}/permanent`). A read-only role reaches its everyday
+(`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
+(`DELETE /workflows/executions/{executionId}/permanent`). A read-only role reaches its everyday
 routes through broad prefixes such as `/workflows`, which also match those two paths, so each is
 withheld by an explicit `deny` constraint on the path suffix. A `deny` overrides any matching `allow`,
 which makes it the reliable way to carve an exception out of a prefix grant.
 
+:::warning[The default roles and their constraints are re-seeded on every deployment]
+Each AWS CDK deployment writes the seeded authorization defaults back to Amazon DynamoDB, replacing the
+stored records in full and re-creating any that were deleted. This is deliberate: read-only role
+constraints are added and adjusted between releases, and re-seeding is how an existing deployment
+receives those changes.
+
+The records rewritten are the `admin` and `basicReadOnly` role definitions (ids
+`initial_admin_role_creation` and `initial_basicro_role_creation`, including their `mfaRequired`
+setting), the `admin` assignments for `app.adminUserId` and `SYSTEM_USER`, and every constraint whose id
+begins with `initial_admin_` or `initial_basicro_`.
+
+**A hand-edit to any of those records is lost on the next deployment.** To customize permissions, create
+a separate role carrying its own constraints and assign users to it, rather than modifying a default role
+or one of its `initial_*` constraints. Roles, user-role assignments, and constraints created through the
+web interface, the API, or the CLI use their own identifiers and are not touched by a deployment.
+:::
+
 :::note[MFA-aware roles]
 Roles can be configured with `mfaRequired: true`. When MFA is required, the role's constraints are only active when the user's session includes a valid MFA claim. If MFA is not present, the role is treated as if it does not exist for that session.
 
-MFA enforcement requires the API Gateway authorizer to reach Amazon Cognito. VAMS does not create Amazon Cognito VPC interface endpoints, so an authorizer running inside the VPC has no path to Amazon Cognito. MFA-aware roles are enforced only when the authorizer runs outside the VPC; when Lambda functions run in the VPC (`useForAllLambdas`), the Cognito MFA check is disabled and `mfaRequired` has no effect. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for the exact conditions.
+Whether a session carries that claim depends on the deployment. The API Gateway authorizer resolves it through a customizable hook that by default reads the user's Amazon Cognito MFA preference, and the hook resolves to false — leaving every `mfaRequired` role inactive for every user — on a deployment that authenticates with an external OAuth IDP (`app.authProvider.useExternalOAuthIdp`), on a deployment that runs Lambda functions in the VPC (`app.useGlobalVpc.useForAllLambdas`), and on requests authenticated with an API key.
+
+Because the role is treated as absent rather than rejected, this is not visible as a failure: an `allow` constraint in the role never grants access, and a `deny` constraint written there to restrict a grant the user holds through another role does not apply. Using MFA-required roles on such a deployment requires supplying the MFA verification logic in the hook, since identity providers differ in how they assert an MFA factor and VAMS ships no default implementation for a provider other than Amazon Cognito. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for the full set of conditions, the hook's location, and its contract.
+
+Both seeded default roles are created with `mfaRequired: false`, and the Amazon Cognito user pool offers MFA as an optional second factor rather than requiring it, so the bootstrap administrator named by `app.adminUserId` reaches every administrative route with a password alone. Registering an MFA factor for that account, and moving the administrative permissions to a separate role that sets `mfaRequired` — the seeded roles are re-seeded on every deployment, as described above — are post-deployment steps. A deployment that authenticates with Amazon Cognito reports this posture as a warning while the stack is synthesized.
 :::
 
 ### Constraints
@@ -97,7 +118,7 @@ A constraint is a policy rule that defines what a role can do. Each constraint s
 Constraints use `criteriaAnd` (all conditions must match) and `criteriaOr` (at least one condition must match) to build complex matching rules. When a constraint defines both, they combine within the same rule: access matches only if **all** `criteriaAnd` conditions are true **and at least one** `criteriaOr` condition is true.
 
 :::warning[Constraint management is an administrative operation]
-The ability to create, modify, or delete constraints is itself a privileged capability. Constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, and `/auth/constraintsTemplateImport`) are gated at Tier 1 by the `api` object type and, in the default deployment, are granted only to the `admin` role.
+The ability to create, modify, or delete constraints is itself a privileged capability. Constraint management routes (`/auth/constraints`, `/auth/constraints/{constraintId}`, and `/auth/constraintsTemplateImport`) are gated at Tier 1 by the `api` object type and, in the default deployment, are granted only to the `admin` role.
 
 A role that can manage constraints can grant itself or others access to any resource in VAMS — for example, by creating an `allow` constraint with a broad `databaseId contains .*` rule. This is equivalent to granting AWS Identity and Access Management (IAM) policy-editing permissions: the holder effectively controls all authorization decisions. Constraints are configuration objects and do not have their own per-object (Tier 2) restrictions.
 
@@ -177,19 +198,11 @@ For roles scoped to a specific database, you typically need two constraints per 
 
 Tags and tag types can be global (available in every database) or scoped to a single database, and the `tag` and `tagType` object types support a `databaseId` constraint field. A role granted `tag`/`tagType` write actions (`PUT`, `POST`, `DELETE`) constrained to a `databaseId` can create, update, and delete tags and tag types scoped to that database, while read access can stay unconstrained so the role sees every tag.
 
-```json
-{
-    "objectType": "tag",
-    "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "my-project-db" }],
-    "groupPermissions": [
-        { "action": "PUT", "type": "allow" },
-        { "action": "POST", "type": "allow" },
-        { "action": "DELETE", "type": "allow" }
-    ]
-}
-```
+Global tags and tag types (those with no database scope, or `databaseId` equal to `GLOBAL`) require an unconstrained tag or tag type write permission to manage. The `database-tag-admin` permission template combines unconstrained read access with database-scoped write access for this pattern. For the constraint-by-constraint breakdown, see [Developer Guide: Permissions](../developer/permissions.md#database-tag-admin).
 
-Global tags and tag types (those with no database scope, or `databaseId` equal to `GLOBAL`) require an unconstrained tag or tag type write permission to manage. The `database-tag-admin` permission template combines unconstrained read access with database-scoped write access for this pattern.
+:::note[Constraint JSON comes in two shapes]
+Permission templates express each `groupPermissions` entry with `action` and `type`. The constraint creation API takes the same criteria but expects `permission`, `permissionType`, and a `groupId` on each entry, plus a top-level `identifier`. See [Developer Guide: Permissions](../developer/permissions.md#template-json-format) for both shapes side by side.
+:::
 
 ## Allow and deny effects
 
@@ -201,22 +214,7 @@ Allow rules grant access to specific operations. At least one allow rule must ma
 
 Deny rules explicitly block specific operations. A single matching deny rule overrides all allow rules for that operation. Deny rules are typically used to create exceptions within broad allow policies.
 
-**Example: Deny modification of tagged assets**
-
-```json
-{
-    "name": "deny-locked-assets",
-    "objectType": "asset",
-    "criteriaAnd": [{ "field": "tags", "operator": "contains", "value": "locked" }],
-    "groupPermissions": [
-        { "permission": "PUT", "permissionType": "deny" },
-        { "permission": "POST", "permissionType": "deny" },
-        { "permission": "DELETE", "permissionType": "deny" }
-    ]
-}
-```
-
-This constraint denies all write operations on any asset tagged with `locked`, regardless of other allow rules. Users can still view (`GET`) the asset.
+A common example denies `PUT`, `POST`, and `DELETE` on the `asset` object type wherever the asset's tag list includes `locked`. Write operations on such an asset are then blocked regardless of any other allow rule, while users can still view (`GET`) it. `tags` holds a list, so the criterion uses the membership operator `is_one_of` — the shipped `deny-tagged-assets` permission template applies the same rule with a variable tag value. For the constraint JSON, see [Developer Guide: Permissions](../developer/permissions.md#deny-by-tag).
 
 ## Common role patterns
 
@@ -311,7 +309,7 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | `/auth/routes`                  | POST      | No Tier 1 checks (POST is non-mutating, retrieves allowed routes) |
 | `/auth/routes/api`              | GET       | API-level only                                                    |
 | `/auth/routes/api/allowed`      | GET       | API-level only                                                    |
-| `/auth/loginProfile/\{userId\}` | GET, POST | API-level only                                                    |
+| `/auth/loginProfile/{userId}` | GET, POST | API-level only                                                    |
 
 ### Database routes
 
@@ -319,9 +317,22 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | ----------------------------------- | ---------------------- | ------------------ | ------------- |
 | `/database`                         | GET                    | `database`         | `databaseId`  |
 | `/database`                         | POST                   | `database`         | `databaseId`  |
-| `/database/\{databaseId\}`          | GET, PUT, DELETE       | `database`         | `databaseId`  |
-| `/buckets`                          | GET                    | --                 | --            |
-| `/database/\{databaseId\}/metadata` | GET, POST, PUT, DELETE | `database`         | `databaseId`  |
+| `/database/{databaseId}`          | GET, PUT, DELETE       | `database`         | `databaseId`  |
+| `/buckets`                          | GET                    | API-level only     | --            |
+| `/database/{databaseId}/metadata` | GET, POST, PUT, DELETE | `database`         | `databaseId`  |
+
+`/buckets` returns every registered asset bucket. `bucket` is not an object type, so no per-bucket
+constraint can be authored and the listing cannot be narrowed per role — a role that holds the route
+receives the whole registry, including the names and prefixes of buckets belonging to other teams.
+The route grant is therefore the only control, and it is scoped to administrators: the
+`database-admin` template and the seeded default administrator role include it, while the
+`database-user`, `database-readonly`, and `global-readonly` templates and the seeded default
+read-only role do not.
+
+The web application reads the route in one place — the default-bucket selector on the database create
+and edit form — so a role without it keeps full use of its other database operations. A role that
+needs to set a database's default bucket without holding the route can still do so through
+`POST /database` or `PUT /database/{databaseId}` by supplying a known `defaultBucketId`.
 
 ### Asset routes
 
@@ -329,54 +340,54 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | ------------------------------------------------------------ | ---------------------- | ------------------ | --------------------------------------------------------- |
 | `/assets`                                                    | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 | `/assets`                                                    | POST                   | `asset`            | `assetName`, `databaseId`, `tags`                         |
-| `/database/\{databaseId\}/assets`                            | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}`                | GET, PUT               | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/archiveAsset`   | DELETE                 | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/deleteAsset`    | DELETE                 | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/unarchiveAsset` | PUT                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/metadata`       | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/metadata/file`  | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/assetHistory`   | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets`                            | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}`                | GET, PUT               | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/archiveAsset`   | DELETE                 | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteAsset`    | DELETE                 | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/unarchiveAsset` | PUT                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/metadata`       | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/metadata/file`  | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetHistory`   | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset file routes
 
 | Route                                                                                  | Methods   | Tier 2 Object Type | Tier 2 Fields                                             |
 | -------------------------------------------------------------------------------------- | --------- | ------------------ | --------------------------------------------------------- |
-| `/database/\{databaseId\}/assets/\{assetId\}/listFiles`                                | GET       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/fileInfo`                                 | GET       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/moveFile`                                 | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/copyFile`                                 | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/archiveFile`                              | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/unarchiveFile`                            | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/deleteFile`                               | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/deleteAssetPreview`                       | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/deleteAuxiliaryPreviewAssetFiles`         | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/createFolder`                             | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/setPrimaryFile`                           | PUT       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/revertFileVersion/\{versionId\}`          | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/download/stream/\{proxy+\}`               | GET, HEAD | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/auxiliaryPreviewAssets/stream/\{proxy+\}` | GET, HEAD | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/download`                                 | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/export`                                   | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/listFiles`                                | GET       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/fileInfo`                                 | GET       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/moveFile`                                 | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/copyFile`                                 | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/archiveFile`                              | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/unarchiveFile`                            | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteFile`                               | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteAssetPreview`                       | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles`         | DELETE    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/createFolder`                             | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/setPrimaryFile`                           | PUT       | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}`          | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`               | GET, HEAD | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` | GET, HEAD | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download`                                 | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/export`                                   | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset version routes
 
 | Route                                                                                    | Methods | Tier 2 Object Type | Tier 2 Fields                                             |
 | ---------------------------------------------------------------------------------------- | ------- | ------------------ | --------------------------------------------------------- |
-| `/database/\{databaseId\}/assets/\{assetId\}/createVersion`                              | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/revertAssetVersion/\{assetVersionId\}`      | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/getVersions`                                | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/getVersion/\{assetVersionId\}`              | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/assetversions/\{assetVersionId\}`           | PUT     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/assetversions/\{assetVersionId\}/archive`   | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/assetversions/\{assetVersionId\}/unarchive` | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/createVersion`                              | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}`      | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/getVersions`                                | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}`              | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}`           | PUT     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive`   | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive` | POST    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Upload and ingestion routes
 
 | Route                            | Methods | Tier 2 Object Type | Tier 2 Fields                                             |
 | -------------------------------- | ------- | ------------------ | --------------------------------------------------------- |
 | `/uploads`                       | POST    | `asset`            | `assetId`, `assetName`, `assetType`, `databaseId`, `tags` |
-| `/uploads/\{uploadId\}/complete` | POST    | `asset`            | `assetId`, `assetName`, `assetType`, `databaseId`, `tags` |
+| `/uploads/{uploadId}/complete` | POST    | `asset`            | `assetId`, `assetName`, `assetType`, `databaseId`, `tags` |
 | `/ingest-asset`                  | POST    | `asset`            | `assetId`, `assetName`, `databaseId`                      |
 
 ### Asset link routes
@@ -384,54 +395,54 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | Route                                                     | Methods                | Tier 2 Object Type                | Tier 2 Fields                                             |
 | --------------------------------------------------------- | ---------------------- | --------------------------------- | --------------------------------------------------------- |
 | `/asset-links`                                            | POST                   | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/single/\{assetLinkId\}`                     | GET                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/\{assetLinkId\}`                            | PUT                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/\{assetLinkId\}`                            | DELETE                 | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/\{assetLinkId\}/metadata`                   | GET, POST, PUT, DELETE | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/database/\{databaseId\}/assets/\{assetId\}/asset-links` | GET                    | `asset`                           | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/asset-links/single/{assetLinkId}`                     | GET                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/{assetLinkId}`                            | PUT                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/{assetLinkId}`                            | DELETE                 | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/{assetLinkId}/metadata`                   | GET, POST, PUT, DELETE | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/asset-links` | GET                    | `asset`                           | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Comment routes
 
 | Route                                                                                | Methods                | Tier 2 Object Type | Tier 2 Fields                                             |
 | ------------------------------------------------------------------------------------ | ---------------------- | ------------------ | --------------------------------------------------------- |
-| `/comments/assets/\{assetId\}`                                                       | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/comments/assets/\{assetId\}/assetVersionId/\{assetVersionId\}`                     | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
-| `/comments/assets/\{assetId\}/assetVersionId:commentId/\{assetVersionId:commentId\}` | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/comments/assets/{assetId}`                                                       | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/comments/assets/{assetId}/assetVersionId/{assetVersionId}`                     | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}` | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Pipeline and workflow routes
 
 | Route                                                                                                                 | Methods                | Tier 2 Object Type              | Tier 2 Fields                                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/pipelines`                                                                                                          | GET                    | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
-| `/database/\{databaseId\}/pipelines`                                                                                  | GET, POST              | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
-| `/database/\{databaseId\}/pipelines/\{pipelineId\}`                                                                   | GET, PUT, DELETE       | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
-| `/database/\{databaseId\}/pipelines/\{pipelineId\}/templates` and `.../templates/\{templateId\}` (incl. `/tagSchema`) | GET, POST, PUT, DELETE | `pipeline`                      | Enforced against the **owning pipeline** (templates + tag schemas have no separate object type).                                                                                                                                                                                              |
+| `/database/{databaseId}/pipelines`                                                                                  | GET, POST              | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
+| `/database/{databaseId}/pipelines/{pipelineId}`                                                                   | GET, PUT, DELETE       | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
+| `/database/{databaseId}/pipelines/{pipelineId}/templates` and `.../templates/{templateId}` (incl. `/tagSchema`) | GET, POST, PUT, DELETE | `pipeline`                      | Enforced against the **owning pipeline** (templates + tag schemas have no separate object type).                                                                                                                                                                                              |
 | `/workflows`                                                                                                          | GET                    | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
-| `/database/\{databaseId\}/workflows`                                                                                  | GET, POST              | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
-| `/database/\{databaseId\}/workflows/\{workflowId\}`                                                                   | GET, PUT, DELETE       | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
-| `/database/\{databaseId\}/workflows/\{workflowId\}/triggers` and `.../triggers/\{triggerType\}`                       | GET, PUT, DELETE       | `workflow`                      | Enforced against the **owning workflow**.                                                                                                                                                                                                                                                     |
-| `/workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`                                                            | POST                   | `workflow`, `pipeline`, `asset` | Workflow GET + each referenced pipeline GET + each input asset GET + the output asset POST.                                                                                                                                                                                                   |
-| `/workflows/executions`                                                                                               | GET                    | `workflow`, `asset`, `database` | Global list; each execution is visible only when the caller can GET its workflow and **every** asset it read (or its output asset, for a run with no inputs). A permanently deleted asset defers to GET on the database it lived in; an archived asset is still authorized on its own record. |
-| `/database/\{databaseId\}/assets/\{assetId\}/workflows/executions` and `.../executions/\{workflowId\}`                | GET                    | `workflow`, `asset`             | The asset's own execution history (the asset detail page's Executions tab), optionally narrowed to one workflow. Same per-execution visibility rule as the global list, and it includes runs where the asset is the OUTPUT target.                                                            |
-| `/workflows/executions/\{executionId\}/details`                                                                       | GET                    | `workflow`, `asset`             | Same per-execution visibility check as the global list.                                                                                                                                                                                                                                       |
-| `/workflows/executions/\{executionId\}/details/metadata`                                                              | GET                    | `workflow`, `asset`             | One page of one metadata collection of the detail view. Same per-execution visibility check as `.../details`, so a caller who can open the detail view can page its metadata. Grant it wherever `.../details` is granted — a prefix grant on `/workflows` already covers both.                |
-| `/workflows/executions/\{executionId\}/logs`                                                                          | GET                    | `workflow`, `asset`             | Detailed execution logs — scope to administrative / operator roles.                                                                                                                                                                                                                           |
-| `/workflows/executions/\{executionId\}`                                                                               | DELETE                 | `workflow`, `asset`             | Abort. Optional `?groupId=` aborts every active execution in the group.                                                                                                                                                                                                                       |
-| `/workflows/executions/\{executionId\}/rerun`                                                                         | POST                   | `workflow`, `asset`             | Re-run (re-launches with the caller's own permissions).                                                                                                                                                                                                                                       |
-| `/workflows/executions/\{executionId\}/permanent`                                                                     | DELETE                 | `workflow`, `asset`             | Permanent delete of the execution's DynamoDB records — **admin-only**; blocked while in progress.                                                                                                                                                                                             |
+| `/database/{databaseId}/workflows`                                                                                  | GET, POST              | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
+| `/database/{databaseId}/workflows/{workflowId}`                                                                   | GET, PUT, DELETE       | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
+| `/database/{databaseId}/workflows/{workflowId}/triggers` and `.../triggers/{triggerType}`                       | GET, PUT, DELETE       | `workflow`                      | Enforced against the **owning workflow**.                                                                                                                                                                                                                                                     |
+| `/workflows/{workflowDatabaseId}/{workflowId}/execute`                                                            | POST                   | `workflow`, `pipeline`, `asset` | Workflow GET + each referenced pipeline GET + each input asset GET + the output asset POST.                                                                                                                                                                                                   |
+| `/workflows/executions`                                                                                               | GET                    | `workflow`, `asset`, `database` | Global list; each execution is visible only when the caller can GET its workflow, **every** asset it read, **and** its output asset whenever the run wrote to one. A results-only run has no asset at all, leaving workflow GET as its whole gate. A permanently deleted asset defers to GET on the database it lived in; an archived asset is still authorized on its own record. |
+| `/database/{databaseId}/assets/{assetId}/workflows/executions` and `.../executions/{workflowId}`                | GET                    | `workflow`, `asset`             | The asset's own execution history (the asset detail page's Executions tab), optionally narrowed to one workflow. Same per-execution visibility rule as the global list, and it includes runs where the asset is the OUTPUT target.                                                            |
+| `/workflows/executions/{executionId}/details`                                                                       | GET                    | `workflow`, `asset`             | Same per-execution visibility check as the global list.                                                                                                                                                                                                                                       |
+| `/workflows/executions/{executionId}/details/metadata`                                                              | GET                    | `workflow`, `asset`             | One page of one metadata collection of the detail view. Same per-execution visibility check as `.../details`, so a caller who can open the detail view can page its metadata. Grant it wherever `.../details` is granted — a prefix grant on `/workflows` already covers both.                |
+| `/workflows/executions/{executionId}/logs`                                                                          | GET                    | `workflow`, `asset`             | Detailed execution logs — scope to administrative / operator roles.                                                                                                                                                                                                                           |
+| `/workflows/executions/{executionId}`                                                                               | DELETE                 | `workflow`, `asset`             | Abort. Optional `?groupId=` aborts every active execution in the group.                                                                                                                                                                                                                       |
+| `/workflows/executions/{executionId}/rerun`                                                                         | POST                   | `workflow`, `asset`             | Re-run (re-launches with the caller's own permissions).                                                                                                                                                                                                                                       |
+| `/workflows/executions/{executionId}/permanent`                                                                     | DELETE                 | `workflow`, `asset`             | Permanent delete of the execution's records — **admin-only**; blocked while in progress.                                                                                                                                                                                             |
 
 :::warning[Scope detailed logs and permanent delete to administrators]
-The execution **logs** route (`/workflows/executions/\{executionId\}/logs`) exposes full CloudWatch execution logs, and the **permanent delete** route (`/workflows/executions/\{executionId\}/permanent`) removes execution records irreversibly. Grant these two routes only to administrative or operator roles. The shipped non-admin templates authorize the everyday execution routes (execute, list, details, paged detail metadata, abort, re-run) but withhold `.../logs` and `.../permanent`; only the Database Admin template grants them.
+The execution **logs** route (`/workflows/executions/{executionId}/logs`) exposes full Amazon CloudWatch execution logs, and the **permanent delete** route (`/workflows/executions/{executionId}/permanent`) removes execution records irreversibly. Grant these two routes only to administrative or operator roles. The shipped non-admin templates authorize the everyday execution routes (execute, list, details, paged detail metadata, abort, re-run) but withhold `.../logs` and `.../permanent`; only the Database Admin template grants them.
 :::
 
 :::note[Grant the paged detail-metadata route wherever details is granted]
-`GET /workflows/executions/\{executionId\}/details/metadata` is its own Tier‑1 route, and it reads the same collections `.../details` returns. A role that can open an execution's detail view but is not authorized on the paged route sees a metadata section flagged as partial with no way to read the rest, so the two routes belong together in a grant.
+`GET /workflows/executions/{executionId}/details/metadata` is its own Tier‑1 route, and it reads the same collections `.../details` returns. A role that can open an execution's detail view but is not authorized on the paged route sees a metadata section flagged as partial with no way to read the rest, so the two routes belong together in a grant.
 
 A prefix grant such as `starts_with /workflows` covers both, which is how the shipped templates authorize them. An allow list that enumerates execution paths individually needs the metadata path added alongside `.../details`, and a `deny` written as a path suffix stays precise enough not to catch it — the administrative denies match `/logs` and `/permanent`.
 :::
 
 :::info[Executing is authorized by the route, not by a workflow POST]
-Permission to run a workflow comes from Tier 1 on the execute route (`POST /workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`). Tier 2 then confirms the caller can **read** what the run touches: `GET` on the workflow, `GET` on each referenced pipeline, and `GET` on each input asset. The output asset is the one object the run writes, so it is authorized with `POST`.
+Permission to run a workflow comes from Tier 1 on the execute route (`POST /workflows/{workflowDatabaseId}/{workflowId}/execute`). Tier 2 then confirms the caller can **read** what the run touches: `GET` on the workflow, `GET` on each referenced pipeline, and `GET` on each input asset. The output asset is the one object the run writes, so it is authorized with `POST`.
 
 On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **modify** — neither is required to execute. A role therefore runs workflows with read-only object access, and granting `POST` on a workflow grants the ability to create workflows. The other execution routes (list, details, abort, re-run) follow the same shape: the Tier‑1 route grants the operation, and Tier‑2 `GET` on the workflow and its assets scopes which executions are reachable.
 :::
@@ -441,7 +452,7 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | Route                                                          | Methods        | Tier 2 Object Type | Tier 2 Fields                                                  |
 | -------------------------------------------------------------- | -------------- | ------------------ | -------------------------------------------------------------- |
 | `/metadataschema`                                              | GET, POST, PUT | `metadataSchema`   | `databaseId`, `metadataSchemaEntityType`, `metadataSchemaName` |
-| `/database/\{databaseId\}/metadataSchema/\{metadataSchemaId\}` | GET, DELETE    | `metadataSchema`   | `databaseId`, `metadataSchemaEntityType`, `metadataSchemaName` |
+| `/database/{databaseId}/metadataSchema/{metadataSchemaId}` | GET, DELETE    | `metadataSchema`   | `databaseId`, `metadataSchemaEntityType`, `metadataSchemaName` |
 
 ### Search route
 
@@ -463,16 +474,16 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | Route                      | Methods        | Tier 2 Object Type | Tier 2 Fields |
 | -------------------------- | -------------- | ------------------ | ------------- |
 | `/tags`                    | GET, PUT, POST | `tag`              | `tagName`     |
-| `/tags/\{tagId\}`          | DELETE         | `tag`              | `tagName`     |
+| `/tags/{tagId}`          | DELETE         | `tag`              | `tagName`     |
 | `/tag-types`               | GET, PUT, POST | `tagType`          | `tagTypeName` |
-| `/tag-types/\{tagTypeId\}` | DELETE         | `tagType`          | `tagTypeName` |
+| `/tag-types/{tagTypeId}` | DELETE         | `tagType`          | `tagTypeName` |
 
 ### Role and user role routes
 
 | Route               | Methods                | Tier 2 Object Type | Tier 2 Fields        |
 | ------------------- | ---------------------- | ------------------ | -------------------- |
 | `/roles`            | GET, PUT, POST         | `role`             | `roleName`           |
-| `/roles/\{roleId\}` | DELETE                 | `role`             | `roleName`           |
+| `/roles/{roleId}` | DELETE                 | `role`             | `roleName`           |
 | `/user-roles`       | GET, PUT, POST, DELETE | `userRole`         | `roleName`, `userId` |
 
 ### Auth and administration routes
@@ -480,16 +491,16 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | Route                                    | Methods                | Tier 2 Object Type |
 | ---------------------------------------- | ---------------------- | ------------------ |
 | `/auth/constraints`                      | GET                    | API-level only     |
-| `/auth/constraints/\{constraintId\}`     | GET, PUT, POST, DELETE | API-level only     |
+| `/auth/constraints/{constraintId}`     | GET, PUT, POST, DELETE | API-level only     |
 | `/auth/constraints/permissionObjects`    | GET                    | API-level only     |
 | `/auth/constraintsTemplateImport`        | POST                   | API-level only     |
 | `/auth/api-keys`                         | GET, POST              | API-level only     |
-| `/auth/api-keys/\{apiKeyId\}`            | GET, PUT, DELETE       | API-level only     |
+| `/auth/api-keys/{apiKeyId}`            | GET, PUT, DELETE       | API-level only     |
 | `/auth/user/api-keys`                    | GET, POST              | API-level only     |
-| `/auth/user/api-keys/\{apiKeyId\}`       | GET, PUT, DELETE       | API-level only     |
+| `/auth/user/api-keys/{apiKeyId}`       | GET, PUT, DELETE       | API-level only     |
 | `/user/cognito`                          | GET, POST              | API-level only     |
-| `/user/cognito/\{userId\}`               | PUT, DELETE            | API-level only     |
-| `/user/cognito/\{userId\}/resetPassword` | POST                   | API-level only     |
+| `/user/cognito/{userId}`               | PUT, DELETE            | API-level only     |
+| `/user/cognito/{userId}/resetPassword` | POST                   | API-level only     |
 
 ### Add-on routes
 

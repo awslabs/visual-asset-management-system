@@ -13,24 +13,36 @@ VAMS supports three deployment modes. Your choice depends on the AWS partition, 
 | **EU Sovereign Cloud** | Application Load Balancer + Amazon S3 | `aws-eusc`   | Yes          | For the AWS European Sovereign Cloud (Region `eusc-de-east-1`). Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service. The Region exposes two Availability Zones. |
 
 :::info[GovCloud and EU Sovereign Cloud constraints]
-When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the following services are unavailable or restricted:
+When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the following services are unavailable or restricted. Configuration validation rejects a deployment that enables any of them.
 
+-   A VPC is required. Set `app.useGlobalVpc.enabled` to `true`.
 -   Amazon CloudFront is not supported. Use the ALB deployment mode.
 -   Amazon Location Service is not supported. Disable `app.useLocationService.enabled`.
--   AWS WAF `AdvancedSecurityMode` for Amazon Cognito is not available (automatically suppressed).
-    :::
+-   AWS Deadline Cloud is not supported. Disable `app.pipelines.deadlineCloudExecutionTypeEnabled`.
+-   Amazon Cognito SAML and OIDC federation are not supported — both use the Amazon Cognito hosted UI. Disable `useCognito.useSaml` and `useCognito.useOidc`, and use the external OAuth identity provider option for federated sign-in.
+-   Next-generation Amazon OpenSearch Serverless collections are not supported. Set `app.openSearch.useServerless.nextGen` to `false`.
+-   Amazon OpenSearch Serverless is not offered at all in the AWS European Sovereign Cloud. Set `app.openSearch.useServerless.enabled` to `false` and use `app.openSearch.useProvisioned` there.
+-   Amazon Cognito advanced security (`AdvancedSecurityMode`) is not available. VAMS does not configure it and suppresses the corresponding check automatically, so no configuration change is needed.
+
+For the authoritative per-field list, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
+:::
 
 ## Key decisions
 
 ### Authentication provider
 
-VAMS supports three authentication approaches. You must choose exactly one.
+VAMS supports four authentication approaches. You must choose exactly one.
 
-| Option                       | Configuration                                               | Description                                                                                                                                                            |
-| ---------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Amazon Cognito** (default) | `authProvider.useCognito.enabled: true`                     | VAMS creates and manages an Amazon Cognito user pool. Users receive a temporary password by email. Supports optional SAML federation.                                  |
-| **Amazon Cognito with SAML** | `authProvider.useCognito.enabled: true` and `useSaml: true` | Amazon Cognito with federated SAML from an external identity provider (IdP). Requires additional SAML configuration.                                                   |
-| **External OAuth IdP**       | `authProvider.useExternalOAuthIdp.enabled: true`            | Bring your own OAuth 2.0 / OpenID Connect identity provider (for example, PingFederate, Okta). Requires configuring multiple IdP endpoint URLs and client credentials. |
+| Option                       | Configuration                                               | Description                                                                                                                                                                                            |
+| ---------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Amazon Cognito** (default) | `authProvider.useCognito.enabled: true`                     | VAMS creates and manages an Amazon Cognito user pool. Users receive a temporary password by email. Supports optional SAML or OIDC federation.                                                           |
+| **Amazon Cognito with SAML** | `authProvider.useCognito.enabled: true` and `useSaml: true` | Amazon Cognito with federated SAML from an external identity provider (IdP). Provider details are configured in `infra/config/saml-config.ts`.                                                          |
+| **Amazon Cognito with OIDC** | `authProvider.useCognito.enabled: true` and `useOidc: true` | Amazon Cognito with federated OpenID Connect from an external IdP (for example, Okta, Microsoft Entra ID, PingFederate). Provider details are configured in `infra/config/oidc-config.ts`.               |
+| **External OAuth IdP**       | `authProvider.useExternalOAuthIdp.enabled: true`            | Bring your own OAuth 2.0 / OpenID Connect identity provider without an Amazon Cognito user pool. Requires configuring multiple IdP endpoint URLs and client credentials, plus a custom JWT issuer and audience. |
+
+:::note[Cognito federation constraints]
+`useSaml` and `useOidc` are mutually exclusive, and both require `useCognito.enabled` to be `true` — they are ignored when it is `false`. Both use the Amazon Cognito hosted UI, which is available only in the commercial `aws` partition, so neither can be used in AWS GovCloud or the AWS European Sovereign Cloud. Use the external OAuth IdP option for federated sign-in there.
+:::
 
 ### Web distribution
 
@@ -52,7 +64,7 @@ Amazon OpenSearch Service provides full-text search, filtering, and map-view fun
 | Option                     | Configuration                             | Notes                                                                                                    |
 | -------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | **OpenSearch Serverless**  | `openSearch.useServerless.enabled: true`  | Fully managed, pay-per-use. No VPC required. Default for commercial deployments.                         |
-| **OpenSearch Provisioned** | `openSearch.useProvisioned.enabled: true` | Dedicated cluster with configurable instance types. Requires VPC with a minimum of 3 Availability Zones. |
+| **OpenSearch Provisioned** | `openSearch.useProvisioned.enabled: true` | Dedicated cluster with configurable instance types. Requires a VPC spanning `availabilityZoneCount` Availability Zones (`2` by default, optionally `3`). |
 | **No OpenSearch**          | Both set to `false`                       | Search is disabled. The assets page returns all authorized assets without filtering.                     |
 
 :::note[Choose only one]
@@ -81,7 +93,7 @@ Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they 
 | ------------------------- | ------------------------------------------------ |
 | ALB                       | Up to 8 (scales during runtime)                  |
 | Container-based pipelines | ~2 per active workflow execution                 |
-| Lambda functions in VPC   | 1 per deployed function per subnet (~66 in v2.5) |
+| Lambda functions in VPC   | 1 per deployed function per subnet               |
 | VPC interface endpoints   | 1 per endpoint per subnet                        |
 
 A minimum of 128 IPv4 addresses per subnet is recommended.

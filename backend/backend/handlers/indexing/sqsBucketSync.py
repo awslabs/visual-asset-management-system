@@ -1994,9 +1994,14 @@ def lambda_handler_deleted(event, context):
                     logger.warning("Record does not contain S3 information, skipping")
                     continue
 
-                # Extract bucket name and object key
+                # Extract bucket name and object key. S3 event notifications deliver
+                # the key URL-encoded per AWS spec (spaces → '+', specials → '%XX');
+                # decode it here so metadata paths and S3 version lookups operate on
+                # the actual object key. The record forwarded to the indexers keeps
+                # the key exactly as received — fileIndexer applies its own decoding.
                 bucket_name = record['s3']['bucket']['name']
-                object_key = record['s3']['object']['key']
+                raw_object_key = record['s3']['object']['key']
+                object_key = decode_s3_event_key(raw_object_key)
 
                 # Skip init files entirely (both processing and indexing)
                 if object_key.endswith('init') or object_key.endswith('init/'):
@@ -2057,16 +2062,28 @@ def lambda_handler_deleted(event, context):
                     if asset_data:
                         database_id_for_asset = asset_data.get('databaseId')
 
-                        # Extract relative file path for metadata deletion
-                        relative_file_path = extract_relative_file_path(object_key, prefix, asset_id)
+                        # Key spellings to clean up: the decoded key is the real object
+                        # key for an encoded event, while a key delivered without any
+                        # encoding applied is real as delivered (a literal '+' in a
+                        # filename decodes to a space). Both are handled when they differ.
+                        key_spellings = [object_key]
+                        if raw_object_key != object_key:
+                            key_spellings.append(raw_object_key)
 
-                        # Only delete metadata/attributes when the file is
-                        # permanently gone (no versions or delete markers remain).
+                        # Only delete metadata/attributes when the file is permanently
+                        # gone (no versions or delete markers remain under any spelling).
                         # A delete-marker event from an archive flow is reversible —
                         # unarchive restores the file and must find its metadata intact.
-                        if is_object_permanently_deleted(bucket_name, object_key):
-                            logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
-                            delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
+                        # Remaining versions under either spelling, or an error reading
+                        # version state, preserve the metadata.
+                        permanently_deleted = all(
+                            is_object_permanently_deleted(bucket_name, key) for key in key_spellings
+                        )
+                        if permanently_deleted:
+                            for key in key_spellings:
+                                relative_file_path = extract_relative_file_path(key, prefix, asset_id)
+                                logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
+                                delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
                         else:
                             logger.info(f"File {object_key} still has versions (archived); preserving metadata/attributes")
                     else:

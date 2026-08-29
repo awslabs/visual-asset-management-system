@@ -540,7 +540,12 @@ export const TemplateFormEditLoader: React.FC<{
         );
     }
     return (
+        // Keyed on the template's identity. Every field is seeded from `initial` at mount, and a route
+        // change between two edit targets under the same path pattern reuses this element — with the
+        // next template already cached, `isLoading` never goes true, so without the key the form would
+        // keep the previous template's name, body, tags and overrides and save them onto this one.
         <TemplateForm
+            key={templateId}
             mode="edit"
             databaseId={databaseId}
             pipelineId={pipelineId}

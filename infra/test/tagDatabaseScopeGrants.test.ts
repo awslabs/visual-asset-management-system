@@ -20,6 +20,7 @@ import { buildAssetService } from "../lib/lambdaBuilder/assetFunctions";
 import * as Config from "../config/config";
 import * as Service from "../lib/helper/service-helper";
 import * as fs from "fs";
+import { newTestApp } from "./support/testApp";
 
 /**
  * A database-scoped tag or tag type is rejected unless its database exists, so the create/update
@@ -53,7 +54,7 @@ const createMockConfig = (): Config.Config => {
 const buildFixture = () => {
     const config = createMockConfig();
     Service.SetConfig(config);
-    const app = new cdk.App();
+    const app = newTestApp();
     const stack = new cdk.Stack(app, "TagGrantStack", {
         env: { account: config.env.account, region: config.env.region },
     });

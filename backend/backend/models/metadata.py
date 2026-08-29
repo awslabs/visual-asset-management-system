@@ -4,7 +4,8 @@
 """Metadata models for VAMS - Centralized metadata handling across all entity types."""
 
 from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import Field
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from enum import Enum
 import json
 import re
@@ -39,6 +40,11 @@ class UpdateType(str, Enum):
     """Supported update types for metadata operations"""
     UPDATE = "update"
     REPLACE_ALL = "replace_all"
+
+
+# The value type a metadata item takes when none is supplied. Named so the field default and the
+# validator that resolves an unsupplied value cannot drift apart.
+DEFAULT_METADATA_VALUE_TYPE = MetadataValueType.STRING
 
 
 # Request-size limits.
@@ -86,9 +92,11 @@ def _validate_lon_lat(coord: Any, label: str) -> None:
     if not isinstance(lon, (int, float)) or not isinstance(lat, (int, float)):
         raise ValueError(f"{label} must contain numeric lon/lat values")
     if lon < -180 or lon > 180:
-        raise ValueError(f"{label} longitude must be between -180 and 180 (got {lon})")
+        logger.info(f"{label} rejected: longitude {lon} out of range")
+        raise ValueError(f"{label} longitude must be between -180 and 180")
     if lat < -90 or lat > 90:
-        raise ValueError(f"{label} latitude must be between -90 and 90 (got {lat})")
+        logger.info(f"{label} rejected: latitude {lat} out of range")
+        raise ValueError(f"{label} latitude must be between -90 and 90")
 
 
 def _validate_linear_ring(ring: Any, label: str) -> None:
@@ -410,14 +418,40 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
 #######################
 
 class MetadataItemModel(BaseModel, extra='ignore'):
-    """Single metadata item with key, value, and type"""
+    """Single metadata item with key, value, and type
+
+    A stored metadata record can carry no value and no value type, and every metadata GET reports
+    each of those as null so the record stays visible and repairable. Clients round-trip a GET
+    response back into a write body, so an explicit null on either field is read here as the field
+    not being supplied: metadataValue becomes the empty string and metadataValueType takes
+    DEFAULT_METADATA_VALUE_TYPE. Both results are already reachable -- an empty value is accepted
+    by validate_metadata_value_common so optional fields may be blank, and omitting the value type
+    resolves to the same default -- so the accepted input widens without widening what is stored.
+
+    The annotations stay non-optional: the coercion is a pre-validator, so the parsed item always
+    carries a concrete str and a concrete MetadataValueType and every caller reading
+    metadataValueType.value is unaffected. Schema enforcement is downstream and unchanged: the
+    coerced empty value is still empty, so a schema-required field holding one is still refused by
+    validate_metadata_against_schema.
+    """
     metadataKey: str = Field(..., min_length=1, max_length=256, description="Metadata key")
     metadataValue: str = Field(..., max_length=MAX_METADATA_VALUE_LENGTH, description="Metadata value as string")
-    metadataValueType: MetadataValueType = Field(default=MetadataValueType.STRING, description="Type of metadata value")
+    metadataValueType: MetadataValueType = Field(
+        default=DEFAULT_METADATA_VALUE_TYPE, description="Type of metadata value")
+
+    @validator('metadataValue', pre=True)
+    def unsupplied_metadata_value_reads_as_empty(cls, v):
+        """Read an explicit null metadataValue as the empty string."""
+        if v is None:
+            return ""
+        return v
 
     @validator('metadataValueType', pre=True)
     def normalize_and_validate_metadata_value_type(cls, v):
         """Convert metadataValueType to lowercase and validate it's a valid enum value"""
+        if v is None:
+            # Read as the field not being supplied, which takes the field's default.
+            return DEFAULT_METADATA_VALUE_TYPE
         if isinstance(v, str):
             v_lower = v.lower()
             # Check if the lowercase value is a valid enum value

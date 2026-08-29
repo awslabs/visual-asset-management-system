@@ -13,6 +13,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
+from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
 
@@ -249,6 +250,11 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
     method_allowed_on_api = False
 
     asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+    if asset_object is None:
+        response["statusCode"] = 404
+        response["body"] = json.dumps({"message": "Asset not found"})
+        return response
+
     asset_object.update({"object__type": "asset"})
 
     # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
@@ -405,6 +411,11 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
     method_allowed_on_api = False
 
     asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+    if asset_object is None:
+        response["statusCode"] = 404
+        response["body"] = json.dumps({"message": "Asset not found"})
+        return response
+
     asset_object.update({"object__type": "asset"})
 
     # Add Casbin Enforcer to check if the current user has permissions to DELETE the Comment
@@ -478,6 +489,15 @@ def lambda_handler(event: dict, context: dict) -> dict:
         response["body"] = json.dumps({"message": "Method not allowed"})
         return response
 
+    except VAMSGeneralErrorResponse as v:
+        # Raised by the asset lookup in get_handler / delete_handler when the assetId cannot
+        # be resolved to a single live asset (e.g. the same assetId exists in more than one
+        # database). The message names no caller-supplied value, so it is returned as the
+        # client-facing reason.
+        logger.exception(v)
+        response["statusCode"] = 400
+        response["body"] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         response["statusCode"] = 500
         logger.exception(e)

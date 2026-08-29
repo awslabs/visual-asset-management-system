@@ -351,22 +351,30 @@ def create_metadata_schema(schema_data, claims_and_roles):
         Created schema operation response
     """
     try:
-        # Verify database exists
-        verify_database_exists(schema_data['databaseId'])
-        
-        # Check authorization
+        # Authorize before the database lookup below can disclose whether the database exists.
+        # verify_database_exists answers 400 for an absent database while the gate answers 403, so
+        # running it first hands a caller holding the POST route but no matching metadataSchema
+        # constraint a database-existence oracle over names the Casbin-filtered database listing
+        # would not have shown it, and drives a table read per probe. A metadataSchema is authorized
+        # on databaseId + metadataSchemaName + metadataSchemaEntityType
+        # (CONSTRAINT_OBJECT_TYPE_FIELDS), all of which the request supplies, so nothing has to be
+        # read to reach the same decision.
         auth_object = {
             "databaseId": schema_data['databaseId'],
             "metadataSchemaEntityType": schema_data['metadataSchemaEntityType'],
             "metadataSchemaName": schema_data['schemaName'],
             "object__type": "metadataSchema"
         }
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "POST"):
-                return authorization_error()
-        
+
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "POST"):
+            return authorization_error()
+
+        # Verify database exists
+        verify_database_exists(schema_data['databaseId'])
+
         # Generate unique ID
         metadata_schema_id = str(uuid.uuid4())
         
@@ -443,10 +451,11 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
             "object__type": "metadataSchema"
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "POST"):  # Uses POST permission for updates
-                return authorization_error()
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "POST"):  # Uses POST permission for updates
+            return authorization_error()
         
         # Update the fields
         logger.info(f"Updating metadata schema {metadataSchemaId}")
@@ -516,10 +525,11 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles):
             "object__type": "metadataSchema"
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "DELETE"):
-                return authorization_error()
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "DELETE"):
+            return authorization_error()
         
         # Delete the schema
         logger.info(f"Deleting metadata schema {metadataSchemaId}")
@@ -606,10 +616,11 @@ def handle_get_request(event):
                     "metadataSchemaEntityType": schema.get('metadataSchemaEntityType', '')
                 }
                 
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce(auth_schema, "GET"):
-                        return authorization_error()
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if not casbin_enforcer.enforce(auth_schema, "GET"):
+                    return authorization_error()
                 
                 # Convert to response model
                 try:
@@ -716,7 +727,11 @@ def handle_post_request(event):
             request_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
@@ -767,7 +782,11 @@ def handle_put_request(event):
             update_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
@@ -842,7 +861,11 @@ def handle_delete_request(event):
             path_parameters['metadataSchemaId'],
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         

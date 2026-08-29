@@ -100,9 +100,13 @@ PIPELINE_INPUT_PREFIX = "/input/"
 #   outputS3AssetPreviewPath.
 # PIPELINE_OUTPUT_METADATA_PREFIX: metadata files produced by the pipeline --
 #   outputS3AssetMetadataPath.
-# PIPELINE_OUTPUT_RESULTS_PREFIX: reserved for structured pipeline result
-#   data. Not yet used by workflow generation; defined ahead of a future
-#   feature.
+# PIPELINE_OUTPUT_RESULTS_PREFIX: structured pipeline result data (text a
+#   pipeline returns instead of, or alongside, asset files). The workflow ASL
+#   threads it as ``outputResultsPrefixRelative`` (next pipeline's manifest) and
+#   ``resultsPathKey`` (process-output step), and processWorkflowExecutionOutput
+#   reads it for both the normal and the results-only (``outputLocationType:
+#   "none"``) terminal paths. No shipped pipeline writes here yet, so the
+#   channel is read-ready but has no producer.
 # ---------------------------------------------------------------------------
 PIPELINE_OUTPUT_FILES_PREFIX = "/files/"
 PIPELINE_OUTPUT_PREVIEWS_PREFIX = "/previews/"

@@ -85,6 +85,62 @@ describe("CreateConstraint", () => {
         });
     });
 
+    describe("deprecated-field filtering on the first open", () => {
+        // The object-type matrix is fetched only after the modal opens, so on the very first
+        // open the form state is built with no valid-field list. A criterion whose field is no
+        // longer in the matrix used to survive that transition, render with a blank Field cell,
+        // and be re-submitted; a later open of the same record silently dropped it.
+        const baseState = {
+            constraintId: "test-constraint",
+            name: "test-constraint",
+            description: "a valid description",
+            objectType: "asset",
+            criteriaOr: [],
+            groupPermissions: [
+                { id: "g1", groupId: "admin", permission: "GET", permissionType: "allow" },
+            ],
+            userPermissions: [],
+        };
+
+        /** Mount closed, then open — the transition on which the matrix is still unfetched. */
+        async function openWithCriterion(field: string) {
+            const initState = {
+                ...baseState,
+                criteriaAnd: [{ id: "c1", field, operator: "equals", value: "x" }],
+            };
+            const view = (open: boolean) => (
+                <MemoryRouter>
+                    <CreateConstraint
+                        open={open}
+                        setOpen={jest.fn()}
+                        setReload={jest.fn()}
+                        initState={initState}
+                    />
+                </MemoryRouter>
+            );
+            const { rerender } = render(view(false));
+            rerender(view(true));
+            const { fetchConstraintPermissionObjects } = require("../../services/APIService");
+            await waitFor(() => expect(fetchConstraintPermissionObjects).toHaveBeenCalled());
+            return screen.findByTestId("Update-authcriteria-button");
+        }
+
+        it("drops a criterion whose field is not in the matrix", async () => {
+            // 'deprecatedField' is absent from _PERMISSION_OBJECTS' asset fields. Once it is
+            // filtered out no criteria remain, so the form is no longer submittable and the
+            // stale criterion cannot be re-saved.
+            const submit = await openWithCriterion("deprecatedField");
+            await waitFor(() => expect(submit).toBeDisabled());
+        });
+
+        it("positive control: keeps a criterion whose field IS in the matrix", async () => {
+            // Same transition, valid field: proves the assertion above is caused by the
+            // filtering and not by a modal that never became submittable at all.
+            const submit = await openWithCriterion("assetName");
+            await waitFor(() => expect(submit).not.toBeDisabled());
+        });
+    });
+
     it("surfaces the backend error message when create fails", async () => {
         const { createConstraint } = require("../../services/APIService");
         // apiClient throws an ApiError carrying the backend message + status.

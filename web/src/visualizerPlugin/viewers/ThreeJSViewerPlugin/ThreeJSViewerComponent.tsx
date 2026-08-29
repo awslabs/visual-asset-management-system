@@ -14,6 +14,7 @@ import LoadingSpinner from "../../components/LoadingSpinner";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import { loadFile } from "./utils/fileLoaders";
 import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
+import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
 
 /**
  * Lays the loaded files out in a row, or returns them to their authored placement.
@@ -112,6 +113,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     // Render loop handle and the in-flight download, both torn down on unmount.
     const animationFrameRef = useRef<number | null>(null);
     const downloadAbortRef = useRef<AbortController | null>(null);
+    const sceneEnvironmentRef = useRef<SceneEnvironment | null>(null);
 
     // 3D selection toggle
     const [enable3DSelection, setEnable3DSelection] = useState(true);
@@ -354,10 +356,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 renderer.setPixelRatio(window.devicePixelRatio);
                 containerRef.current!.appendChild(renderer.domElement);
 
-                scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-                const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                dirLight.position.set(5, 10, 7.5);
-                scene.add(dirLight);
+                applySceneLighting(THREE, scene);
+                // Assigned before anything loads: a material samples `scene.environment` at render
+                // time, so a model added later still picks it up.
+                sceneEnvironmentRef.current = applySceneEnvironment(THREE, scene, renderer);
 
                 const filesToLoad =
                     multiFileKeys && multiFileKeys.length > 0
@@ -779,6 +781,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (renderer?.domElement?.parentNode) {
                     renderer.domElement.parentNode.removeChild(renderer.domElement);
                 }
+
+                // Before the renderer: the environment is a render target that belongs to this
+                // renderer's context, so releasing it afterwards releases nothing.
+                sceneEnvironmentRef.current?.dispose();
+                sceneEnvironmentRef.current = null;
 
                 renderer?.dispose();
 

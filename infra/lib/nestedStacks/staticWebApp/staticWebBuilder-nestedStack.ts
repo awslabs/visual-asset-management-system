@@ -255,6 +255,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                     "CustomCognitoWebClientConfig",
                     {
                         name: "Web",
+                        config: props.config,
                         clientId: props.authResources.cognito.webClientId,
                         userPoolId: props.authResources.cognito.userPoolId,
                         callbackUrls: callbackUrls,
@@ -360,6 +361,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                     "CustomCognitoWebClientConfig",
                     {
                         name: "Web",
+                        config: props.config,
                         clientId: props.authResources.cognito.webClientId,
                         userPoolId: props.authResources.cognito.userPoolId,
                         callbackUrls: callbackUrls,

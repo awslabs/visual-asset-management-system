@@ -23,7 +23,15 @@ module.exports = {
         "/node_modules/(?!(@cloudscape-design|d3-[^/]+|internmap|react-leaflet|@react-leaflet|axios)/)",
     ],
     moduleNameMapper: {
-        "^axios$": "axios/dist/axios.js",
+        // axios ships ESM by default, which jest cannot load, so it is mapped to a CommonJS build.
+        // The target must be a subpath axios's `exports` map actually exposes: jest's resolver honours
+        // `exports`, and `dist/axios.js` is NOT listed there (axios 1.x publishes
+        // `./dist/browser/axios.cjs` and `./dist/node/axios.cjs`). Pointing at the unexposed path failed
+        // resolution even though the file exists on disk, and the symptom is a SUITE-LOAD error —
+        // "Could not locate module axios mapped as: axios/dist/axios.js" — so no component importing
+        // axios could be unit-tested at all. The browser build is the right one for the jsdom
+        // environment. Re-check this mapping when axios is upgraded; the exports map is what governs it.
+        "^axios$": "axios/dist/browser/axios.cjs",
         "\\.(css|scss)$": "<rootDir>/src/__mocks__/styleMock.js",
         "\\.(png|jpg|jpeg|gif|svg)$": "<rootDir>/src/__mocks__/fileMock.js",
         // Monaco: the real `monaco-editor` package is a UMD/AMD bundle (calls `define`) and its

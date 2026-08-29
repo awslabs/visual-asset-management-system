@@ -1,6 +1,6 @@
 # Audit Logging
 
-VAMS provides a comprehensive audit logging system that captures security-sensitive operations across all API handlers. All audit events are written to dedicated Amazon CloudWatch Log Groups with long-term retention and optional AWS KMS encryption.
+VAMS provides a comprehensive audit logging system that captures security-sensitive operations across all API handlers. All audit events are written to dedicated Amazon CloudWatch Log Groups with a configurable retention period (1 year by default) and optional AWS KMS encryption.
 
 ## Overview
 
@@ -28,7 +28,7 @@ VAMS creates nine dedicated log groups for different event types. Each log group
 
 ### Log Group Configuration
 
--   **Retention**: 10 years (3,653 days)
+-   **Retention**: 1 year, applied by the `LogRetentionAspect` CDK aspect
 -   **Encryption**: AWS KMS encryption when `config.app.useKmsCmkEncryption.enabled` is `true`
 -   **Removal Policy**: `DESTROY` (log groups are deleted with stack deletion)
 
@@ -244,16 +244,38 @@ def lambda_handler(event, context):
 
 ## Configuring Log Retention
 
-Log retention is controlled at two levels:
+Log retention is controlled in **one** place. The `LogRetentionAspect` CDK aspect visits every
+`AWS::Logs::LogGroup` in the stack and sets its retention period, so a single value applies to the audit
+log groups and to every other log group alike. The default is **1 year**.
 
-1. **Audit Log Groups** -- 10-year retention (3,653 days), configured in the storage nested stack
-2. **All Other Log Groups** -- 1-year retention, enforced by the `LogRetentionAspect` CDK aspect that applies to all `CfnLogGroup` resources in the stack
+To change it, edit the `new LogRetentionAspect(...)` call in `infra/lib/core-stack.ts`:
 
-To modify audit log retention, update the `retention` property on the audit log groups in `storageBuilder-nestedStack.ts`.
+```typescript
+Aspects.of(this).add(new LogRetentionAspect(logs.RetentionDays.ONE_YEAR));
+```
 
-:::note[Cost Consideration]
-10-year retention for audit logs may incur significant Amazon CloudWatch storage costs. Review retention settings based on your organization's compliance requirements. Consider archiving logs to Amazon S3 for long-term storage beyond 10 years.
+:::warning[The aspect wins over per-construct settings]
+A `retention` property set on an individual log group has **no effect** -- the aspect runs afterwards and
+overwrites it. Changing retention by editing a construct produces a template that still carries the
+aspect's value, which looks like the edit was ignored. Change it at the aspect.
 :::
+
+### Retaining audit records for longer
+
+A retention period beyond a year is a common requirement in regulated environments, including
+public-sector, defence, and other industries whose audit-record obligations exceed one year. Pass a longer
+`logs.RetentionDays` value -- for example `TEN_YEARS` -- at the call site above.
+
+Two considerations before doing so:
+
+-   The value applies to **every** log group, including high-volume AWS Lambda execution logs, not only
+    the nine audit groups. Amazon CloudWatch Logs storage is billed per GB-month across the whole
+    retention window, so the cost scales with total ingestion volume.
+-   If only the audit groups need the longer period, narrow the aspect by log-group name rather than
+    raising it globally. The audit groups are created in `storageBuilder-nestedStack.ts` and exposed as
+    `storageResources.cloudWatchAuditLogGroups`.
+
+Archiving to Amazon S3 remains the lower-cost option for very long retention horizons.
 
 ## Querying Logs with Amazon CloudWatch Logs Insights
 
@@ -394,7 +416,7 @@ Create Amazon CloudWatch alarms on the patterns above to detect audit logging fa
 2. **Restrict read access** to audit logs using IAM policies
 3. **Review logs regularly** for suspicious patterns (repeated authorization failures, unusual file downloads)
 4. **Set up Amazon CloudWatch alarms** for critical events
-5. **Archive to Amazon S3** for retention beyond 10 years
+5. **Archive to Amazon S3** for retention beyond the configured period
 6. **Monitor audit logging health** to detect failures in the logging system itself
 
 ## When to Use Each Function
@@ -526,7 +548,7 @@ The API Gateway authorizer runs before normal request processing and handles raw
 -   User IDs are logged for audit purposes (legitimate interest for security monitoring).
 -   No personally identifiable information (PII) beyond user IDs is logged.
 -   Logs can be exported for data subject access requests.
--   The 10-year retention period aligns with common compliance requirements (for example, FedRAMP, SOC 2).
+-   The retention period is configurable; regulated environments that require multi-year audit records can extend it (see [Configuring Log Retention](#configuring-log-retention)).
 -   Automatic data masking removes all authorization tokens, credentials, and secrets before writing.
 
 ## Maintenance and Troubleshooting
@@ -535,7 +557,7 @@ The API Gateway authorizer runs before normal request processing and handles raw
 
 | Aspect         | Details                                                                                                                    |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Retention**  | Automatically managed by Amazon CloudWatch (10 years / 3,653 days).                                                        |
+| **Retention**  | Applied by the `LogRetentionAspect` CDK aspect; 1 year by default.                                                        |
 | **Encryption** | Managed by the VAMS AWS KMS key when `useKmsCmkEncryption.enabled` is `true`. Key rotation is automatic.                   |
 | **Cleanup**    | Log groups are destroyed with stack deletion (`RemovalPolicy.DESTROY`).                                                    |
 | **Naming**     | Uses a unique 10-character hash derived from the stack name and account ID to prevent naming conflicts across deployments. |
@@ -543,8 +565,8 @@ The API Gateway authorizer runs before normal request processing and handles raw
 ### Cost Optimization
 
 -   Use Amazon CloudWatch Logs Insights for ad-hoc querying instead of exporting all logs.
--   Consider archiving to Amazon S3 for long-term storage beyond 10 years at lower cost.
--   Monitor ingestion rates and adjust retention if the 10-year period exceeds your compliance requirements.
+-   Consider archiving to Amazon S3 for long-term storage beyond the configured period at lower cost.
+-   Monitor ingestion rates and adjust retention at the aspect if the default period does not match your compliance requirements.
 -   For high-volume deployments, set up Amazon CloudWatch Logs subscription filters to stream only critical events to downstream systems.
 
 ### Logs Not Appearing

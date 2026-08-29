@@ -28,15 +28,20 @@ _CREATE_ASSET_PATH = os.path.join(
 _cached_module = None
 
 
-def _load():
+def _load(fresh=False):
     """Load the real createAsset module by file path with boto3 stubbed.
 
     The mock handlers package registered by the root conftest shadows the real
     package, so a normal import cannot reach the real module. Load it directly
     from its file path with all heavy dependencies stubbed.
+
+    Tests stub module globals in place, so the cached instance carries whatever
+    the previous test left behind. Pass fresh=True to get an unmutated instance —
+    required by any test that exercises a real module-level function rather than
+    replacing it with a mock.
     """
     global _cached_module
-    if _cached_module is not None:
+    if _cached_module is not None and not fresh:
         return _cached_module
 
     # Create stub modules for handlers that createAsset imports
@@ -87,7 +92,8 @@ def _load():
                 sys.modules.pop(name, None)
         if added_pattern and validators_mod is not None:
             delattr(validators_mod, "bucket_existing_key_pattern")
-    _cached_module = module
+    if not fresh:
+        _cached_module = module
     return module
 
 

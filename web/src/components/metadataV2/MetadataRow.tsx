@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
     Input,
     Select,
@@ -94,14 +94,25 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
         "geopoint",
         "geojson",
     ];
-    const isComplexType = complexTypes.includes(row.editType);
+    // A row whose type was never recorded is not a complex type: it gets the plain text input
+    // until the operator classifies it.
+    const isComplexType = row.editType !== null && complexTypes.includes(row.editType);
 
     // Geo types render a side-by-side text editor + map picker inside the modal
     const isGeoType =
         row.editType === "lla" || row.editType === "geopoint" || row.editType === "geojson";
-    const locationServicesEnabled = !!appCache
-        .getItem("config")
-        ?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES);
+    // `appCache.getItem` is a synchronous localStorage read plus a full JSON.parse of the runtime
+    // config envelope. Every keystroke in a value input replaces the rows array and re-renders every
+    // row on the page, so reading it in the render body cost one read per row per keystroke. Only the
+    // geo branch below consumes it, so a non-geo row does not read it at all.
+    const locationServicesEnabled = useMemo(
+        () =>
+            isGeoType &&
+            !!appCache
+                .getItem("config")
+                ?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES),
+        [isGeoType]
+    );
 
     // Check if required field is empty
     const isRequiredAndEmpty =
@@ -382,7 +393,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                             <Select
                                 selectedOption={{
                                     label: getValueTypeLabel(row.editType),
-                                    value: row.editType,
+                                    value: row.editType ?? undefined,
                                 }}
                                 onChange={({ detail }) =>
                                     onTypeChange(detail.selectedOption.value as MetadataValueType)
@@ -402,7 +413,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                         {!row.isNew && row.hasChanges && (
                             <ValueHistoryTooltip
                                 oldValue={row.originalValue}
-                                oldType={row.originalType}
+                                oldType={row.originalType ?? undefined}
                                 schemaDefaultValue={row.metadataSchemaDefaultValue}
                                 hasChanges={row.hasChanges}
                             />
@@ -525,7 +536,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                     setModalValidationErrors([]);
                     setIsModalValueValid(true);
                 }}
-                header={`Edit ${row.editType.toUpperCase()} Value`}
+                header={`Edit ${(row.editType ?? "").toUpperCase()} Value`}
                 size="large"
                 footer={
                     <Box float="right">

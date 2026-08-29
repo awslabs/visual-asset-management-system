@@ -651,22 +651,6 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
-                                    S: `15_${roleNameIDClean}_api_paths`,
-                                },
-                                operator: {
-                                    S: "starts_with",
-                                },
-                                value: {
-                                    S: "/buckets",
-                                },
-                            },
-                        },
                         ...(props.config.app.addons.usePhysnaSync.enabled
                             ? [
                                   {
@@ -856,6 +840,26 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                                 value: {
                                     S: "/check-subscription",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `3_${roleNameIDClean}_api_paths_post`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    // The web app POSTs this on every sign-in to record the user's
+                                    // email and last-login. The GET is granted by the read-only
+                                    // constraint above; without the POST the write is denied and the
+                                    // user row never receives an email address.
+                                    S: "/auth/loginProfile",
                                 },
                             },
                         },

@@ -7,6 +7,17 @@ title: File Commands
 
 Manage files within assets, including upload, listing, folder creation, move, copy, archive, unarchive, permanent deletion, version revert, primary type metadata, and preview management.
 
+:::warning[Asset-relative paths on Windows]
+Options that address a location inside an asset — `-p`/`--path`, `--source`, `--dest`, and `--asset-location` — take an asset-relative path that begins with a single `/`, such as `/model.gltf` or `/textures/diffuse.png`. A file path without the leading slash is rejected.
+
+Git Bash, MSYS2, and Cygwin shells on Windows rewrite any argument that begins with `/` into a Windows path before the CLI receives it, and quoting does not prevent it. An argument passed as `-p "/model.gltf"` therefore arrives as `-p "C:/Program Files/Git/model.gltf"`, which either fails validation or resolves to a path the asset does not contain. Prefix the command with `MSYS_NO_PATHCONV=1`, or run it from PowerShell or the Command Prompt, where no rewriting occurs:
+
+```bash
+MSYS_NO_PATHCONV=1 vamscli file info -d my-db -a my-asset -p "/model.gltf"
+```
+
+:::
+
 ---
 
 ## file upload

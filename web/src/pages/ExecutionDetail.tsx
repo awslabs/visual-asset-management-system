@@ -6,15 +6,20 @@
 import React from "react";
 import { useParams } from "react-router-dom";
 import ExecutionDetailPage from "../features/orchestration/executions/ExecutionDetailPage";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const ExecutionDetail: React.FC = () => {
     const { executionId } = useParams<{ executionId: string }>();
 
+    usePageTitle("Execution", executionId);
+
     if (!executionId) {
         return (
-            <div className="flex items-center justify-center min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+            <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
                 <div className="text-center">
-                    <p className="text-red-600 dark:text-red-400 text-xl">Missing Execution ID</p>
+                    <p role="alert" className="text-vams-error text-xl">
+                        Missing Execution ID
+                    </p>
                 </div>
             </div>
         );

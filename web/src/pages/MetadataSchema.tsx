@@ -215,6 +215,16 @@ export default function MetadataSchemaPage() {
         setDeleteModalVisible(true);
     };
 
+    // File Type Restriction exists only for file metadata and file attributes — CreateEditSchemaModal
+    // offers the field for those two entity types and clears it for the others, so a database, asset or
+    // asset-link schema can never carry one. Derived from the selected tab in the same render that
+    // selects the rows, so the column set and the data always agree. "All" keeps the column, because
+    // file schemas are listed there and their restriction is real data rather than an empty placeholder.
+    const showFileTypeRestrictionColumn =
+        selectedEntityType === "all" ||
+        selectedEntityType === "fileMetadata" ||
+        selectedEntityType === "fileAttribute";
+
     const getEntityTypeTabs = () => {
         const tabs = [
             {
@@ -333,22 +343,28 @@ export default function MetadataSchemaPage() {
                                             return 0;
                                         },
                                     },
-                                    {
-                                        id: "fileTypeRestriction",
-                                        header: "File Type Restriction",
-                                        cell: (item) => (
-                                            <span
-                                                style={{
-                                                    whiteSpace: "normal",
-                                                    wordBreak: "break-word",
-                                                }}
-                                            >
-                                                {item.fileKeyTypeRestriction || (
-                                                    <Box color="text-body-secondary">None</Box>
-                                                )}
-                                            </span>
-                                        ),
-                                    },
+                                    ...(showFileTypeRestrictionColumn
+                                        ? [
+                                              {
+                                                  id: "fileTypeRestriction",
+                                                  header: "File Type Restriction",
+                                                  cell: (item: MetadataSchema) => (
+                                                      <span
+                                                          style={{
+                                                              whiteSpace: "normal",
+                                                              wordBreak: "break-word",
+                                                          }}
+                                                      >
+                                                          {item.fileKeyTypeRestriction || (
+                                                              <Box color="text-body-secondary">
+                                                                  None
+                                                              </Box>
+                                                          )}
+                                                      </span>
+                                                  ),
+                                              },
+                                          ]
+                                        : []),
                                     {
                                         id: "enabled",
                                         header: "Status",

@@ -121,14 +121,18 @@ List all tags, optionally filtered by tag type.
 vamscli tag list [OPTIONS]
 ```
 
-| Option          | Type | Required | Description                                     |
-| --------------- | ---- | -------- | ----------------------------------------------- |
-| `--tag-type`    | TEXT | No       | Filter tags by tag type name (case-insensitive) |
+| Option          | Type | Required | Description                                                   |
+| --------------- | ---- | -------- | ------------------------------------------------------------- |
+| `--tag-type`    | TEXT | No       | Filter tags by tag type name (case-insensitive)               |
 | `--database`    | TEXT | No       | Show only tags scoped to this database (GLOBAL tags excluded) |
-| `--scope`       | TEXT | No       | `global` for GLOBAL tags only, `all` for every tag        |
-| `--json-output` | Flag | No       | Output raw JSON response                        |
+| `--scope`       | TEXT | No       | `global` for GLOBAL tags only, `all` for every tag            |
+| `--json-output` | Flag | No       | Output raw JSON response                                      |
 
-The default output is a table of tag name, tag type, and description. Tags belonging to a required tag type are shown with an `[R]` indicator on the tag type. When more results are available, the output notes that additional tags can be retrieved through pagination.
+The default output is a table of tag name, tag type, and description. Tags belonging to a required tag type are shown with an `[R]` indicator on the tag type.
+
+`--tag-type` filters the payload rather than the display, so `--json-output` returns the same narrowed set the table shows.
+
+The listing returns the whole tag vocabulary in one call. `--database <id>` and `--scope global` read a single partition and always return it complete; the unscoped form is bounded at the service's item limit, and if that limit is reached the output says so and points at the two scoped forms.
 
 ```bash
 vamscli tag list
@@ -240,14 +244,16 @@ List all tag types, optionally including the tags associated with each type.
 vamscli tag-type list [OPTIONS]
 ```
 
-| Option          | Type | Required | Description                                |
-| --------------- | ---- | -------- | ------------------------------------------ |
-| `--show-tags`   | Flag | No       | Include associated tags in a detailed view |
+| Option          | Type | Required | Description                                                   |
+| --------------- | ---- | -------- | ------------------------------------------------------------- |
+| `--show-tags`   | Flag | No       | Include associated tags in a detailed view                    |
 | `--database`    | TEXT | No       | Show only tag types scoped to this database (GLOBAL excluded) |
-| `--scope`       | TEXT | No       | `global` for GLOBAL tag types only, `all` for every tag type        |
-| `--json-output` | Flag | No       | Output raw JSON response                   |
+| `--scope`       | TEXT | No       | `global` for GLOBAL tag types only, `all` for every tag type  |
+| `--json-output` | Flag | No       | Output raw JSON response                                      |
 
-The default output is a table of name, description, required status, and tag count. Adding `--show-tags` switches to a detailed view that lists the tags associated with each tag type. When more results are available, the output notes that additional tag types can be retrieved through pagination.
+The default output is a table of name, description, required status, and tag count. Adding `--show-tags` switches to a detailed view that lists the tags associated with each tag type.
+
+As with `tag list`, `--database <id>` and `--scope global` read a single partition and always return it complete; the unscoped form is bounded at the service's item limit.
 
 ```bash
 vamscli tag-type list

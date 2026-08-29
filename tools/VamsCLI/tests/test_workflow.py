@@ -687,6 +687,91 @@ class TestWorkflowListExecutions:
             assert result.exit_code != 0
 
 
+class TestWorkflowListExecutionsWarnings:
+    """The asset-scoped history reports a bounded page in `warnings` too.
+
+    Its page is bounded by the distinct assets it resolves for permission checks — a bound reached
+    sooner now that each row also resolves the asset the run WROTE to. The external connectors read
+    this command's `--json-output`, so a bound dropped here is one they can never see.
+    """
+
+    _BOUND = (
+        "This page reached the limit of 500 distinct assets resolved for permission checks, so some "
+        "executions were not evaluated and are not listed. Narrow the filters or continue with "
+        "NextToken to see the rest.")
+
+    def test_the_bound_is_rendered_alongside_rows(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}], 'warnings': [self._BOUND]}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1'])
+            assert result.exit_code == 0
+            assert 'Warnings (1)' in result.output
+            assert 'distinct assets resolved for permission checks' in result.output
+
+    def test_the_bound_is_rendered_on_an_empty_page(self, cli_runner, generic_command_mocks):
+        """The case that matters: an asset whose history looks absent when it was only withheld."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [], 'filterStartDate': '2026-05-11T00:00:00Z',
+                            'warnings': [self._BOUND]}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1'])
+            assert result.exit_code == 0
+            assert 'No workflow executions found.' in result.output
+            # The echoed window must survive alongside the new block.
+            assert '2026-05-11T00:00:00Z' in result.output
+            assert 'distinct assets resolved for permission checks' in result.output
+
+    def test_the_bound_is_rendered_on_an_empty_page_carrying_a_token(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [], 'NextToken': 'tok-abc', 'warnings': [self._BOUND]}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1'])
+            assert result.exit_code == 0
+            assert 'tok-abc' in result.output
+            assert 'distinct assets resolved for permission checks' in result.output
+
+    def test_a_clean_page_prints_no_warnings_header(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}]}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1'])
+            assert result.exit_code == 0
+            assert 'Warnings' not in result.output
+
+    def test_auto_paginate_accumulates_deduplicated(self, cli_runner, generic_command_mocks):
+        """The shape the IsaacSim connector invokes (--auto-paginate --json-output): without this the
+        bound is discarded before the connector's JSON parse ever sees it."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.side_effect = [
+                {'message': {'Items': [{'workflowExecutionId': 'e1'}], 'NextToken': 't1',
+                             'warnings': [self._BOUND]}},
+                {'message': {'Items': [{'workflowExecutionId': 'e2'}], 'warnings': [self._BOUND]}},
+            ]
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1', '--auto-paginate',
+                '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['totalItems'] == 2
+            assert data['warnings'] == [self._BOUND]
+
+    def test_auto_paginate_clean_walk_adds_no_warnings_key(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}]}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1', '--auto-paginate',
+                '--json-output'])
+            assert result.exit_code == 0
+            assert 'warnings' not in json.loads(result.output)
+
+
 class TestWorkflowListTriggerCounts:
     """The workflow list surfaces trigger counts and can filter on them."""
 

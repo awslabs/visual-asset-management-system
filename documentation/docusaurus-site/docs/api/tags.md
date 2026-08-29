@@ -111,7 +111,7 @@ POST /tag-types
 | Field         | Type   | Required | Description                                                                          |
 | ------------- | ------ | -------- | ------------------------------------------------------------------------------------ |
 | `tagTypeName` | string | Yes      | Tag type name, unique per database (1-256 chars)                                     |
-| `description` | string | No       | Description of the tag type                                                          |
+| `description` | string | Yes      | Description of the tag type (1-256 chars)                                            |
 | `required`    | string | No       | Whether this tag type is required (`True`/`False`, default `False`)                  |
 | `databaseId`  | string | No       | Scope of the tag type. Omit or use `GLOBAL` for a global tag type; a database ID scopes it to that database. Immutable after creation. |
 
@@ -271,6 +271,7 @@ POST /tags
 | Field         | Type   | Required | Description                                                                          |
 | ------------- | ------ | -------- | ------------------------------------------------------------------------------------ |
 | `tagName`     | string | Yes      | Tag name, unique per database (1-256 chars)                                          |
+| `description` | string | Yes      | Description of the tag (1-256 chars)                                                 |
 | `tagTypeName` | string | Yes      | Tag type this tag belongs to (must already exist)                                    |
 | `databaseId`  | string | No       | Scope of the tag. Omit or use `GLOBAL` for a global tag; a database ID scopes it to that database. Immutable after creation. |
 
@@ -281,6 +282,7 @@ The referenced database must exist, and a tag's tag type must live in the tag's 
 ```json
 {
     "tagName": "High Priority",
+    "description": "Assets that require immediate attention",
     "tagTypeName": "Priority",
     "databaseId": "factory-db"
 }
@@ -290,7 +292,26 @@ The referenced database must exist, and a tag's tag type must live in the tag's 
 
 ```json
 {
-    "message": "Tag created successfully"
+    "success": true,
+    "message": "Tag High Priority created successfully",
+    "tagName": "High Priority",
+    "operation": "create",
+    "timestamp": "2026-01-15T10:30:00.000Z"
+}
+```
+
+A create that succeeds with an advisory carries a `warnings` array — currently returned when a GLOBAL tag is created for a name a database already uses:
+
+```json
+{
+    "success": true,
+    "message": "Tag High Priority created successfully",
+    "tagName": "High Priority",
+    "operation": "create",
+    "timestamp": "2026-01-15T10:30:00.000Z",
+    "warnings": [
+        "This name is also used by a database-specific tag. Asset forms will list both entries until the database-specific tag is removed."
+    ]
 }
 ```
 

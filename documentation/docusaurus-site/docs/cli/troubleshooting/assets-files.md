@@ -184,7 +184,7 @@ A file operation fails because the path cannot be found within the asset.
 
 **Cause:**
 
-The file path is incorrect, the path is case-sensitive, or the file is archived.
+The file path is incorrect, the path is case-sensitive, the file is archived, or the shell rewrote the path before the CLI received it.
 
 **Resolution:**
 
@@ -206,7 +206,13 @@ The file path is incorrect, the path is case-sensitive, or the file is archived.
     vamscli file info -d my-database -a my-asset -p "/model.gltf" --include-versions
     ```
 
-File paths within an asset are absolute and begin with `/`.
+4. On Windows, re-run the command with `MSYS_NO_PATHCONV=1` if you are using Git Bash, MSYS2, or Cygwin:
+
+    ```bash
+    MSYS_NO_PATHCONV=1 vamscli file info -d my-database -a my-asset -p "/model.gltf"
+    ```
+
+File paths within an asset are absolute and begin with `/`. Those shells rewrite an argument that begins with `/` into a Windows path before the CLI receives it, and quoting does not prevent it, so `-p "/model.gltf"` arrives as a local filesystem path that the asset does not contain. `--source` and `--dest` on `file move` and `file copy` are rewritten the same way, which can direct the operation at an unintended path. See [Asset-relative paths on Windows](../commands/files.md) on the File Commands page.
 
 ### File Move or Copy Fails
 
@@ -568,10 +574,10 @@ vamscli sync file push ./models -d my-database -a my-asset --allow-modify --size
 
 ## Diagnostics
 
-When a command fails for an unclear reason, re-run it with the global `--debug` flag for detailed error information:
+When a command fails for an unclear reason, re-run it with the global `--verbose` flag for detailed error information, API requests and responses, and per-request timing:
 
 ```bash
-vamscli --debug assets download /local/path -d my-database -a my-asset
+vamscli --verbose assets download /local/path -d my-database -a my-asset
 ```
 
 Validate complex `--json-input` payloads separately before passing them to a command:

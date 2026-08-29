@@ -4,8 +4,8 @@
 import os
 import boto3
 import json
-import gzip
 import base64
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
@@ -65,7 +65,7 @@ bucket_cache = {}
 
 # Load environment variables
 try:
-    from common.resourceNames import ResourceKeys, get_table_name
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
     asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
@@ -74,6 +74,7 @@ try:
     asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
     asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
     s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_auxiliary_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
     asset_links_function_name = os.environ["ASSET_LINKS_FUNCTION_NAME"]
     presigned_url_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
@@ -89,7 +90,16 @@ asset_links_metadata_table = dynamodb.Table(asset_links_metadata_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 # Constants
-COMPRESSION_THRESHOLD = 102400  # 100KB
+# Export payloads at or below this size are returned inline as the JSON response body. Larger
+# payloads are staged in the asset auxiliary bucket and delivered by redirecting to a presigned
+# URL, the same delivery the download and stream APIs use. The REST API returns a Lambda response
+# carrying isBase64Encoded as literal text, so a compressed base64 body is not readable by a
+# client, and an inline body is additionally bounded by the 6 MB Lambda response limit.
+INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
+# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant is
+# scoped to this prefix (ASSET_EXPORT_STAGING_PREFIX in
+# infra/lib/lambdaBuilder/assetFunctions.ts), so the two values move together.
+EXPORT_STAGING_PREFIX = "assetExports/"
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 # Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
 MAX_PARALLEL_EXPORT_WORKERS = 10
@@ -153,12 +163,16 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
             raise VAMSGeneralErrorResponse("Asset not found")
         
         asset["object__type"] = "asset"
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(asset, operation):
-                raise VAMSGeneralErrorResponse("Not Authorized to access asset")
-        
+
+        # Fail closed: with no authenticated identity no authorization can be
+        # evaluated, so deny rather than return the asset.
+        if len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(asset, operation):
+            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+
         return asset
     except VAMSGeneralErrorResponse as e:
         raise e
@@ -185,28 +199,58 @@ def parse_pagination_token(token: str) -> Dict:
         logger.exception(f"Error parsing pagination token: {e}")
         raise VAMSGeneralErrorResponse("Invalid pagination token format")
 
-def compress_response(response_dict: Dict) -> Dict:
-    """Compress response if over threshold"""
-    json_str = json.dumps(response_dict)
-    
-    if len(json_str.encode('utf-8')) > COMPRESSION_THRESHOLD:
-        logger.info(f"Compressing response (size: {len(json_str.encode('utf-8'))} bytes)")
-        compressed = gzip.compress(json_str.encode('utf-8'))
-        return {
-            'statusCode': 200,
-            'headers': {
-                **commonHeaders(),
-                'Content-Encoding': 'gzip'
+def stage_export_payload(payload_bytes: bytes, databaseId: str, assetId: str) -> str:
+    """Write an export payload to the auxiliary bucket and return a presigned URL for it"""
+    object_key = f"{EXPORT_STAGING_PREFIX}{databaseId}/{assetId}/{uuid.uuid4().hex}.json"
+    try:
+        s3_client.put_object(
+            Bucket=asset_auxiliary_bucket_name,
+            Key=object_key,
+            Body=payload_bytes,
+            ContentType='application/json'
+        )
+        return s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': asset_auxiliary_bucket_name,
+                'Key': object_key
             },
-            'body': base64.b64encode(compressed).decode('utf-8'),
-            'isBase64Encoded': True
-        }
-    else:
+            ExpiresIn=int(presigned_url_timeout)
+        )
+    except Exception as e:
+        logger.exception(f"Error staging export payload: {e}")
+        raise VAMSGeneralErrorResponse("Error preparing the export payload for download")
+
+def build_export_response(response_dict: Dict, databaseId: str, assetId: str) -> Dict:
+    """Return the export payload inline, or redirect to a presigned URL when it is too large"""
+    json_str = json.dumps(response_dict)
+    payload_bytes = json_str.encode('utf-8')
+
+    if len(payload_bytes) <= INLINE_RESPONSE_MAX_BYTES:
         return {
             'statusCode': 200,
             'headers': commonHeaders(),
             'body': json_str
         }
+
+    logger.info(f"Staging export payload for presigned delivery (size: {len(payload_bytes)} bytes)")
+    presigned_url = stage_export_payload(payload_bytes, databaseId, assetId)
+
+    # 303 rather than 307: the export route is a POST, and 303 is the status that tells a client to
+    # fetch the result with a GET. A 307 preserves the method, so the client would re-POST to the
+    # presigned URL, which is signed for a GET and rejects it.
+    return {
+        'statusCode': 303,
+        'headers': {
+            **commonHeaders(),
+            'Location': presigned_url
+        },
+        'body': json.dumps({
+            'message': 'Export payload exceeds the inline response size and is available at the redirect target',
+            'presignedExportPayloadUrl': presigned_url,
+            'presignedExportPayloadExpiresIn': int(presigned_url_timeout)
+        })
+    }
 
 #######################
 # Asset Tree Functions
@@ -376,6 +420,36 @@ def batch_get_assets(asset_identifiers: List[Dict]) -> Dict[str, Dict]:
     
     return asset_details
 
+# How many metadata keys one aggregated log line names. Rule 9: a metadata key is an identifier,
+# so naming it is safe where rendering its value would not be -- but one asset can hold a great
+# many rows, and a line that grows with the data is the same volume problem in another shape. The
+# count is always reported in full.
+ABSENT_FIELD_LOG_KEY_SAMPLE = 25
+
+
+def log_absent_stored_fields(absent_keys_by_field: Dict[str, List[str]], subject: str) -> None:
+    """Report one entity's malformed stored metadata rows in one line per absent attribute.
+
+    An export is what a customer takes off the platform, so a row that could not be read in full
+    has to be findable afterwards. Reporting per row emitted a line for every legacy row of every
+    exported asset, so the log volume scaled with the export; the count, plus enough keys to begin
+    repairing them, is what an operator needs and neither requires a line per row.
+
+    Args:
+        absent_keys_by_field: Stored attribute name -> metadata keys of the rows that lack it.
+        subject: Identifiers of the entity the rows belong to.
+    """
+    for field_name in sorted(absent_keys_by_field):
+        keys = absent_keys_by_field[field_name]
+        if not keys:
+            continue
+        sample = [str(key) for key in keys[:ABSENT_FIELD_LOG_KEY_SAMPLE]]
+        remainder = len(keys) - len(sample)
+        more = f" (+{remainder} more)" if remainder > 0 else ""
+        logger.warning(
+            f"{len(keys)} stored metadata row(s) for {subject} carry no {field_name}; exported "
+            f"with that attribute null. Keys: {', '.join(sample)}{more}")
+
 def get_asset_metadata(databaseId: str, assetId: str) -> Dict:
     """Get asset-level metadata using new table structure"""
     try:
@@ -391,17 +465,40 @@ def get_asset_metadata(databaseId: str, assetId: str) -> Dict:
             ExpressionAttributeValues={':pkValue': {'S': composite_key}}
         )
         
-        # Deserialize and convert to dict
+        # Deserialize and convert to dict. Stored attributes are read with .get: a row written by
+        # an earlier release can carry no metadataValue, and subscripting one raised a KeyError the
+        # handler below answered with an empty dict -- so ONE such row exported the asset as though
+        # it held no metadata at all, which is what a consumer of the bundle would then believe. A
+        # row is kept with what it has and reported, matching the metadata GET, which returns an
+        # absent attribute as null rather than inventing a value for it.
+        #
+        # The stored value TYPE is carried out alongside the value rather than dropped, because the
+        # export bundle has to report it and cannot recover it later. Defaulting it at the bundle
+        # boundary labels a row of unknown type as 'string', which is a claim about the data that
+        # nothing checked -- see the asset-link path and assetVersions.get_asset_metadata_version,
+        # both of which report an absent type as null.
         metadata = {}
+        absent_keys_by_field = {}
         deserializer = TypeDeserializer()
         for item in response.get('Items', []):
             deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-            # Store as key-value pairs
-            metadata[deserialized['metadataKey']] = deserialized['metadataValue']
-        
+            metadata_key = deserialized.get('metadataKey')
+            if metadata_key is None:
+                logger.warning(
+                    f"Skipping a stored metadata row with no metadataKey for {databaseId}:{assetId}")
+                continue
+            for field_name in ('metadataValue', 'metadataValueType'):
+                if field_name not in deserialized:
+                    absent_keys_by_field.setdefault(field_name, []).append(metadata_key)
+            metadata[metadata_key] = {
+                'value': deserialized.get('metadataValue'),
+                'valueType': deserialized.get('metadataValueType'),
+            }
+
+        log_absent_stored_fields(absent_keys_by_field, f"{databaseId}:{assetId}")
         return metadata
     except Exception as e:
-        logger.warning(f"Error getting asset metadata for {assetId}: {e}")
+        logger.exception(f"Error reading asset metadata for {databaseId}:{assetId}: {e}")
         return {}
 
 def get_file_metadata(databaseId: str, assetId: str, relative_path: str) -> Dict:
@@ -423,17 +520,35 @@ def get_file_metadata(databaseId: str, assetId: str, relative_path: str) -> Dict
             ExpressionAttributeValues={':pkValue': {'S': composite_key}}
         )
         
-        # Deserialize and convert to dict
+        # Deserialize and convert to dict. Read with .get, and carry the stored value type out
+        # alongside the value, for the same reasons as the asset-level metadata above: one row
+        # lacking metadataValue used to empty the file's whole metadata block in the exported
+        # bundle, and a type defaulted at the bundle boundary asserts a type the row never had.
         metadata = {}
+        absent_keys_by_field = {}
         deserializer = TypeDeserializer()
         for item in response.get('Items', []):
             deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-            # Store as key-value pairs
-            metadata[deserialized['metadataKey']] = deserialized['metadataValue']
-        
+            metadata_key = deserialized.get('metadataKey')
+            if metadata_key is None:
+                logger.warning(
+                    f"Skipping a stored metadata row with no metadataKey for "
+                    f"{databaseId}:{assetId}:{relative_path}")
+                continue
+            for field_name in ('metadataValue', 'metadataValueType'):
+                if field_name not in deserialized:
+                    absent_keys_by_field.setdefault(field_name, []).append(metadata_key)
+            metadata[metadata_key] = {
+                'value': deserialized.get('metadataValue'),
+                'valueType': deserialized.get('metadataValueType'),
+            }
+
+        log_absent_stored_fields(
+            absent_keys_by_field, f"{databaseId}:{assetId}:{relative_path}")
         return metadata
     except Exception as e:
-        logger.warning(f"Error getting file metadata for {relative_path}: {e}")
+        logger.exception(
+            f"Error reading file metadata for {databaseId}:{assetId}:{relative_path}: {e}")
         return {}
 
 
@@ -461,12 +576,16 @@ def get_file_attributes(databaseId: str, assetId: str, relative_path: str) -> Di
         deserializer = TypeDeserializer()
         for item in response.get('Items', []):
             deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-            # Handle both attributeKey and metadataKey field names for compatibility
+            # Handle both attributeKey and metadataKey field names for compatibility. The stored
+            # value type is carried out with the value so the export bundle reports the row's own
+            # type instead of defaulting it -- an absent type is null, as everywhere else.
             key = deserialized.get('attributeKey', deserialized.get('metadataKey'))
             value = deserialized.get('attributeValue', deserialized.get('metadataValue'))
+            value_type = deserialized.get(
+                'attributeValueType', deserialized.get('metadataValueType'))
             if key:
-                attributes[key] = value
-        
+                attributes[key] = {'value': value, 'valueType': value_type}
+
         return attributes
     except Exception as e:
         logger.warning(f"Error getting file attributes for {relative_path}: {e}")
@@ -619,16 +738,31 @@ def get_asset_link_metadata(assetLinkId: str) -> Dict:
             KeyConditionExpression=Key('assetLinkId').eq(assetLinkId)
         )
         
+        # Stored attributes are read with .get: a row written by an earlier release can carry no
+        # metadataValue or metadataValueType, and subscripting either raised a KeyError the handler
+        # below answered with an empty dict -- so ONE such row exported the link as though it
+        # carried no metadata. Absent is reported as null, matching the metadata GET.
         metadata = {}
+        absent_keys_by_field = {}
         for item in response.get('Items', []):
-            metadata[item['metadataKey']] = {
-                'valueType': item['metadataValueType'],
-                'value': item['metadataValue']
+            metadata_key = item.get('metadataKey')
+            if metadata_key is None:
+                logger.warning(
+                    f"Skipping a stored asset link metadata row with no metadataKey for link "
+                    f"{assetLinkId}")
+                continue
+            for field_name in ('metadataValue', 'metadataValueType'):
+                if field_name not in item:
+                    absent_keys_by_field.setdefault(field_name, []).append(metadata_key)
+            metadata[metadata_key] = {
+                'valueType': item.get('metadataValueType'),
+                'value': item.get('metadataValue')
             }
-        
+
+        log_absent_stored_fields(absent_keys_by_field, f"asset link {assetLinkId}")
         return metadata
     except Exception as e:
-        logger.warning(f"Error getting asset link metadata for {assetLinkId}: {e}")
+        logger.exception(f"Error reading asset link metadata for link {assetLinkId}: {e}")
         return {}
 
 def is_preview_file(file_path: str) -> bool:
@@ -755,11 +889,15 @@ def process_asset_batch(
             asset_metadata = {}
             if request_model.includeAssetMetadata:
                 raw_metadata = get_asset_metadata(asset_info['databaseId'], asset_info['assetId'])
-                for key, value in raw_metadata.items():
+                for key, stored in raw_metadata.items():
                     if not key.startswith(HIDDEN_FIELD_PREFIX):
+                        # A row carrying no stored value is exported with its key and a null
+                        # value, so it stays visible instead of reading as absent. The type is
+                        # the row's own -- null when the row does not carry one, never defaulted.
+                        value = stored.get('value')
                         asset_metadata[key] = {
-                            'valueType': 'string',
-                            'value': str(value)
+                            'valueType': stored.get('valueType'),
+                            'value': None if value is None else str(value)
                         }
 
             # Get files
@@ -822,11 +960,12 @@ def process_asset_batch(
                         file['relativePath']
                     )
                     if raw_file_metadata:
-                        for key, value in raw_file_metadata.items():
+                        for key, stored in raw_file_metadata.items():
                             if not key.startswith(HIDDEN_FIELD_PREFIX):
+                                value = stored.get('value')
                                 file_metadata[key] = {
-                                    'valueType': 'string',
-                                    'value': str(value)
+                                    'valueType': stored.get('valueType'),
+                                    'value': None if value is None else str(value)
                                 }
 
                     raw_file_attributes = get_file_attributes(
@@ -835,11 +974,12 @@ def process_asset_batch(
                         file['relativePath']
                     )
                     if raw_file_attributes:
-                        for key, value in raw_file_attributes.items():
+                        for key, stored in raw_file_attributes.items():
                             if not key.startswith(HIDDEN_FIELD_PREFIX):
+                                value = stored.get('value')
                                 file_attributes[key] = {
-                                    'valueType': 'string',
-                                    'value': str(value)
+                                    'valueType': stored.get('valueType'),
+                                    'value': None if value is None else str(value)
                                 }
 
                 # Generate presigned URL if requested (skip for archived files)
@@ -1125,8 +1265,12 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
             event
         )
         
-        # Apply compression if needed
-        return compress_response(response_data)
+        # Deliver inline, or redirect to a presigned URL when the payload is too large
+        return build_export_response(
+            response_data,
+            path_params['databaseId'],
+            path_params['assetId']
+        )
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")

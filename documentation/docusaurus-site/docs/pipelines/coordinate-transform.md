@@ -82,8 +82,8 @@ Enable this pipeline in `infra/config/config.json`:
 
 The pipeline accepts transform parameters that control the coordinate reprojection. Parameters can be provided in two ways:
 
-1. **Pipeline defaults** -- configured during pipeline registration (the `inputParameters` field in the pipeline definition).
-2. **Asset metadata overrides** -- set as metadata key-value pairs on individual assets. Metadata values override pipeline defaults.
+1. **Pipeline template** -- a named JSON configuration body registered against the pipeline. A template is chosen per run in the pipeline stage of the execute wizard, and its body can be edited for that one run. This pipeline requires a template (`systemConfig.requireTemplate` is `true`), so a run cannot start without selecting one. Deployment registers the `coordinate-transform-wgs84-to-osgb36-laz` template, which reprojects `EPSG:4326` to `EPSG:27700` and writes LAZ output.
+2. **Asset metadata overrides** -- set as metadata key-value pairs on individual assets. Metadata values override the template parameters.
 
 ### Parameter Reference
 
@@ -133,7 +133,7 @@ Custom grids allow you to define local or site-specific coordinate systems using
 
 Custom grid names are only supported for `sourceCrs`. For `targetCrs`, use EPSG codes, PROJ strings, or WKT.
 
-### Example Input Parameters
+### Example template configuration body
 
 ```json
 {
@@ -246,13 +246,13 @@ Verify the build status is `SUCCEEDED` and the Amazon ECR repository contains th
 
 ### Missing sourceCrs or targetCrs
 
-The container requires both `sourceCrs` and `targetCrs` to be present in the final merged parameters. If neither the pipeline defaults nor the asset metadata provide these values, the pipeline fails with:
+The container requires both `sourceCrs` and `targetCrs` to be present in the final merged parameters. If neither the selected template body nor the asset metadata provide these values, the pipeline fails with:
 
 ```
 inputParameters must include 'sourceCrs' and 'targetCrs'
 ```
 
-Ensure at least one source provides both CRS values.
+`inputParameters` in that message is the container's own name for the merged configuration it receives; the values originate in the template body and the asset metadata. Ensure at least one of those provides both CRS values.
 
 ### CRS Mismatch Errors
 

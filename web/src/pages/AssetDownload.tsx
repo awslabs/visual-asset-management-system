@@ -593,7 +593,12 @@ export default function AssetDownloadsPage() {
     const { state } = useLocation();
     const { databaseId, assetId } = useParams();
     const navigate = useNavigate();
-    const fileTree = state["fileTree"] as FileTree;
+    // `location.state` is null whenever this route is reached without an in-app navigation carrying it —
+    // a bookmark, a shared link, or simply a browser refresh. Indexing it directly threw
+    // "Cannot read properties of null (reading 'fileTree')" and the page died behind the error boundary,
+    // whose Reload button repeats the same stateless navigation, so the user could not recover at all.
+    // The next line already guarded `state?.assetName`, so the null case was anticipated one field over.
+    const fileTree = (state as { fileTree?: FileTree } | null)?.fileTree;
     const [assetName, setAssetName] = useState<string>((state?.assetName as string) || "");
     usePageTitle(databaseId, assetName || assetId, "Download");
     const [resume, setResume] = useState(true);
@@ -614,15 +619,19 @@ export default function AssetDownloadsPage() {
     const [flattenHierarchy, setFlattenHierarchy] = useState(true);
     const [selectedFolderName, setSelectedFolderName] = useState<string>("");
 
-    // Initialize table items
-    const fileUploadTableItems = convertFileTreeItemsToFileUploadTableItems(fileTree);
+    // Initialize table items. Falls back to an empty list when there is no tree, so every hook below
+    // still runs unconditionally — the "no state" case is handled by an early return after the hooks,
+    // which is the only placement that respects hook ordering.
+    const fileUploadTableItems = fileTree
+        ? convertFileTreeItemsToFileUploadTableItems(fileTree)
+        : [];
     const [fileUploadTableItemsState, dispatch] = useReducer(
         assetDownloadReducer,
         fileUploadTableItems
     );
 
     // Check for duplicate file names when in flatten mode
-    const flattenedFiles = flattenFileTree(fileTree);
+    const flattenedFiles = fileTree ? flattenFileTree(fileTree) : [];
     const duplicateFileNames = flattenHierarchy ? detectDuplicateFileNames(flattenedFiles) : [];
     const hasDuplicates = duplicateFileNames.length > 0;
 
@@ -639,6 +648,10 @@ export default function AssetDownloadsPage() {
 
     // Handle download
     const handleDownload = async () => {
+        // Unreachable without a tree — the early return above replaces the entire download UI, including
+        // the button that calls this. Guarded rather than asserted with `!`, so the type stays honest if
+        // that return is ever moved or removed.
+        if (!fileTree) return;
         setIsDownloading(true);
 
         try {
@@ -707,6 +720,32 @@ export default function AssetDownloadsPage() {
 
     const stats = getDownloadStats();
     const allComplete = isAllComplete();
+
+    // No router state means there is nothing to download: the folder tree is chosen in the file manager
+    // and handed over on navigation, so it cannot be reconstructed from the URL alone. Placed after every
+    // hook above, because an early return before them would change the hook order between renders.
+    // A link back to the asset is the actionable part — telling the user the page is unusable without
+    // saying where to go leaves them exactly as stuck as the crash did.
+    if (!fileTree) {
+        return (
+            <Box padding={{ top: "xs", horizontal: "l" }}>
+                <SpaceBetween direction="vertical" size="m">
+                    <Header variant="h2">Nothing selected to download</Header>
+                    <Box variant="p">
+                        This page downloads a folder chosen in the {Synonyms.Asset} file manager, so
+                        it cannot be opened directly, bookmarked, or reloaded. Open the{" "}
+                        {Synonyms.asset} and start the download from its Files tab.
+                    </Box>
+                    <Button
+                        variant="primary"
+                        onClick={() => navigate(`/databases/${databaseId}/assets/${assetId}`)}
+                    >
+                        Go to {Synonyms.Asset}
+                    </Button>
+                </SpaceBetween>
+            </Box>
+        );
+    }
 
     return (
         <Box padding={{ top: "xs", horizontal: "l" }}>
