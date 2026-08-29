@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Plan your deployment | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/deployment/plan-your-deployment"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Plan your deployment | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="Before deploying Visual Asset Management System (VAMS), review the decisions on this page to determine the architecture, authentication method, and optional features that best fit your environment."><meta data-rh="true" property="og:description" content="Before deploying Visual Asset Management System (VAMS), review the decisions on this page to determine the architecture, authentication method, and optional features that best fit your environment."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/deployment/plan-your-deployment"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/deployment/plan-your-deployment" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/deployment/plan-your-deployment" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Plan your deployment","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/deployment/plan-your-deployment"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.6a3d9626.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.5c02b926.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.f5a28683.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -49,37 +49,20 @@
 
 
 <table><thead><tr><th>Mode</th><th>Web distribution</th><th>Partition</th><th>VPC required</th><th>Description</th></tr></thead><tbody><tr><td><strong>Commercial</strong></td><td>Amazon CloudFront + Amazon S3</td><td><code>aws</code></td><td>Optional</td><td>Default mode. Uses Amazon CloudFront for global edge caching and static website hosting.</td></tr><tr><td><strong>GovCloud</strong></td><td>Application Load Balancer + Amazon S3</td><td><code>aws-us-gov</code></td><td>Yes</td><td>For AWS GovCloud (US) Regions. Amazon CloudFront is not available; an Application Load Balancer (ALB) serves the web application. Supports full VPC isolation with VPC endpoints for restricted environments.</td></tr><tr><td><strong>EU Sovereign Cloud</strong></td><td>Application Load Balancer + Amazon S3</td><td><code>aws-eusc</code></td><td>Yes</td><td>For the AWS European Sovereign Cloud (Region <code>eusc-de-east-1</code>). Deploys with the GovCloud guardrails (<code>app.govCloud.enabled: true</code>): no Amazon CloudFront, no Amazon Location Service. The Region exposes two Availability Zones.</td></tr></tbody></table>
-<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>GovCloud and EU Sovereign Cloud constraints</div><div class="admonitionContent_BuS1"><p>When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the following services are unavailable or restricted:</p><ul>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>GovCloud and EU Sovereign Cloud constraints</div><div class="admonitionContent_BuS1"><p>When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the following services are unavailable or restricted. Configuration validation rejects a deployment that enables any of them.</p><ul>
+<li class="">A VPC is required. Set <code>app.useGlobalVpc.enabled</code> to <code>true</code>.</li>
 <li class="">Amazon CloudFront is not supported. Use the ALB deployment mode.</li>
 <li class="">Amazon Location Service is not supported. Disable <code>app.useLocationService.enabled</code>.</li>
-<li class="">AWS WAF <code>AdvancedSecurityMode</code> for Amazon Cognito is not available (automatically suppressed).
-:::</li>
-</ul><h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="key-decisions">Key decisions<a href="#key-decisions" class="hash-link" aria-label="Direct link to Key decisions" title="Direct link to Key decisions" translate="no">​</a></h2><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="authentication-provider">Authentication provider<a href="#authentication-provider" class="hash-link" aria-label="Direct link to Authentication provider" title="Direct link to Authentication provider" translate="no">​</a></h3><p>VAMS supports three authentication approaches. You must choose exactly one.</p>
+<li class="">AWS Deadline Cloud is not supported. Disable <code>app.pipelines.deadlineCloudExecutionTypeEnabled</code>.</li>
+<li class="">Amazon Cognito SAML and OIDC federation are not supported — both use the Amazon Cognito hosted UI. Disable <code>useCognito.useSaml</code> and <code>useCognito.useOidc</code>, and use the external OAuth identity provider option for federated sign-in.</li>
+<li class="">Next-generation Amazon OpenSearch Serverless collections are not supported. Set <code>app.openSearch.useServerless.nextGen</code> to <code>false</code>.</li>
+<li class="">Amazon OpenSearch Serverless is not offered at all in the AWS European Sovereign Cloud. Set <code>app.openSearch.useServerless.enabled</code> to <code>false</code> and use <code>app.openSearch.useProvisioned</code> there.</li>
+<li class="">Amazon Cognito advanced security (<code>AdvancedSecurityMode</code>) is not available. VAMS does not configure it and suppresses the corresponding check automatically, so no configuration change is needed.</li>
+</ul><p>For the authoritative per-field list, see <a class="" href="/visual-asset-management-system/release-2.6.0/deployment/configuration-reference#restricted-partition-constraints">Restricted-partition constraints</a>.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="key-decisions">Key decisions<a href="#key-decisions" class="hash-link" aria-label="Direct link to Key decisions" title="Direct link to Key decisions" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="authentication-provider">Authentication provider<a href="#authentication-provider" class="hash-link" aria-label="Direct link to Authentication provider" title="Direct link to Authentication provider" translate="no">​</a></h3>
+<p>VAMS supports four authentication approaches. You must choose exactly one.</p>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>Option</th><th>Configuration</th><th>Description</th></tr></thead><tbody><tr><td><strong>Amazon Cognito</strong> (default)</td><td><code>authProvider.useCognito.enabled: true</code></td><td>VAMS creates and manages an Amazon Cognito user pool. Users receive a temporary password by email. Supports optional SAML federation.</td></tr><tr><td><strong>Amazon Cognito with SAML</strong></td><td><code>authProvider.useCognito.enabled: true</code> and <code>useSaml: true</code></td><td>Amazon Cognito with federated SAML from an external identity provider (IdP). Requires additional SAML configuration.</td></tr><tr><td><strong>External OAuth IdP</strong></td><td><code>authProvider.useExternalOAuthIdp.enabled: true</code></td><td>Bring your own OAuth 2.0 / OpenID Connect identity provider (for example, PingFederate, Okta). Requires configuring multiple IdP endpoint URLs and client credentials.</td></tr></tbody></table><h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="web-distribution">Web distribution<a href="#web-distribution" class="hash-link" aria-label="Direct link to Web distribution" title="Direct link to Web distribution" translate="no">​</a></h3>
 
 
 
@@ -109,7 +92,41 @@
 
 
 
-<table><thead><tr><th>Option</th><th>When to use</th><th>Configuration</th></tr></thead><tbody><tr><td><strong>Amazon CloudFront</strong></td><td>Commercial AWS. Provides global edge caching, AWS-managed TLS, and a generated domain URL.</td><td><code>useCloudFront.enabled: true</code></td></tr><tr><td><strong>Amazon CloudFront with custom domain</strong></td><td>Commercial AWS with organizational branding requirements. Requires an AWS Certificate Manager (ACM) certificate in <code>us-east-1</code>.</td><td><code>useCloudFront.customDomain.enabled: true</code></td></tr><tr><td><strong>Application Load Balancer</strong></td><td>AWS GovCloud, the AWS European Sovereign Cloud, or when CloudFront is not permitted. Requires a registered domain name and an ACM certificate in the deployment Region.</td><td><code>useAlb.enabled: true</code></td></tr><tr><td><strong>API only (no web UI)</strong></td><td>Headless deployments driven entirely through API or CLI.</td><td>Both <code>useCloudFront.enabled: false</code> and <code>useAlb.enabled: false</code></td></tr></tbody></table><div class="theme-admonition theme-admonition-danger admonition_xJq3 alert alert--danger"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M5.05.31c.81 2.17.41 3.38-.52 4.31C3.55 5.67 1.98 6.45.9 7.98c-1.45 2.05-1.7 6.53 3.53 7.7-2.2-1.16-2.67-4.52-.3-6.61-.61 2.03.53 3.33 1.94 2.86 1.39-.47 2.3.53 2.27 1.67-.02.78-.31 1.44-1.13 1.81 3.42-.59 4.78-3.42 4.78-5.56 0-2.84-2.53-3.22-1.25-5.61-1.52.13-2.03 1.13-1.89 2.75.09 1.08-1.02 1.8-1.86 1.33-.67-.41-.66-1.19-.06-1.78C8.18 5.31 8.68 2.45 5.05.32L5.03.3l.02.01z"></path></svg></span>Mutual exclusion</div><div class="admonitionContent_BuS1"><p>You cannot enable both Amazon CloudFront and ALB simultaneously. The deployment will fail validation if both are set to <code>true</code>.</p></div></div></div></div>
+<table><thead><tr><th>Option</th><th>Configuration</th><th>Description</th></tr></thead><tbody><tr><td><strong>Amazon Cognito</strong> (default)</td><td><code>authProvider.useCognito.enabled: true</code></td><td>VAMS creates and manages an Amazon Cognito user pool. Users receive a temporary password by email. Supports optional SAML or OIDC federation.</td></tr><tr><td><strong>Amazon Cognito with SAML</strong></td><td><code>authProvider.useCognito.enabled: true</code> and <code>useSaml: true</code></td><td>Amazon Cognito with federated SAML from an external identity provider (IdP). Provider details are configured in <code>infra/config/saml-config.ts</code>.</td></tr><tr><td><strong>Amazon Cognito with OIDC</strong></td><td><code>authProvider.useCognito.enabled: true</code> and <code>useOidc: true</code></td><td>Amazon Cognito with federated OpenID Connect from an external IdP (for example, Okta, Microsoft Entra ID, PingFederate). Provider details are configured in <code>infra/config/oidc-config.ts</code>.</td></tr><tr><td><strong>External OAuth IdP</strong></td><td><code>authProvider.useExternalOAuthIdp.enabled: true</code></td><td>Bring your own OAuth 2.0 / OpenID Connect identity provider without an Amazon Cognito user pool. Requires configuring multiple IdP endpoint URLs and client credentials, plus a custom JWT issuer and audience.</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Cognito federation constraints</div><div class="admonitionContent_BuS1"><p><code>useSaml</code> and <code>useOidc</code> are mutually exclusive, and both require <code>useCognito.enabled</code> to be <code>true</code> — they are ignored when it is <code>false</code>. Both use the Amazon Cognito hosted UI, which is available only in the commercial <code>aws</code> partition, so neither can be used in AWS GovCloud or the AWS European Sovereign Cloud. Use the external OAuth IdP option for federated sign-in there.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="web-distribution">Web distribution<a href="#web-distribution" class="hash-link" aria-label="Direct link to Web distribution" title="Direct link to Web distribution" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Option</th><th>When to use</th><th>Configuration</th></tr></thead><tbody><tr><td><strong>Amazon CloudFront</strong></td><td>Commercial AWS. Provides global edge caching, AWS-managed TLS, and a generated domain URL.</td><td><code>useCloudFront.enabled: true</code></td></tr><tr><td><strong>Amazon CloudFront with custom domain</strong></td><td>Commercial AWS with organizational branding requirements. Requires an AWS Certificate Manager (ACM) certificate in <code>us-east-1</code>.</td><td><code>useCloudFront.customDomain.enabled: true</code></td></tr><tr><td><strong>Application Load Balancer</strong></td><td>AWS GovCloud, the AWS European Sovereign Cloud, or when CloudFront is not permitted. Requires a registered domain name and an ACM certificate in the deployment Region.</td><td><code>useAlb.enabled: true</code></td></tr><tr><td><strong>API only (no web UI)</strong></td><td>Headless deployments driven entirely through API or CLI.</td><td>Both <code>useCloudFront.enabled: false</code> and <code>useAlb.enabled: false</code></td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-danger admonition_xJq3 alert alert--danger"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M5.05.31c.81 2.17.41 3.38-.52 4.31C3.55 5.67 1.98 6.45.9 7.98c-1.45 2.05-1.7 6.53 3.53 7.7-2.2-1.16-2.67-4.52-.3-6.61-.61 2.03.53 3.33 1.94 2.86 1.39-.47 2.3.53 2.27 1.67-.02.78-.31 1.44-1.13 1.81 3.42-.59 4.78-3.42 4.78-5.56 0-2.84-2.53-3.22-1.25-5.61-1.52.13-2.03 1.13-1.89 2.75.09 1.08-1.02 1.8-1.86 1.33-.67-.41-.66-1.19-.06-1.78C8.18 5.31 8.68 2.45 5.05.32L5.03.3l.02.01z"></path></svg></span>Mutual exclusion</div><div class="admonitionContent_BuS1"><p>You cannot enable both Amazon CloudFront and ALB simultaneously. The deployment will fail validation if both are set to <code>true</code>.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="search-capability">Search capability<a href="#search-capability" class="hash-link" aria-label="Direct link to Search capability" title="Direct link to Search capability" translate="no">​</a></h3>
 <p>Amazon OpenSearch Service provides full-text search, filtering, and map-view functionality in the VAMS web interface.</p>
 
@@ -137,7 +154,7 @@
 
 
 
-<table><thead><tr><th>Option</th><th>Configuration</th><th>Notes</th></tr></thead><tbody><tr><td><strong>OpenSearch Serverless</strong></td><td><code>openSearch.useServerless.enabled: true</code></td><td>Fully managed, pay-per-use. No VPC required. Default for commercial deployments.</td></tr><tr><td><strong>OpenSearch Provisioned</strong></td><td><code>openSearch.useProvisioned.enabled: true</code></td><td>Dedicated cluster with configurable instance types. Requires VPC with a minimum of 3 Availability Zones.</td></tr><tr><td><strong>No OpenSearch</strong></td><td>Both set to <code>false</code></td><td>Search is disabled. The assets page returns all authorized assets without filtering.</td></tr></tbody></table>
+<table><thead><tr><th>Option</th><th>Configuration</th><th>Notes</th></tr></thead><tbody><tr><td><strong>OpenSearch Serverless</strong></td><td><code>openSearch.useServerless.enabled: true</code></td><td>Fully managed, pay-per-use. No VPC required. Default for commercial deployments.</td></tr><tr><td><strong>OpenSearch Provisioned</strong></td><td><code>openSearch.useProvisioned.enabled: true</code></td><td>Dedicated cluster with configurable instance types. Requires a VPC spanning <code>availabilityZoneCount</code> Availability Zones (<code>2</code> by default, optionally <code>3</code>).</td></tr><tr><td><strong>No OpenSearch</strong></td><td>Both set to <code>false</code></td><td>Search is disabled. The assets page returns all authorized assets without filtering.</td></tr></tbody></table>
 <div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Choose only one</div><div class="admonitionContent_BuS1"><p>You cannot enable both OpenSearch Serverless and OpenSearch Provisioned at the same time.</p></div></div>
 <div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Provisioned is for advanced deployments only</div><div class="admonitionContent_BuS1"><p>Amazon OpenSearch Serverless is the recommended option for most deployments. Provisioned is intended for advanced use cases that require dedicated capacity, custom instance sizing, or features unsupported by Serverless. It can complicate stack deployments — domain configuration changes trigger blue/green updates that may exceed the AWS CloudFormation custom-resource timeout, and major-version engine upgrades can fail in place and require redeploying with OpenSearch disabled before re-enabling. See the <a class="" href="/visual-asset-management-system/release-2.6.0/deployment/configuration-reference#amazon-opensearch-service-appopensearch">OpenSearch configuration reference</a> for the full caveat list.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="vpc-configuration">VPC configuration<a href="#vpc-configuration" class="hash-link" aria-label="Direct link to VPC configuration" title="Direct link to VPC configuration" translate="no">​</a></h3>
@@ -194,7 +211,7 @@
 
 
 
-<table><thead><tr><th>Feature</th><th>IPs per subnet</th></tr></thead><tbody><tr><td>ALB</td><td>Up to 8 (scales during runtime)</td></tr><tr><td>Container-based pipelines</td><td>~2 per active workflow execution</td></tr><tr><td>Lambda functions in VPC</td><td>1 per deployed function per subnet (~66 in v2.5)</td></tr><tr><td>VPC interface endpoints</td><td>1 per endpoint per subnet</td></tr></tbody></table>
+<table><thead><tr><th>Feature</th><th>IPs per subnet</th></tr></thead><tbody><tr><td>ALB</td><td>Up to 8 (scales during runtime)</td></tr><tr><td>Container-based pipelines</td><td>~2 per active workflow execution</td></tr><tr><td>Lambda functions in VPC</td><td>1 per deployed function per subnet</td></tr><tr><td>VPC interface endpoints</td><td>1 per endpoint per subnet</td></tr></tbody></table>
 <p>A minimum of 128 IPv4 addresses per subnet is recommended.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="encryption">Encryption<a href="#encryption" class="hash-link" aria-label="Direct link to Encryption" title="Direct link to Encryption" translate="no">​</a></h3>
 

@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Pipeline Commands | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/cli/commands/pipelines"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Pipeline Commands | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="Manage pipeline definitions, their configuration templates, and template tag schemas. A pipeline"><meta data-rh="true" property="og:description" content="Manage pipeline definitions, their configuration templates, and template tag schemas. A pipeline"><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/cli/commands/pipelines"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/cli/commands/pipelines" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/cli/commands/pipelines" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Pipelines","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/cli/commands/pipelines"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.6a3d9626.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.5c02b926.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.f5a28683.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -19,7 +19,12 @@ to compose multi-step processing. See <a class="" href="/visual-asset-management
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-list">pipeline list<a href="#pipeline-list" class="hash-link" aria-label="Direct link to pipeline list" title="Direct link to pipeline list" translate="no">​</a></h2>
 <p>List pipelines in a database, or all pipelines you can access.</p>
-<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">vamscli pipeline list</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli pipeline list </span><span class="token parameter variable" style="color:#36acaa">-d</span><span class="token plain"> my-database</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli pipeline list </span><span class="token parameter variable" style="color:#36acaa">-d</span><span class="token plain"> my-database --include-archived --json-output</span><br></div></code></pre></div></div>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">vamscli pipeline list</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli pipeline list </span><span class="token parameter variable" style="color:#36acaa">-d</span><span class="token plain"> my-database</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli pipeline list </span><span class="token parameter variable" style="color:#36acaa">-d</span><span class="token plain"> my-database --include-archived --auto-paginate</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli pipeline list </span><span class="token parameter variable" style="color:#36acaa">-d</span><span class="token plain"> my-database --include-archived --json-output</span><br></div></code></pre></div></div>
+<p>A page may come back empty and still carry a continuation token: archived and unauthorized pipelines
+are filtered after the page limit is applied, so later pages can still hold matches. <code>--auto-paginate</code>
+follows the token through those pages. It stops early once <code>--max-items</code> items have been collected or
+after 200 pages, and reports the outstanding token so the walk can be resumed with
+<code>--starting-token</code>.</p>
 
 
 
@@ -45,7 +50,19 @@ to compose multi-step processing. See <a class="" href="/visual-asset-management
 
 
 
-<table><thead><tr><th>Option</th><th>Description</th></tr></thead><tbody><tr><td><code>-d, --database-id</code></td><td>Database ID (omit to list all accessible pipelines)</td></tr><tr><td><code>--include-archived</code></td><td>Include archived pipelines</td></tr><tr><td><code>--page-size</code> / <code>--starting-token</code></td><td>Pagination</td></tr><tr><td><code>--json-output</code></td><td>Emit the raw JSON response</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Option</th><th>Description</th></tr></thead><tbody><tr><td><code>-d, --database-id</code></td><td>Database ID (omit to list all accessible pipelines)</td></tr><tr><td><code>--include-archived</code></td><td>Include archived pipelines</td></tr><tr><td><code>--page-size</code></td><td>Items per page</td></tr><tr><td><code>--auto-paginate</code></td><td>Fetch all pages automatically (up to <code>--max-items</code>, default 10000)</td></tr><tr><td><code>--max-items</code></td><td>Maximum total items to fetch (only with <code>--auto-paginate</code>)</td></tr><tr><td><code>--starting-token</code></td><td>Continuation token for manual pagination</td></tr><tr><td><code>--json-output</code></td><td>Emit the raw JSON response</td></tr></tbody></table>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-get">pipeline get<a href="#pipeline-get" class="hash-link" aria-label="Direct link to pipeline get" title="Direct link to pipeline get" translate="no">​</a></h2>
 <p>Get a pipeline and the descriptors of its templates.</p>
