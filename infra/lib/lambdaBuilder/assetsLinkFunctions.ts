@@ -51,7 +51,7 @@ export function buildAssetLinksService(
     });
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -89,7 +89,7 @@ export function buildCreateAssetLinkFunction(
     });
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

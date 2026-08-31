@@ -70,7 +70,7 @@ export class CoordinateTransformCodeBuildConstruct extends Construct {
         const project = new codebuild.Project(this, "CodeBuild-CoordTransform", {
             description: "Build Coordinate Transform container image and push to ECR",
             environment: {
-                buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+                buildImage: Config.CODEBUILD_BUILD_IMAGE,
                 computeType: codebuild.ComputeType.LARGE,
                 privileged: true,
                 environmentVariables: {

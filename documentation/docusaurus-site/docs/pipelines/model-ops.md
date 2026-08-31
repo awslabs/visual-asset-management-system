@@ -102,6 +102,17 @@ Deployment registers one VAMS pipeline template per output format (`model-ops-to
 
 The ModelOps container integrates with AWS Marketplace for usage tracking. The container IAM roles include permissions for `aws-marketplace:RegisterUsage` and `aws-marketplace:MeterUsage`. Ensure the AWS Marketplace subscription is active in the deployment account before running the pipeline.
 
+:::warning[Partition availability]
+AWS Marketplace product availability differs by partition. A subscription is bought and metered in the
+partition it is offered in, and a container obtained through AWS Marketplace in the commercial partition
+is not automatically available in AWS GovCloud (US) or the AWS European Sovereign Cloud — the Marketplace
+listing, the metering API, and the vendor's own distribution all have to support the target partition.
+Confirm availability with the vendor before enabling this pipeline in a restricted partition. VAMS does
+not block the configuration, because whether a given subscription is available is a fact about the
+listing rather than about the deployment: with no reachable image or metering endpoint the pipeline
+deploys and then fails when a job runs.
+:::
+
 ## Related pages
 
 -   [Pipeline overview](overview.md)

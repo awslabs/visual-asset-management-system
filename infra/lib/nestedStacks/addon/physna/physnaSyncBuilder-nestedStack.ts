@@ -33,6 +33,8 @@ import { attachFunctionToApi } from "../../apiLambda/apiRouteRegistry";
 import { NagSuppressions } from "cdk-nag";
 import { populatePhysnaSecret } from "./customResources/populatePhysnaSecret";
 
+import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../../helper/security";
+
 export interface PhysnaSyncBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
@@ -176,7 +178,7 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 maxReceiveCount: syncQueueMaxReceiveCount,
             },
         });
-        fileSyncQueue.grantSendMessages(Service("SNS").Principal);
+
         props.storageResources.sns.fileIndexerSnsTopic.addSubscription(
             new SqsSubscription(fileSyncQueue)
         );
@@ -234,7 +236,6 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
                 maxReceiveCount: syncQueueMaxReceiveCount,
             },
         });
-        assetSyncQueue.grantSendMessages(Service("SNS").Principal);
         props.storageResources.sns.assetIndexerSnsTopic.addSubscription(
             new SqsSubscription(assetSyncQueue)
         );
@@ -280,7 +281,7 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaBasicExecutionRole as-is at this stage of the Physna add-on.",
+                    reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
                     appliesTo: [{ regex: "/.*AWSLambdaBasicExecutionRole$/g" }],
                 },
             ],

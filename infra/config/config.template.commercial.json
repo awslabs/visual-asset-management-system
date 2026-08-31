@@ -73,7 +73,7 @@
             "usePublicSubnet": false,
             "addAlbS3SpecialVpcEndpoint": true,
             "domainHost": "vams1.example.com",
-            "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
+            "certificateArn": "arn:aws:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
         "useCloudFront": {
@@ -321,7 +321,8 @@
         },
         "webUi": {
             "optionalBannerHtmlMessage": "",
-            "allowUnsafeEvalFeatures": false
+            "allowUnsafeEvalFeatures": false,
+            "allowLocalhostAuthCallbacks": false
         },
         "api": {
             "apiType": "APIGATEWAY_REST",

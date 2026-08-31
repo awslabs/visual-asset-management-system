@@ -261,16 +261,32 @@ The two API builder stacks stay split, and consolidating them would remove headr
 
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
-| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 106, `apiBuilder2` 69                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.40 MB, `apiBuilder2` ~0.24 MB                  |
+| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 106, `apiBuilder2` 71                             |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.29 MB                  |
 | API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
 
+-   **A CDK Nag suppression `reason` is a real consumer of the body budget.** cdk-nag stamps the reason
+    onto the metadata of EVERY resource a suppression applies to, and the shared grant suppressions are
+    applied with `applyToChildren` over whole stacks — so the text is multiplied by the resource count.
+    Replacing one catch-all entry with six individually justified ones moved `apiBuilder` from ~0.40 MB
+    to ~0.57 MB; shortening each reason to the fact that justifies it brought that back to ~0.48 MB.
+    Keep a reason to one sentence and put the reasoning in the helper's doc comment, which costs nothing.
+
 -   **Resource count understates how full an API stack is.** `apiBuilder` sits at about a fifth of the resource ceiling but two fifths of the template-body ceiling — the Lambda functions there carry long inline IAM policies and CDK Nag metadata. Both ceilings are per-template, so both are what the split buys headroom against.
 -   **Splitting the CDK stacks does not relieve the API Gateway quota.** Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. API Gateway builds it from the inline OpenAPI document, which is why no `AWS::ApiGateway::Resource` appears in any template and no per-stack ceiling applies to it. That quota is the adjustable one of the three; the CloudFormation ceilings are not.
 
-The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `test/apiStackCeilings.test.ts` asserts every figure above against the synthesized templates, so this table cannot silently go stale.
+The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `test/api/apiStackCeilings.test.ts` asserts every figure above against the synthesized templates, so this table cannot silently go stale.
+
+**A fourth ceiling governs the storage stack: 200 Outputs per template, not adjustable.**
+`StorageResourcesBuilder` emits 133 of them where the next highest stack emits 32 — every table a
+sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a
+`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 64 as its own
+Parameters. Exceeding 200 is rejected at ValidateTemplate, the same class of failure that forced the
+API stack split, so roughly 30 more cross-stack-referenced storage resources would hit it.
+`test/api/apiStackCeilings.test.ts` fails above 170, which leaves headroom to design a split rather than
+discovering the limit at the deploy that crosses it. Counted from a fresh synth, not from `cdk.out`.
 
 ### RESTful Route Convention
 
@@ -307,17 +323,77 @@ Partition(): string  // Returns current partition
 
 **KMS encryption.** Optional CMK via `config.app.useKmsCmkEncryption`. `kmsKeyLambdaPermissionAddToResourcePolicy()` grants Lambda access; `kmsKeyPolicyStatementPrincipalGenerator()` creates key policy with service principals (S3, DynamoDB, SQS, SNS, ECS, EKS, Lambda, etc.).
 
+**Encryption at rest for a new resource.** Any resource that supports encryption at rest takes
+`storageResources.encryption.kmsKey`, which is `undefined` when `config.app.useKmsCmkEncryption.enabled` is
+false — so the prop is self-guarding and needs no ternary. Pass it and the resource falls back to its
+service's AWS-managed key when the operator has not enabled a CMK.
+
+| Resource                  | Prop                           | Notes                                                    |
+| ------------------------- | ------------------------------ | -------------------------------------------------------- |
+| `dynamodb.Table`          | `encryption` + `encryptionKey` | `CUSTOMER_MANAGED` only when a key exists                |
+| `s3.Bucket`               | `encryption` + `encryptionKey` | `BucketEncryption.KMS`; set `bucketKeyEnabled`           |
+| `sns.Topic` / `sqs.Queue` | `masterKey` / `encryptionKey`  |                                                          |
+| `logs.LogGroup`           | `encryptionKey`                | The key policy already admits the Logs service principal |
+| `efs.FileSystem`          | `encrypted: true` + `kmsKey`   | See trap 1                                               |
+| `secretsmanager.Secret`   | `encryptionKey`                | See trap 2                                               |
+
+Three traps, each of which passes `cdk synth` and fails later:
+
+1.  **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on a file system that
+    already exists makes AWS CloudFormation create an empty replacement and delete the original. VAMS
+    declares these `RemovalPolicy.DESTROY`, so the original is not retained. Changing the key on an
+    existing file system is a breaking change and belongs in `CHANGELOG.md` plus the upgrade guide. Log
+    groups and secrets update in place and need no such note.
+
+2.  **Do not pass the key OBJECT to a construct whose grants CDK derives.** `Secret.grantRead`/`grantWrite`
+    call `Key.grant()`, which writes the grantee's ARN into the key's RESOURCE policy. The key lives in the
+    storage nested stack, so a grantee in another nested stack makes the storage template consume that
+    stack's output while that stack consumes storage — AWS CloudFormation rejects the changeset with
+    `Circular dependency between resources`. Import the key by ARN instead, which keeps the derived grant
+    on the grantee's own policy:
+
+    ```typescript
+    encryptionKey: props.storageResources.encryption.kmsKey
+        ? kms.Key.fromKeyArn(this, "MySecretKmsKeyRef", props.storageResources.encryption.kmsKey.keyArn)
+        : undefined,
+    ```
+
+    This is sufficient because `kmsKeyPolicyStatementPrincipalGenerator()` already delegates to
+    `AccountRootPrincipal`, so a principal-side grant authorizes the key.
+
+3.  **A ROOT-stack resource cannot consume the key.** The key belongs to a nested stack, so a root-stack
+    resource referencing it makes the root stack and every nested stack in it circular. The AWS CloudTrail
+    log group is the case in the tree today and stays on the AWS-managed key.
+
+Two further resources stay on their AWS-managed key by necessity: the VPC flow log group, because the VPC
+nested stack is created before the storage nested stack, and the provisioned OpenSearch domain's log groups,
+which Amazon OpenSearch Service creates from the domain's `logging` props rather than VAMS.
+
+**Verify before deploying, not after.** `cdk synth` emits a cyclic assembly without complaint; the cycle
+appears only at changeset creation. Synth and confirm the storage stack takes no parameter fed from another
+nested stack's output:
+
+```bash
+npx cdk synth <stack> --output /tmp/cyclecheck
+node -e "const t=require('/tmp/cyclecheck/<stack>.template.json');
+  const s=Object.entries(t.Resources).find(([k])=>k.includes('StorageResourcesBuilder'))[1];
+  console.log(Object.entries(s.Properties.Parameters||{}).filter(([,v])=>JSON.stringify(v).includes('PipelineBuilder')).length)"
+```
+
+Regression coverage for all of the above: `test/security/inPlaceUpdateSafety.test.ts`, which asserts the CMK-on and
+CMK-off directions, the exemption list, and the nested-stack dependency direction.
+
 **S3 TLS enforcement.** Every S3 bucket gets `requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config)` — Deny policy for `s3:*` when `aws:SecureTransport=false`, plus optional additional policy from `config/policy/s3AdditionalBucketPolicyConfig.json`.
 
 **Content Security Policy.** `generateContentSecurityPolicy()` in `security.ts` builds CSP headers: base sources (self, blob, data, API URL, S3 endpoint); conditional sources (Cognito IDP/Identity, Location Service, unsafe-eval); extensible via `config/csp/cspAdditionalConfig.json`.
 
-`script-src` allows the inline `<script>` blocks in `web/index.html` by **SHA-256 hash**, from the generated `INDEX_HTML_INLINE_SCRIPT_HASHES` in `lib/helper/cspInlineScriptHashes.ts`. **That file is generated — do not hand-edit it.** A hash covers the exact text content of the element, indentation included, so any edit to an inline block (a reformat is enough) invalidates it, and the browser then silently refuses to run the script. Regenerate with `cd web && npm run build && node scripts/cspInlineScriptHashes.js --ts`; `test/cspInlineScriptHashes.test.ts` recomputes from `web/index.html` and fails on drift. The full workflow lives in `web/CLAUDE.md` Rule 9.
+`script-src` allows the inline `<script>` blocks in `web/index.html` by **SHA-256 hash**, from the generated `INDEX_HTML_INLINE_SCRIPT_HASHES` in `lib/helper/cspInlineScriptHashes.ts`. **That file is generated — do not hand-edit it.** A hash covers the exact text content of the element, indentation included, so any edit to an inline block (a reformat is enough) invalidates it, and the browser then silently refuses to run the script. Regenerate with `cd web && npm run build && node scripts/cspInlineScriptHashes.js --ts`; `test/web/cspInlineScriptHashes.test.ts` recomputes from `web/index.html` and fails on drift. The full workflow lives in `web/CLAUDE.md` Rule 9.
 
-A CSP may allow inline script by hash **or** by `'unsafe-inline'`, never both — a hash source makes browsers ignore the keyword. `'unsafe-inline'` is therefore added only when the Physna add-on is enabled (its viewer renders Physna-hosted HTML in a `blob:` iframe, which inherits this policy and whose inline scripts VAMS cannot hash), which scopes the trade-off to deployments that opt in. A new viewer needing inline script widens that condition; it does not go back into the base list.
+A CSP may allow inline script by hash **or** by `'unsafe-inline'`, never both — a hash source makes browsers ignore the keyword. `'unsafe-inline'` is therefore emitted in **no** configuration, the Physna add-on included: the add-on's viewer frames Physna's own HTTPS origin, so that document loads under Physna's policy and its inline scripts are outside this one's reach, and the keyword would be ignored on a VAMS page anyway because the hash sources are present. The add-on contributes `frame-src` and `connect-src` origins only. A new viewer that genuinely needs inline script is served by hashing that document's own blocks, not by adding the keyword.
 
 **WAF rule policy.** When `config.app.useWaf` is true, `Wafv2BasicConstruct` (`constructs/wafv2-basic-construct.ts`) builds the Web ACL rules from `config/policy/wafPolicyConfig.json` via `buildRulesFromPolicy()`: managed rule groups (`overrideAction` count vs none per `block`), optional per-rule `ruleActionOverrides` mapped to `managedRuleGroupStatement.ruleActionOverrides` (`actionToUse` count/block/allow), and rate-based rules. The shipped policy overrides two Common Rule Set rules to `count`. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking (the remaining body-inspecting rules use `oversizeHandling: CONTINUE`, matching on attack signatures, not size). No `AssociationConfig` body-inspection override is needed for the 10 MB guarantee. `SizeRestrictions_QUERYSTRING` is likewise overridden to `count`: it blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter. A presigned URL carrying a session security token already approaches that limit, and the viewer requires the value double-encoded to survive its own two decode passes, which roughly doubles it again — so the iframe request for the static viewer page was blocked with a 403 before it ever reached S3.
 
-**WAF rate-based rules.** Each `rateBasedRules` entry sets `limit` (per 5-min window). Every rule is built with `aggregateKeyType: "IP"`, the address WAF observes on the connection, for both the CloudFront-scoped and the regional ACL. A `FORWARDED_IP` key is **accepted in the policy file but not emitted**, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and WAF omits a request carrying no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. Rate blocks return a `429` (via `blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`, `APPLICATION_JSON`) registered on the ACL when any rate rule exists — distinct from the `403` used for auth denials. The web `apiClient` and the VAMS CLI both treat `429` as retryable (honor `Retry-After`, back off) rather than an auth failure. Managed-group blocks keep the WAF default 403. Test: `test/wafRateLimit.test.ts`.
+**WAF rate-based rules.** Each `rateBasedRules` entry sets `limit` (per 5-min window). Every rule is built with `aggregateKeyType: "IP"`, the address WAF observes on the connection, for both the CloudFront-scoped and the regional ACL. A `FORWARDED_IP` key is **accepted in the policy file but not emitted**, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and WAF omits a request carrying no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. Rate blocks return a `429` (via `blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`, `APPLICATION_JSON`) registered on the ACL when any rate rule exists — distinct from the `403` used for auth denials. The web `apiClient` and the VAMS CLI both treat `429` as retryable (honor `Retry-After`, back off) rather than an auth failure. Managed-group blocks keep the WAF default 403. Test: `test/waf/wafRateLimit.test.ts`.
 
 **IAM aspects.** `IamRoleTransform` applies role name prefixes and permission boundaries (from `cdk.json` "aws" environment settings). `LogRetentionAspect` forces `RetentionDays.ONE_YEAR` on all `CfnLogGroup` resources.
 
@@ -376,7 +452,7 @@ When writing a partition deny-list, **name every restricted partition explicitly
     }
     ```
 
-    There is no CDK aspect that can do this for you: the L1 is created lazily inside `addEventSource()`, after an aspect has finished visiting the construct tree. Regression coverage: `test/eventSourceMappingGovCloudTags.test.ts`.
+    There is no CDK aspect that can do this for you: the L1 is created lazily inside `addEventSource()`, after an aspect has finished visiting the construct tree. Regression coverage: `test/partition/eventSourceMappingGovCloudTags.test.ts`.
 
 2. **Never hardcode a partition, DNS suffix, or region.** Use `Service("X").ARN(...)` / `.Endpoint` / `.Principal`, `IAMArn(name)`, and `Partition()`. The DNS suffix differs per partition (`.amazonaws.com`, `.amazonaws.com.cn`, **`.amazonaws.eu`** for `aws-eusc`, `.c2s.ic.gov`, …), while service **principals** stay `.amazonaws.com` in `aws-us-gov` and `aws-eusc` — so a literal `ServicePrincipal("lambda.amazonaws.com")` happens to work in those two but is wrong in `aws-cn`/ISO. Prefer `Service("LAMBDA").Principal` in new code.
 
@@ -405,7 +481,7 @@ node -e "const t=require('/abs/path/to/gcsynth/<stack>.nested.template.json');
     .forEach(([k,v])=>console.log(k, 'Tags?', 'Tags' in v.Properties));"
 ```
 
-A `cdk synth` against a placeholder account still emits templates (the context-lookup and CDK-Nag errors it prints are artifacts of the fake account); the templates are what matter. Prefer encoding the check as a Jest test over a one-off synth — see `test/eventSourceMappingGovCloudTags.test.ts`, which tags its test stack the way `core-stack.ts` does so the assertion is load-bearing rather than vacuous.
+A `cdk synth` against a placeholder account still emits templates (the context-lookup and CDK-Nag errors it prints are artifacts of the fake account); the templates are what matter. Prefer encoding the check as a Jest test over a one-off synth — see `test/partition/eventSourceMappingGovCloudTags.test.ts`, which tags its test stack the way `core-stack.ts` does so the assertion is load-bearing rather than vacuous.
 
 ---
 
@@ -437,7 +513,7 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 4. Update **ALL** config template files: `config.template.{commercial,govcloud,eusovereign}.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 5. Update `config.json` for the active deployment
 6. Document the option in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
-7. Mirror the **field** into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — `schema.ts` (the field) and `defaults.ts` (the presets); see its `README.md`. Then run the `infra/test/configBuilderSync.test.ts` drift check (part of `npm test`), which covers these two files.
+7. Mirror the **field** into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — `schema.ts` (the field) and `defaults.ts` (the presets); see its `README.md`. Then run the `infra/test/config/configBuilderSync.test.ts` drift check (part of `npm test`), which covers these two files.
 8. **Mirror every `getConfig()` VALIDATION rule into `ConfigBuilder/validation.ts` — by hand, in the same change.** This is the step the tooling cannot catch: the drift check verifies `schema.ts` and `defaults.ts` only, so a `throw new Error(...)` added to `getConfig()` without a matching `validation.ts` rule leaves the ConfigBuilder silently approving a configuration that fails at `cdk synth`. That is worse than no validation, because the operator has been told the config is valid.
 
     Each rule is a `Rule` entry carrying `id`, `severity` (`error` | `warning`), `fieldPaths` (so the UI can highlight the offending fields), an `appliesWhen` predicate that returns **true when the rule is VIOLATED**, and a `message`. Keep the `// ----- Section (config.ts: "quoted anchor") -----` comment, which names the `getConfig()` block the section mirrors by quoting that block's leading comment or error-message text — it is what makes the two files diffable later. Anchor by quoted text, not by line number: a line number goes stale silently, since a wrong one reads exactly like a right one until the file is opened. Port a `console.warn` as `severity: "warning"`.
@@ -552,7 +628,7 @@ npx cdk diff         # Show pending changes
 npx cdk destroy      # Tear down stack
 ```
 
-Note: `test/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock config. Tests may need updates when adding features.
+Note: `test/platform/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock config. Tests may need updates when adding features.
 
 ### The T1 tier: synth assertions across all three config templates
 

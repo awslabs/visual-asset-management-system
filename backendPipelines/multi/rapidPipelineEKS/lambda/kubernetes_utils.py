@@ -8,7 +8,6 @@ Provides standardized methods for creating and using Kubernetes clients.
 
 import os
 import sys
-import os
 import boto3
 import base64
 import tempfile
@@ -301,59 +300,17 @@ def get_k8s_client():
 
     logger.info(f"Using EKS endpoint: {endpoint}")
 
-    # Test DNS resolution for debugging
+    # Resolve the endpoint for diagnostics only. The cluster's API endpoint is private, so this is
+    # expected to be a VPC address served by the endpoint's private hosted zone; a public address here
+    # means the cluster is not configured the way this pipeline expects. A resolution failure is not
+    # fatal on its own - the connection below reports the real outcome - so it is logged and passed
+    # over rather than raised.
     import socket
+    hostname = endpoint.replace('https://', '').replace('http://', '')
     try:
-        hostname = endpoint.replace('https://', '').replace('http://', '')
-        ip_address = socket.gethostbyname(hostname)
-        logger.info(f"EKS endpoint resolved to IP: {ip_address}")
-
-        # If we get a private IP (VPC endpoint), try to force public resolution
-        if ip_address.startswith('10.') or ip_address.startswith('172.') or ip_address.startswith('192.168.'):
-            logger.info(f"Detected private IP {ip_address}, attempting to bypass VPC endpoint")
-            # Try to resolve using Python socket with custom DNS
-            try:
-                import dns.resolver
-                # Configure resolver to use public DNS
-                resolver = dns.resolver.Resolver()
-                resolver.nameservers = ['8.8.8.8', '1.1.1.1']  # Google and Cloudflare DNS
-
-                # Query for A records
-                answers = resolver.resolve(hostname, 'A')
-                for answer in answers:
-                    public_ip = str(answer)
-                    if not public_ip.startswith('10.') and not public_ip.startswith('172.') and not public_ip.startswith('192.168.'):
-                        logger.info(f"Found public IP via DNS: {public_ip}, modifying endpoint")
-                        endpoint = endpoint.replace(hostname, public_ip)
-                        break
-
-            except ImportError:
-                logger.warning("dnspython not available, trying alternative method")
-                # Fallback: try to connect directly to known AWS EKS public IPs
-                # This is a workaround - we'll use a known public IP range for EKS
-                try:
-                    # Try to resolve without VPC endpoint by using a different approach
-                    import urllib3
-                    # Disable SSL warnings for this test
-                    urllib3.disable_warnings()
-
-                    # Create a custom HTTP adapter that bypasses local DNS
-                    # We'll modify the endpoint to use a public IP directly
-                    # For EKS in us-west-2, we can try some known public IP ranges
-
-                    # Alternative: Force the connection to go through NAT by modifying hosts
-                    logger.info("Attempting to force NAT Gateway route by disabling VPC endpoint DNS")
-                    # We'll keep the original endpoint but add a custom header to bypass VPC endpoint
-
-                except Exception as fallback_error:
-                    logger.warning(f"Fallback DNS resolution failed: {fallback_error}")
-
-            except Exception as dns_error:
-                logger.warning(f"Custom DNS resolution failed: {dns_error}")
-
+        logger.info(f"EKS endpoint {hostname} resolved to IP: {socket.gethostbyname(hostname)}")
     except Exception as dns_error:
         logger.warning(f"DNS resolution failed for {hostname}: {dns_error}")
-        # Try to continue anyway
 
     # Create SSL context with proper certificate verification
     try:
@@ -703,11 +660,13 @@ def get_k8s_client():
                 try:
                     # AWS official method for token generation
                     # Based on https://github.com/kubernetes-sigs/aws-iam-authenticator/
+                    # os and sys are module-level imports. Importing them here as well binds them as
+                    # locals of the whole enclosing function, which makes the earlier
+                    # os.path.exists(token_file) check raise UnboundLocalError before this block is
+                    # ever reached.
                     import base64
                     import datetime
                     import json
-                    import os
-                    import sys
                     from botocore.signers import RequestSigner
                     from botocore.awsrequest import AWSRequest
 
@@ -1656,132 +1615,6 @@ def get_pod_logs_for_job(job_name, namespace="default"):
         logger.error(f"Error retrieving logs for job {job_name}: {str(e)}")
         return f"Could not retrieve logs: {str(e)}"
 
-def get_pod_events_for_job(job_name, namespace="default"):
-    """
-    Get events for pods associated with a job for enhanced diagnostics
-
-    Args:
-        job_name (str): The name of the job
-        namespace (str): The Kubernetes namespace
-
-    Returns:
-        str: Events information or error message
-    """
-    if namespace is None:
-        namespace = "default"
-
-    try:
-        # Get CoreV1Api client
-        core_v1 = get_core_v1_api()
-
-        # Get pods for the job first
-        def list_pods():
-            return core_v1.list_namespaced_pod(
-                namespace=namespace,
-                label_selector=f"job-name={job_name}"
-            )
-
-        pods = with_retries(list_pods)
-
-        if not pods.items:
-            return "No pods found for job"
-
-        all_events = []
-        for pod in pods.items:
-            pod_name = pod.metadata.name
-
-            try:
-                def get_pod_events():
-                    return core_v1.list_namespaced_event(
-                        namespace=namespace,
-                        field_selector=f"involvedObject.name={pod_name}"
-                    )
-
-                events = with_retries(get_pod_events)
-
-                pod_events = []
-                for event in events.items:
-                    event_time = event.last_timestamp or event.first_timestamp
-                    pod_events.append(f"{event_time}: {event.reason} - {event.message}")
-
-                if pod_events:
-                    all_events.append(f"Pod {pod_name}: {'; '.join(pod_events)}")
-
-            except Exception as event_error:
-                logger.warning(f"Could not get events for pod {pod_name}: {event_error}")
-
-        return "; ".join(all_events) if all_events else "No events found"
-
-    except Exception as e:
-        logger.error(f"Error retrieving events for job {job_name}: {str(e)}")
-        return f"Could not retrieve events: {str(e)}"
-
-def get_pod_status_for_job(job_name, namespace="default"):
-    """
-    Get detailed pod status information for a job
-
-    Args:
-        job_name (str): The name of the job
-        namespace (str): The Kubernetes namespace
-
-    Returns:
-        str: Pod status information
-    """
-    if namespace is None:
-        namespace = "default"
-
-    try:
-        # Get CoreV1Api client
-        core_v1 = get_core_v1_api()
-
-        # Get pods for the job
-        def list_pods():
-            return core_v1.list_namespaced_pod(
-                namespace=namespace,
-                label_selector=f"job-name={job_name}"
-            )
-
-        pods = with_retries(list_pods)
-
-        if not pods.items:
-            return "No pods found for job"
-
-        pod_statuses = []
-        for pod in pods.items:
-            pod_name = pod.metadata.name
-            pod_phase = pod.status.phase
-
-            # Get container statuses
-            container_statuses = []
-            if pod.status.container_statuses:
-                for container_status in pod.status.container_statuses:
-                    container_name = container_status.name
-                    ready = container_status.ready
-                    restart_count = container_status.restart_count
-
-                    state_info = "Unknown"
-                    if container_status.state:
-                        if container_status.state.running:
-                            state_info = f"Running since {container_status.state.running.started_at}"
-                        elif container_status.state.waiting:
-                            state_info = f"Waiting: {container_status.state.waiting.reason}"
-                        elif container_status.state.terminated:
-                            state_info = f"Terminated: {container_status.state.terminated.reason} (exit code: {container_status.state.terminated.exit_code})"
-
-                    container_statuses.append(f"{container_name}: {state_info} (ready: {ready}, restarts: {restart_count})")
-
-            pod_status_info = f"Pod {pod_name}: phase={pod_phase}"
-            if container_statuses:
-                pod_status_info += f", containers=[{'; '.join(container_statuses)}]"
-
-            pod_statuses.append(pod_status_info)
-
-        return "; ".join(pod_statuses)
-
-    except Exception as e:
-        logger.error(f"Error retrieving pod status for job {job_name}: {str(e)}")
-        return f"Could not retrieve pod status: {str(e)}"
-
 def cleanup_completed_job(job_name, namespace="default", force=False):
     """
     Clean up a completed job with enhanced safety checks
@@ -1999,62 +1832,6 @@ def test_kubernetes_connectivity():
             diagnostics["error_details"].append("Network connectivity issue")
 
         return False, diagnostics
-
-def cleanup_completed_job(job_name, namespace="default", force=False):
-    """
-    Clean up a completed Kubernetes job with enhanced error handling
-
-    Args:
-        job_name (str): Name of the job to clean up
-        namespace (str): Kubernetes namespace
-        force (bool): Force cleanup even if job is still running
-
-    Returns:
-        tuple: (success, message)
-    """
-    logger.info(f"Starting cleanup for job {job_name} in namespace {namespace} (force: {force})")
-
-    try:
-        # Get job status first
-        status, error_logs = check_job_status(job_name, namespace)
-
-        if not force and status == "RUNNING":
-            message = f"Job {job_name} is still running, skipping cleanup (use force=True to override)"
-            logger.warning(message)
-            return False, message
-
-        # Delete the job
-        logger.info(f"Deleting job {job_name}")
-        delete_job(job_name, namespace)
-
-        # Verify deletion
-        try:
-            def verify_deletion():
-                batch_v1 = get_batch_v1_api()
-                return batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
-
-            # Try to read the job - if it still exists, deletion may not be complete
-            with_retries(verify_deletion, max_retries=2, operation_name="verify_job_deletion")
-
-            # If we get here, job still exists
-            message = f"Job {job_name} deletion initiated but job still exists"
-            logger.warning(message)
-            return True, message
-
-        except Exception as e:
-            if "not found" in str(e).lower() or (ApiException is not None and isinstance(e, ApiException) and e.status == 404):
-                message = f"Job {job_name} successfully deleted"
-                logger.info(message)
-                return True, message
-            else:
-                message = f"Could not verify job deletion: {str(e)}"
-                logger.warning(message)
-                return True, message
-
-    except Exception as e:
-        message = f"Failed to cleanup job {job_name}: {str(e)}"
-        logger.error(message)
-        return False, message
 
 def get_pod_events_for_job(job_name, namespace="default"):
     """

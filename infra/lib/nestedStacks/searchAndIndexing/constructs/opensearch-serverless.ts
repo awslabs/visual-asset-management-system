@@ -19,6 +19,7 @@ import { aws_opensearchserverless as opensearchserverless } from "aws-cdk-lib";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
+    schemaDeploySsmParameterArns,
     suppressCdkNagLambda,
 } from "../../../helper/security";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
@@ -35,6 +36,16 @@ interface OpensearchServerlessConstructProps extends cdk.StackProps {
 
 export class OpensearchServerlessConstruct extends Construct {
     public aossEndpointUrl: string;
+    /**
+     * The custom resource that writes the index-name/endpoint SSM parameters and creates the
+     * indexes. Exposed so a consumer can order itself after it: the reindexer reads those
+     * parameters to learn which indexes to fill, and CloudFormation gives two custom resources with
+     * no declared dependency no particular order (root CLAUDE.md Rule 9). Running first, the
+     * reindexer either reads a stale index name and fills an index nothing searches, or fails
+     * against an index that does not exist yet and rolls the stack back.
+     */
+    public schemaDeployResource: CustomResource;
+
     collectionUid: string;
     collectionArn: string;
     config: Config.Config;
@@ -323,10 +334,17 @@ export class OpensearchServerlessConstruct extends Construct {
                 effect: cdk.aws_iam.Effect.ALLOW,
             })
         );
+        // PutParameter on the three parameters this handler writes, and nothing else. `ssm:*` over
+        // `parameter/*<config.name>*` covered the deployment's entire resource-name tree
+        // (`/{config.name}-{baseStackName}/resourceNames/...`), which every non-pipeline backend Lambda
+        // resolves its DynamoDB table and bucket names from — so code execution in this Lambda, which
+        // bundles third-party npm packages at synth, could repoint a table name and have every handler
+        // read an attacker-chosen table once the 60-minute cache expired. The handler issues exactly
+        // three PutParameterCommand calls (deployschema.ts) and reads nothing.
         schemaDeploy.addToRolePolicy(
             new cdk.aws_iam.PolicyStatement({
-                actions: ["ssm:*"],
-                resources: [IAMArn("*" + props.config.name + "*").ssm],
+                actions: ["ssm:PutParameter"],
+                resources: schemaDeploySsmParameterArns(props.config),
                 effect: cdk.aws_iam.Effect.ALLOW,
             })
         );
@@ -346,7 +364,7 @@ export class OpensearchServerlessConstruct extends Construct {
             schemaDeployProvider.node.addDependency(this.vpcEndpointAOSSDependable);
         }
 
-        new CustomResource(this, "DeploySSMIndexSchema", {
+        this.schemaDeployResource = new CustomResource(this, "DeploySSMIndexSchema", {
             serviceToken: schemaDeployProvider.serviceToken,
             properties: {
                 endpointSSMParam: props.config.openSearchDomainEndpointSSMParam,

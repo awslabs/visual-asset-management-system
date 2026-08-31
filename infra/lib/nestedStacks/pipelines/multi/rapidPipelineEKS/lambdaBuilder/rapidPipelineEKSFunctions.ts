@@ -23,6 +23,7 @@ import { storageResources } from "../../../../../nestedStacks/storage/storageBui
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    grantExternalAssetBucketKmsKeys,
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../../../../../helper/security";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
@@ -81,6 +82,13 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
             // Reference to open pipeline function
             OPEN_PIPELINE_FUNCTION_NAME_EKS: openPipelineFunction.functionName,
 
+            // The Kubernetes Job's activeDeadlineSeconds. Sourced from the same configuration value the
+            // state machine derives its poll ceiling from, so the two cannot drift: a pod allowed to run
+            // longer than the poll watches for it produces a FAILED execution that then writes output.
+            EKS_JOB_TIMEOUT_SECONDS: String(
+                config.app.pipelines.useRapidPipeline.useEks.jobTimeout
+            ),
+
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",
         },
@@ -97,6 +105,9 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
 
     // Grant auxiliary bucket access
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
+
+    grantExternalAssetBucketKmsKeys(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Apply global environment and permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -197,6 +208,9 @@ export function buildOpenPipelineEKSFunction(
     // Grant auxiliary bucket access
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
 
+    grantExternalAssetBucketKmsKeys(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+
     // Apply global environment and permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
@@ -283,19 +297,20 @@ export function buildConsolidatedHandlerFunction(
         },
     });
 
-    // Grant EKS permissions - comprehensive permissions for cluster access
+    // EKS permissions, scoped to this deployment's own cluster. The three actions kept are the ones
+    // the handler calls (describe_cluster, list_access_entries) plus the one the Kubernetes API path
+    // needs when a cluster is set to API authentication mode rather than the aws-auth ConfigMap this
+    // stack configures. eks:ListClusters, eks:ListUpdates and eks:DescribeUpdate are called nowhere,
+    // and eks:GetToken is not an IAM action at all — the boto3 get_token is client-side, and the
+    // handler already logs that the method is absent and falls back to a presigned STS request.
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: [
-                "eks:DescribeCluster",
-                "eks:ListClusters",
-                "eks:AccessKubernetesApi",
-                "eks:GetToken",
-                "eks:ListAccessEntries",
-                "eks:ListUpdates",
-                "eks:DescribeUpdate",
+            actions: ["eks:DescribeCluster", "eks:AccessKubernetesApi", "eks:ListAccessEntries"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:eks:${config.env.region}:${
+                    config.env.account
+                }:cluster/${clusterName}`,
             ],
-            resources: ["*"],
             effect: iam.Effect.ALLOW,
         })
     );
@@ -305,14 +320,6 @@ export function buildConsolidatedHandlerFunction(
         new iam.PolicyStatement({
             actions: ["sts:GetCallerIdentity"],
             resources: ["*"], // GetCallerIdentity doesn't support resource-level permissions
-        })
-    );
-
-    // Grant permissions to pass role for EKS auth
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["iam:PassRole"],
-            resources: [fun.role!.roleArn],
         })
     );
 
@@ -339,6 +346,8 @@ export function buildConsolidatedHandlerFunction(
 
     // Grant auxiliary bucket access
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
+
+    grantExternalAssetBucketKmsKeys(fun);
 
     // Grant KMS permissions
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

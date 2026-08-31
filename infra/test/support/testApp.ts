@@ -23,7 +23,7 @@
  * ## Use it instead of `new cdk.App()`
  *
  * ```ts
- * import { newTestApp } from "./support/testApp";
+ * import { newTestApp } from "../support/testApp";
  *
  * const app = newTestApp();                       // instead of new cdk.App()
  * const app = newTestApp({ context: { ... } });   // AppProps are passed straight through
@@ -60,6 +60,33 @@ import * as path from "path";
 /** Outdirs handed out by `newTestApp`, in creation order. */
 const assemblyDirs: string[] = [];
 
+let dockerStubbed = false;
+
+/**
+ * Stub the eager `DockerImage.fromBuild` so no Jest suite needs a Docker daemon.
+ *
+ * `lambdaLayersBuilder-nestedStack.ts` calls `cdk.DockerImage.fromBuild()` as an EAGER ARGUMENT to
+ * `bundling.image`, so it runs when the construct is created — before CDK consults its bundling-skip
+ * logic. That is why `aws:cdk:bundling-stacks: []` alone is not enough; both halves are needed, and both
+ * are applied here.
+ *
+ * Spying on the static is deliberate: `jest.mock("aws-cdk-lib")` also works but replaces the module
+ * object, which breaks `instanceof` checks inside CDK itself.
+ *
+ * Without this, `infra.test.ts` and `genAiPipelineConstructs.test.ts` failed whenever Docker Desktop was
+ * not running, with an error that reads as a code defect rather than a missing prerequisite — an
+ * environment gap presented as a red build. Applied in `newTestApp` rather than per suite so a new test
+ * cannot reintroduce the dependency by forgetting a call.
+ */
+export function stubDockerBundling(): void {
+    if (dockerStubbed) return;
+    if (typeof jest === "undefined") return;
+    jest.spyOn(cdk.DockerImage, "fromBuild").mockImplementation(() =>
+        cdk.DockerImage.fromRegistry("vams-test-stub-bundling-image:latest")
+    );
+    dockerStubbed = true;
+}
+
 /**
  * A `cdk.App` whose assembly lands in a temporary directory that is removed after the test file.
  *
@@ -67,11 +94,17 @@ const assemblyDirs: string[] = [];
  * its lifetime.
  */
 export function newTestApp(props: cdk.AppProps = {}): cdk.App {
-    if (props.outdir) return new cdk.App(props);
+    stubDockerBundling();
+
+    // The second half of the Docker-free technique: tells CDK to bundle assets for no stack. A caller's
+    // own context wins, so a suite that genuinely wants bundling can still ask for it.
+    const context = { "aws:cdk:bundling-stacks": [], ...(props.context ?? {}) };
+
+    if (props.outdir) return new cdk.App({ ...props, context });
 
     const outdir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "vams-cdk-test"));
     assemblyDirs.push(outdir);
-    return new cdk.App({ ...props, outdir });
+    return new cdk.App({ ...props, context, outdir });
 }
 
 /**

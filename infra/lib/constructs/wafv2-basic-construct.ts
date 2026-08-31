@@ -5,6 +5,8 @@
 
 import * as cdk from "aws-cdk-lib";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
+import * as logs from "aws-cdk-lib/aws-logs";
+import { generateUniqueNameHash } from "../helper/security";
 import { Construct } from "constructs";
 export enum WAFScope {
     CLOUDFRONT = "CLOUDFRONT",
@@ -271,5 +273,35 @@ export class Wafv2BasicConstruct extends Construct {
         });
 
         this.webacl = webacl;
+
+        // Durable request logging. `visibilityConfig` above yields CloudWatch metrics and a
+        // rolling sample only, so with the managed rule groups in block mode a rejected request
+        // leaves no record to correlate a report against — WAF answers it before any VAMS Lambda
+        // runs, so nothing else logs it either.
+        //
+        // The log group name must begin with `aws-waf-logs-`; AWS WAF rejects any other
+        // destination name. It is created in this construct's own scope, which places it in the
+        // ACL's Region — a requirement AWS WAF enforces, and the reason a CLOUDFRONT-scoped ACL
+        // (us-east-1) gets its group there rather than in the deployment's Region.
+        const wafLogGroup = new logs.LogGroup(this, "WafLogs", {
+            logGroupName:
+                "aws-waf-logs-vams-" +
+                generateUniqueNameHash(
+                    props.stackName ?? "vams",
+                    props.env?.account ?? "",
+                    "WafLogs" + wafScopeString,
+                    10
+                ),
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        new wafv2.CfnLoggingConfiguration(this, "WafLoggingConfiguration", {
+            resourceArn: webacl.attrArn,
+            logDestinationConfigs: [wafLogGroup.logGroupArn],
+            // The bearer token would otherwise be written in cleartext for every recorded
+            // request. WAF redacts the value and keeps the field name.
+            redactedFields: [{ singleHeader: { Name: "authorization" } }],
+        });
     }
 }

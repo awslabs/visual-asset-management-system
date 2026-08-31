@@ -67,7 +67,11 @@ export function buildVamsExecuteGr00tFinetunePipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -129,7 +133,11 @@ export function buildGr00tFinetuneOpenPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);

@@ -13,6 +13,8 @@ import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { CfnJobDefinition, CfnComputeEnvironment, CfnJobQueue } from "aws-cdk-lib/aws-batch";
 import path = require("path");
+import { suppressCdkNagEcrAuthTokenWildcard } from "../../../helper/security";
+import { Service } from "../../../helper/service-helper";
 
 export interface BatchGpuPipelineConstructProps extends cdk.StackProps {
     vpc: ec2.IVpc;
@@ -63,7 +65,7 @@ export class BatchGpuPipelineConstruct extends Construct {
 
         // Create batch service role
         const batchServiceRole = new iam.Role(this, "BatchServiceRole", {
-            assumedBy: new iam.ServicePrincipal("batch.amazonaws.com"),
+            assumedBy: Service("BATCH").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBatchServiceRole"),
             ],
@@ -71,7 +73,7 @@ export class BatchGpuPipelineConstruct extends Construct {
 
         // Create instance role and profile
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
-            assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+            assumedBy: Service("EC2").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonEC2ContainerServiceforEC2Role"
@@ -193,6 +195,11 @@ chmod 775 /mnt/workspace
                 streamPrefix: "batch-temp",
             }),
         });
+
+        // Binding a container image gives this task definition's execution role
+        // `ecr:GetAuthorizationToken` on `*`, which is the only form Amazon ECR accepts for it. Named
+        // here rather than covered by a blanket, so an unrelated wildcard acquired later still surfaces.
+        suppressCdkNagEcrAuthTokenWildcard(tempTaskDef);
 
         // Build container properties dynamically based on configuration
         const containerProperties: any = {

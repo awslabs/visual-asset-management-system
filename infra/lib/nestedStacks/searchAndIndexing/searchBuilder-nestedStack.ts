@@ -30,6 +30,8 @@ import { Service } from "../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 
+import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../helper/security";
+
 export class SearchBuilderNestedStack extends NestedStack {
     public reindexerFunctionName = "";
     public searchFunction: lambda.Function;
@@ -96,6 +98,10 @@ export class SearchBuilderNestedStack extends NestedStack {
         let fileIndexingFunction: lambda.Function | undefined = undefined;
         let assetIndexingFunction: lambda.Function | undefined = undefined;
         let reindexerFunction: lambda.Function | undefined = undefined;
+        // The schema-deploy custom resource of whichever OpenSearch flavour is built. Held in the
+        // outer scope so the reindex trigger created after both branches can declare a dependency on
+        // it; the constructs themselves are block-scoped to their branch.
+        let schemaDeployResource: cdk.CustomResource | undefined = undefined;
 
         // The dead-letter queues of the two indexer source queues. Held in the outer scope so the
         // CDK Nag suppression at the end of this method can be scoped to them rather than to the
@@ -122,6 +128,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                 vpc: vpc,
                 subnets: subnets,
             });
+            schemaDeployResource = aoss.schemaDeployResource;
 
             const osEndpointOutput = new cdk.CfnOutput(
                 scope,
@@ -189,7 +196,6 @@ export class SearchBuilderNestedStack extends NestedStack {
                     maxReceiveCount: indexerQueueMaxReceiveCount,
                 },
             });
-            fileIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
             // Subscribe file indexer queue to file indexer SNS topic
             storageResources.sns.fileIndexerSnsTopic.addSubscription(
@@ -249,7 +255,6 @@ export class SearchBuilderNestedStack extends NestedStack {
                     maxReceiveCount: indexerQueueMaxReceiveCount,
                 },
             });
-            assetIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
             // Subscribe asset indexer queue to asset indexer SNS topic
             storageResources.sns.assetIndexerSnsTopic.addSubscription(
@@ -320,6 +325,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                 availabilityZoneCount: config.app.openSearch.useProvisioned.availabilityZoneCount,
                 numberOfShards: config.app.openSearch.useProvisioned.numberOfShards,
             });
+            schemaDeployResource = aos.schemaDeployResource;
 
             const osEndpointOutput = new cdk.CfnOutput(
                 scope,
@@ -387,7 +393,6 @@ export class SearchBuilderNestedStack extends NestedStack {
                     maxReceiveCount: indexerQueueMaxReceiveCount,
                 },
             });
-            fileIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
             // Subscribe file indexer queue to file indexer SNS topic
             storageResources.sns.fileIndexerSnsTopic.addSubscription(
@@ -447,7 +452,6 @@ export class SearchBuilderNestedStack extends NestedStack {
                     maxReceiveCount: indexerQueueMaxReceiveCount,
                 },
             });
-            assetIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
             // Subscribe asset indexer queue to asset indexer SNS topic
             storageResources.sns.assetIndexerSnsTopic.addSubscription(
@@ -503,7 +507,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                 onEventHandler: reindexerFunction,
             });
 
-            new cdk.CustomResource(scope, "ReindexTrigger", {
+            const reindexTrigger = new cdk.CustomResource(scope, "ReindexTrigger", {
                 serviceToken: reindexProvider.serviceToken,
                 properties: {
                     Operation: "both",
@@ -511,6 +515,16 @@ export class SearchBuilderNestedStack extends NestedStack {
                     Timestamp: Date.now().toString(),
                 },
             });
+
+            // The reindexer reads the index names and the endpoint from SSM, and the schema-deploy
+            // custom resource is what writes them and creates the indexes. Two custom resources with no
+            // declared dependency are ordered arbitrarily by CloudFormation (Rule 9), so without this
+            // the reindexer can run first: on an upgrade it reads the previous index name and fills an
+            // index nothing searches — a successful deploy with an empty search — and on a fresh install
+            // it fails against an index that does not exist yet and rolls the stack back.
+            if (schemaDeployResource) {
+                reindexTrigger.node.addDependency(schemaDeployResource);
+            }
         }
 
         // Publish the reindexer function name for data-migration tooling. Created here
@@ -562,7 +576,7 @@ export class SearchBuilderNestedStack extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
+                    reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
                     appliesTo: [
                         {
                             regex: "/.*AWSLambdaBasicExecutionRole$/g",

@@ -810,7 +810,7 @@ To change a dependency version:
 
 4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export, and the layer bundling build installs from the exported file.
 
-Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`, `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/constructs/requirements.txt`) are hand-maintained pip files, edited directly.
+Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files, edited directly.
 
 ---
 

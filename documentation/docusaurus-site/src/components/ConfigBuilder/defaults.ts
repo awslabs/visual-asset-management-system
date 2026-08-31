@@ -210,7 +210,7 @@ const COMMERCIAL: ConfigShape = {
             usePublicSubnet: false,
             addAlbS3SpecialVpcEndpoint: true,
             domainHost: "vams1.example.com",
-            certificateArn: "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
+            certificateArn: "arn:aws:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             optionalHostedZoneId: null,
         },
         useCloudFront: {
@@ -355,6 +355,7 @@ const COMMERCIAL: ConfigShape = {
         webUi: {
             optionalBannerHtmlMessage: "",
             allowUnsafeEvalFeatures: false,
+            allowLocalhostAuthCallbacks: false,
         },
         api: {
             apiType: "APIGATEWAY_REST",
@@ -393,9 +394,15 @@ function buildGovCloud(): ConfigShape {
     cfg.app.openSearch.useProvisioned.enabled = true;
     cfg.app.useLocationService.enabled = false;
     cfg.app.useAlb.enabled = true;
+    // Set explicitly: the commercial base now carries an aws-partition ARN, so this is no
+    // longer inherited.
+    cfg.app.useAlb.certificateArn =
+        "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>";
     cfg.app.useCloudFront.enabled = false;
-    cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId =
-        "global.anthropic.claude-sonnet-4-20250514-v1:0";
+    // Left empty: the "global." cross-Region inference profiles exist only in the commercial
+    // partition, and getConfig() rejects one here. The operator sets a model id offered in their
+    // partition when they enable the pipeline (it ships disabled).
+    cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
     cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
     return cfg;
 }

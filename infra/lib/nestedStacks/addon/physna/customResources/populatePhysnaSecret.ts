@@ -4,10 +4,20 @@
  *
  * The credential values are written into the custom-resource Lambda's CODE ASSET
  * (a JSON file bundled alongside the handler). CDK references code assets by content
- * hash and uploads them to the CDK assets bucket, so the values never appear in the
+ * hash and uploads them to the CDK assets bucket, so the values do not appear in the
  * synthesized template, the template properties, or environment variables. The handler
  * reads its bundled credentials file at run time and calls PutSecretValue on the
  * (empty) secret created by the caller.
+ *
+ * WHAT THIS DOES NOT PROTECT, stated plainly because the shape invites the opposite reading:
+ * the credential is in the Lambda's deployment package, so `lambda:GetFunction` on this
+ * function yields a download URL for a zip containing it in cleartext — a weaker permission
+ * than the `secretsmanager:GetSecretValue` + `kms:Decrypt` the secret itself requires. The
+ * same plaintext also lands in the CDK assets bucket, where content-addressed assets are never
+ * garbage collected, so a rotated credential stays readable there. `credentialsSecretArn` is
+ * the path that avoids this entirely: the operator creates the secret out of band and VAMS only
+ * reads it, so no credential passes through synth. This construct is not created at all on
+ * that path.
  *
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -25,7 +35,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import { Duration } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../config/config";
-import { suppressCdkNagLambda } from "../../../../helper/security";
+import { discardStagedSecretAsset, suppressCdkNagLambda } from "../../../../helper/security";
 
 const HANDLER_SOURCE = `# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -57,7 +67,9 @@ def handler(event, context):
 
 /**
  * Build the credentials asset directory (handler + credentials.json) in a temp
- * location. Content-hashed by CDK, so the values never enter the template.
+ * location. Content-hashed by CDK, so the values do not enter the template.
+ *
+ * The caller must pass the directory to `discardStagedSecretAsset()` once CDK has staged it.
  */
 function buildCredentialsAsset(clientId: string, clientSecret: string): string {
     const assetDir = fs.mkdtempSync(path.join(os.tmpdir(), "vams-physna-secret-"));
@@ -65,7 +77,7 @@ function buildCredentialsAsset(clientId: string, clientSecret: string): string {
     fs.writeFileSync(
         path.join(assetDir, "credentials.json"),
         JSON.stringify({ clientId, clientSecret }),
-        { encoding: "utf-8" }
+        { encoding: "utf-8", mode: 0o600 }
     );
     return assetDir;
 }
@@ -92,6 +104,11 @@ export function populatePhysnaSecret(
         timeout: Duration.minutes(2),
     });
 
+    // The staged copy in the cloud assembly is what gets uploaded, so the source directory has
+    // no further purpose. Left behind it accumulates one cleartext credential per synth on the
+    // build host, and CI runners keep them for the life of the workspace.
+    discardStagedSecretAsset(assetDir);
+
     // Grant only PutSecretValue on the single target secret.
     secret.grantWrite(populateLambda);
 
@@ -112,9 +129,13 @@ export function populatePhysnaSecret(
         serviceToken: provider.serviceToken,
         properties: {
             SecretArn: secret.secretArn,
-            // Re-run when the credential content changes so rotations in config apply.
-            // This is a one-way SHA-256 digest, not the secret value, so it is safe to
-            // place in the template.
+            // Re-run when the credential content changes so rotations in config apply. A
+            // property change is the only thing that re-invokes a custom resource, so a version
+            // value is required rather than optional. It is a one-way digest and not the secret,
+            // and it reveals nothing the template does not already carry: the Lambda's code S3
+            // key is itself a content hash of the file the credential sits in. For a
+            // high-entropy secret neither is invertible; for a low-entropy one both would let a
+            // guess be confirmed offline by anyone holding cloudformation:GetTemplate.
             credentialVersion: crypto
                 .createHash("sha256")
                 .update(`${clientId}:${clientSecret}`)

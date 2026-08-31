@@ -9,6 +9,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as batch from "aws-cdk-lib/aws-batch";
@@ -31,9 +32,10 @@ import { Service } from "../../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../../config/config";
 import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
-    kmsKeyPolicyStatementGenerator,
     grantExternalAssetBucketKmsKeys,
+    kmsKeyPolicyStatementGenerator,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
@@ -84,6 +86,17 @@ export class Cosmos3Construct extends Construct {
          */
         const hfTokenSecret = new secretsmanager.Secret(this, "CosmosHfTokenSecret", {
             description: "HuggingFace API token for downloading NVIDIA Cosmos models",
+            // Imported by ARN, not passed as the key object: the grants CDK derives from
+            // grantRead/grantWrite then land only on each grantee's own policy. Passing the object
+            // writes those grantees into the key's resource policy, which makes the storage stack
+            // that owns the key reference this pipeline stack and forms a circular dependency.
+            encryptionKey: props.storageResources.encryption.kmsKey
+                ? kms.Key.fromKeyArn(
+                      this,
+                      "HfTokenSecretKmsKeyRef",
+                      props.storageResources.encryption.kmsKey.keyArn
+                  )
+                : undefined,
         });
 
         populateHuggingFaceTokenSecret(
@@ -251,7 +264,7 @@ export class Cosmos3Construct extends Construct {
          * Shared across all Cosmos model types for GPU-accelerated inference
          */
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
-            assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+            assumedBy: Service("EC2").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonEC2ContainerServiceforEC2Role"
@@ -281,6 +294,10 @@ export class Cosmos3Construct extends Construct {
         // Determine small-tier instance types from the Nano model config (or default). Every entry
         // must carry at least four GPUs: the Nano job reserves four so the container can shard the
         // checkpoint's parameters, and Batch cannot place it on a smaller instance.
+        //
+        // Not the same shape as the Super pool below: nano16B is the only model on this tier, so this
+        // is a disabled-model fallback rather than a choice between several variants' lists, and there
+        // is nothing to intersect.
         const instanceTypes = cosmosConfig.modelsOmni.nano16B?.enabled
             ? cosmosConfig.modelsOmni.nano16B.instanceTypes
             : ["g6e.12xlarge", "g6e.24xlarge", "g6e.48xlarge"];
@@ -291,9 +308,19 @@ export class Cosmos3Construct extends Construct {
             48
         );
 
-        // Warm instances: if enabled, keep minVCpus at warmInstanceCount * 48 vCPUs
+        // Warm instances hold GPU capacity so a job starts without waiting for an instance to launch.
+        // The floor applies only when the Nano tier is ENABLED: this environment is the Nano tier's, and
+        // a deployment with warm instances on and Nano off was holding GPU instances running for a tier
+        // that can never receive a job. Nothing reported it, because an idle warm instance is what the
+        // feature is for.
+        //
+        // The Super tier hardcodes minvCpus 0 below, so warm instances are a Nano-tier feature only.
+        // 48 vCPUs is one g6e.12xlarge, the smallest instance type this tier accepts; an operator who
+        // configures a larger type gets fewer warm instances than the count says, which is a separate
+        // sizing question from whether the floor should exist at all.
+        const nanoTierEnabled = cosmosConfig.modelsOmni.nano16B?.enabled === true;
         const minVCpus =
-            cosmosConfig.useWarmInstances && cosmosConfig.warmInstanceCount > 0
+            nanoTierEnabled && cosmosConfig.useWarmInstances && cosmosConfig.warmInstanceCount > 0
                 ? cosmosConfig.warmInstanceCount * 48
                 : 0;
 
@@ -425,12 +452,22 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
         let batchJobQueueSuper: batch.CfnJobQueue | undefined;
 
         if (anySuperEnabled) {
-            // Determine instance types and maxVCpus from the first enabled Super model config
-            const instanceTypesSuper = cosmosConfig.modelsOmni.super64B?.enabled
-                ? cosmosConfig.modelsOmni.super64B.instanceTypes
-                : cosmosConfig.modelsOmni.superText2Image64B?.enabled
-                ? cosmosConfig.modelsOmni.superText2Image64B.instanceTypes
-                : cosmosConfig.modelsOmni.superImage2Video64B.instanceTypes;
+            // The pool every enabled Super variant permits. These variants share this one compute
+            // environment and its job queue, and Batch cannot tell which variant a job came from, so
+            // an instance type only one variant allows could receive another variant's job. Taking the
+            // intersection is what makes each variant's list mean what the configuration reference says
+            // it means; getConfig() rejects a configuration whose enabled variants share no type.
+            const instanceTypesSuper = Config.intersectInstanceTypes([
+                cosmosConfig.modelsOmni.super64B?.enabled
+                    ? cosmosConfig.modelsOmni.super64B.instanceTypes
+                    : undefined,
+                cosmosConfig.modelsOmni.superText2Image64B?.enabled
+                    ? cosmosConfig.modelsOmni.superText2Image64B.instanceTypes
+                    : undefined,
+                cosmosConfig.modelsOmni.superImage2Video64B?.enabled
+                    ? cosmosConfig.modelsOmni.superImage2Video64B.instanceTypes
+                    : undefined,
+            ]);
 
             const maxVCpusSuper = Math.max(
                 cosmosConfig.modelsOmni.super64B?.enabled
@@ -751,14 +788,6 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             /**
              * Step Functions State Machine for this model
              */
-            const constructPipelineTask = new tasks.LambdaInvoke(
-                this,
-                `ConstructPipelineTask-${modelKey}`,
-                {
-                    lambdaFunction: constructPipelineFunction,
-                    outputPath: "$.Payload",
-                }
-            );
 
             const successState = new sfn.Succeed(this, `SuccessState-${modelKey}`, {
                 comment: `Cosmos 3 ${modelKey} pipeline returned SUCCESS`,
@@ -782,6 +811,29 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             const handleBatchError = new sfn.Pass(this, `HandleBatchError-${modelKey}`, {
                 resultPath: "$",
             }).next(pipeLineEndTask);
+
+            // error handler passthrough - Construct Pipeline Lambda.
+            //
+            // Without it a failure in the FIRST state ends the execution before PipelineEndTask runs,
+            // and PipelineEndTask is the only state that resolves the parent workflow's task token.
+            // The parent's waitForCallback task then stays RUNNING for its whole taskTimeout — eight
+            // hours on these pipelines — for a job that failed in under a second.
+            const handleConstructPipelineError = new sfn.Pass(
+                this,
+                `HandleConstructPipelineError-${modelKey}`,
+                { resultPath: "$" }
+            ).next(pipeLineEndTask);
+
+            const constructPipelineTask = new tasks.LambdaInvoke(
+                this,
+                `ConstructPipelineTask-${modelKey}`,
+                {
+                    lambdaFunction: constructPipelineFunction,
+                    outputPath: "$.Payload",
+                }
+            ).addCatch(handleConstructPipelineError, {
+                resultPath: "$.error",
+            });
 
             const batchJob = new tasks.BatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -816,6 +868,9 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         `Cosmos3-${modelKey}-StateMachineLogGroup`,
                         10
                     ),
+                // Encrypted with the shared VAMS CMK when the deployment enables one; undefined leaves the
+                // CloudWatch Logs AWS-managed key. The key policy already admits the Logs service principal.
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: RemovalPolicy.DESTROY,
             });
@@ -825,10 +880,14 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 `Cosmos3-${modelKey}-StateMachine`,
                 {
                     definitionBody: sfn.DefinitionBody.fromChainable(sfnDefinition),
-                    // Match the Batch attempt (8h) and outer task-token timeouts so
-                    // pipelineEnd always runs and closes the token, even on a first-run
-                    // Super download (~133 GB) followed by multi-GPU inference.
-                    timeout: Duration.hours(8),
+                    // ENVELOPES the Batch attempt (attemptDurationSeconds 28800) rather than matching
+                    // it. An execution-level States.Timeout is not routed through any task's Catch, so
+                    // an equal timeout means a job that runs the full attempt duration cuts the
+                    // execution off at the same instant — pipelineEnd never runs, and the parent
+                    // workflow's task token is never released. The hour of margin is what lets the Batch
+                    // task fail on its own terms and reach the callback. Matches the four sibling GPU
+                    // pipelines, which all use 9 hours against the same 8-hour attempt.
+                    timeout: Duration.hours(9),
                     logs: {
                         destination: stateMachineLogGroup,
                         includeExecutionData: true,
@@ -836,6 +895,22 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     },
                     tracingEnabled: true,
                 }
+            );
+
+            // Step Functions cancels the submitted Batch job when the execution stops, which needs
+            // TerminateJob. Without it an abort leaves the GPU job running to its attempt limit — eight
+            // hours on a g6e or p5 instance — and the execution reports stopped while the compute is
+            // still billing. DescribeJobs is granted alongside it because the `.sync` integration reads
+            // the job's terminal state; this deployment's managed EventBridge rule happens to deliver
+            // that today, so its absence was not visible in a successful run. Batch job ids are
+            // runtime-generated with no name pattern to scope on, so both actions take a wildcard
+            // resource. Matches cosmosReason, cosmosTransfer and gr00tFinetune.
+            pipelineStateMachine.addToRolePolicy(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["batch:DescribeJobs", "batch:TerminateJob"],
+                    resources: ["*"],
+                })
             );
 
             /**
@@ -1061,7 +1136,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
         );
 
         const reason =
-            "Intended Solution. The Cosmos Predict pipeline lambda functions need appropriate access to S3 for reading asset files and model data.";
+            "Cosmos 3 pipeline Lambdas read asset objects whose keys are created after deployment, so the S3 resource cannot be enumerated at synthesis.";
 
         NagSuppressions.addResourceSuppressions(
             this,
@@ -1071,7 +1146,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -1087,7 +1162,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*Cosmos3.*StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*Cosmos3.*StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -1103,7 +1178,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -1119,7 +1194,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*vamsExecuteCosmos.*Pipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteCosmos.*Pipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -1132,7 +1207,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -1147,7 +1222,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -1184,7 +1259,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 [
                     {
                         id: "AwsSolutions-IAM5",
-                        reason: "Cosmos Predict pipeline state machine uses default policy that contains wildcards for batch job submission and lambda invocation",
+                        reason: "AWS Batch generates a job id at submit time, so the job this state machine terminates cannot be named at synthesis.",
                         appliesTo: [
                             "Resource::*",
                             "Action::kms:GenerateDataKey*",

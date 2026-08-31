@@ -99,6 +99,8 @@ export class IsaacLabTrainingConstruct extends Construct {
                     ? { subnets: props.pipelineSubnetsIsolated }
                     : undefined,
             securityGroup: props.pipelineSecurityGroups[0],
+            encrypted: true,
+            kmsKey: props.storageResources.encryption.kmsKey,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
             throughputMode: efs.ThroughputMode.BURSTING,
@@ -248,7 +250,7 @@ export class IsaacLabTrainingConstruct extends Construct {
 
         // IAM role for Batch job
         const jobRole = new iam.Role(this, "BatchJobRole", {
-            assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+            assumedBy: ServiceHelper.Service("ECS_TASKS").Principal,
         });
 
         // Grant VAMS asset bucket read/write access for inputs and outputs
@@ -360,7 +362,18 @@ export class IsaacLabTrainingConstruct extends Construct {
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(8)),
-            heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.minutes(30)),
+            // The heartbeat clock starts when this task is ENTERED, but the only producer is the
+            // container (first beat 5 minutes after it starts). Nothing beats while the Batch job sits
+            // RUNNABLE waiting for GPU capacity or pulls its multi-gigabyte image, so this value is
+            // really the tolerance for that pre-run window — at 30 minutes, ordinary capacity
+            // contention failed the run.
+            //
+            // It must stay BELOW the parent pipeline's taskHeartbeatTimeout (3600s in both Isaac Lab
+            // vamsSchema bundles), because the parent is starved by the same silence: whichever fires
+            // first decides the outcome, and this one firing first is what routes through
+            // executeBatchJobState's Catch, terminating the Batch job and reporting a diagnosable
+            // failure. If the parent won that race the job would keep running and billing.
+            heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.minutes(45)),
         });
 
         const closePipelineState = new tasks.LambdaInvoke(this, "ClosePipelineState", {
@@ -402,6 +415,7 @@ export class IsaacLabTrainingConstruct extends Construct {
             .next(closePipelineState);
 
         const stateMachineLogGroup = new logs.LogGroup(this, "IsaacLab-StateMachineLogGroup", {
+            encryptionKey: props.storageResources.encryption.kmsKey,
             logGroupName:
                 "/aws/vendedlogs/VAMSstateMachine-IsaacLabTrainingPipeline" +
                 generateUniqueNameHash(
@@ -416,7 +430,12 @@ export class IsaacLabTrainingConstruct extends Construct {
 
         const stateMachine = new sfn.StateMachine(this, "IsaacLabStateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            timeout: cdk.Duration.hours(8),
+            // ENVELOPES the task timeout (8h) rather than matching it. openPipelineState runs before
+            // executeBatchJobState, so the task's deadline always falls after the execution's when the
+            // two are equal — the task-level States.Timeout becomes unreachable and the execution-level
+            // one fires instead. That bypasses every Catch, so the error handler writes no record and
+            // closePipelineState never runs. Same invariant the Splat Toolbox state machine states.
+            timeout: cdk.Duration.hours(9),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

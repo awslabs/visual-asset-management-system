@@ -49,7 +49,12 @@ export function buildCreateAssetFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const name = "createAsset";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -86,7 +91,7 @@ export function buildCreateAssetFunction(
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["sns:CreateTopic", "sns:ListTopics"],
+            actions: ["sns:CreateTopic"],
             resources: [assetTopicWildcardArn],
         })
     );
@@ -105,7 +110,9 @@ export function buildAssetService(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const name = "assetService";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -150,7 +157,7 @@ export function buildAssetService(
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["sns:CreateTopic", "sns:ListTopics", "sns:DeleteTopic"],
+            actions: ["sns:CreateTopic", "sns:DeleteTopic"],
             resources: [assetTopicWildcardArn],
         })
     );

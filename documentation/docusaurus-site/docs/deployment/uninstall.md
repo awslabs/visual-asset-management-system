@@ -239,6 +239,7 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSOrchestrationBusAudit-{hash}` — EventBridge orchestration bus audit
 -   `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` — VPC flow logs (conditional on `useGlobalVpc`)
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
+-   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
 -   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
 
 ```bash
@@ -324,6 +325,22 @@ for P in $(aws ssm get-parameters-by-path \
     aws ssm delete-parameter --name "${P}"
 done
 ```
+
+:::note[An Amazon Location Service API key orphaned by an earlier release]
+When Amazon Location Service is enabled, VAMS creates an API key named
+`vams-location-api-key-<name>-<baseStackName>` and deletes it with the stack. Earlier releases retained
+it, so a deployment that has ever had a failed-and-rolled-back deploy may still have a key left behind
+from that release. It costs nothing while unused, but its name is deterministic, so it conflicts with a
+redeploy that uses the same configuration name, stack name, and Region. List and remove any that remain:
+
+```bash
+aws location list-keys --query "Entries[].KeyName" --output text
+aws location delete-key --key-name "vams-location-api-key-<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>"
+```
+
+A key created with no expiry deletes immediately. `--force-delete` is available if a key was given an
+expiry in the past and is therefore subject to the deprecation waiting period.
+:::
 
 ## Step 6: Delete the API Gateway account CloudWatch role
 

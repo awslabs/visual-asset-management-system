@@ -6,7 +6,7 @@
     "_comment_prefix": "Required: SSM resource-name base prefix from CDK core stack output 'ResourceNamesSSMParamPrefixOutput' (format: /{configName}-{baseStackName}/resourceNames). When set, the reindexer function name is resolved automatically from SSM Parameter Store.",
     "resource_names_ssm_param_prefix": "<RESOURCE_NAMES_SSM_PARAM_PREFIX>",
 
-    "_comment_function": "Optional override: explicit reindexer Lambda function name (CDK stack output 'ReindexerFunctionNameOutput'). Only needed when the SSM prefix above is not filled in, or to override the SSM-resolved value.",
+    "_comment_function": "Optional override: explicit reindexer Lambda function name (CDK stack output 'OpenSearchReindexerFunctionNameOutput'). Only needed when the SSM prefix above is not filled in, or to override the SSM-resolved value.",
     "reindexer_function_name": null,
 
     "_comment_history": "Asset history backfill (phase 2). Table names resolve automatically from the SSM prefix; the explicit overrides below are only needed when the prefix is not set.",
@@ -82,7 +82,7 @@
         "   is then resolved automatically from SSM Parameter Store.",
         "",
         "   Alternative: set 'reindexer_function_name' explicitly (CDK stack output",
-        "   'ReindexerFunctionNameOutput') to skip or override the SSM lookup.",
+        "   'OpenSearchReindexerFunctionNameOutput') to skip or override the SSM lookup.",
         "",
         "3. workflowExecutions step: set the six *_storage_table_name* fields to your stack's DynamoDB table names",
         "   (from the CloudFormation stack outputs or the DynamoDB console).",
@@ -99,6 +99,8 @@
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps assetHistory",
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps workflowExecutions",
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps auxPreviewRelocation",
+        "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps pipelineWorkflowDefinitions",
+        "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps globalListBackfill",
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps tagsNamespacing",
         "",
         "7. (Reindex re-run only) Clear the v3 indexes first if a previous run partially populated them:",

@@ -474,6 +474,61 @@ const bucket = new s3.Bucket(this, "MyBucket", {
 });
 ```
 
+**Every resource that supports encryption at rest takes the shared key.** It is `undefined` when
+`config.app.useKmsCmkEncryption.enabled` is false, so the prop is self-guarding — pass it unconditionally
+and the resource falls back to its service's AWS-managed key.
+
+```typescript
+// ✅ CORRECT - CloudWatch log group
+const logGroup = new logs.LogGroup(this, "MyLogGroup", {
+    encryptionKey: props.storageResources.encryption.kmsKey,
+    retention: logs.RetentionDays.ONE_YEAR,
+});
+
+// ✅ CORRECT - EFS file system (see trap 1 below before changing an existing one)
+const fileSystem = new efs.FileSystem(this, "MyEfs", {
+    vpc: props.vpc,
+    encrypted: true,
+    kmsKey: props.storageResources.encryption.kmsKey,
+});
+
+// ❌ INCORRECT - key object on a secret; see trap 2
+const secret = new secretsmanager.Secret(this, "MySecret", {
+    encryptionKey: props.storageResources.encryption.kmsKey,
+});
+secret.grantRead(someRoleInThisNestedStack); // writes the role into the KEY's resource policy
+
+// ✅ CORRECT - import by ARN so derived grants stay on the grantee
+const secret = new secretsmanager.Secret(this, "MySecret", {
+    encryptionKey: props.storageResources.encryption.kmsKey
+        ? kms.Key.fromKeyArn(
+              this,
+              "MySecretKmsKeyRef",
+              props.storageResources.encryption.kmsKey.keyArn
+          )
+        : undefined,
+});
+```
+
+Three traps, each of which passes `cdk synth` and fails later:
+
+1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Changing it on an existing file system makes
+   AWS CloudFormation create an empty replacement and delete the original, which VAMS declares
+   `RemovalPolicy.DESTROY` and therefore does not retain. Treat it as a breaking change: record it in
+   `CHANGELOG.md` and the upgrade guide. Log groups and secrets update in place.
+2. **Passing the key OBJECT where CDK derives grants creates a circular stack dependency.** `Key.grant()`
+   writes the grantee into the key's resource policy, so the storage nested stack that owns the key ends up
+   consuming an output of the grantee's stack while that stack consumes storage. AWS CloudFormation rejects
+   the changeset with `Circular dependency between resources`. Import the key by ARN, as shown above.
+3. **A root-stack resource cannot consume the key at all**, because the key lives in a nested stack. The AWS
+   CloudTrail log group is the case in the tree and stays on the AWS-managed key, along with the VPC flow
+   log group (its stack precedes storage) and the provisioned OpenSearch domain log groups (created by the
+   service, not VAMS).
+
+Verify before deploying: a cycle is invisible to `cdk synth` and appears only at changeset creation. Synth
+and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
+coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`.
+
 ### **Dependency Management Standards**
 
 #### **Rule 8: Proper Stack Dependencies**
@@ -691,6 +746,41 @@ Both halves are required, and each is inert without the other:
 Report the token before propagating so the original error still reaches Amazon CloudWatch, and make the call
 conditional on a token being present — a direct invoke carries none.
 
+### **Capturing a Child Process's Output for the Execution Record**
+
+A container that runs its real work in a child process must keep a bounded copy of that child's output. The
+message it raises on failure is what the workflow stores as the execution's error, and that record is what
+an operator reads. `subprocess.run(check=True)` with no capture leaves the child writing to the inherited
+stdout — the output reaches Amazon CloudWatch, but the container never sees it, so the exception can only
+report an exit code.
+
+Use the `_run_streaming` helper the five NVIDIA inference containers carry (canonical copy:
+`backendPipelines/genAi/nvidia/cosmos/3/container/inference.py`) and put its returned tail in the raised
+message:
+
+```python
+returncode, output_tail = _run_streaming(cmd, env=env, cwd=REPO_DIR)
+if returncode != 0:
+    raise RuntimeError(f"Inference failed with exit code {returncode}. Last output:\n{output_tail}")
+```
+
+-   **Read before you wait.** `Popen(stdout=PIPE)` followed by `wait()` with no reader is what deadlocks:
+    the child blocks on `write()` once the pipe buffer fills and never exits. The helper drains as the
+    child writes.
+-   **`capture_output=True` does NOT deadlock** — `run()` drains through `communicate()`, reading both
+    pipes concurrently (measured: 1.2 MB, no stall). It is still wrong here, for a different reason: it
+    yields nothing until the child exits, so a multi-hour GPU job would log nothing while running and a
+    hang would be undiagnosable. Do not restate the deadlock claim; both measurements are pinned in
+    `backendPipelines/genAi/nvidia/tests/test_inference_output_capture.py`.
+-   **The tail is bounded** (80 lines, 2000 chars each) so a job printing a progress line per step cannot
+    grow the container's memory for the whole run.
+
+The helper is duplicated per container rather than shared: each container is its own Docker build context
+whose Dockerfile `COPY`s an explicit file list, so no shared module is importable at container runtime.
+Inline it into the existing entry point rather than adding a file — a new file also needs a Dockerfile
+`COPY` edit, and a missed one fails at container **runtime**, not at build. A no-drift test compares all
+copies structurally, so edit one and propagate in the same change.
+
 ### **Pipeline Directory Structure (`/backendPipelines/`)**
 
 All pipeline backend code (including containers) should be organized in `/backendPipelines/` by use case:
@@ -752,11 +842,11 @@ not read). Two rules follow:
     built-in (rename, retuned `systemConfig`, deliberate archive) from the schema files. Substitute a
     placeholder for token values -- the resolved value still reaches CloudFormation via the
     `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
-    `infra/test/vamsSchemaRegistrationHash.test.ts`.
+    `infra/test/pipelines/vamsSchemaRegistrationHash.test.ts`.
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` -- otherwise refreshing an unrelated artefact deletes every bundle while the
-    registration resources still expect to read them. Test: `infra/test/artefactsBucketPrune.test.ts`.
+    registration resources still expect to read them. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
 
 Register it from the pipeline's nested stack with the `VamsSchemaRegistration` construct, passing the
 deploy-time resolved resource values:
@@ -1149,10 +1239,13 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`.
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
-8. **VPC Builder Updates (CRITICAL)**: Pipelines using AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` (search for `useSplatToolbox` to find them):
-    - **Subnet creation** (~line 341): adds public + private subnets to the VPC
-    - **VPC endpoints** (~line 540): creates Batch, ECR, ECR Docker endpoints
-    - **ECS endpoint** (~line 619): includes private subnets in the ECS endpoint
+8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
+
+    - **Subnet creation** (~line 343): adds public + private subnets. **Private-subnet pipelines only** — `subnetPrivateConfig` is `PRIVATE_WITH_EGRESS` and the `ec2.Vpc` sets no `natGateways`, so listing an isolated-subnet pipeline here creates one NAT gateway per Availability Zone (~$66/month at two AZs) that nothing routes through. Omitting it for a private-subnet pipeline fails its compute environment with "Resource subnets are required".
+    - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
+    - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
+
+    Six pipelines run in isolated subnets (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
 #### **Pipeline Configuration Rules**
 
@@ -1463,7 +1556,7 @@ export class Wafv2BasicConstruct extends Construct {
 
 The shipped `wafPolicyConfig.json` overrides two Common Rule Set rules to `count`. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking. `SizeRestrictions_QUERYSTRING` is likewise overridden to `count`: it blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter. A presigned URL carrying a session security token already approaches that limit, and the viewer requires the value double-encoded to survive its own two decode passes, which roughly doubles it again — so the iframe request for the static viewer page was blocked with a 403 before it ever reached S3.
 
-The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. Unit test: `infra/test/wafRateLimit.test.ts`.
+The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. Unit test: `infra/test/waf/wafRateLimit.test.ts`.
 
 ### **Security Helper Integration**
 
@@ -2356,7 +2449,7 @@ When making CDK infrastructure changes, update the corresponding documentation a
 #### **Docusaurus Documentation Updates:**
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
--   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts`: a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table, not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm the `infra/test/config/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it covers **neither** `validation.ts` nor `derived.ts`, so both are kept in sync by review, not by the test. New/changed `getConfig()` validation logic must be hand-ported into `validation.ts`: a missing rule leaves the ConfigBuilder approving a config that then fails `cdk synth`, which is worse than no validation because the operator was told it was valid. `getConfig()` auto-mutations — assignments that rewrite the operator's config — must be mirrored into `derived.ts` when added or changed, and **deleted** from it when removed from `getConfig()`; a leftover mutation makes the builder keep rewriting the downloaded `config.json` in a way the deployment does not. `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Where `getConfig()` rejects a feature combination instead of assigning, the mirror is an error rule in `validation.ts` — a feature added to a constraint list such as the VPC-requiring set goes into that file's `VPC_REQUIRING_FEATURES` table, not into `derived.ts`. Two exclusions: rules reading a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`. When checking the port, compare the config FIELD PATHS each rule references; the two files word the same rule differently, so matching on message text under-reports drift.
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 -   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
@@ -2639,7 +2732,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
     }
     ```
 
-    No CDK aspect can do this for you — the L1 is created lazily inside `addEventSource()`, after aspects finish visiting the tree. Regression coverage: `infra/test/eventSourceMappingGovCloudTags.test.ts`.
+    No CDK aspect can do this for you — the L1 is created lazily inside `addEventSource()`, after aspects finish visiting the tree. Regression coverage: `infra/test/partition/eventSourceMappingGovCloudTags.test.ts`.
 
 2. **Never hardcode a partition, DNS suffix, or region.** Use `Service("X").ARN(...)` / `.Endpoint` / `.Principal`, `IAMArn(name)`, `Partition()`. Suffixes differ (`.amazonaws.com`, `.amazonaws.com.cn`, **`.amazonaws.eu`** for `aws-eusc`, `.c2s.ic.gov`, …), while service **principals** stay `.amazonaws.com` in `aws-us-gov` and `aws-eusc` — so a literal `ServicePrincipal("lambda.amazonaws.com")` happens to work there but is wrong in `aws-cn`/ISO.
 
@@ -2657,7 +2750,7 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 ### **Verifying a partition change**
 
-Assert the restricted output **and** the commercial output — otherwise a correct tag strip is indistinguishable from a resource that was never emitted. Inspect the emitted nested template, not the construct tree, and prefer a Jest test over a one-off synth (see `infra/test/eventSourceMappingGovCloudTags.test.ts`, which tags its test stack the way `core-stack.ts` does so the assertion is load-bearing rather than vacuous).
+Assert the restricted output **and** the commercial output — otherwise a correct tag strip is indistinguishable from a resource that was never emitted. Inspect the emitted nested template, not the construct tree, and prefer a Jest test over a one-off synth (see `infra/test/partition/eventSourceMappingGovCloudTags.test.ts`, which tags its test stack the way `core-stack.ts` does so the assertion is load-bearing rather than vacuous).
 
 ## 📖 **Best Practices Summary**
 

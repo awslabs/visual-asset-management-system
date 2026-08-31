@@ -1047,7 +1047,7 @@ export class ApiBuilderNestedStack extends NestedStack {
                 this,
                 "MetadataSchemaDefaultCustomResourceRole",
                 {
-                    assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+                    assumedBy: Service("LAMBDA").Principal,
                     inlinePolicies: {
                         TablePolicy: metadataSchemaCustomResourcePolicy,
                     },

@@ -172,11 +172,24 @@ class LasReader(PointCloudReader):
             header = f.header
             point_count = header.point_count
 
+            # A LAS file records its CRS as either VLR 2112 (OGC WKT, the LAS 1.4 form) or VLR 34735
+            # (GeoTIFF GeoKeyDirectoryTag, the LAS 1.0-1.3 form). parse_crs() reads both; matching only
+            # 2112 reports every GeoKey-tagged file as carrying no CRS.
             crs = None
-            for vlr in header.vlrs:
-                if vlr.record_id == 2112:
-                    crs = vlr.string
-                    break
+            try:
+                parsed = header.parse_crs()
+                if parsed is not None:
+                    crs = parsed.to_wkt()
+            except Exception:
+                # parse_crs raises on a malformed or partial GeoKey directory; a file carrying both
+                # records is still readable through its WKT VLR.
+                crs = None
+
+            if crs is None:
+                for vlr in header.vlrs:
+                    if vlr.record_id == 2112:
+                        crs = vlr.string
+                        break
 
             fmt = (
                 InputFormat.LAZ

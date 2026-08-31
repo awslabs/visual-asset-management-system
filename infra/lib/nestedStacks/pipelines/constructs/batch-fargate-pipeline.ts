@@ -30,6 +30,21 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      */
     ephemeralStorageGiB?: number;
     /**
+     * Hard limit on a single job attempt, after which AWS Batch terminates the job itself.
+     *
+     * Required rather than optional so a new pipeline has to state its own bound: with no attempt
+     * duration a wedged 16 vCPU / 64 GiB container runs until someone notices. The orchestration's
+     * timeout is not a substitute — a pipeline that submits its job from a Lambda under
+     * `WAIT_FOR_TASK_TOKEN` (coordinate transform) owns the job itself, so Step Functions giving up
+     * bounds only the token wait, not the container.
+     *
+     * Set it to the enclosing orchestration bound (the task timeout, or the state machine timeout for
+     * a `.sync` submission). Equal is correct here: the orchestration clock starts first, so it still
+     * gives up before Batch does on a live execution, and this limit only takes effect once the
+     * orchestration is no longer watching.
+     */
+    attemptDuration: cdk.Duration;
+    /**
      * Optional ECR repository to use instead of local Docker build.
      * When provided, imageAssetPath is ignored and the image is
      * pulled from this ECR repository (tagged "latest").
@@ -85,6 +100,7 @@ export class BatchFargatePipelineConstruct extends Construct {
         this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
             jobDefinitionName: batchJobName,
             retryAttempts: 1,
+            timeout: props.attemptDuration,
             container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
                 cpu: 16,
                 memory: cdk.Size.mebibytes(65536),

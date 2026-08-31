@@ -184,7 +184,7 @@ export function buildPipelineServiceV2Function(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
+            actions: ["lambda:CreateFunction"],
             resources: [
                 IAMArn("*" + config.name + "*").lambda,
                 IAMArn(BACKEND_GENERATED_NAME_PATTERN).lambda,

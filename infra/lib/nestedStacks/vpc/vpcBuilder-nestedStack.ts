@@ -346,12 +346,15 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
-                props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
+                // Only pipelines whose compute is placed in PRIVATE subnets belong here. A pipeline
+                // running in isolated subnets reaches AWS through the interface endpoints created
+                // below, so listing it would add public subnets and one NAT gateway per Availability
+                // Zone that nothing routes through.
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
             }
@@ -733,12 +736,17 @@ export class VPCBuilderNestedStack extends NestedStack {
             // and IsaacLab (isolated subnets). Only one ECS endpoint per VPC is allowed
             // when privateDnsEnabled is true, so we consolidate into a single endpoint
             // and combine the subnets from both pipeline types as needed.
+            // Private only for pipelines whose compute actually runs in the private subnets.
+            // coordinateTransform runs in isolated ones and needs no ECS endpoint at all: this is the
+            // ECS control-plane endpoint, which an EC2-launch-type container instance's agent uses, and
+            // its AWS Batch jobs are Fargate — they reach ECR, Amazon S3 and CloudWatch Logs through the
+            // isolated-subnet endpoints created above. Its five isolated-subnet peers are likewise
+            // absent from this list and run without it.
             const needsEcsPrivate =
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
-                props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled;

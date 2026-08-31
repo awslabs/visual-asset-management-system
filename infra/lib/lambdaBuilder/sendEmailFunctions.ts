@@ -30,7 +30,12 @@ export function buildSendEmailFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const name = "sendEmail";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),

@@ -9,6 +9,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as batch from "aws-cdk-lib/aws-batch";
@@ -31,9 +32,10 @@ import { Service } from "../../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../../config/config";
 import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
-    kmsKeyPolicyStatementGenerator,
     grantExternalAssetBucketKmsKeys,
+    kmsKeyPolicyStatementGenerator,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
@@ -100,6 +102,17 @@ export class CosmosReasonConstruct extends Construct {
          */
         const hfTokenSecret = new secretsmanager.Secret(this, "CosmosReasonHfTokenSecret", {
             description: "HuggingFace API token for downloading NVIDIA Cosmos Reason models",
+            // Imported by ARN, not passed as the key object: the grants CDK derives from
+            // grantRead/grantWrite then land only on each grantee's own policy. Passing the object
+            // writes those grantees into the key's resource policy, which makes the storage stack
+            // that owns the key reference this pipeline stack and forms a circular dependency.
+            encryptionKey: props.storageResources.encryption.kmsKey
+                ? kms.Key.fromKeyArn(
+                      this,
+                      "HfTokenSecretKmsKeyRef",
+                      props.storageResources.encryption.kmsKey.keyArn
+                  )
+                : undefined,
         });
 
         populateHuggingFaceTokenSecret(
@@ -253,7 +266,7 @@ export class CosmosReasonConstruct extends Construct {
          * Uses standard GPU instances (same class as predict 2B) for Reason inference
          */
         const instanceRole = new iam.Role(this, "ReasonBatchInstanceRole", {
-            assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+            assumedBy: Service("EC2").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonEC2ContainerServiceforEC2Role"
@@ -581,14 +594,6 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             /**
              * Step Functions State Machine for this model
              */
-            const constructPipelineTask = new tasks.LambdaInvoke(
-                this,
-                `ConstructPipelineTask-${modelKey}`,
-                {
-                    lambdaFunction: constructPipelineFunction,
-                    outputPath: "$.Payload",
-                }
-            );
 
             const successState = new sfn.Succeed(this, `SuccessState-${modelKey}`, {
                 comment: `Cosmos Reason ${modelKey} pipeline returned SUCCESS`,
@@ -612,6 +617,29 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             const handleBatchError = new sfn.Pass(this, `HandleBatchError-${modelKey}`, {
                 resultPath: "$",
             }).next(pipeLineEndTask);
+
+            // error handler passthrough - Construct Pipeline Lambda.
+            //
+            // Without it a failure in the FIRST state ends the execution before PipelineEndTask runs,
+            // and PipelineEndTask is the only state that resolves the parent workflow's task token.
+            // The parent's waitForCallback task then stays RUNNING for its whole taskTimeout — eight
+            // hours on these pipelines — for a job that failed in under a second.
+            const handleConstructPipelineError = new sfn.Pass(
+                this,
+                `HandleConstructPipelineError-${modelKey}`,
+                { resultPath: "$" }
+            ).next(pipeLineEndTask);
+
+            const constructPipelineTask = new tasks.LambdaInvoke(
+                this,
+                `ConstructPipelineTask-${modelKey}`,
+                {
+                    lambdaFunction: constructPipelineFunction,
+                    outputPath: "$.Payload",
+                }
+            ).addCatch(handleConstructPipelineError, {
+                resultPath: "$.error",
+            });
 
             const batchJob = new tasks.BatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -646,6 +674,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                             `CosmosReason-${modelKey}-StateMachineLogGroup`,
                             10
                         ),
+                    encryptionKey: props.storageResources.encryption.kmsKey,
                     retention: logs.RetentionDays.ONE_YEAR,
                     removalPolicy: RemovalPolicy.DESTROY,
                 }
@@ -839,7 +868,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: nagReason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -855,7 +884,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: nagReason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*CosmosReason.*StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*CosmosReason.*StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -871,7 +900,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: nagReason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -887,7 +916,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     reason: nagReason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*vamsExecuteCosmos.*Pipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteCosmos.*Pipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -900,7 +929,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -915,7 +944,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

@@ -175,6 +175,9 @@ export class CoreVAMSStack extends cdk.Stack {
                         "VAMSCloudTrailLogs",
                         10
                     ),
+                // No encryptionKey: this log group lives in the root stack, so consuming the shared key
+                // from the storage nested stack forms a circular dependency between the root stack and
+                // every nested stack in it. Encrypted under the CloudWatch Logs AWS-managed key instead.
                 retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             });

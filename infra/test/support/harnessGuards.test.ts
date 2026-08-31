@@ -58,7 +58,9 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import * as cdk from "aws-cdk-lib";
 import { MAX_SQS_BATCH_SIZE, batchSizeOffenders } from "./sqsEventSourceBounds";
+import { newTestApp } from "./testApp";
 
 // `require` rather than an import: the jest config is JavaScript and this project compiles with
 // `allowJs` off, so an import of it does not type-check.
@@ -339,5 +341,53 @@ describe("the SQS event source batch bound can fail", () => {
                 { at, properties: {} },
             ])
         ).toEqual([]);
+    });
+});
+
+/**
+ * ## 4. No Jest suite may require a running Docker daemon
+ *
+ * `lambdaLayersBuilder-nestedStack.ts` calls `cdk.DockerImage.fromBuild()` as an EAGER ARGUMENT to
+ * `bundling.image`, so it runs when the construct is created, before CDK consults its bundling-skip
+ * logic. `aws:cdk:bundling-stacks: []` alone therefore does not prevent the build — both that context
+ * value and a stub on the static are needed, and `newTestApp` now applies both.
+ *
+ * Before that, `infra.test.ts` and `genAiPipelineConstructs.test.ts` failed whenever Docker Desktop was
+ * not running, with an error that reads as a code defect rather than a missing prerequisite: an
+ * environment gap presented as a red build, which is the worst of both (it neither passes honestly nor
+ * names what is wrong).
+ *
+ * Verified once by measurement rather than only by this guard: with `DOCKER_HOST` pointed at a dead port
+ * — `docker info` confirmed returning non-zero — both suites passed 26/26. That is the check this guard
+ * exists to keep true, because a suite that reintroduces its own `cdk.App` would bypass `newTestApp` and
+ * the stub with it.
+ */
+describe("no suite requires a Docker daemon", () => {
+    test("newTestApp installs the DockerImage.fromBuild stub", () => {
+        // Asserted through the public helper: importing it is what any suite does, and the stub is
+        // installed on first use rather than at import, so the app has to be built.
+        newTestApp();
+        const fromBuild = cdk.DockerImage.fromBuild as unknown as jest.Mock;
+        expect(jest.isMockFunction(fromBuild)).toBe(true);
+    });
+
+    test("newTestApp disables asset bundling by context", () => {
+        // The other half. Without it CDK still stages assets for the stacks it is asked to bundle, which
+        // is slow even when no image build is attempted.
+        const app = newTestApp();
+        expect(app.node.tryGetContext("aws:cdk:bundling-stacks")).toEqual([]);
+    });
+
+    test("a caller's own context still wins", () => {
+        // The control against over-application: a suite that genuinely wants bundling must be able to
+        // ask, or this guard would silently change what such a suite tests.
+        const app = newTestApp({ context: { "aws:cdk:bundling-stacks": ["*"] } });
+        expect(app.node.tryGetContext("aws:cdk:bundling-stacks")).toEqual(["*"]);
+    });
+
+    test("the stubbed build returns a usable DockerImage rather than throwing", () => {
+        // A stub that threw would turn the missing-daemon failure into a different confusing failure.
+        const image = cdk.DockerImage.fromBuild("./config/docker");
+        expect(image).toBeInstanceOf(cdk.DockerImage);
     });
 });

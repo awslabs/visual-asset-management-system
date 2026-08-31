@@ -367,6 +367,19 @@ The VAMS KMS key policy grants cryptographic operations to the following service
 
 VAMS applies this key policy to keys it creates. When an external key is supplied with `useKmsCmkEncryption.optionalExternalCmkArn`, VAMS references the key by ARN for encryption and leaves the key's policy unchanged. An imported key carries its own policy, which grants the same cryptographic operations to the service principals listed above so the encrypted VAMS resources — including the Amazon EventBridge orchestration bus and the Amazon CloudWatch log groups — can use the key.
 
+### Third-Party Credentials Supplied in Configuration
+
+Three third-party credentials can be supplied as configuration values: the HuggingFace access token used by the NVIDIA pipelines (`useNvidiaCosmos.huggingFaceToken`, `useNvidiaCosmos3.huggingFaceToken`, `useNvidiaGr00t.huggingFaceToken`) and the Physna OAuth2 client secret (`usePhysnaSync.clientSecret`). For each, VAMS creates an empty AWS Secrets Manager secret and populates it at deployment time through a custom resource whose Lambda carries the value in its code asset, which keeps the value out of the synthesized CloudFormation template, its resource properties, and every environment variable.
+
+The value is still present in that Lambda's deployment package. Two consequences follow, and both are properties of passing a credential through synthesis rather than of the Secrets Manager secret:
+
+-   **`lambda:GetFunction` is sufficient to read it.** That action is part of the AWS managed `ReadOnlyAccess` and `ViewOnlyAccess` policies, and it returns a download URL for the deployment package. A principal holding it does not need `secretsmanager:GetSecretValue` or `kms:Decrypt` on the secret.
+-   **A rotated credential remains readable in the CDK assets bucket.** CDK assets are content-addressed and are not garbage collected, so changing the value in configuration uploads a new asset and leaves the previous one in `cdk-hnb659fds-assets-<account>-<region>`.
+
+Where a credential must be reachable only through Secrets Manager, create the secret out of band and have VAMS reference it. The Physna add-on supports this with `app.addons.usePhysnaSync.credentialsSecretArn`; on that path no credential passes through synthesis and the populate custom resource is not created. The NVIDIA pipelines accept the token value only, so their credential does pass through synthesis — scope `lambda:GetFunction` and access to the CDK assets bucket accordingly, and rotate the HuggingFace token on the HuggingFace side when a principal's access is revoked.
+
+The temporary directory that carries a credential into a code asset is removed as soon as CDK has staged it, so a build or CI host does not accumulate cleartext copies across synthesis runs.
+
 ### Encryption in Transit
 
 All data in transit is encrypted using TLS:
@@ -490,6 +503,27 @@ Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConf
 
 Entries are screened when the file is read at synthesis time. A non-string or empty entry is skipped with a warning, as is an `'unsafe-inline'` entry in `scriptSrc` — the inline-script hashes make browsers ignore that keyword, so accepting it would lengthen the policy without permitting anything. Inline script in a served document is permitted by adding a hash computed from that document. Every other source, including a script origin and `'unsafe-eval'`, merges into its directive as written.
 
+### Policy size on the Application Load Balancer path
+
+The two web distributions deliver the policy by different mechanisms with different size limits, and the tighter of the two belongs to the Application Load Balancer. The ALB carries the whole policy in a single listener attribute, whose value Elastic Load Balancing limits to 1 KB; a CloudFront response-headers policy allows 1,783 bytes. The shipped policy measures 858 bytes, leaving roughly 166 bytes on the ALB path — about three further inline-script hashes, or two to three further host sources.
+
+A policy that exceeds the limit is rejected at synthesis time with a message naming its measured size, so the constraint surfaces before deployment rather than as a load balancer error or a truncated header. Because the limit belongs to the delivery mechanism rather than to the policy, the check applies only where an ALB serves the web front. Restricted partitions use the ALB exclusively, so a deployment that adds several CSP sources should confirm the size there.
+
+## Web Response Security Headers
+
+Both web distributions set the same security response headers, so neither delivery path is the weaker one.
+
+| Header                    | Value                                    | Purpose                                                                                 |
+| ------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| `Content-Security-Policy` | Generated per deployment (see above)      | Restricts the origins each resource type may load from                                  |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains`   | Requires HTTPS for two years, including subdomains                                      |
+| `X-Content-Type-Options`  | `nosniff`                                | Prevents MIME-type sniffing of served objects                                           |
+| `X-Frame-Options`         | `SAMEORIGIN`                             | Legacy equivalent of `frame-ancestors 'self'`; permits VAMS's own iframe viewers         |
+
+CloudFront delivers these through a response-headers policy; the ALB delivers them as listener attributes. The ALB path additionally suppresses the load balancer's own `Server` response header, which names the infrastructure without serving the application.
+
+Two headers are available only on the CloudFront path. `Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Opener-Policy: same-origin` establish cross-origin isolation, which a viewer plugin needs in order to use `SharedArrayBuffer`. An Application Load Balancer emits only its documented set of response headers and cannot add arbitrary ones, so a deployment that requires cross-origin isolation for a viewer needs the CloudFront distribution.
+
 ## IP Range Restrictions
 
 The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation.
@@ -516,6 +550,12 @@ When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and �
 The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the address AWS WAF observes on the connection. An `X-Forwarded-For` aggregation key is not applied: the header is supplied by the caller and can be rotated to evade the limit, and AWS WAF omits a request that omits the header from the rule's evaluation altogether. Requests arriving through Amazon CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress address therefore share a counter. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
 
 When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+
+### Rule policy validation
+
+`getConfig()` validates `wafPolicyConfig.json` at synthesis so a policy that would leave the deployment unprotected is rejected rather than deployed. Only an absent file falls back to the built-in count-only rules, and that fallback warns; a file that exists but cannot be read, or that is not valid JSON, fails the synthesis. Validation then rejects the structural mistakes AWS WAF itself rejects mid-deployment — a rule group missing `name`, `vendorName`, or `managedRuleGroupName`, a non-integer or duplicated `priority` (managed rule groups and rate-based rules share one priority space), a rate-based rule without a positive `limit`, an unrecognized `ruleActionOverrides` action, and a policy declaring no rules at all.
+
+A policy that is structurally valid but sets `block: false` on every managed rule group produces a warning rather than an error, because counting a rule group's matches is how its false-positive rate is measured against real traffic before it is enforced.
 
 ## IAM Least Privilege
 

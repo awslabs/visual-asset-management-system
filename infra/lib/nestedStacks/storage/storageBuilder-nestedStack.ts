@@ -18,6 +18,7 @@ import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
+    suppressCdkNagErrorsByGrantReadWrite,
     requireTLSAndAdditionalPolicyAddToResourcePolicy,
     addPresignedUrlNetworkRestrictionsToBucketPolicy,
     generateUniqueNameHash,
@@ -151,34 +152,16 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             resourceNameRegistry
         );
 
-        //Nag supressions
-        const reason =
-            "The custom resource CDK bucket deployment needs full access to the bucket to deploy files";
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            regex: "/Action::s3:.*/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "/^Resource::.*/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
+        // Nag suppressions. Delegated to the shared helper, which carries one individually justified
+        // entry per wildcard SHAPE that a CDK grant produces — an S3 object ARN, a DynamoDB index ARN, a
+        // Lambda qualifier ARN, a Step Functions execution ARN.
+        //
+        // This used to be an inline `/^Resource::.*/g` entry applied to the whole stack with a reason
+        // that described only the CDK bucket deployment. The scope is everything this stack owns: the
+        // KMS key, every DynamoDB table, the asset and auxiliary buckets, the SNS topics and the
+        // bucket-sync queues — so the repository's primary IAM guardrail was off for all of them under a
+        // justification that covered one construct.
+        suppressCdkNagErrorsByGrantReadWrite(this);
 
         if (!this.storageResources.encryption.kmsKey) {
             NagSuppressions.addResourceSuppressions(
@@ -2503,7 +2486,6 @@ export function storageResourcesBuilder(
                 enforceSSL: true,
             }
         );
-        onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (created events)
         const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
@@ -2572,7 +2554,6 @@ export function storageResourcesBuilder(
                 enforceSSL: true,
             }
         );
-        onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (deleted events)
         const sqsBucketSyncFunctionRemoved = buildSqsBucketSyncFunction(

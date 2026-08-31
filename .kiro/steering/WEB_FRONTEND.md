@@ -370,32 +370,33 @@ node scripts/cspInlineScriptHashes.js --ts
 #    infra/lib/helper/cspInlineScriptHashes.ts
 
 # 4. Confirm the drift guard passes
-cd ../infra && npx jest test/cspInlineScriptHashes.test.ts
+cd ../infra && npx jest test/web/cspInlineScriptHashes.test.ts
 ```
 
 Run the generator with no `--ts` for a human-readable listing of each block and its hash.
 
-| File                                        | Role                                                                     |
-| ------------------------------------------- | ------------------------------------------------------------------------ |
-| `web/index.html`                            | The inline scripts being hashed                                          |
-| `web/scripts/cspInlineScriptHashes.js`      | Generator -- hashes every inline block (skips any with `src`)            |
-| `infra/lib/helper/cspInlineScriptHashes.ts` | The generated constant. **Generated -- do not hand-edit**                |
-| `infra/lib/helper/security.ts`              | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
-| `infra/test/cspInlineScriptHashes.test.ts`  | Recomputes from `index.html` and fails on drift                          |
+| File                                           | Role                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                               | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`         | Generator -- hashes every inline block (skips any with `src`)            |
+| `infra/lib/helper/cspInlineScriptHashes.ts`    | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`                 | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/web/cspInlineScriptHashes.test.ts` | Recomputes from `index.html` and fails on drift                          |
 
 **A hash and `'unsafe-inline'` are mutually exclusive.** A CSP may allow inline script by hash **or**
 by the `'unsafe-inline'` keyword, never both -- when a hash source is present browsers ignore
 `'unsafe-inline'` entirely. The two are not additive, so `'unsafe-inline'` cannot be left in as a
 safety net.
 
-Because of that, `generateContentSecurityPolicy()` adds `'unsafe-inline'` **only** when the Physna
-add-on is enabled: that viewer renders Physna-hosted HTML in a `blob:` iframe, a `blob:` document
-inherits the parent page's CSP, and its inline scripts are not ours to hash. Enabling that add-on
-trades hash protection for viewer compatibility, scoped to deployments that opt in.
+Because of that, `generateContentSecurityPolicy()` adds `'unsafe-inline'` in **no** configuration,
+the Physna add-on included. The add-on's viewer frames Physna's own HTTPS origin rather than a
+`blob:` document, so that page loads under Physna's own CSP and its inline scripts are outside this
+policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are
+present. The add-on contributes `frame-src` and `connect-src` origins and no `script-src` source.
 
-If a **new** viewer plugin needs inline script, widen that condition (or add a dedicated
-`app.webUi` flag) rather than moving `'unsafe-inline'` back into the base `script-src` list -- the
-base list is what keeps a default deployment protected.
+If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than
+moving `'unsafe-inline'` into `script-src` -- a hash source makes the keyword inert, so adding it
+would relax nothing while removing the protection the hashes give every other page.
 
 Adding a `<script src="...">` (external) needs no hash; it is matched by host-source instead. It may
 still need its origin added to `script-src`/`connect-src`.

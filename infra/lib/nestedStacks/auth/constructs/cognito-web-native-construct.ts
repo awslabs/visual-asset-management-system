@@ -68,9 +68,11 @@ export function cognitoWebClientTokenAndAuthFlowSettings(config: Config.Config) 
         refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
         accessTokenValidity: credTokenTimeout,
         idTokenValidity: credTokenTimeout,
+        // No `custom` flow: ALLOW_CUSTOM_AUTH requires DefineAuthChallenge / CreateAuthChallenge /
+        // VerifyAuthChallengeResponse triggers on the pool, and VAMS declares none, so the flow
+        // could only ever fail. Amplify signs in with SRP; the CLI uses USER_PASSWORD when enabled.
         authFlows: {
             userSrp: true,
-            custom: true,
             userPassword: config.app.authProvider.useCognito.useUserPasswordAuthFlow,
         },
     };
@@ -81,7 +83,8 @@ export function cognitoWebClientTokenAndAuthFlowSettings(config: Config.Config) 
  *
  * That API replaces the whole app client configuration: a parameter the request omits is set back to
  * its Amazon Cognito default (30 days of refresh-token validity, 1 hour of access/ID token validity,
- * and the SRP/custom/refresh auth flows). Any post-deploy update of the web client therefore has to
+ * and the SRP/custom/refresh auth flows -- note CUSTOM is among them, which is why this list is sent
+ * explicitly rather than omitted). Any post-deploy update of the web client therefore has to
  * send these alongside whatever it is changing. Durations are expressed in minutes to match what the
  * `UserPoolClient` resource emits, so the two can be compared directly.
  */
@@ -100,10 +103,14 @@ export function cognitoWebClientUpdateParameters(config: Config.Config): Record<
         // Order matches the list cognito.UserPoolClient builds from the same authFlows object.
         ExplicitAuthFlows: [
             ...(settings.authFlows.userPassword ? ["ALLOW_USER_PASSWORD_AUTH"] : []),
-            "ALLOW_CUSTOM_AUTH",
             "ALLOW_USER_SRP_AUTH",
             "ALLOW_REFRESH_TOKEN_AUTH",
         ],
+        // Carried here as well as on the client itself. UpdateUserPoolClient is a FULL replace, so a
+        // property this parameter set omits reverts to its Cognito default — and the default for this
+        // one is LEGACY, which answers an unknown username with UserNotFoundException. Omitting it would
+        // hand username enumeration back to exactly the federated deployments this repair runs for.
+        PreventUserExistenceErrors: "ENABLED",
     };
 }
 
@@ -271,11 +278,44 @@ export class CognitoWebNativeConstructStack extends Construct {
             }
         }
 
+        // OAuth is declared explicitly, and only when federation needs it.
+        //
+        // Omitting `oAuth` does not mean "no OAuth": CDK then applies its own defaults, which enable the
+        // IMPLICIT grant alongside the authorization-code grant, request five scopes including
+        // `aws.cognito.signin.user.admin`, and register `https://example.com` — a domain the operator
+        // does not control — as the callback. Verified on a live non-federated deployment, whose client
+        // carried exactly that.
+        //
+        // Without federation VAMS never uses an OAuth flow: sign-in goes through Amplify's SRP (or
+        // USER_PASSWORD) authentication, and the identity pool exchanges the resulting token directly.
+        // There is also no user pool domain in that configuration — `addDomain` is called only on the
+        // SAML path — so no `/oauth2/authorize` endpoint exists and the permissive settings are latent
+        // rather than reachable. Disabling OAuth removes the surface instead of relying on that.
+        //
+        // With federation the settings are left to CloudFormation's defaults on purpose, because
+        // `CustomCognitoConfigConstruct` in the static-web stack narrows them post-deploy and supplies
+        // the real callback URLs, which are not knowable in this stack. Declaring them here would make
+        // CloudFormation overwrite that hardening on its next update to the client without re-running the
+        // custom resource — see S1-INFRA-022, whose remaining half needs a federated environment.
+        const federationEnabled =
+            props.config.app.authProvider.useCognito.useSaml ||
+            props.config.app.authProvider.useCognito.useOidc;
+
         const userPoolWebClient = new cognito.UserPoolClient(this, "UserPoolWebClient", {
             generateSecret: false,
             userPool: userPool,
             userPoolClientName: COGNITO_WEB_CLIENT_NAME,
             supportedIdentityProviders,
+            ...(federationEnabled ? {} : { disableOAuth: true }),
+            // Left unset, Amazon Cognito applies its LEGACY behaviour and answers an unknown username
+            // with UserNotFoundException on both sign-in and password recovery, which confirms whether
+            // an account exists and narrows a credential-stuffing campaign to real users. Enabled, both
+            // answer as though the account existed.
+            //
+            // Nothing downstream depends on the distinction: the CLI's Cognito wrapper handles
+            // NotAuthorizedException as "Invalid username or password", which is the message this
+            // setting produces, and its UserNotFoundException branch simply stops firing.
+            preventUserExistenceErrors: true,
             ...cognitoWebClientTokenAndAuthFlowSettings(props.config),
         });
 
@@ -343,6 +383,14 @@ export class CognitoWebNativeConstructStack extends Construct {
                 },
             ],
         });
+
+        // A user pool user is keyed on its username, so changing app.adminUserId or
+        // app.adminEmailAddress replaces this resource. Retaining it on replacement means the previous
+        // administrator identity survives as an unmanaged user to be reviewed and removed, rather than
+        // being deleted by the same deployment that created its successor — losing the only account
+        // that could grant anyone else access. It changes no property of the resource, so an existing
+        // deployment sees an attribute-only template change and no replacement.
+        cognitoUser.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
 
         // Assign Cfn Outputs
         new cdk.CfnOutput(this, "AuthCognito_UserPoolId", {

@@ -535,7 +535,37 @@ export function buildRegisterPipelineExecutionFunction(
             detailType: ["pipeline.execution.register"],
         },
     });
-    registerRule.addTarget(new eventsTargets.LambdaFunction(fun));
+
+    // The registration event is what makes an execution abortable: `execution abort` can only stop the
+    // sub-state-machines and Batch jobs that were registered against the pipeline execution row. With
+    // no dead-letter queue, EventBridge discards a persistently failing delivery after its own retries
+    // and nothing records that it happened — leaving orphaned pipeline state machines and GPU Batch
+    // jobs that keep incurring cost after the user aborted the workflow. Same reasoning, and the same
+    // treatment, as the Deadline Cloud job-status rules.
+    const registerDlq = new sqs.Queue(scope, "PipelineExecutionRegisterDLQ", {
+        encryption: storageResources.encryption.kmsKey
+            ? sqs.QueueEncryption.KMS
+            : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true,
+    });
+    NagSuppressions.addResourceSuppressions(registerDlq, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue is itself the dead-letter target for the pipeline-execution registration " +
+                "EventBridge rule, so it does not take a further dead-letter queue. Its messages are the " +
+                "undeliverable registration events an operator redrives; until they are, the affected " +
+                "executions cannot be aborted.",
+        },
+    ]);
+
+    registerRule.addTarget(
+        new eventsTargets.LambdaFunction(fun, {
+            deadLetterQueue: registerDlq,
+            retryAttempts: 3,
+        })
+    );
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -815,19 +845,6 @@ export function buildWorkflowRole(
         statements: [
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: ["states:CreateStateMachine"],
-                resources: [
-                    IAMArn("*" + config.name + "*").statemachine,
-                    IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
-                ],
-            }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
-                resources: [IAMArn("*" + config.name + "*").stateMachineEvents],
-            }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
                 actions: [
                     "logs:CreateLogDelivery",
                     "logs:GetLogDelivery",
@@ -910,6 +927,19 @@ export function buildWorkflowRole(
                 actions: ["events:PutEvents"],
                 resources: [IAMArn("*" + config.name + "*").eventBus, IAMArn("default").eventBus],
             }),
+
+            // AWS X-Ray publishes no resource-level permissions for these actions, so the resource is
+            // "*" of necessity.
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords",
+                    "xray:GetSamplingRules",
+                    "xray:GetSamplingTargets",
+                ],
+                resources: ["*"],
+            }),
         ],
     });
 
@@ -938,20 +968,12 @@ export function buildWorkflowRole(
     }
 
     const role = new iam.Role(scope, "VAMSWorkflowIAMRole", {
-        assumedBy: new iam.CompositePrincipal(
-            Service("LAMBDA").Principal,
-            Service("STATES").Principal
-        ),
+        assumedBy: Service("STATES").Principal,
         description: "VAMS Workflow IAM Role.",
         inlinePolicies: {
             createWorkflowPolicy: createWorkflowPolicy,
             runWorkflowPolicy: runWorkflowPolicy,
         },
-        managedPolicies: [
-            iam.ManagedPolicy.fromAwsManagedPolicyName(
-                "service-role/AWSLambdaVPCAccessExecutionRole"
-            ),
-        ],
     });
 
     // Grant access to any external asset bucket customer managed KMS keys so the

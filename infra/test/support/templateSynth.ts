@@ -52,6 +52,7 @@ import govcloudTemplate from "../../config/config.template.govcloud.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import cdkJson from "../../cdk.json";
 import { newTestApp } from "./testApp";
+import { SplatToolboxConstruct } from "../../lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct";
 
 export type TemplateName = "commercial" | "govcloud" | "eusovereign";
 
@@ -211,6 +212,26 @@ export function stubDockerBundling(): void {
 }
 
 /**
+ * Mark the Splat Toolbox container sources as already synced, so no synth clones over the network.
+ *
+ * `SplatToolboxConstruct`'s constructor syncs pinned upstream container sources into a SHARED temporary
+ * directory and throws if the sync fails. Two things make that hostile to a test run: it needs the
+ * network, and the directory is shared, so Jest workers building the construct concurrently collide —
+ * observed as `EBUSY: resource busy or locked` while unlinking a git pack file, which surfaces as the
+ * splat pipeline's resources being absent from the synth rather than as anything resembling a lock error.
+ *
+ * One suite already stubbed this for itself. It belongs here instead: every T1 synth of the commercial
+ * template builds this construct, so a new suite that synthesizes with the pipeline enabled would
+ * otherwise reintroduce the race by simply not knowing to opt out.
+ */
+function stubSplatToolboxSourceSync(): void {
+    // Assigned through the class rather than mocked: the guard the constructor consults is this static,
+    // and setting it is exactly what a completed sync would have done.
+    (SplatToolboxConstruct as unknown as { syncedCommit?: string }).syncedCommit =
+        SplatToolboxConstruct.GITHUB_REPO_COMMIT_HASH;
+}
+
+/**
  * Clear module-level state that survives between synths in one Jest module.
  *
  * `s3AssetBucketRecords` in `lib/helper/s3AssetBuckets.ts` is an exported mutable array with no reset,
@@ -250,6 +271,7 @@ export function synthTemplate(
     if (hit) return hit;
 
     stubDockerBundling();
+    stubSplatToolboxSourceSync();
     resetGlobalRegistries();
     const t = TARGET[name];
     const config = buildConfig(name, opts.mutate);

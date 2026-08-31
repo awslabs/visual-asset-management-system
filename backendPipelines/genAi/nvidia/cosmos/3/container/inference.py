@@ -13,6 +13,7 @@ sample-arg `model_mode`.
 import json
 import logging
 import os
+import collections
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -93,6 +94,58 @@ def build_sample(
         if control_guidance is not None:
             sample["control_guidance"] = control_guidance
     return sample
+
+
+# Enough lines to carry a Python traceback plus the output that preceded it. Bounded because a job that
+# prints a progress line per step would otherwise grow this process's memory for the whole run, and the
+# failure message needs the END of the output, not all of it.
+_TAIL_LINES = 80
+# A single line can be arbitrarily long (a full command echo, a serialized tensor shape), so the line
+# bound above is only a real memory bound with a per-line one beside it.
+_TAIL_LINE_CHARS = 2000
+
+
+def _run_streaming(cmd, env=None, cwd=None, tail_lines=_TAIL_LINES):
+    """Run `cmd`, streaming its output onward while keeping a bounded copy of the tail.
+
+    Returns `(returncode, tail_text)`.
+
+    `subprocess.run(check=True)` with no capture leaves the child writing straight to the inherited
+    stdout, so its output reaches CloudWatch but this process never sees it -- and the exception raised
+    on failure can then only report the exit code. That message is what lands in the VAMS execution
+    record, so an operator reading the record was told "exit code 1" for a cause the child had already
+    printed in full.
+
+    `capture_output=True` would hand this process the text, but only once the child has exited: `run()`
+    returns nothing before then, so a multi-hour job would log NOTHING while it ran and a hang would be
+    undiagnosable. It does NOT deadlock -- `run()` drains through `communicate()`, which reads both pipes
+    concurrently; measured at 1.2 MB with no stall. What deadlocks is `Popen(stdout=PIPE)` followed by
+    `wait()` with no reader, which is why the loop below reads before it waits.
+
+    So: one pipe, drained incrementally as the child writes, which keeps the live log and still leaves
+    this process holding the tail. stderr is merged into stdout because with two pipes and a single
+    reader the unread pipe is exactly the one that fills.
+    """
+    tail = collections.deque(maxlen=tail_lines)
+    proc = subprocess.Popen(  # nosemgrep: dangerous-subprocess-use-audit
+        cmd, env=env, cwd=cwd,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )  # nosemgrep: dangerous-subprocess-use-audit
+    try:
+        for raw in iter(lambda: proc.stdout.readline(), b""):
+            # errors="replace": container output can carry non-UTF-8 bytes, and a decode error must not
+            # abort a run whose real work already succeeded.
+            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            # Forwarded to this process's stdout so CloudWatch still receives the child's output
+            # unchanged -- the whole point is to ADD an in-process copy, not to reroute the log.
+            print(line, flush=True)
+            if line.strip():
+                tail.append(line[:_TAIL_LINE_CHARS])
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+        proc.wait()
+    return proc.returncode, "\n".join(tail)
 
 
 def run_inference(
@@ -217,15 +270,19 @@ def run_inference(
     logger.info(f"  Single-GPU: {is_single_gpu} (num_gpus={num_gpus})")
     logger.info(f"  Command: {' '.join(cmd)}")
 
-    try:
-        subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-            cmd, env=env, check=True, text=True, cwd=COSMOS_REPO_DIR,
-        )  # nosemgrep: dangerous-subprocess-use-audit
-        logger.info("Inference completed successfully")
-        return output_dir
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Inference failed with exit code {e.returncode}. Check CloudWatch logs.")
-        raise RuntimeError(f"Inference failed with exit code {e.returncode}.")
+    returncode, output_tail = _run_streaming(cmd, env=env, cwd=COSMOS_REPO_DIR)
+    if returncode != 0:
+        # The tail goes in the RAISED message, not only the log: this exception's text is
+        # what the workflow records as the execution's error, and that record was
+        # previously the one place the cause did not appear.
+        logger.error(
+            f"Inference failed with exit code {returncode}. Last output:\n{output_tail}"
+        )
+        raise RuntimeError(
+            f"Inference failed with exit code {returncode}. Last output:\n{output_tail}"
+        )
+    logger.info("Inference completed successfully")
+    return output_dir
 
 
 def generate_preview_gif(video_path: str, output_path: str, duration: int = 2, fps: int = 10, width: int = 320) -> str:

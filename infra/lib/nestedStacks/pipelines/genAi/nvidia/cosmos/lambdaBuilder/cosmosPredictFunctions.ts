@@ -69,7 +69,11 @@ export function buildVamsExecuteCosmosText2WorldPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -123,7 +127,11 @@ export function buildVamsExecuteCosmosVideo2WorldPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -230,7 +238,11 @@ export function buildOpenPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);

@@ -27,6 +27,7 @@ import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import { Service } from "../../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
+import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../../helper/security";
 
 export interface garnetFrameworkBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -86,7 +87,6 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
         });
-        garnetDatabaseIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
         // Subscribe Garnet database indexer queue to database indexer SNS topic
         props.storageResources.sns.databaseIndexerSnsTopic.addSubscription(
@@ -129,7 +129,6 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
         });
-        garnetAssetIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
         // Subscribe Garnet asset indexer queue to asset indexer SNS topic
         props.storageResources.sns.assetIndexerSnsTopic.addSubscription(
@@ -172,7 +171,6 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
         });
-        garnetFileIndexerSqsQueue.grantSendMessages(Service("SNS").Principal);
 
         // Subscribe Garnet file indexer queue to file indexer SNS topic
         props.storageResources.sns.fileIndexerSnsTopic.addSubscription(
@@ -222,7 +220,7 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
+                    reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
                     appliesTo: [
                         {
                             regex: "/.*AWSLambdaBasicExecutionRole$/g",

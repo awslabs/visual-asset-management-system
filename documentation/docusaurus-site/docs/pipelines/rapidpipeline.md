@@ -103,6 +103,8 @@ Enable either `useEcs` or `useEks`, not both. The ECS mode is simpler to operate
 
 -   **RapidPipeline license** -- A valid DGG RapidPipeline subscription is required. The container image is available through AWS Marketplace.
 -   **Internet access** -- The container requires internet access to communicate with the AWS Marketplace metering API. The ECS cluster runs in private subnets with a NAT Gateway for egress.
+-   **Amazon EKS API reachability (EKS variant)** -- The Amazon EKS cluster's Kubernetes API endpoint is private: it is reachable only from within the deployment VPC. Its only clients are the pipeline's own cluster-handler and `kubectl` provider functions, its pipeline Lambda functions, and the managed node group, all of which run in the same private subnets, so no operator access from outside the VPC is required to run the pipeline. Because the endpoint is private, calls to it travel to the cluster's elastic network interfaces inside the VPC and are governed by security groups: VAMS grants the pipeline security groups inbound TCP 443 on both the cluster security group and the security group it creates for the cluster. Administering the cluster with `kubectl` from a workstation requires a network path into the VPC, such as AWS Systems Manager Session Manager, a VPN, or AWS Direct Connect. The VPC must have DNS support and DNS hostnames enabled, which VAMS configures, because the endpoint is resolved through a private hosted zone.
+-   **Kubernetes permissions (EKS variant)** -- The pipeline Lambda function authenticates to the cluster through the `aws-auth` ConfigMap, which maps its execution role to the `vams-rapid-pipeline` Kubernetes group. That group is bound by a namespaced role in the `default` namespace granting only what the pipeline performs: create, read, and delete `batch/v1` jobs and read their status, list pods and read pod logs, and list events. The pipeline is not a cluster administrator, so a task that needs broader access -- installing a controller, creating a namespace, or reading resources in another namespace -- requires an additional role and binding of your own.
 -   **VPC with private subnets** -- Both ECS and EKS modes require private subnets with internet egress. When using an external VPC, you must provide private subnet IDs in the VPC configuration.
 -   **Container image** -- The `ecrContainerImageURI` must point to a valid container image accessible from your AWS account.
 
@@ -120,6 +122,17 @@ All registered pipelines accept any supported input file format (`.all`) and ope
 ## AWS Marketplace integration
 
 The RapidPipeline container integrates with AWS Marketplace for usage tracking. The container IAM roles include permissions for `aws-marketplace:RegisterUsage` and `aws-marketplace:MeterUsage` to enable metered billing. Ensure that the AWS Marketplace subscription is active in the deployment account before running the pipeline.
+
+:::warning[Partition availability]
+AWS Marketplace product availability differs by partition. A subscription is bought and metered in the
+partition it is offered in, and a container obtained through AWS Marketplace in the commercial partition
+is not automatically available in AWS GovCloud (US) or the AWS European Sovereign Cloud — the Marketplace
+listing, the metering API, and the vendor's own distribution all have to support the target partition.
+Confirm availability with the vendor before enabling this pipeline in a restricted partition. VAMS does
+not block the configuration, because whether a given subscription is available is a fact about the
+listing rather than about the deployment: with no reachable image or metering endpoint the pipeline
+deploys and then fails when a job runs.
+:::
 
 ## How it works
 

@@ -315,6 +315,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         }
 
         const accessLogs = new logs.LogGroup(this, "VAMS-REST-API-AccessLogs", {
+            encryptionKey: storageResources.encryption.kmsKey,
             retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });

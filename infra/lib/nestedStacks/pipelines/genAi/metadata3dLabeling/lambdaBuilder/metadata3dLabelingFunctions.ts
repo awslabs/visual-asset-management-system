@@ -12,6 +12,7 @@ import * as events from "aws-cdk-lib/aws-events";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
+import { NagSuppressions } from "cdk-nag";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
@@ -229,7 +230,12 @@ export function buildMetadataGenerationPipelineFunction(
         bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId;
     }
 
-    const bedrockModelPermissions = bedrockModelId.replace("global.", "").replace("us.", "");
+    // The foundation-model id underneath any cross-Region inference-profile prefix, which is what the
+    // `foundation-model/*` ARN in the grant below has to name. The prefix set is partition-specific:
+    // `global.`/`us.` in the commercial partition, `us-gov.` in GovCloud, `eu.`/`apac.` for the
+    // regional profiles. Anchored, and only the leading prefix is removed — a bare `.replace()` would
+    // also strip the same text from the middle of a model name.
+    const bedrockModelPermissions = bedrockModelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
@@ -314,6 +320,35 @@ export function buildMetadataGenerationPipelineFunction(
         resources: ["*"],
     });
     fun.addToRolePolicy(rekognitionPolicy);
+
+    // The two resource wildcards this handler genuinely needs, each named rather than covered by a
+    // blanket. Amazon Rekognition's detection APIs analyse bytes supplied in the request and publish no
+    // resource to scope to (see the link above the policy). The Bedrock inference-profile wildcard
+    // exists because the profile is chosen by the operator through
+    // `useGenAiMetadata3dLabeling.bedrockModelId` and its id is not known at synthesis; the
+    // foundation-model ARNs beside it are already exact.
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Amazon Rekognition's Detect*/Describe* APIs operate on image bytes passed in the " +
+                    "request and support no resource-level permissions, so Resource must be '*'. " +
+                    "https://docs.aws.amazon.com/rekognition/latest/dg/security_iam_id-based-policy-examples.html",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "The Bedrock cross-Region inference profile is selected by the operator through " +
+                    "pipelines.useGenAiMetadata3dLabeling.bedrockModelId, so its identifier is not known " +
+                    "at synthesis. Scoped to this account and Region, and to inference profiles only.",
+                appliesTo: [{ regex: "/^Resource::arn:.*:bedrock:.*:inference-profile/\\*$/g" }],
+            },
+        ],
+        true
+    );
 
     suppressCdkNagLambda(fun);
     return fun;

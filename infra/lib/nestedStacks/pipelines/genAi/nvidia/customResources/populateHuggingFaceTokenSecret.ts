@@ -1,12 +1,21 @@
 /*
  * Populates an NVIDIA pipeline's HuggingFace token secret with the value from config,
- * without ever placing that value in the CloudFormation template.
+ * without placing that value in the CloudFormation template.
  *
  * The token is written into the custom-resource Lambda's CODE ASSET (a JSON file bundled
  * alongside the handler). CDK references code assets by content hash and uploads them to
- * the CDK assets bucket, so the value never appears in the synthesized template, the
+ * the CDK assets bucket, so the value does not appear in the synthesized template, the
  * template properties, or environment variables. The handler reads its bundled file at
  * run time and calls PutSecretValue on the (empty) secret created by the caller.
+ *
+ * WHAT THIS DOES NOT PROTECT, stated plainly because the shape invites the opposite reading:
+ * the token is in the Lambda's deployment package, so `lambda:GetFunction` on this function
+ * yields a download URL for a zip containing it in cleartext — a weaker permission than the
+ * `secretsmanager:GetSecretValue` + `kms:Decrypt` the secret itself requires. The same
+ * plaintext also lands in the CDK assets bucket, where content-addressed assets are never
+ * garbage collected, so a rotated token stays readable there. An operator who needs the
+ * credential to be reachable ONLY through Secrets Manager should create the secret out of
+ * band and reference it, rather than passing a value through synth.
  *
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -23,7 +32,7 @@ import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Duration } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
-import { suppressCdkNagLambda } from "../../../../../helper/security";
+import { discardStagedSecretAsset, suppressCdkNagLambda } from "../../../../../helper/security";
 
 const HANDLER_SOURCE = `# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -56,13 +65,16 @@ def handler(event, context):
 
 /**
  * Build the token asset directory (handler + token.json) in a temp location.
- * Content-hashed by CDK, so the value never enters the template.
+ * Content-hashed by CDK, so the value does not enter the template.
+ *
+ * The caller must pass the directory to `discardStagedSecretAsset()` once CDK has staged it.
  */
 function buildTokenAsset(token: string): string {
     const assetDir = fs.mkdtempSync(path.join(os.tmpdir(), "vams-hf-token-"));
     fs.writeFileSync(path.join(assetDir, "index.py"), HANDLER_SOURCE, { encoding: "utf-8" });
     fs.writeFileSync(path.join(assetDir, "token.json"), JSON.stringify({ token }), {
         encoding: "utf-8",
+        mode: 0o600,
     });
     return assetDir;
 }
@@ -87,6 +99,12 @@ export function populateHuggingFaceTokenSecret(
         timeout: Duration.minutes(2),
     });
 
+    // The staged copy in the cloud assembly is what gets uploaded, so the source directory has
+    // no further purpose. Left behind it accumulates one cleartext token per synth on the build
+    // host — over a thousand were found on a single developer machine — and CI runners keep them
+    // for the life of the workspace.
+    discardStagedSecretAsset(assetDir);
+
     // Grant only PutSecretValue on the single target secret.
     secret.grantWrite(populateLambda);
 
@@ -100,8 +118,13 @@ export function populateHuggingFaceTokenSecret(
         serviceToken: provider.serviceToken,
         properties: {
             SecretArn: secret.secretArn,
-            // Re-run when the token changes so a rotation in config applies. This is a
-            // one-way SHA-256 digest, not the token, so it is safe to place in the template.
+            // Re-run when the token changes so a rotation in config applies. A property change
+            // is the only thing that re-invokes a custom resource, so a version value is
+            // required rather than optional. It is a one-way digest and not the token, and it
+            // reveals nothing the template does not already carry: the Lambda's code S3 key is
+            // itself a content hash of the file the token sits in. For a high-entropy token
+            // neither is invertible; for a low-entropy secret both would let a guess be
+            // confirmed offline by anyone holding cloudformation:GetTemplate.
             tokenVersion: crypto.createHash("sha256").update(token).digest("hex"),
         },
     });

@@ -128,6 +128,44 @@ Report the token before propagating, so the original error still reaches Amazon 
 call conditional on a token being present: a direct invoke carries none and must not fail inside the
 callback helper. `cause` is truncated to 256 characters to match the peer implementations.
 
+## Capturing a Child Process's Output for the Execution Record
+
+A container that runs its real work in a child process must keep a bounded copy of that child's output,
+because the message it raises on failure is what the workflow stores as the execution's error — and that
+record is what an operator reads. `subprocess.run(check=True)` with no capture leaves the child writing
+to the inherited stdout: the output reaches Amazon CloudWatch, but the container never sees it, so the
+exception can only report an exit code and the cause has to be hunted for by log stream.
+
+Use the `_run_streaming` helper the five NVIDIA inference containers carry (identical in each; the
+canonical copy is `genAi/nvidia/cosmos/3/container/inference.py`) and put its returned tail in the raised
+message:
+
+```python
+returncode, output_tail = _run_streaming(cmd, env=env, cwd=REPO_DIR)
+if returncode != 0:
+    raise RuntimeError(f"Inference failed with exit code {returncode}. Last output:\n{output_tail}")
+```
+
+Three things about it are load-bearing:
+
+-   **Read before you wait.** `Popen(stdout=PIPE)` followed by `wait()` with no reader is what deadlocks
+    — the child blocks on `write()` once the pipe buffer fills and never exits. The helper's loop drains
+    as the child writes, which is why it is safe.
+-   **`capture_output=True` does NOT deadlock** — `run()` drains through `communicate()`, which reads both
+    pipes concurrently (measured: 1.2 MB, no stall). It is still wrong here for a different reason: it
+    yields nothing until the child exits, so a multi-hour GPU job would log nothing at all while running
+    and a hang would be undiagnosable. Do not restate the deadlock claim; both measurements are pinned in
+    `genAi/nvidia/tests/test_inference_output_capture.py`.
+-   **The tail is bounded** (80 lines, 2000 chars each) so a job printing a progress line per step cannot
+    grow the container's memory for the whole run. The failure message needs the end of the output, not
+    all of it.
+
+The helper is duplicated per container rather than shared: each container is its own Docker build context
+whose Dockerfile `COPY`s an explicit file list, so no shared module is importable at container runtime.
+Inline it into the existing entry point rather than adding a file — a new file also needs a Dockerfile
+`COPY` edit, and a missed one fails at container **runtime**, not at build. The no-drift test compares all
+copies structurally, so edit one and propagate in the same change.
+
 ## `assetId` Threading
 
 **`assetId` is a workflow state variable — thread it, don't derive it.** The `assetId` is passed as a top-level field in the workflow event payload. It must be captured in the `vamsExecute` lambda, forwarded to `constructPipeline`, included in the pipeline definition, and used directly in the container. Never attempt to reverse-engineer the asset ID from S3 path segments.
@@ -175,11 +213,11 @@ The registration custom resource re-fires only when the bundle changes: `schemaH
     built-in (rename, retuned `systemConfig`, deliberate archive) from the schema files. Substitute a
     placeholder for token values — the resolved value still reaches CloudFormation via the
     `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
-    `infra/test/vamsSchemaRegistrationHash.test.ts`.
+    `infra/test/pipelines/vamsSchemaRegistrationHash.test.ts`.
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the
-    registration resources still expect to read them. Test: `infra/test/artefactsBucketPrune.test.ts`.
+    registration resources still expect to read them. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
 
 `pipeline.json` carries no ARNs — the execution target is injected at deploy time from
 `resource_overrides` per `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`,
@@ -340,10 +378,14 @@ vamscli pipeline template list -d GLOBAL -p {pipelineId}
 6. Add pipeline config to `config.ts` under `pipelines` section.
 7. Register in pipeline builder nested stack.
 8. Add feature switch if pipeline is optional.
-9. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** of these condition blocks in the VPC builder (search for `useSplatToolbox` to find them all):
-    - **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. Without this, the VPC has no private subnets and Batch compute environments will fail with "Resource subnets are required".
-    - **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints. Without this, Batch jobs cannot pull container images.
-    - **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable that controls whether the ECS VPC endpoint includes private subnets. Without this, the ECS agent on Batch instances cannot communicate with the ECS service.
+9. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). A pipeline using AWS Batch, ECS, or Fargate goes into some of the VPC builder's three condition blocks — **which ones depends on the subnets its compute runs in.** Decide that first from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
+
+    - **Subnet creation condition** (~line 343) — the `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. **Private-subnet pipelines only.** Omit it for one and its Batch compute environment fails with "Resource subnets are required"; add an isolated-subnet pipeline and CDK creates public subnets plus **one NAT gateway per Availability Zone** (~$66/month at two AZs, plus data processing) that the pipeline never routes through, because `subnetPrivateConfig` is `PRIVATE_WITH_EGRESS` and the `ec2.Vpc` sets no `natGateways`.
+    - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
+    - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
+
+    Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+
 10. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 11. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
 12. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.

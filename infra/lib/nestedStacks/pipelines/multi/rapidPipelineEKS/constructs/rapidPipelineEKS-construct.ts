@@ -87,7 +87,19 @@ export class RapidPipelineEKSConstruct extends Construct {
             vpc: eksVpc,
             vpcSubnets: [{ subnets: eksPrivateSubnets }], // Always use private subnets for EKS cluster
             defaultCapacity: 0, // No default node group
-            endpointAccess: eks.EndpointAccess.PUBLIC, // PUBLIC only (not PUBLIC_AND_PRIVATE) forces Lambda to use NAT Gateway instead of VPC endpoints
+            // The Kubernetes API endpoint is reachable only from inside the VPC. Nothing outside VAMS
+            // ever calls it: the only clients are this stack's own cluster-handler and kubectl provider
+            // functions, and the node group, all of which live in the same private subnets. A public
+            // endpoint on a cluster whose sole consumers are in-VPC is an internet-facing control plane
+            // for no benefit, and it is also what made the pipeline unusable in a VPC-isolated
+            // deployment.
+            //
+            // Both of the following are required together. Private access needs the cluster handler
+            // inside the VPC — aws-cdk-lib states it outright ("requires ... placeClusterHandlerInVpc to
+            // be set to true") — and it needs the VPC to resolve the endpoint's private hosted zone,
+            // which needs DNS support and DNS hostnames on the VPC. The VPC builder enables both.
+            endpointAccess: eks.EndpointAccess.PRIVATE,
+            placeClusterHandlerInVpc: true,
             kubectlLayer: props.kubectlLayer, // Use our multi-runtime kubectl layer
             securityGroup: eksClusterSecurityGroup,
             // Observability configuration (configurable via config.json)
@@ -102,6 +114,24 @@ export class RapidPipelineEKSConstruct extends Construct {
                   ]
                 : undefined,
         });
+
+        // A private Kubernetes API endpoint is reached over the cluster's cross-account network
+        // interfaces inside the VPC, so the pipeline Lambdas' security groups have to be admitted on
+        // 443. This is not needed for a public endpoint — that path leaves the VPC through the NAT
+        // gateway and arrives from a public address, which no security group governs — so the rule
+        // belongs with the private endpoint above rather than being independent of it.
+        //
+        // The interfaces carry the EKS-managed cluster security group (which admits only itself) and
+        // the group declared above (which admits nothing), so without this every Kubernetes call ends
+        // in a connection timeout after the client's retries, and the pipeline reports a failure whose
+        // stated cause is a missing job name.
+        for (const pipelineSecurityGroup of eksSecurityGroups) {
+            cluster.connections.allowFrom(
+                pipelineSecurityGroup,
+                ec2.Port.tcp(443),
+                "Pipeline Lambda functions call the private Kubernetes API endpoint"
+            );
+        }
 
         // Enable CloudWatch Container Insights if configured
         if (
@@ -202,7 +232,12 @@ export class RapidPipelineEKSConstruct extends Construct {
                             containers: [
                                 {
                                     name: "cloudwatch-agent",
-                                    image: "public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest",
+                                    // Pinned rather than :latest. This DaemonSet runs on every node
+                                    // with a host filesystem and container-runtime socket mounted,
+                                    // so a moving tag changes what has that access without any
+                                    // change to this repository. The bare version tag is the
+                                    // multi-arch manifest; the -amd64/-arm64 variants are not.
+                                    image: "public.ecr.aws/cloudwatch-agent/cloudwatch-agent:1.300072.0b1766",
                                     resources: {
                                         limits: {
                                             cpu: "200m",
@@ -358,42 +393,6 @@ export class RapidPipelineEKSConstruct extends Construct {
             ],
         });
 
-        // Add S3 access using new pattern
-        assetBucketRecords.forEach((record) => {
-            const prefix = record.prefix || "/";
-            // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
-            // leading slash from the prefix so the '/' separator after the bucket
-            // ARN is always present (root prefix yields {bucketArn}/*).
-            const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
-            const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
-
-            nodeGroupRole.addToPolicy(
-                new iam.PolicyStatement({
-                    actions: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
-                    resources: [
-                        record.bucket.bucketArn,
-                        `${record.bucket.bucketArn}/${objectPrefix}*`,
-                    ],
-                })
-            );
-        });
-
-        // Add auxiliary bucket access
-        nodeGroupRole.addToPolicy(
-            new iam.PolicyStatement({
-                actions: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
-                resources: [
-                    props.storageResources.s3.assetAuxiliaryBucket.bucketArn,
-                    `${props.storageResources.s3.assetAuxiliaryBucket.bucketArn}/*`,
-                ],
-            })
-        );
-
-        // Grant access to any external asset bucket customer managed KMS keys so the
-        // container can read/write objects in cross-account encrypted buckets
-        // (no-op when no external keys are configured)
-        grantExternalAssetBucketKmsKeys(nodeGroupRole);
-
         // 3. Add node group for pipeline processing
         cluster.addNodegroupCapacity("WorkerNodeGroup", {
             nodegroupName: `rapid-pipeline-eks-workers-${stackIdentifier}`,
@@ -498,15 +497,89 @@ export class RapidPipelineEKSConstruct extends Construct {
             eksSecurityGroups
         );
 
-        // Grant EKS permissions to the Lambda - add role mapping for cluster access
+        // Kubernetes access for the pipeline Lambda, scoped to the jobs it runs.
+        //
+        // The handler was mapped into system:masters, which is cluster-admin — a single Lambda
+        // compromise became full cluster takeover. What it actually calls is a closed set, enumerated
+        // from the client calls in kubernetes_utils.py: create / get / delete a batch/v1 Job and read
+        // its status, list pods and read pod logs, and list events. All of it is namespaced to
+        // KUBERNETES_NAMESPACE, which the handler defaults to "default" and the job manifests use.
+        // The one cluster-scoped call in the file, list_namespace, sits in
+        // validate_kubernetes_environment(), which nothing invokes.
+        //
+        // Server discovery (/version, /api/v1) needs no rule here: those are non-resource URLs already
+        // granted to system:authenticated by the built-in system:discovery and
+        // system:public-info-viewer cluster roles.
+        const pipelineKubernetesGroup = "vams-rapid-pipeline";
+        const pipelineRbacName = "vams-rapid-pipeline-job-runner";
+
+        const pipelineJobRole = cluster.addManifest("PipelineJobRunnerRole", {
+            apiVersion: "rbac.authorization.k8s.io/v1",
+            kind: "Role",
+            metadata: { name: pipelineRbacName, namespace: "default" },
+            rules: [
+                {
+                    apiGroups: ["batch"],
+                    resources: ["jobs"],
+                    verbs: ["create", "get", "delete"],
+                },
+                {
+                    apiGroups: ["batch"],
+                    resources: ["jobs/status"],
+                    verbs: ["get"],
+                },
+                {
+                    apiGroups: [""],
+                    resources: ["pods"],
+                    verbs: ["get", "list"],
+                },
+                {
+                    apiGroups: [""],
+                    resources: ["pods/log"],
+                    verbs: ["get"],
+                },
+                {
+                    apiGroups: [""],
+                    resources: ["events"],
+                    verbs: ["list"],
+                },
+            ],
+        });
+
+        const pipelineJobRoleBinding = cluster.addManifest("PipelineJobRunnerRoleBinding", {
+            apiVersion: "rbac.authorization.k8s.io/v1",
+            kind: "RoleBinding",
+            metadata: { name: pipelineRbacName, namespace: "default" },
+            roleRef: {
+                apiGroup: "rbac.authorization.k8s.io",
+                kind: "Role",
+                name: pipelineRbacName,
+            },
+            subjects: [
+                {
+                    kind: "Group",
+                    name: pipelineKubernetesGroup,
+                    apiGroup: "rbac.authorization.k8s.io",
+                },
+            ],
+        });
+        pipelineJobRoleBinding.node.addDependency(pipelineJobRole);
+
         consolidatedHandler.role &&
             cluster.awsAuth.addRoleMapping(consolidatedHandler.role, {
-                groups: ["system:masters"],
+                groups: [pipelineKubernetesGroup],
                 username: "pipeline-lambda",
             });
 
+        // Ordering matters on an UPGRADE, where the aws-auth mapping is being narrowed rather than
+        // created. If the ConfigMap were patched first, the Lambda would hold a group that grants
+        // nothing until the RoleBinding landed, and a failure in between would leave the pipeline with
+        // no Kubernetes access at all.
+        cluster.awsAuth.node.addDependency(pipelineJobRoleBinding);
+
         // 6. Create CloudWatch Log Group for State Machine
         const stateMachineLogGroup = new logs.LogGroup(this, "StateMachineLogGroup", {
+            encryptionKey: props.storageResources.encryption.kmsKey,
             retention: logs.RetentionDays.TWO_WEEKS,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
@@ -589,6 +662,25 @@ export class RapidPipelineEKSConstruct extends Construct {
             resultPath: "$.PipelineEndResult",
             outputPath: "$",
             retryOnServiceExceptions: true, // Retry on transient AWS service errors
+        });
+
+        // The success-path counterpart of PipelineEnd. It differs in one way that matters: it does not
+        // pass `error`. The handler decides which callback to send with `has_error = "error" in event`,
+        // a PRESENCE test — so an `error` key holding an empty value would still be read as a failure
+        // and send SendTaskFailure for a job that succeeded. That is why this is a separate state
+        // rather than one task with a conditional field, which Step Functions parameters cannot express.
+        const pipelineEndSuccessTask = new tasks.LambdaInvoke(this, "PipelineEndSuccess", {
+            lambdaFunction: consolidatedHandler,
+            timeout: Duration.minutes(5),
+            payload: sfn.TaskInput.fromObject({
+                operation: "PIPELINE_END",
+                jobName: sfn.JsonPath.stringAt("$.jobName"),
+                k8sJobName: sfn.JsonPath.stringAt("$.k8sJobName"),
+                externalSfnTaskToken: sfn.JsonPath.stringAt("$.externalSfnTaskToken"),
+            }),
+            resultPath: "$.PipelineEndResult",
+            outputPath: "$",
+            retryOnServiceExceptions: true,
         });
 
         // End state: success
@@ -706,9 +798,34 @@ export class RapidPipelineEKSConstruct extends Construct {
 
         pipelineEndTask.next(endChoice);
 
+        // Both PipelineEnd variants exit through the same Choice, so the state machine has one ending.
+        // EndChoice tests IsPresent("$.error"), which the success path does not carry, so it resolves
+        // to Succeed — the routing decision stays in one place rather than being implied by which task
+        // happens to be terminal.
+        pipelineEndSuccessTask.next(endChoice);
+
         // Define variables for job monitoring with enhanced configuration
-        const maxJobCheckAttempts = 360; // 60 minutes maximum (with 10-second intervals) - increased for large files
         const jobCheckInterval = 10; // seconds between status checks
+
+        // The poll ceiling is DERIVED from the configured job timeout, and deliberately outlives it.
+        //
+        // It was a hardcoded 360 attempts — 60 minutes — while the Kubernetes pod is given
+        // `useEks.jobTimeout` seconds (7200 by default) and the registered bundle declares a
+        // taskTimeout of 14400. A job running between those two figures was reported FAILED to the
+        // parent workflow, via SendTaskFailure, while the pod carried on for up to another hour and
+        // kept writing output. `useEks.jobTimeout` was meanwhile read by nothing at all: a configured
+        // value that did nothing.
+        //
+        // The margin matters and is not padding. If the ceiling merely EQUALLED the pod deadline the
+        // two clocks would expire together, so the poll would give up at the same instant Kubernetes
+        // terminated the pod and the outcome would again be reported as a timeout rather than as the
+        // pod's own failure. One extra minute lets the poll observe the terminated pod and report what
+        // actually happened.
+        const jobTimeoutSeconds = props.config.app.pipelines.useRapidPipeline.useEks.jobTimeout;
+        const pollMarginSeconds = 60;
+        const maxJobCheckAttempts = Math.ceil(
+            (jobTimeoutSeconds + pollMarginSeconds) / jobCheckInterval
+        );
 
         // Enhanced counter initialization with additional context
         const counterState = new sfn.Pass(this, "InitializeCounter", {
@@ -772,6 +889,46 @@ export class RapidPipelineEKSConstruct extends Construct {
             },
         }).next(pipelineEndTask);
 
+        // RUN_JOB reports a failure by returning a 4xx/5xx body, which is not an invocation error and
+        // so is not caught by the task's Catch. Nothing examined it: the run went straight to
+        // InitializeCounter, which reads $.RunJobResult.Payload.body.k8sJobName and fails the whole
+        // state machine with States.Runtime for a JSONPath that "could not be found".
+        //
+        // Two things went wrong there, and the second is the expensive one. The reported cause named a
+        // missing field rather than the actual failure, and States.Runtime in a Pass state is raised
+        // before the state is entered, so it is routed by no Catch and never reaches PipelineEnd —
+        // leaving the parent workflow's task token unreleased until its taskTimeout hours later.
+        const handleRunJobError = new sfn.Pass(this, "HandleRunJobError", {
+            parameters: {
+                "jobName.$": "$.jobName",
+                k8sJobName: "failure-before-creation", // No Kubernetes job exists to clean up
+                "externalSfnTaskToken.$": "$.externalSfnTaskToken",
+                status: "FAILED",
+                error: {
+                    Error: "RunJobFailed",
+                    "Cause.$": "States.JsonToString($.RunJobResult.Payload)",
+                },
+                errorContext: {
+                    "timestamp.$": "$$.State.EnteredTime",
+                    "stateName.$": "$$.State.Name",
+                    "executionName.$": "$$.Execution.Name",
+                },
+            },
+            resultPath: "$",
+        }).next(pipelineEndTask);
+
+        // Written as the NEGATIVE case on purpose. IsPresent is the one comparison that is defined on
+        // an absent path — a value comparison against one is what raised States.Runtime in the first
+        // place — and it guards exactly the two fields InitializeCounter goes on to read.
+        const runJobOutcomeChoice = new sfn.Choice(this, "RunJobSucceeded?")
+            .when(
+                sfn.Condition.not(
+                    sfn.Condition.isPresent("$.RunJobResult.Payload.body.k8sJobName")
+                ),
+                handleRunJobError
+            )
+            .otherwise(counterState);
+
         // Enhanced max attempts check with better logic
         const checkMaxAttemptsChoice = new sfn.Choice(this, "Check Max Attempts")
             .when(
@@ -796,7 +953,7 @@ export class RapidPipelineEKSConstruct extends Construct {
                             "completionTime.$": "$$.State.EnteredTime",
                         },
                     },
-                }).next(pipelineEndTask)
+                }).next(pipelineEndSuccessTask)
             )
             .when(
                 sfn.Condition.stringEquals("$.status", "FAILED"),
@@ -806,7 +963,19 @@ export class RapidPipelineEKSConstruct extends Construct {
                         "k8sJobName.$": "$.k8sJobName",
                         "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                         status: "FAILED",
-                        "error.$": "$.error",
+                        // Built here rather than read from $.error. A job that reports FAILED through
+                        // the poll loop has raised no state-machine error, so no Catch has written
+                        // $.error and reading it would fail this state with States.Runtime — the
+                        // failure would be reported as a missing field and would skip PipelineEnd,
+                        // leaving the parent's task token unreleased.
+                        error: {
+                            Error: "KubernetesJobFailed",
+                            Cause: sfn.JsonPath.format(
+                                "Kubernetes job {} reported status FAILED after {} status checks",
+                                sfn.JsonPath.stringAt("$.k8sJobName"),
+                                sfn.JsonPath.stringAt("$.counter")
+                            ),
+                        },
                         failureContext: {
                             "totalAttempts.$": "$.counter",
                             "startTime.$": "$.startTime",
@@ -841,14 +1010,42 @@ export class RapidPipelineEKSConstruct extends Construct {
                 }).next(pipelineEndTask)
             );
 
+        // Lift the status CheckJob just reported into the field the choice above reads.
+        //
+        // Without this the loop can never end on its own. CheckJob writes its response under
+        // `resultPath: "$.CheckJobResult"`, so the fresh status lands at
+        // $.CheckJobResult.Payload.body.status — while "Job Complete?" compares $.status, which is set
+        // once by InitializeCounter and then copied forward unchanged by IncrementCounter. A job that
+        // starts RUNNING therefore reads as RUNNING for every subsequent check no matter what
+        // Kubernetes reports, so the poll runs to its ceiling and the run is reported as a timeout
+        // however it actually finished.
+        //
+        // Every field the loop and its exits consume is carried through explicitly: counter,
+        // maxAttempts and checkInterval for "Check Max Attempts" and IncrementCounter, startTime for
+        // the completion and timeout contexts, and jobName / k8sJobName / externalSfnTaskToken for
+        // PipelineEnd. CheckJobResult itself is dropped, because from here on the status is what
+        // matters and keeping it would grow the state payload on every iteration.
+        const recordJobStatus = new sfn.Pass(this, "RecordJobStatus", {
+            parameters: {
+                "counter.$": "$.counter",
+                "maxAttempts.$": "$.maxAttempts",
+                "checkInterval.$": "$.checkInterval",
+                "jobName.$": "$.jobName",
+                "k8sJobName.$": "$.k8sJobName",
+                "status.$": "$.CheckJobResult.Payload.body.status",
+                "externalSfnTaskToken.$": "$.externalSfnTaskToken",
+                "startTime.$": "$.startTime",
+            },
+            resultPath: "$",
+        });
+
         // Add error handling to the job status check
-        checkJobTask.next(jobStatusChoice);
+        checkJobTask.next(recordJobStatus);
+        recordJobStatus.next(jobStatusChoice);
 
         // Define the state machine - connect the workflow
-        const definition = constructPipelineTask
-            .next(runJobTask)
-            .next(counterState)
-            .next(checkJobTask);
+        counterState.next(checkJobTask);
+        const definition = constructPipelineTask.next(runJobTask).next(runJobOutcomeChoice);
 
         // 8. Create Step Function State Machine with enhanced configuration
         const stateMachine = new sfn.StateMachine(this, "StateMachine", {

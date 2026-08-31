@@ -591,13 +591,20 @@ def lookup_archived_database(database_id: str) -> Optional[Dict]:
 
 def lookup_databases(bucket_id: str) -> List[Dict]:
     """
-    Look up databases by bucket ID
-    
+    Look up LIVE databases by bucket ID
+
+    A soft-deleted database keeps its row with `#deleted` appended to its databaseId, and the scan
+    matches it just as readily as a live one. The caller uses `matching_databases[0]` when the
+    configured default is not among the results, so an ingested object could be written into a deleted
+    database — where it is invisible to every list and unreachable through the API, with the sync logged
+    as successful. Filtering here rather than at the call site keeps every caller safe, and matches how
+    the rest of this module already treats the suffix (see the archived-asset lookups below).
+
     Args:
         bucket_id: The bucket ID
-        
+
     Returns:
-        list: List of database data
+        list: List of live database data
     """
     try:
         # Scan the database table for matching bucket ID
@@ -606,7 +613,10 @@ def lookup_databases(bucket_id: str) -> List[Dict]:
             FilterExpression=Key('defaultBucketId').eq(bucket_id)
         )
         
-        databases = response.get('Items', [])
+        databases = [
+            db for db in response.get('Items', [])
+            if not str(db.get('databaseId', '')).endswith('#deleted')
+        ]
         
         # Cache each database individually by databaseId
         for db in databases:

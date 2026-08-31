@@ -22,6 +22,7 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
 import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
     grantExternalAssetBucketKmsKeys,
     kmsKeyPolicyStatementGenerator,
@@ -121,14 +122,10 @@ export class CoordinateTransformConstruct extends Construct {
             ],
         });
 
-        // Container execution role
+        // Container EXECUTION role: used by the ECS agent, not by the container's own process. It pulls
+        // the image and writes the task's log stream, and that is all the managed policy below grants.
         const containerExecutionRole = new iam.Role(this, "CoordTransformContainerExecutionRole", {
             assumedBy: Service("ECS_TASKS").Principal,
-            inlinePolicies: {
-                InputBucketPolicy: inputBucketPolicy,
-                OutputBucketPolicy: outputBucketPolicy,
-                StateTaskPolicy: stateTaskPolicy,
-            },
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonECSTaskExecutionRolePolicy"
@@ -184,6 +181,10 @@ export class CoordinateTransformConstruct extends Construct {
             this,
             "BatchFargatePipeline_CoordTransform",
             {
+                // Matches the 4-hour taskTimeout on the state that waits for this job. This
+                // pipeline submits its own job under WAIT_FOR_TASK_TOKEN, so Step Functions
+                // bounds only the token wait -- without this the container outlives the run.
+                attemptDuration: cdk.Duration.hours(4),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -309,6 +310,7 @@ export class CoordinateTransformConstruct extends Construct {
                         "CoordTransformProcessing-StateMachineLogGroup",
                         10
                     ),
+                encryptionKey: props.kmsKey,
                 retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
@@ -396,7 +398,7 @@ export class CoordinateTransformConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "ECS Container execution role uses AWS Managed Policies for task execution and X-Ray tracing.",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -411,7 +413,7 @@ export class CoordinateTransformConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "ECS Container job role uses AWS Managed Policies for task execution and X-Ray tracing.",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

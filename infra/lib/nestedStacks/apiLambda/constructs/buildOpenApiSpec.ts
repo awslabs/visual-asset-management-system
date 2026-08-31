@@ -36,6 +36,17 @@ function lambdaProxyUri(partition: string, region: string, fnArn: string): strin
     return `arn:${partition}:apigateway:${region}:lambda:path/2015-03-31/functions/${fnArn}/invocations`;
 }
 
+/**
+ * How long a browser may cache a CORS preflight result, in seconds.
+ *
+ * Without `Access-Control-Max-Age` a browser re-issues the `OPTIONS` preflight before EVERY
+ * cross-origin request, which roughly doubles the request count the API sees and adds a round trip to
+ * each call — and each preflight counts against the stage's `globalRateLimit`. One hour is the value
+ * the API carried before the spec was rebuilt; Chromium caps the cache at 2 hours regardless, so a
+ * longer value buys nothing.
+ */
+const CORS_PREFLIGHT_MAX_AGE_SECONDS = 3600;
+
 function corsOptionsOperation(opts: OpenApiSpecOptions): object {
     // MOCK integration that returns the CORS headers (preflight).
     return {
@@ -46,6 +57,7 @@ function corsOptionsOperation(opts: OpenApiSpecOptions): object {
                     "Access-Control-Allow-Origin": { schema: { type: "string" } },
                     "Access-Control-Allow-Methods": { schema: { type: "string" } },
                     "Access-Control-Allow-Headers": { schema: { type: "string" } },
+                    "Access-Control-Max-Age": { schema: { type: "string" } },
                 },
             },
         },
@@ -59,6 +71,7 @@ function corsOptionsOperation(opts: OpenApiSpecOptions): object {
                         "method.response.header.Access-Control-Allow-Origin": `'${opts.cors.allowOrigins}'`,
                         "method.response.header.Access-Control-Allow-Methods": `'${opts.cors.allowMethods}'`,
                         "method.response.header.Access-Control-Allow-Headers": `'${opts.cors.allowHeaders}'`,
+                        "method.response.header.Access-Control-Max-Age": `'${CORS_PREFLIGHT_MAX_AGE_SECONDS}'`,
                     },
                 },
             },

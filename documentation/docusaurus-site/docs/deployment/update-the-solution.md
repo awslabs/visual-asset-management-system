@@ -28,11 +28,14 @@ Back up before updating, and if an update replaces a table, locate the orphaned 
     ```bash
     # Export a table to Amazon S3 using point-in-time export
     aws dynamodb export-table-to-point-in-time \
-        --table-arn arn:aws:dynamodb:<REGION>:<ACCOUNT_ID>:table/<TABLE_NAME> \
+        --table-arn arn:<PARTITION>:dynamodb:<REGION>:<ACCOUNT_ID>:table/<TABLE_NAME> \
         --s3-bucket <BACKUP_BUCKET> \
         --s3-prefix vams-backup/$(date +%Y%m%d) \
         --export-format DYNAMODB_JSON
     ```
+
+    Substitute `<PARTITION>` with the partition the deployment runs in: `aws` for commercial Regions,
+    `aws-us-gov` for AWS GovCloud (US), or `aws-eusc` for the AWS European Sovereign Cloud.
 
 3. **Back up S3 buckets.** Sync asset buckets to a backup location:
 
@@ -121,13 +124,20 @@ Editing either value therefore does not rename the account — AWS CloudFormatio
 deletes the old one. Which of two outcomes you get depends only on whether the new username already
 exists in the pool:
 
-- **The new username does not exist.** The deployment **succeeds** and the previous administrator
-  identity is **deleted**. You can no longer sign in as it, and any `userRoles` rows still keyed to the
-  old username grant nothing to nobody. This half is silent — nothing in the deployment output says an
-  administrator was removed.
+- **The new username does not exist.** The deployment **succeeds** and the new administrator is created.
+  The previous identity is **retained** rather than deleted — the user carries a `Retain` replacement
+  policy — so you can still sign in as it, but it is no longer managed by AWS CloudFormation and will
+  not be removed when the stack is deleted. Review it and delete it by hand once the new administrator
+  is working. Any `userRoles` rows keyed to the old username continue to apply to it and not to the new
+  one.
 - **The new username already exists** (created by hand, or equal to another operator's account). The
   replacement's create step fails with `AlreadyExists`, the nested authorization stack fails, and the
   **whole core stack rolls back** — roughly 15 minutes, across every nested stack.
+
+Synthesis warns whenever `app.adminUserId` and `app.adminEmailAddress` differ, restating that both are
+immutable — it cannot detect that a value has *changed*, because it has no view of what is deployed. It
+also rejects a username Amazon Cognito itself would refuse (whitespace, or over 128 characters), so that
+failure arrives as a configuration message rather than as a rolled-back deployment.
 
 Treat both values as fixed for the life of the deployment. To change who administers VAMS, leave the
 seeded account alone and grant the `admin` role to another user through the web interface, the API, or
@@ -430,7 +440,7 @@ steps here.
       --output text
     ```
 
-    The reindexer Lambda function name is then resolved automatically from the deployment's SSM Parameter Store resource-name parameters (requires `ssm:GetParametersByPath` on the prefix). To skip or override the lookup, set `reindexer_function_name` explicitly to the value of the CloudFormation output `ReindexerFunctionNameOutput` instead.
+    The reindexer Lambda function name is then resolved automatically from the deployment's SSM Parameter Store resource-name parameters (requires `ssm:GetParametersByPath` on the prefix). To skip or override the lookup, set `reindexer_function_name` explicitly to the value of the CloudFormation output `OpenSearchReindexerFunctionNameOutput` instead.
 
 5.  Do a dry run first. Each step reports the rows it would write without writing them.
 
@@ -657,6 +667,100 @@ Changing `app.api.apiGatewayRest.endpointType` on an existing deployment is supp
 
 This explicit-policy behavior exists because Amazon API Gateway does not clear a previously-set resource policy when an update stops supplying one. If a stale `PRIVATE` resource policy is ever left on a now-`REGIONAL` API (for example, after an out-of-band change to the API), every public request — including the browser CORS preflight — is denied at the resource-policy layer with `403 AccessDeniedException` ("no resource-based policy allows the execute-api:Invoke action"). Because that denial happens before any CORS headers are applied, the browser surfaces it as a missing `Access-Control-Allow-Origin` / failed-preflight error rather than an authorization failure. Re-running the VAMS deployment re-asserts the correct policy for the configured `endpointType` and resolves it.
 
+#### Encryption at rest for log groups and the Isaac Lab file system
+
+When `app.useKmsCmkEncryption.enabled` is `true`, CloudWatch log groups and the Isaac Lab training Amazon
+EFS file system are encrypted with the shared VAMS customer-managed key. With the setting `false` nothing
+changes: each resource keeps its service's AWS-managed key. The two resource types update differently, and
+only one of them loses data.
+
+**Log groups update in place.** Attaching a key to a log group is an `AssociateKmsKey` call, so the group
+and the events it already holds survive the deployment. CloudWatch applies a key to new events only, so a
+group that carries history ends up holding both unencrypted and encrypted events. The groups newly covered
+are the REST API access log, the shared workflow log group, and each pipeline's state-machine and
+container log groups. The nine audit log groups and the orchestration-bus
+audit log group were already encrypted and are unchanged.
+
+Three log groups are deliberately left on their AWS-managed key: the VPC flow log group, because the VPC
+nested stack is created before the storage nested stack that owns the key; the AWS CloudTrail log group,
+because it lives in the root stack and consuming the key from a nested stack makes the two circular; and
+the provisioned OpenSearch domain's slow-search, slow-index, and application log groups, which Amazon
+OpenSearch Service creates rather than VAMS.
+
+**The Isaac Lab training file system is replaced.** `KmsKeyId` cannot be changed in place on an Amazon EFS
+file system, so AWS CloudFormation creates a new, empty file system and deletes the existing one. The file
+system is declared for deletion on stack teardown, so the old copy is not retained and **any training
+checkpoints it holds are lost**. Copy anything you need off the file system before updating. The NVIDIA
+Cosmos and GR00T model caches were created with the shared key and are not replaced.
+
+##### If a resource fails to update
+
+Disable the owning pipeline, deploy, then re-enable it. This removes the resource and recreates it cleanly
+instead of leaving the stack in a failed update.
+
+1. Set the pipeline's `enabled` flag to `false` in `infra/config/config.json`.
+2. Run `npx cdk deploy --all --require-approval never`.
+3. Set the flag back to `true`.
+4. Deploy again.
+
+The same procedure applies to the CloudTrail log group through `app.addStackCloudTrailLogs`.
+
+:::warning Disabling a feature deletes its log group and the data in it
+Every pipeline log group and the CloudTrail log group are configured for deletion on stack teardown, so
+disabling the owning feature discards the events the group holds — audit and diagnostic history included.
+
+To keep any of that data, **rename the log group in the Amazon CloudWatch console before the disabling
+deployment**, or export its events. AWS CloudFormation deletes the group by name, so a renamed copy is left
+in place while the VAMS-named group is removed. The data cannot be preserved in place, because the name is
+what ties the group to the stack resource.
+:::
+
+#### Switching between CloudFront and ALB distribution
+
+Changing `app.useCloudFront.enabled` on an existing deployment renames the regional AWS WAF stack, because
+the two distributions need differently-scoped web ACLs and a CloudFront-scoped ACL must live in us-east-1:
+
+| `useCloudFront.enabled` | Regional WAF stack             | CloudFront WAF stack (us-east-1) |
+| ----------------------- | ------------------------------ | -------------------------------- |
+| `false`                 | `<name>-waf-<base>`            | not created                      |
+| `true`                  | `<name>-waf-regional-<base>`   | `<name>-waf-<base>`              |
+
+The naming keeps an in-place update for a deployment that never changes distribution. Switching does not
+migrate, and the two directions fail differently:
+
+- **ALB → CloudFront.** `<name>-waf-<base>` is redefined as the CloudFront stack in us-east-1 while the
+  existing stack of that name holds the regional ACL in the deployment Region. A stack cannot change
+  Region, so the deployment attempts a new us-east-1 stack under a name already in use elsewhere and the
+  old regional stack is left unmanaged.
+- **CloudFront → ALB.** `<name>-waf-regional-<base>` is no longer referenced and is left in place.
+
+
+##### Release the DNS record first
+
+When both fronts are configured with the same `domainHost` and a hosted zone, each one creates a Route 53
+alias record for that name — as separate CloudFormation resources with different logical ids. AWS
+CloudFormation creates the new record before deleting the old one, and Amazon Route 53 rejects a create for
+a name that already exists, so the stack update fails and rolls back.
+
+Delete the existing alias record before deploying:
+
+```bash
+aws route53 list-resource-record-sets --hosted-zone-id <ZONE_ID>   --query "ResourceRecordSets[?starts_with(Name, '<HOST>')]"
+# save that output, then delete the record with a DELETE change batch
+```
+
+The deployment recreates it pointing at the new front, so the hostname is unresolvable only for the length
+of the deploy. Keep the saved record: restoring it is the fastest rollback if the deployment fails.
+
+An alternative that needs no manual DNS change is to deploy twice — first with
+`useCloudFront.customDomain.enabled` (or `useAlb.domainHost`) cleared, which lets CloudFormation remove the
+old record as part of removing the old front, then again with the custom domain restored. That trades a
+second deployment for not touching live DNS by hand.
+
+Before switching, delete the WAF stack that the new configuration does not use, and confirm no web ACL is
+still associated with a distribution or load balancer first — AWS WAF refuses to delete an associated ACL.
+Then deploy. The web ACL carries no data, so nothing is lost.
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
@@ -680,6 +784,8 @@ Use this checklist to determine if additional actions are needed after updating.
 | API Gateway authorizer change          | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                                                                                |
 | Pipeline CDK construct rename          | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                                                                         |
 | Website framework change               | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`.                                                     |
+| Distribution switch renames the WAF stack and collides on DNS | any version (`app.useCloudFront.enabled` changed) | Delete the existing Route 53 alias record for the shared `domainHost` before deploying — both fronts create one for the same name and Route 53 rejects the create, failing the update. Also delete the WAF stack the new configuration does not use, disassociating its web ACL first since AWS WAF refuses to delete an associated ACL. |
+| Encryption at rest for log groups and EFS | v2.5 to v2.6 (`app.useKmsCmkEncryption` enabled) | Log groups update in place. The Isaac Lab training EFS is replaced and its checkpoints are lost — copy them off first. If a resource fails to update, disable the owning pipeline, deploy, and re-enable it; rename any log group whose data you need to keep before the disabling deploy, because the cycle deletes it. |
 
 ## Rollback guidance
 

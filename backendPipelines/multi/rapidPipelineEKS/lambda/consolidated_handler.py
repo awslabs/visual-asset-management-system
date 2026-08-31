@@ -41,6 +41,9 @@ sfn = boto3.client('stepfunctions')
 
 # Get environment variables with defaults
 CLUSTER_NAME = os.environ.get('EKS_CLUSTER_NAME')
+# Maximum pod runtime. The default matches the shipped useEks.jobTimeout so a deployment whose Lambda
+# predates this variable behaves exactly as before rather than falling back to something shorter.
+JOB_TIMEOUT_SECONDS = int(os.environ.get('EKS_JOB_TIMEOUT_SECONDS') or 7200)
 CONTAINER_IMAGE_URI = os.environ.get('CONTAINER_IMAGE_URI')
 NAMESPACE = os.environ.get('KUBERNETES_NAMESPACE', 'default')
 REGION = os.environ.get('AWS_REGION', 'us-west-2')
@@ -624,7 +627,10 @@ def handle_construct_pipeline(event):
             },
             "spec": {
                 "ttlSecondsAfterFinished": 600,  # Delete job 10 minutes after completion
-                "activeDeadlineSeconds": 7200,  # Maximum job runtime of 2 hours for large files
+                # From the same configuration value the state machine derives its poll ceiling from
+                # (useEks.jobTimeout), so a pod cannot outlive the poll that watches it — which reported
+                # the execution FAILED while the pod carried on writing output.
+                "activeDeadlineSeconds": JOB_TIMEOUT_SECONDS,
                 "template": {
                     "metadata": {
                         "labels": {

@@ -60,7 +60,7 @@ The reindexer Lambda function name is available in the CDK stack outputs:
 # Via AWS CLI
 aws cloudformation describe-stacks \
     --stack-name <your-vams-stack-name> \
-    --query "Stacks[0].Outputs[?OutputKey=='ReindexerFunctionNameOutput'].OutputValue" \
+    --query "Stacks[0].Outputs[?OutputKey=='OpenSearchReindexerFunctionNameOutput'].OutputValue" \
     --output text
 ```
 

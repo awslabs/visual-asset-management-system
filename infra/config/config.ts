@@ -13,10 +13,18 @@ import * as cdk from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
+import { samlSettings } from "./saml-config";
 
 dotenv.config();
 
-//Top level configurations
+// ============================================================================================
+// Constants that shape the deployment
+//
+// Every value here reaches synthesized infrastructure: either imported directly by lib/ or bin/, or
+// written into the config object by getConfig() and consumed from there. Changing one changes what
+// CloudFormation receives.
+// ============================================================================================
+
 export const VAMS_VERSION = "2.6.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
@@ -52,23 +60,48 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // base URLs remain /api/*.
 export const API_GATEWAY_STAGE_NAME = "api";
 
-// REST API integration timeout bounds, in seconds. 29 seconds is the API Gateway default
-// integration timeout and the floor VAMS allows. Raising it above the default requires an
-// account-level quota increase for the "Integration timeout" quota (L-E5AE38E3) in the
-// deployment Region first — the increase applies to Regional and Private APIs (edge-optimized
-// cannot be raised, and VAMS uses neither). Without the approved quota the deployment fails
-// when API Gateway rejects the higher TimeoutInMillis. The 300-second ceiling is VAMS' own
-// cap, matching the practical upper bound for a synchronous request/response API.
+// The REST API integration timeout applied when a deployment names none, in seconds. 29 seconds is
+// the API Gateway default and the floor VAMS allows. Raising it above the default requires an
+// account-level quota increase for the "Integration timeout" quota (L-E5AE38E3) in the deployment
+// Region first — the increase applies to Regional and Private APIs (edge-optimized cannot be raised,
+// and VAMS uses neither). Without the approved quota the deployment fails when API Gateway rejects
+// the higher TimeoutInMillis.
+//
+// This constant is in the deployment section, not the checks section, because getConfig() ASSIGNS it
+// into `apiGatewayRest.apiGatewayTimeoutTime`; it doubles as the validation floor below.
 export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
-export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 
 // GPUs each NVIDIA Cosmos 3 job reserves, and therefore the minimum its tier's instance types must
 // carry. The container shards the checkpoint's parameters across the devices the job holds, so the
 // reservation is what makes a multi-GPU instance's memory usable; a tier pointed at a smaller
 // instance leaves the job RUNNABLE indefinitely, because AWS Batch has nowhere to place it and
-// reports no error. The construct reads these rather than repeating the numbers.
+// reports no error.
+//
+// COSMOS3_NANO_GPU_COUNT is the reservation the cosmos3 construct passes to the job definition.
+// COSMOS3_SUPER_GPU_COUNT is referenced only by the getConfig() instance-type checks below.
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
+
+// ============================================================================================
+// Constants used only to check configuration
+//
+// Nothing here reaches synthesized infrastructure. Each one exists so getConfig() can reject a bad
+// configuration at synth, where the error names the offending field, rather than letting the
+// deployment fail partway through and roll back.
+// ============================================================================================
+
+// VAMS' own ceiling on the REST API integration timeout, matching the practical upper bound for a
+// synchronous request/response API. Compared against, never assigned.
+export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
+
+// Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
+// than letting CreateUser fail mid-deploy and roll the core stack back.
+export const COGNITO_USERNAME_MAX_LENGTH = 128;
+
+// The taskTimeout the RapidPipeline EKS bundle declares
+// (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
+// long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
+export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
@@ -118,6 +151,95 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "p5en.48xlarge": 8,
 };
 
+/** Strings a CDK context value or environment variable may use to mean true. */
+const TRUTHY_STRINGS = ["true", "1", "yes", "on"];
+/** Strings that mean false. Listed rather than inferred, so anything else can be reported. */
+const FALSY_STRINGS = ["false", "0", "no", "off", ""];
+
+/**
+ * Interprets one boolean-ish configuration value.
+ *
+ * `app.node.tryGetContext()` and `process.env` both yield STRINGS, and every non-empty string is
+ * truthy in JavaScript — so `-c useWaf=false` and `AWS_USE_WAF=false` both read as true, and the
+ * `<boolean>` cast that used to wrap these expressions is erased at compile time and checks nothing.
+ * The operator's flag then enables the feature they set it to disable.
+ *
+ * An unrecognised non-empty string warns rather than being silently taken either way: it used to mean
+ * true purely because it was a non-empty string, so reading it as false without saying so would be a
+ * second silent reversal.
+ */
+function coerceConfigBool(value: unknown, name: string): boolean {
+    if (typeof value === "boolean") return value;
+    if (value === undefined || value === null) return false;
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (TRUTHY_STRINGS.includes(normalized)) return true;
+        if (FALSY_STRINGS.includes(normalized)) return false;
+        console.warn(
+            `Configuration Warning: ${name} was given the value "${value}", which is not a boolean. ` +
+                `Reading it as false. Use ${TRUTHY_STRINGS.join("/")} or ${FALSY_STRINGS.filter(
+                    (s) => s !== ""
+                ).join("/")}.`
+        );
+        return false;
+    }
+    return Boolean(value);
+}
+
+/**
+ * Resolves a boolean from its sources in precedence order: CDK context, then `config.json`, then the
+ * environment variable.
+ *
+ * The FIRST source that resolves to true wins, which is the behaviour the `||` chains this replaces
+ * had — a source holding false falls through to the next one rather than settling the question. That
+ * ordering is preserved deliberately: changing it would alter how existing deployments resolve a flag
+ * set in more than one place, which is a separate decision from reading a string correctly.
+ */
+function resolveConfigBool(name: string, ...sources: unknown[]): boolean {
+    for (const source of sources) {
+        if (coerceConfigBool(source, name)) return true;
+    }
+    return false;
+}
+
+/**
+ * Requires a configured outbound endpoint to be HTTPS and to point somewhere outside the deployment.
+ *
+ * `new URL(x)` succeeds for `http://169.254.169.254/` and `http://internal.corp/token` alike, so
+ * parseability establishes nothing about either confidentiality or destination. Applied to endpoints a
+ * VAMS Lambda sends credentials to.
+ */
+function validateOutboundHttpsEndpoint(endpoint: string, configPath: string) {
+    const url = new URL(endpoint);
+    if (url.protocol !== "https:") {
+        throw new Error(
+            `Configuration Error: ${configPath} must use https, or the credentials VAMS sends to it ` +
+                `travel in cleartext. Got: ${endpoint}`
+        );
+    }
+
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    const blocked =
+        host === "localhost" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".internal") ||
+        host === "::1" ||
+        /^127\./.test(host) ||
+        /^169\.254\./.test(host) || // link-local, including the instance metadata endpoint
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+        /^(fc|fd)[0-9a-f]{2}:/.test(host); // IPv6 unique-local
+    if (blocked) {
+        throw new Error(
+            `Configuration Error: ${configPath} resolves to a loopback, link-local, or private ` +
+                `address (${url.hostname}). This endpoint is called by a Lambda that can read the ` +
+                `VAMS asset buckets, so it must name an external service. Got: ${endpoint}`
+        );
+    }
+}
+
 /**
  * Rejects instance types that are known to carry fewer GPUs than a job reserves.
  *
@@ -150,6 +272,146 @@ function validateInstanceTypeGpuCount(
                     `instance type with at least ${requiredGpus} GPUs (for example g6e.12xlarge).`
             );
         }
+    }
+}
+
+/**
+ * The instance types that EVERY enabled model in a shared compute environment permits.
+ *
+ * Several Cosmos 3 model variants share one AWS Batch compute environment and one job queue. Batch has
+ * no notion of which variant a job belongs to, so it may place any job in that queue on any instance
+ * type in the environment's pool. The pool must therefore be the INTERSECTION of the enabled variants'
+ * lists:
+ *
+ * -   The **union** would let a job run on hardware its own model excludes. The shipped defaults differ
+ *     exactly that way — `superText2Image64B` omits `p4de.24xlarge` (the A100 family) while `super64B`
+ *     allows it, and the configuration reference states different GPU requirements for the two.
+ * -   **First-wins** silently discards the other variants' values, which `getConfig()` has already
+ *     validated per variant — enforcing a setting and then dropping it.
+ *
+ * Order follows the first list, which is the preference order Batch reads for `BEST_FIT_PROGRESSIVE`.
+ *
+ * Exported so the construct and the validation share one implementation: if they computed the pool
+ * separately, a validation that accepted a configuration the construct then rendered differently would
+ * be worse than no validation.
+ */
+export function intersectInstanceTypes(lists: (string[] | undefined)[]): string[] {
+    const present = lists.filter(
+        (list): list is string[] => Array.isArray(list) && list.length > 0
+    );
+    if (present.length === 0) {
+        return [];
+    }
+    return present.reduce((common, list) => common.filter((type) => list.includes(type)));
+}
+
+/**
+ * Reject a WAF policy file that would produce a Web ACL protecting nothing.
+ *
+ * Every failure this catches is otherwise SILENT: `wafv2-basic-construct.ts` renders whatever the file
+ * contains, and a rule with a missing `vendorName` or a duplicate `priority` is rejected by AWS WAF at
+ * deploy time (rolling the stack back) while a policy with no rules at all, or with every group set to
+ * `block: false`, deploys cleanly and counts instead of blocking. The deployment still reports WAF as
+ * enabled either way, so the only visible symptom is a change in Amazon CloudWatch WAF metrics.
+ *
+ * Structure is an error; a policy that is structurally valid but non-blocking is a warning, because
+ * count-only is a legitimate way to evaluate a new rule group before enforcing it.
+ */
+function validateWafPolicy(policy: any) {
+    const where = "config/policy/wafPolicyConfig.json";
+    if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+        throw new Error(`Configuration Error: ${where} must contain a JSON object.`);
+    }
+
+    const groups = policy.managedRuleGroups ?? [];
+    const rateRules = policy.rateBasedRules ?? [];
+    if (!Array.isArray(groups) || !Array.isArray(rateRules)) {
+        throw new Error(
+            `Configuration Error: ${where} managedRuleGroups and rateBasedRules must be arrays ` +
+                `when present.`
+        );
+    }
+    if (groups.length === 0 && rateRules.length === 0) {
+        throw new Error(
+            `Configuration Error: ${where} declares no rules. An empty policy produces a Web ACL ` +
+                `that inspects nothing while the deployment still reports WAF as enabled. Remove the ` +
+                `file to fall back to the default rules, or set app.useWaf to false.`
+        );
+    }
+
+    // A duplicate or missing priority is rejected by AWS WAF mid-deploy, which rolls back the whole
+    // core stack; naming the offending rule here costs a synth instead.
+    const priorities = new Map<number, string>();
+    const claimPriority = (priority: any, label: string) => {
+        if (typeof priority !== "number" || !Number.isInteger(priority) || priority < 0) {
+            throw new Error(
+                `Configuration Error: ${where} rule '${label}' needs an integer priority of 0 or more.`
+            );
+        }
+        const held = priorities.get(priority);
+        if (held !== undefined) {
+            throw new Error(
+                `Configuration Error: ${where} rules '${held}' and '${label}' both use priority ` +
+                    `${priority}. AWS WAF requires priorities to be unique within a Web ACL and ` +
+                    `rejects the ACL at deploy time.`
+            );
+        }
+        priorities.set(priority, label);
+    };
+
+    groups.forEach((group: any, index: number) => {
+        const label = String(group?.name ?? `managedRuleGroups[${index}]`);
+        for (const field of ["name", "vendorName", "managedRuleGroupName"]) {
+            if (typeof group?.[field] !== "string" || group[field].trim() === "") {
+                throw new Error(
+                    `Configuration Error: ${where} managed rule group '${label}' is missing ` +
+                        `'${field}'.`
+                );
+            }
+        }
+        claimPriority(group.priority, label);
+        for (const override of group.ruleActionOverrides ?? []) {
+            if (typeof override?.name !== "string" || override.name.trim() === "") {
+                throw new Error(
+                    `Configuration Error: ${where} managed rule group '${label}' has a ` +
+                        `ruleActionOverrides entry with no 'name'.`
+                );
+            }
+            if (!["count", "block", "allow"].includes(String(override?.action))) {
+                throw new Error(
+                    `Configuration Error: ${where} managed rule group '${label}' override ` +
+                        `'${override.name}' has action '${override?.action}'; expected count, ` +
+                        `block, or allow.`
+                );
+            }
+        }
+    });
+
+    rateRules.forEach((rule: any, index: number) => {
+        const label = String(rule?.name ?? `rateBasedRules[${index}]`);
+        if (typeof rule?.name !== "string" || rule.name.trim() === "") {
+            throw new Error(
+                `Configuration Error: ${where} rate-based rule at index ${index} is missing 'name'.`
+            );
+        }
+        claimPriority(rule.priority, label);
+        if (typeof rule?.limit !== "number" || !Number.isInteger(rule.limit) || rule.limit <= 0) {
+            throw new Error(
+                `Configuration Error: ${where} rate-based rule '${label}' needs a positive integer ` +
+                    `'limit' (requests per five-minute window).`
+            );
+        }
+    });
+
+    // Structurally fine but enforcing nothing. Not an error: counting a group before enforcing it is a
+    // deliberate way to measure its false-positive rate on real traffic first.
+    const blocking = groups.filter((group: any) => group.block !== false);
+    if (groups.length > 0 && blocking.length === 0) {
+        console.warn(
+            `Configuration Warning: every managed rule group in ${where} sets block: false, so the ` +
+                `Web ACL counts matches instead of blocking them. This is correct for evaluating a ` +
+                `rule group and wrong for protecting a deployment.`
+        );
     }
 }
 
@@ -214,31 +476,34 @@ export function getConfig(app: cdk.App): Config {
             86400)
     );
 
-    config.app.useFips = <boolean>(
-        (app.node.tryGetContext("useFips") ||
-            config.app.useFips ||
-            process.env.AWS_USE_FIPS_ENDPOINT ||
-            false)
+    config.app.useFips = resolveConfigBool(
+        "useFips",
+        app.node.tryGetContext("useFips"),
+        config.app.useFips,
+        process.env.AWS_USE_FIPS_ENDPOINT
     );
-    config.app.useWaf = <boolean>(
-        (app.node.tryGetContext("useWaf") || config.app.useWaf || process.env.AWS_USE_WAF || false)
+    config.app.useWaf = resolveConfigBool(
+        "useWaf",
+        app.node.tryGetContext("useWaf"),
+        config.app.useWaf,
+        process.env.AWS_USE_WAF
     );
-    config.env.loadContextIgnoreVPCStacks = <boolean>(
-        (app.node.tryGetContext("loadContextIgnoreVPCStacks") ||
-            config.env.loadContextIgnoreVPCStacks ||
-            false)
-    );
-
-    config.app.openSearch.reindexOnCdkDeploy = <boolean>(
-        (app.node.tryGetContext("reindexOnCdkDeploy") ||
-            config.app.openSearch.reindexOnCdkDeploy ||
-            false)
+    config.env.loadContextIgnoreVPCStacks = resolveConfigBool(
+        "loadContextIgnoreVPCStacks",
+        app.node.tryGetContext("loadContextIgnoreVPCStacks"),
+        config.env.loadContextIgnoreVPCStacks
     );
 
-    config.app.openSearch.useServerless.deployDeferredIndexSchema = <boolean>(
-        (app.node.tryGetContext("deployDeferredIndexSchema") ||
-            config.app.openSearch.useServerless.deployDeferredIndexSchema ||
-            false)
+    config.app.openSearch.reindexOnCdkDeploy = resolveConfigBool(
+        "reindexOnCdkDeploy",
+        app.node.tryGetContext("reindexOnCdkDeploy"),
+        config.app.openSearch.reindexOnCdkDeploy
+    );
+
+    config.app.openSearch.useServerless.deployDeferredIndexSchema = resolveConfigBool(
+        "deployDeferredIndexSchema",
+        app.node.tryGetContext("deployDeferredIndexSchema"),
+        config.app.openSearch.useServerless.deployDeferredIndexSchema
     );
 
     //OpenSearch Variables - Dual Index Configuration
@@ -721,6 +986,16 @@ export function getConfig(app: cdk.App): Config {
         config.app.webUi.allowUnsafeEvalFeatures = false;
     }
 
+    // Whether http://localhost:3001 is registered as a Cognito callback and logout URL. It exists so a
+    // developer running the web front locally can complete a federated sign-in against a deployed
+    // user pool. Defaults off: the URLs are registered on the same user pool that serves real users,
+    // and a redirect target on the user's own machine is a code-delivery destination the deployment
+    // does not control. Only read when Cognito SAML or OIDC federation is enabled — without
+    // federation VAMS uses no OAuth redirect at all.
+    if (config.app.webUi.allowLocalhostAuthCallbacks == undefined) {
+        config.app.webUi.allowLocalhostAuthCallbacks = false;
+    }
+
     // Initialize authorizerOptions if undefined
     if (config.app.authProvider.authorizerOptions == undefined) {
         config.app.authProvider.authorizerOptions = {
@@ -863,20 +1138,52 @@ export function getConfig(app: cdk.App): Config {
     //best-practice managed rule groups + rate-based rule it defines.
     config.wafPolicyJSON = undefined;
     if (config.app.useWaf) {
+        // Only a MISSING file falls back to the legacy default rules. A file that exists but cannot be
+        // read or parsed is an error, because the fallback blocks nothing: legacyDefaultRules is a
+        // single Common Rule Set with overrideAction count, so a trailing comma in an edited policy
+        // would silently turn every managed rule and every rate-based rule into a counter while the
+        // deployment still reported WAF as enabled. The only visible symptom would be a change in
+        // CloudWatch WAF metrics.
+        let wafPolicyFile: string | undefined;
         try {
-            const wafPolicyFile: string = readFileSync(
-                join(__dirname, "policy", "wafPolicyConfig.json"),
-                {
-                    encoding: "utf8",
-                    flag: "r",
-                }
-            );
-            if (wafPolicyFile && wafPolicyFile.trim().length > 0) {
-                config.wafPolicyJSON = JSON.parse(wafPolicyFile);
+            wafPolicyFile = readFileSync(join(__dirname, "policy", "wafPolicyConfig.json"), {
+                encoding: "utf8",
+                flag: "r",
+            });
+        } catch (e: any) {
+            if (e?.code !== "ENOENT") {
+                throw new Error(
+                    `Configuration Error: app.useWaf is true but ` +
+                        `config/policy/wafPolicyConfig.json could not be read: ${
+                            e?.message ?? e
+                        }. ` +
+                        `Fix the file, or remove it to fall back to the count-only default rules.`
+                );
             }
-        } catch (e) {
-            //Missing file is not an error — fall back to the legacy default rules.
-            config.wafPolicyJSON = undefined;
+            console.warn(
+                "Configuration Warning: app.useWaf is true and config/policy/wafPolicyConfig.json " +
+                    "is absent, so the Web ACL falls back to a count-only Common Rule Set that " +
+                    "BLOCKS NOTHING. Supply a policy file to block."
+            );
+        }
+
+        if (wafPolicyFile !== undefined && wafPolicyFile.trim().length > 0) {
+            // Outside the try: a syntax error must not read as an absent file.
+            try {
+                config.wafPolicyJSON = JSON.parse(wafPolicyFile);
+            } catch (e: any) {
+                throw new Error(
+                    `Configuration Error: config/policy/wafPolicyConfig.json is not valid JSON ` +
+                        `(${e?.message ?? e}). Left unparsed the Web ACL would fall back to ` +
+                        `count-only rules that block nothing, so this fails the synthesis instead.`
+                );
+            }
+            validateWafPolicy(config.wafPolicyJSON);
+        } else if (wafPolicyFile !== undefined) {
+            console.warn(
+                "Configuration Warning: config/policy/wafPolicyConfig.json is empty, so the Web ACL " +
+                    "falls back to a count-only Common Rule Set that BLOCKS NOTHING."
+            );
         }
     }
 
@@ -1082,7 +1389,7 @@ export function getConfig(app: cdk.App): Config {
         ) {
             throw new Error(
                 "Configuration Error: useNvidiaCosmos requires huggingFaceToken " +
-                    "(SSM SecureString parameter path, e.g., '/vams/cosmos/hf-token') for model downloads."
+                    "(the HuggingFace access token value itself) for model downloads."
             );
         }
 
@@ -1212,6 +1519,41 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array."
             );
         }
+        // The enabled Super variants share ONE compute environment, so its instance pool is the
+        // intersection of their lists (see intersectInstanceTypes). Disjoint lists leave no type any
+        // variant permits, which would render a compute environment that can launch nothing and whose
+        // jobs sit RUNNABLE forever without an error. Rejected here, naming each list, because the
+        // symptom gives no hint that two unrelated config blocks are what disagree.
+        const enabledSuperInstanceTypes: Array<[string, string[] | undefined]> = [];
+        if (c3?.super64B?.enabled) {
+            enabledSuperInstanceTypes.push(["super64B", c3.super64B.instanceTypes]);
+        }
+        if (c3?.superText2Image64B?.enabled) {
+            enabledSuperInstanceTypes.push([
+                "superText2Image64B",
+                c3.superText2Image64B.instanceTypes,
+            ]);
+        }
+        if (c3?.superImage2Video64B?.enabled) {
+            enabledSuperInstanceTypes.push([
+                "superImage2Video64B",
+                c3.superImage2Video64B.instanceTypes,
+            ]);
+        }
+        if (
+            enabledSuperInstanceTypes.length > 1 &&
+            intersectInstanceTypes(enabledSuperInstanceTypes.map(([, list]) => list)).length === 0
+        ) {
+            throw new Error(
+                `Configuration Error: the enabled useNvidiaCosmos3.modelsOmni Super variants share one ` +
+                    `AWS Batch compute environment, and their instanceTypes have no type in common: ` +
+                    enabledSuperInstanceTypes
+                        .map(([name, list]) => `${name}=[${(list || []).join(", ")}]`)
+                        .join("; ") +
+                    `. Give them at least one instance type in common, or enable only one Super variant ` +
+                    `per deployment.`
+            );
+        }
         // Every tier's instance types must be able to hold the GPUs its jobs reserve.
         if (c3?.nano16B?.enabled) {
             validateInstanceTypeGpuCount(
@@ -1287,6 +1629,98 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: pipelines.useRapidPipeline.useEks.eksClusterVersion must be an " +
                     'Amazon EKS Kubernetes minor version of the form "1.NN" (for example "1.31"). ' +
                     `Received: ${JSON.stringify(eksClusterVersion)}`
+            );
+        }
+
+        // The job timeout sits in the middle of a three-link chain and every link is enforced somewhere
+        // else, so an inconsistent value produces a wrong OUTCOME rather than an error: the state machine
+        // derives its poll ceiling from this value, the Kubernetes pod's activeDeadlineSeconds is set
+        // from it, and the registered pipeline bundle declares a taskTimeout the parent workflow waits
+        // for. A pod allowed to outlive the poll makes the execution report FAILED while the pod keeps
+        // writing output; a pod allowed to outlive the parent's taskTimeout makes the parent give up on
+        // a job that is still running.
+        const jobTimeout = config.app.pipelines.useRapidPipeline.useEks.jobTimeout;
+        if (typeof jobTimeout !== "number" || !Number.isInteger(jobTimeout) || jobTimeout <= 0) {
+            throw new Error(
+                "Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout must be a positive " +
+                    `integer number of seconds. Received: ${JSON.stringify(jobTimeout)}`
+            );
+        }
+        if (jobTimeout > RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS) {
+            throw new Error(
+                `Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout (${jobTimeout}s) ` +
+                    `exceeds the ${RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS}s taskTimeout the ` +
+                    `registered pipeline declares, so the parent workflow would stop waiting while the ` +
+                    `Kubernetes job is still allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
+                    `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`
+            );
+        }
+    }
+
+    // Container image URIs for the Marketplace-sourced pipelines. Every template ships the literal
+    // placeholder, and it is passed straight to `ecs.ContainerImage.fromRegistry`, so an unedited value
+    // deploys cleanly and fails only when a job tries to pull it — one deploy plus one failed execution
+    // later. Checked per pipeline so only an ENABLED one is required to have a real image.
+    const containerImagePipelines: [
+        string,
+        { enabled?: boolean; ecrContainerImageURI?: string }
+    ][] = [
+        ["pipelines.useRapidPipeline.useEcs", config.app.pipelines.useRapidPipeline?.useEcs],
+        ["pipelines.useRapidPipeline.useEks", config.app.pipelines.useRapidPipeline?.useEks],
+        ["pipelines.useModelOps", config.app.pipelines.useModelOps],
+    ];
+    for (const [configPath, pipeline] of containerImagePipelines) {
+        if (!pipeline?.enabled) continue;
+        const uri = pipeline.ecrContainerImageURI ?? "";
+        // The angle-bracket tokens the shipped templates use, matched individually so the message can
+        // say which one is still in place.
+        const remainingPlaceholders = [
+            "<ACCOUNTID>",
+            "<REGION>",
+            "<ECR-REPOSITORY>",
+            "<IMAGE-ID>",
+            "<IMAGE-TAG>",
+        ].filter((token) => uri.includes(token));
+        if (uri.trim() === "" || remainingPlaceholders.length > 0) {
+            throw new Error(
+                `Configuration Error: ${configPath} is enabled but ecrContainerImageURI is not set to a ` +
+                    `real image. ${
+                        uri.trim() === ""
+                            ? "The value is empty."
+                            : `It still contains the template placeholder(s) ${remainingPlaceholders.join(
+                                  ", "
+                              )}.`
+                    } This pipeline runs a licensed container from AWS Marketplace; subscribe to it and ` +
+                    `set the image URI before deploying, or disable the pipeline.`
+            );
+        }
+    }
+
+    // The Bedrock model id carries a cross-Region inference-profile prefix, and the prefixes are
+    // partition-specific: `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is
+    // passed through to the Lambda unvalidated, and the IAM grant is derived by stripping the prefix —
+    // so a commercial profile id in a restricted partition produces both a model that does not exist
+    // and a grant that does not match it.
+    if (config.app.pipelines.useGenAiMetadata3dLabeling?.enabled) {
+        const bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "";
+        if (bedrockModelId.trim() === "") {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiMetadata3dLabeling is enabled but " +
+                    "bedrockModelId is empty. Set a model id available in this partition and Region " +
+                    "(the restricted-partition templates ship it empty because the commercial " +
+                    "cross-Region inference profiles do not exist there)."
+            );
+        }
+        const commercialOnlyPrefix = ["global.", "us."].find((prefix) =>
+            bedrockModelId.startsWith(prefix)
+        );
+        if (commercialOnlyPrefix && config.env.partition !== "aws") {
+            throw new Error(
+                `Configuration Error: pipelines.useGenAiMetadata3dLabeling.bedrockModelId is ` +
+                    `"${bedrockModelId}", whose "${commercialOnlyPrefix}" cross-Region inference-profile ` +
+                    `prefix exists only in the commercial partition. This deployment targets ` +
+                    `${config.env.partition}. Use a model id or inference profile offered there ` +
+                    `(GovCloud uses the "us-gov." prefix).`
             );
         }
     }
@@ -1528,6 +1962,41 @@ export function getConfig(app: cdk.App): Config {
     ) {
         throw new Error(
             "Configuration Error: Must specify an initial admin user ID as part of this deployment configuration!"
+        );
+    }
+
+    // Only what Amazon Cognito itself rejects, so this can turn a mid-deploy failure into a synth-time
+    // message without ever refusing a value that is already deployed and working. A CreateUser that
+    // fails takes the AuthBuilder nested stack with it, which rolls back the whole core stack.
+    if (config.app.adminUserId.length > COGNITO_USERNAME_MAX_LENGTH) {
+        throw new Error(
+            `Configuration Error: app.adminUserId is ${config.app.adminUserId.length} characters. ` +
+                `Amazon Cognito allows at most ${COGNITO_USERNAME_MAX_LENGTH}.`
+        );
+    }
+    if (/\s/.test(config.app.adminUserId)) {
+        throw new Error(
+            `Configuration Error: app.adminUserId '${config.app.adminUserId}' contains whitespace, ` +
+                `which Amazon Cognito does not accept in a username.`
+        );
+    }
+
+    // The admin user is a CloudFormation-managed resource keyed on its username, so changing either
+    // field after the first deployment REPLACES it. Which way that goes depends only on whether the new
+    // username already exists in the pool: if it does, the create fails with AlreadyExists and the core
+    // stack rolls back; if it does not, the new user is created and the previous admin identity is
+    // orphaned (the resource carries a retain policy so it is not deleted, but it is no longer managed
+    // and its role assignments do not follow). A warning rather than an error, because an operator who
+    // has read this and accepts the consequence must still be able to deploy — and because synthesis
+    // cannot see the deployed value to know whether it changed.
+    if (config.app.adminUserId !== config.app.adminEmailAddress) {
+        console.warn(
+            `Configuration Warning: app.adminUserId ('${config.app.adminUserId}') and ` +
+                `app.adminEmailAddress ('${config.app.adminEmailAddress}') differ. Both are immutable ` +
+                `after the first deployment: changing either replaces the Amazon Cognito admin user, ` +
+                `which fails the deployment if the new username already exists in the pool and ` +
+                `otherwise orphans the previous admin. Grant additional administrators through roles ` +
+                `instead of by editing these fields.`
         );
     }
 
@@ -1817,6 +2286,55 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
+        if (config.app.authProvider.useCognito.useSaml) {
+            //saml-config.ts ships with placeholders, including a misspelled provider name. Deploying
+            //them registers an identity provider that cannot complete a login, and the failure surfaces
+            //at the identity provider rather than here, so they are rejected up front. This mirrors the
+            //oidcSettings guard below.
+            const samlRequiredFields: [string, string | undefined][] = [
+                ["name", samlSettings.name],
+                ["cognitoDomainPrefix", samlSettings.cognitoDomainPrefix],
+                ["metadata.metadataContent", samlSettings.metadata?.metadataContent],
+            ];
+            for (const [field, value] of samlRequiredFields) {
+                if (!value || value.trim() === "") {
+                    throw new Error(
+                        `Configuration Error: useCognito.useSaml requires samlSettings.${field} to be set in infra/config/saml-config.ts!`
+                    );
+                }
+            }
+
+            //`displayName` is deliberately not rejected: "SSO" is a usable sign-in button label, so
+            //requiring the operator to invent another one would add friction and catch nothing.
+            const samlPlaceholders: [string, boolean][] = [
+                ["name", samlSettings.name === "myidentiyprovidername"],
+                ["cognitoDomainPrefix", samlSettings.cognitoDomainPrefix === "mydomainprefix"],
+                // A Cognito domain prefix is globally unique within a Region, so the shipped value is
+                // very unlikely to be available — and when it is not, the stack fails partway through
+                // creating the domain.
+                [
+                    "metadata.metadataContent",
+                    (samlSettings.metadata?.metadataContent ?? "").includes("example.com"),
+                ],
+            ];
+            const samlUnedited = samlPlaceholders.filter(([, isPlaceholder]) => isPlaceholder);
+            if (samlUnedited.length > 0) {
+                const fields = [...new Set(samlUnedited.map(([field]) => field))].join(", ");
+                throw new Error(
+                    `Configuration Error: useCognito.useSaml is enabled but infra/config/saml-config.ts still holds placeholder values for: ${fields}. Set these for your identity provider before deploying.`
+                );
+            }
+
+            //A URL metadata source is fetched by Amazon Cognito over TLS. Detected from the content
+            //rather than from metadataType, so config.ts does not need to import aws-cognito for one
+            //enum comparison; a FILE source is a path and never starts with http.
+            if ((samlSettings.metadata?.metadataContent ?? "").startsWith("http://")) {
+                throw new Error(
+                    "Configuration Error: samlSettings.metadata.metadataContent must use https (Amazon Cognito fetches the provider metadata over TLS)."
+                );
+            }
+        }
+
         if (config.app.authProvider.useCognito.useOidc) {
             if (config.env.partition !== "aws") {
                 throw new Error(
@@ -1841,13 +2359,31 @@ export function getConfig(app: cdk.App): Config {
                     );
                 }
             }
-            if (
-                oidcSettings.issuerUrl.includes("your-idp.example.com") ||
-                oidcSettings.clientSecretArn.includes("ACCOUNT_ID") ||
-                oidcSettings.clientSecretArn.includes("REGION")
-            ) {
+            // Every shipped stand-in that cannot work as written, not only the two that name themselves
+            // as examples. A non-empty check passes all of them, so the deployment used to succeed and
+            // the failure surfaced at the identity provider — where the reported cause is a rejected
+            // client rather than an unedited configuration file.
+            //
+            // `name` and `displayName` are deliberately NOT rejected. "ExternalOIDC" and "SSO" are
+            // usable values for the provider's own name and its sign-in button label; requiring the
+            // operator to invent different ones would add friction and catch no misconfiguration.
+            const oidcPlaceholders: [string, boolean][] = [
+                ["issuerUrl", oidcSettings.issuerUrl.includes("your-idp.example.com")],
+                ["clientSecretArn", oidcSettings.clientSecretArn.includes("ACCOUNT_ID")],
+                ["clientSecretArn", oidcSettings.clientSecretArn.includes("REGION")],
+                // The shipped stand-in. An identity provider issues the client id, so this string
+                // cannot be one; left as-is the provider rejects every authorization request.
+                ["clientId", oidcSettings.clientId === "vams-oidc-client"],
+                // A Cognito domain prefix is globally unique within a Region, so the shipped value is
+                // very unlikely to be available — and when it is not, the stack fails partway through
+                // creating the domain.
+                ["cognitoDomainPrefix", oidcSettings.cognitoDomainPrefix === "vams"],
+            ];
+            const unedited = oidcPlaceholders.filter(([, isPlaceholder]) => isPlaceholder);
+            if (unedited.length > 0) {
+                const fields = [...new Set(unedited.map(([field]) => field))].join(", ");
                 throw new Error(
-                    "Configuration Error: useCognito.useOidc is enabled but infra/config/oidc-config.ts still holds placeholder values. Set issuerUrl and clientSecretArn for your identity provider before deploying."
+                    `Configuration Error: useCognito.useOidc is enabled but infra/config/oidc-config.ts still holds placeholder values for: ${fields}. Set these for your identity provider before deploying.`
                 );
             }
             if (!oidcSettings.issuerUrl.startsWith("https://")) {
@@ -1858,6 +2394,21 @@ export function getConfig(app: cdk.App): Config {
             if (!oidcSettings.scopes || !oidcSettings.scopes.includes("openid")) {
                 throw new Error(
                     `Configuration Error: oidcSettings.scopes must include the "openid" scope for OIDC federation.`
+                );
+            }
+            if (!/^arn:aws[a-z-]*:secretsmanager:/.test(oidcSettings.clientSecretArn)) {
+                throw new Error(
+                    `Configuration Error: oidcSettings.clientSecretArn must be an AWS Secrets Manager ARN (arn:<partition>:secretsmanager:...). Got: ${oidcSettings.clientSecretArn}`
+                );
+            }
+            // Without at least one mapped attribute the federated user arrives with no claims VAMS can
+            // use, and the authorizer has no email to identify them by.
+            if (
+                !oidcSettings.attributeMapping ||
+                Object.keys(oidcSettings.attributeMapping).length === 0
+            ) {
+                throw new Error(
+                    "Configuration Error: oidcSettings.attributeMapping must map at least one attribute (email at minimum) so the federated user's claims reach VAMS."
                 );
             }
         }
@@ -2161,6 +2712,14 @@ export function getConfig(app: cdk.App): Config {
                 `Configuration Error: Physna Sync authTokenEndpoint must be a valid URL. Got: ${physna.authTokenEndpoint}`
             );
         }
+
+        // Parseability alone accepts `http://` and an address inside the VPC. The add-on sends the
+        // Physna OAuth client secret to authTokenEndpoint as HTTP Basic credentials, so a plain-http
+        // endpoint transmits it in cleartext, and a link-local or loopback host turns a Lambda that
+        // holds read access to every VAMS asset bucket into a request source aimed inside the network —
+        // 169.254.169.254 being the instance metadata endpoint.
+        validateOutboundHttpsEndpoint(physna.apiBaseEndpoint, "usePhysnaSync.apiBaseEndpoint");
+        validateOutboundHttpsEndpoint(physna.authTokenEndpoint, "usePhysnaSync.authTokenEndpoint");
 
         // authType must be "cognito" (only supported mode phase 1)
         if (physna.authType !== "cognito") {
@@ -2756,6 +3315,7 @@ export interface ConfigPublic {
         webUi: {
             optionalBannerHtmlMessage: string;
             allowUnsafeEvalFeatures: boolean;
+            allowLocalhostAuthCallbacks: boolean;
         };
         api: {
             apiType: string;

@@ -1,11 +1,29 @@
-# PowerShell script to run the VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3)
+# PowerShell script to run the VAMS v2.5 to v2.6 migration (OpenSearch reindex plus the data-model steps)
 # Usage: .\run_migration.ps1 [-ConfigFile <path>] [-DryRun] [-ClearIndexes] [-Async]
+#                            [-Steps <step>] [-Limit <n>] [-Profile <name>] [-Region <name>]
+#                            [-Operation <op>] [-LogLevel <level>] [-ConfirmAccount <id>] [-Yes]
+#
+# The per-step, per-profile and per-region parameters exist so a Windows operator can run a single
+# step or target a specific deployment without bypassing this wrapper — bypassing it also loses the
+# timestamped log file under logs\, which is the record of what a migration did.
 
 param(
     [string]$ConfigFile = "v2.5_to_v2.6_migration_config.json",
     [switch]$DryRun,
     [switch]$ClearIndexes,
-    [switch]$Async
+    [switch]$Async,
+    [ValidateSet("all", "reindex", "assetHistory", "workflowExecutions", "auxPreviewRelocation",
+                 "pipelineWorkflowDefinitions", "globalListBackfill", "tagsNamespacing")]
+    [string]$Steps,
+    [int]$Limit,
+    [string]$Profile,
+    [string]$Region,
+    [ValidateSet("both", "assets", "files")]
+    [string]$Operation,
+    [ValidateSet("DEBUG", "INFO", "WARNING", "ERROR")]
+    [string]$LogLevel,
+    [string]$ConfirmAccount,
+    [switch]$Yes
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +70,17 @@ $ExtraArgs = @()
 if ($DryRun)       { $ExtraArgs += "--dry-run";       Write-Host "Mode: DRY RUN (no changes will be made)" -ForegroundColor Yellow }
 if ($ClearIndexes) { $ExtraArgs += "--clear-indexes"; Write-Host "Mode: CLEAR INDEXES (existing v3 documents will be deleted first)" -ForegroundColor Yellow }
 if ($Async)        { $ExtraArgs += "--async";         Write-Host "Mode: ASYNCHRONOUS (results in CloudWatch Logs)" -ForegroundColor Yellow }
+if ($Yes)          { $ExtraArgs += "--yes";           Write-Host "Mode: NO CONFIRMATION PROMPT (--yes)" -ForegroundColor Yellow }
+# Valued parameters. PSBoundParameters rather than a truthiness test, so -Limit 0 is passed through
+# instead of being dropped as if it had not been given.
+if ($PSBoundParameters.ContainsKey("Steps"))          { $ExtraArgs += @("--steps", $Steps) }
+if ($PSBoundParameters.ContainsKey("Limit"))          { $ExtraArgs += @("--limit", $Limit) }
+if ($PSBoundParameters.ContainsKey("Profile"))        { $ExtraArgs += @("--profile", $Profile) }
+if ($PSBoundParameters.ContainsKey("Region"))         { $ExtraArgs += @("--region", $Region) }
+if ($PSBoundParameters.ContainsKey("Operation"))      { $ExtraArgs += @("--operation", $Operation) }
+if ($PSBoundParameters.ContainsKey("LogLevel"))       { $ExtraArgs += @("--log-level", $LogLevel) }
+if ($PSBoundParameters.ContainsKey("ConfirmAccount")) { $ExtraArgs += @("--confirm-account", $ConfirmAccount) }
+if ($ExtraArgs.Count -gt 0) { Write-Host "Extra arguments: $($ExtraArgs -join ' ')" }
 
 try {
     & $PythonCmd v2.5_to_v2.6_migration.py --config $ConfigFile @ExtraArgs 2>&1 | Tee-Object -FilePath $LogFile

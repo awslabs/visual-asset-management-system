@@ -114,7 +114,7 @@
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
-                "bedrockModelId": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+                "bedrockModelId": "",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
@@ -321,7 +321,8 @@
         },
         "webUi": {
             "optionalBannerHtmlMessage": "",
-            "allowUnsafeEvalFeatures": false
+            "allowUnsafeEvalFeatures": false,
+            "allowLocalhostAuthCallbacks": false
         },
         "api": {
             "apiType": "APIGATEWAY_REST",

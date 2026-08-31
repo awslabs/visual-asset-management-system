@@ -313,8 +313,11 @@ Named `/aws/vendedlogs/<identifier>-<hash>`:
 | `/aws/vendedlogs/VAMSOrchestrationBusAudit-<hash>` | EventBridge orchestration bus audit rule target                                                                      | Always                   | DESTROY        | Yes         |
 | `/aws/vendedlogs/VAMSCloudWatchVPCLogs<hash>`      | VPC flow logs                                                                                                        | `useGlobalVpc`           | DESTROY        | Yes         |
 | `/aws/vendedlogs/VAMSCloudTrailLogs<hash>`         | AWS CloudTrail logs                                                                                                  | `addStackCloudTrailLogs` | DESTROY        | Yes         |
+| `aws-waf-logs-vams-<hash>`                         | AWS WAF request logs, one group per web ACL. The `aws-waf-logs-` prefix is mandatory — AWS WAF rejects any other destination name. Created in the ACL's own Region, so the CloudFront-scoped ACL's group is in us-east-1. | `useWaf`                 | DESTROY        | Yes         |
 
 The hyphen before the hash is part of the identifier rather than a fixed convention, so it is present on the audit and orchestration bus groups and absent on the workflow, VPC flow log, and AWS CloudTrail groups. Match on the identifier prefix when searching for a group.
+
+The AWS WAF groups are the one set outside the `/aws/vendedlogs/` namespace: AWS WAF requires the `aws-waf-logs-` prefix and rejects a destination named otherwise, so a search for VAMS log groups has to cover both prefixes.
 
 ### Pipeline Log Groups (per enabled pipeline)
 
@@ -356,6 +359,24 @@ with no retention again.
 All VAMS log groups use the `DESTROY` removal policy and are deleted when the stack is destroyed cleanly. However, if a stack deletion fails partway, or a log group is recreated by an AWS service (such as a Lambda function writing logs) after the stack is gone, the orphaned, deterministically named group will conflict with the same-named group on a subsequent redeploy. Delete any remaining `/aws/vendedlogs/...` groups for the deployment before redeploying with the same configuration name and account. This is most common with the conditional AWS CloudTrail and VPC flow log groups.
 :::
 
+
+### Log Group Encryption
+
+When `app.useKmsCmkEncryption.enabled` is `true`, VAMS log groups are encrypted with the shared
+customer-managed key; otherwise each uses the CloudWatch Logs AWS-managed key. The shared key's policy
+admits the CloudWatch Logs service principal, so no per-group grant is required.
+
+CloudWatch applies a key to new log events only. A group that already holds events keeps those events
+unencrypted after a key is attached, so a group spanning the change contains both.
+
+Three log groups always use the AWS-managed key:
+
+| Log Group                                       | Reason                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `/aws/vendedlogs/VAMSCloudWatchVPCLogs<hash>`   | The VPC nested stack is created before the storage nested stack that owns the key.     |
+| `/aws/vendedlogs/VAMSCloudTrailLogs<hash>`      | Lives in the root stack; consuming the key from a nested stack makes the two circular.  |
+| Provisioned OpenSearch domain log groups        | Created by Amazon OpenSearch Service from the domain's logging configuration, not VAMS. |
+
 ## AWS Systems Manager Parameter Store
 
 VAMS publishes deployment configuration values as explicitly named SSM `String` parameters.
@@ -369,7 +390,7 @@ VAMS publishes deployment configuration values as explicitly named SSM `String` 
 | `/<name>-<baseStackName>/resourceNames/lambdaFunctions/*`     | 1      | OpenSearch reindexer function name, read by the data-migration tooling only (when search is enabled) |
 | `/<name>-<baseStackName>/aos/*`                               | 3      | OpenSearch endpoint and index names (when search is enabled)                |
 | `/<name>-<baseStackName>/web/deployedUrl`                     | 1      | Deployed web application URL                                                |
-| `/<name>-<baseStackName>/location/apiKeyArn`                  | 1      | Amazon Location Service API key ARN (when Location Service is enabled)      |
+| `/<name>-<baseStackName>/location/apiKeyArn`                  | 1      | Amazon Location Service API key ARN (when Location Service is enabled). The key itself is named `vams-location-api-key-<name>-<baseStackName>` — a custom name, so it is redeploy-collision relevant — and is deleted with the stack |
 | `waf_acl_arn_<wafStackName>`                                  | 1 or 2 | AWS WAF Web ACL ARN, one per web ACL stack (when `useWaf` is enabled)       |
 
 The `ResourceNamesBuilder` nested stack materializes every `resourceNames` parameter except one, from descriptors the storage builder registers — the DynamoDB table, legacy table, Amazon S3 bucket, and CloudWatch log group groups above. The search stack publishes `lambdaFunctions/crOsReindexer` on its own because it builds after the registry is materialized. Every Lambda function receives the prefix in the `VAMS_RESOURCE_PARAM_PREFIX` environment variable and resolves the values through `backend/common/resourceNames.py` (environment-variable override, then a cached batched Parameter Store fetch). Resource names are configuration pointers rather than data, so the parameters use the `String` type without KMS encryption.
@@ -423,6 +444,33 @@ Deployed when `useWaf = true`:
 A regional web ACL is always created and associated with the API Gateway stage (for both `REGIONAL` and `PRIVATE` endpoint types), so the API's `execute-api` endpoint is protected in every fronting configuration. When Amazon CloudFront is enabled, a second `CLOUDFRONT`-scoped web ACL is created in `us-east-1` for the distribution — AWS WAF requires a separate scope for CloudFront, and a CloudFront-associated web ACL cannot be shared with any other resource type. Both web ACLs use the same `config/policy/wafPolicyConfig.json` rule policy.
 
 The web ACLs are separate CloudFormation stacks. When CloudFront is disabled, the regional stack is `{name}-waf-{baseStackName}`. When CloudFront is enabled, the regional stack is `{name}-waf-regional-{baseStackName}` and the CloudFront stack is `{name}-waf-{baseStackName}` (in `us-east-1`).
+
+## Amazon EFS
+
+VAMS creates an Amazon EFS file system for each enabled pipeline that caches large model weights or holds
+intermediate training state. All are auto-named, so they are not redeploy-collision relevant, and all are
+deleted on stack teardown.
+
+| File System                     | Purpose                                    | Condition                | Removal Policy | Custom Name |
+| ------------------------------- | ------------------------------------------ | ------------------------ | -------------- | ----------- |
+| `CosmosModelEfs`                | NVIDIA Cosmos model weight cache           | `useNvidiaCosmos*`       | DESTROY        | No          |
+| `Gr00tModelEfs`                 | NVIDIA GR00T model weight cache            | `useNvidiaGr00t*`        | DESTROY        | No          |
+| `TrainingEfs`                   | Isaac Lab training checkpoints             | `useIsaacLabTraining`    | DESTROY        | No          |
+
+All three are encrypted at rest. With `app.useKmsCmkEncryption.enabled` set they use the shared
+customer-managed key; otherwise they use the AWS-managed EFS key.
+
+:::warning Changing a file system's KMS key replaces it
+`KmsKeyId` cannot be changed in place on an Amazon EFS file system. Altering it — including switching
+`app.useKmsCmkEncryption.enabled` on a deployment that already has one of these file systems — makes AWS
+CloudFormation create a new, empty file system and delete the existing one. Because these file systems are
+deleted on teardown rather than retained, the old copy is not kept and its contents are lost.
+
+The model caches repopulate themselves from the upstream model source on the next pipeline run, so losing
+them costs only download time. Isaac Lab training checkpoints do not repopulate: copy anything you need off
+`TrainingEfs` before a deployment that changes its key. See
+[Update the solution](../deployment/update-the-solution.md#encryption-at-rest-for-log-groups-and-the-isaac-lab-file-system).
+:::
 
 ## AWS Batch
 

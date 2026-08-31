@@ -27,7 +27,10 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
@@ -162,11 +165,13 @@ export class SplatToolboxConstruct extends Construct {
             ],
         });
 
+        // This is the Batch JOB role, so its credentials are reachable from inside the container — and
+        // that container runs third-party 3D-reconstruction code, as root, privileged, over
+        // user-uploaded video and archives. It therefore carries only what the container uses.
+        //
+
         const containerJobRole = new iam.Role(this, "SplatToolboxContainerJobRole", {
-            assumedBy: new iam.CompositePrincipal(
-                Service("ECS_TASKS").Principal,
-                Service("SAGEMAKER").Principal
-            ),
+            assumedBy: Service("ECS_TASKS").Principal,
             inlinePolicies: {
                 InputBucketPolicy: inputBucketPolicy,
                 OutputBucketPolicy: outputBucketPolicy,
@@ -177,7 +182,6 @@ export class SplatToolboxConstruct extends Construct {
                     "service-role/AmazonECSTaskExecutionRolePolicy"
                 ),
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSageMakerFullAccess"),
             ],
         });
 
@@ -333,6 +337,7 @@ export class SplatToolboxConstruct extends Construct {
                         "SplatToolboxProcessing-StateMachineLogGroup",
                         10
                     ),
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
@@ -458,7 +463,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -475,7 +480,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*SplatToolboxProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*SplatToolboxProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -492,7 +497,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -509,7 +514,7 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecuteSplatToolboxPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteSplatToolboxPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -522,7 +527,7 @@ export class SplatToolboxConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -537,7 +542,7 @@ export class SplatToolboxConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

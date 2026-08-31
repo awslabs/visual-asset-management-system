@@ -6,7 +6,7 @@
         "executionType": "Lambda",
         "waitForCallback": "Enabled",
         "taskTimeout": "7200",
-        "taskHeartbeatTimeout": "1800",
+        "taskHeartbeatTimeout": "3600",
         "lambda": {}
     },
     "systemConfig": {

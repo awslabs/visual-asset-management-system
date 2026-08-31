@@ -30,7 +30,7 @@ The utility supports two run modes, selected with `--mode`:
 -   Python 3.6+
 -   `boto3` installed (`pip install boto3`)
 -   AWS credentials with `lambda:InvokeFunction` permission
--   The reindexer Lambda function deployed as part of the VAMS CDK stack (function name available in CDK stack outputs as `ReindexerFunctionNameOutput`)
+-   The reindexer Lambda function deployed as part of the VAMS CDK stack (function name available in CDK stack outputs as `OpenSearchReindexerFunctionNameOutput`)
 
 **Quick start:**
 

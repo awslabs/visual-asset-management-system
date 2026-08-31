@@ -255,6 +255,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
                     "vamsPipelineWorkflowsV2",
                     10
                 ),
+            encryptionKey: props.storageResources.encryption.kmsKey,
             retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });

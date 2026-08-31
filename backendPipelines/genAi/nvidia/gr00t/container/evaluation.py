@@ -305,15 +305,16 @@ def _last_redraw(line: str) -> str:
 def _run_streaming(cmd, env, cwd=GROOT_REPO_DIR, echo=None):
     """Run `cmd`, streaming its output to the log while accumulating it. Returns (returncode, text).
 
-    Deliberately NOT `subprocess.run(capture_output=True)`. That fills an OS pipe buffer (typically
-    64 KB) and then blocks the child until the parent reads — but a synchronous `run()` does not read
-    until the child exits, so a child that outdraws the buffer stalls and is eventually killed. The
-    signature is distinctive and was observed here: exit code 1, stdout truncated mid-progress-bar,
-    and NO traceback, because the child never got to print one. Loading a multi-billion-parameter
-    checkpoint emits far more than 64 KB of progress output, so evaluation reliably hit it.
+    Deliberately NOT `subprocess.run(capture_output=True)`, though not because it deadlocks — it does
+    not. `run()` drains through `communicate()`, which reads both pipes concurrently; measured at 1.2 MB
+    from a child that exited 1, with no stall. What it does is yield nothing until the child exits, so a
+    multi-hour evaluation would log NOTHING while it ran and a hang would be undiagnosable. Reading
+    incrementally means the job log fills in as the evaluation proceeds, so a run that hangs can be
+    diagnosed while it is still hanging.
 
-    Reading incrementally also means the job log fills in as the evaluation proceeds rather than only
-    at the end, so a run that hangs can be diagnosed while it is still hanging.
+    What genuinely deadlocks is `Popen(stdout=PIPE)` followed by `wait()` with no reader, which is why
+    the loop below reads before it waits. Both measurements are pinned in
+    `backendPipelines/genAi/nvidia/tests/test_inference_output_capture.py`.
 
     stderr is merged into stdout so one read loop drains both — with two pipes and one reader, the
     unread pipe is exactly the one that fills. Merging costs interleaving fidelity, which does not

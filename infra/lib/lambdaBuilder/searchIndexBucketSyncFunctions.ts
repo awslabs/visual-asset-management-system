@@ -25,6 +25,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     suppressCdkNagLambda,
+    suppressCdkNagDynamoStreamListWildcard,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
@@ -231,6 +232,7 @@ export function buildAssetIndexingFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -250,7 +252,12 @@ export function buildSqsBucketSyncFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.indexing.sqsBucketSync.lambda_handler_` + handlerType,
@@ -311,7 +318,7 @@ export function buildSqsBucketSyncFunction(
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["sns:CreateTopic", "sns:ListTopics", "sns:DeleteTopic"],
+            actions: ["sns:CreateTopic", "sns:DeleteTopic"],
             resources: [assetTopicWildcardArn],
         })
     );
@@ -431,6 +438,7 @@ export function buildFileIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
@@ -478,6 +486,7 @@ export function buildAssetIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
@@ -523,6 +532,7 @@ export function buildDatabaseIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 

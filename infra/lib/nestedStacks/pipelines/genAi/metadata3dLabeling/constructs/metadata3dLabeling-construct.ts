@@ -27,7 +27,10 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { layerBundlingCommand } from "../../../../../helper/lambda";
@@ -215,6 +218,8 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_BlenderRenderer",
             {
+                // Matches the 5-hour state machine timeout that encloses this job.
+                attemptDuration: cdk.Duration.hours(5),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -379,6 +384,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                         "Metadata3dLabelingProcessing-StateMachineLogGroup",
                         10
                     ),
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
@@ -488,7 +494,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -505,7 +511,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*Metadata3dLabelingProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*Metadata3dLabelingProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -522,7 +528,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -539,7 +545,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecuteGenAiMetadata3dLabelingPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteGenAiMetadata3dLabelingPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -552,7 +558,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -567,7 +573,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

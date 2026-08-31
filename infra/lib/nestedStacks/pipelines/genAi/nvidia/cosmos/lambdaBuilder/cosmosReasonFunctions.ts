@@ -69,7 +69,11 @@ export function buildVamsExecuteCosmosReasonPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -176,7 +180,11 @@ export function buildOpenReasonPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);

@@ -1591,6 +1591,123 @@ export const RULES: Rule[] = [
         message:
             "Each OpenSearch Serverless maximum OCU must be greater than or equal to its matching minimum (maxIndexingOcu >= minIndexingOcu, maxSearchOcu >= minSearchOcu).",
     },
+
+    // ----- Marketplace container images (config.ts: "is enabled but ecrContainerImageURI is not set to a real image") -----
+    ...(
+        [
+            [
+                "rapidpipeline-ecs",
+                "app.pipelines.useRapidPipeline.useEcs",
+                "useRapidPipeline.useEcs",
+            ],
+            [
+                "rapidpipeline-eks",
+                "app.pipelines.useRapidPipeline.useEks",
+                "useRapidPipeline.useEks",
+            ],
+            ["model-ops", "app.pipelines.useModelOps", "useModelOps"],
+        ] as const
+    ).map(([slug, base, label]) => ({
+        id: `container-image-placeholder-${slug}`,
+        severity: "error" as const,
+        fieldPaths: [`${base}.ecrContainerImageURI`],
+        appliesWhen: (c: ConfigShape) => {
+            if (!g(c, `${base}.enabled`)) return false;
+            const uri = String(g(c, `${base}.ecrContainerImageURI`) ?? "");
+            return (
+                isBlank(uri) ||
+                ["<ACCOUNTID>", "<REGION>", "<ECR-REPOSITORY>", "<IMAGE-ID>", "<IMAGE-TAG>"].some(
+                    (token) => uri.includes(token)
+                )
+            );
+        },
+        message: `${label} is enabled but ecrContainerImageURI is still empty or holds the template placeholder. Subscribe to the AWS Marketplace container and set the image URI, or disable the pipeline.`,
+    })),
+
+    // ----- Bedrock model id (config.ts: "cross-Region inference-profile prefix exists only in the commercial partition") -----
+    {
+        id: "bedrock-model-id-required",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId")),
+        message:
+            "useGenAiMetadata3dLabeling requires a bedrockModelId available in this partition and Region. The restricted-partition presets leave it empty because the commercial cross-Region inference profiles do not exist there.",
+    },
+    {
+        id: "bedrock-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId", "env.partition"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled")) return false;
+            const id = String(
+                g(c, "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId") ?? ""
+            );
+            const partition = String(g(c, "env.partition") ?? "aws");
+            return partition !== "aws" && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+    },
+
+    // ----- Physna outbound endpoints (config.ts: "must use https, or the credentials VAMS sends to it travel in cleartext") -----
+    ...(
+        [
+            ["api-base", "app.addons.usePhysnaSync.apiBaseEndpoint", "apiBaseEndpoint"],
+            ["auth-token", "app.addons.usePhysnaSync.authTokenEndpoint", "authTokenEndpoint"],
+        ] as const
+    ).map(([slug, path, label]) => ({
+        id: `physna-endpoint-https-${slug}`,
+        severity: "error" as const,
+        fieldPaths: [path],
+        appliesWhen: (c: ConfigShape) => {
+            if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
+            const value = String(g(c, path) ?? "");
+            if (isBlank(value)) return false; // a separate required-field rule covers empty
+            try {
+                return new URL(value).protocol !== "https:";
+            } catch {
+                return false; // a malformed URL is reported by the parseability rule
+            }
+        },
+        message: `usePhysnaSync.${label} must use https. The add-on sends the Physna OAuth client secret to it as HTTP Basic credentials, which plain http transmits in cleartext.`,
+    })),
+    ...(
+        [
+            ["api-base", "app.addons.usePhysnaSync.apiBaseEndpoint", "apiBaseEndpoint"],
+            ["auth-token", "app.addons.usePhysnaSync.authTokenEndpoint", "authTokenEndpoint"],
+        ] as const
+    ).map(([slug, path, label]) => ({
+        id: `physna-endpoint-private-host-${slug}`,
+        severity: "error" as const,
+        fieldPaths: [path],
+        appliesWhen: (c: ConfigShape) => {
+            if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
+            const value = String(g(c, path) ?? "");
+            if (isBlank(value)) return false;
+            let host: string;
+            try {
+                host = new URL(value).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+            } catch {
+                return false;
+            }
+            return (
+                host === "localhost" ||
+                host.endsWith(".localhost") ||
+                host.endsWith(".local") ||
+                host.endsWith(".internal") ||
+                host === "::1" ||
+                /^127\./.test(host) ||
+                /^169\.254\./.test(host) ||
+                /^10\./.test(host) ||
+                /^192\.168\./.test(host) ||
+                /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+                /^(fc|fd)[0-9a-f]{2}:/.test(host)
+            );
+        },
+        message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
+    })),
 ];
 
 /** Evaluate every rule against the config and return those that apply. */

@@ -146,6 +146,13 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         contentSecurityPolicy: props.csp,
                         override: true,
                     },
+                    // Send the origin but not the path on a cross-origin request, and nothing at
+                    // all when downgrading to HTTP.
+                    referrerPolicy: {
+                        referrerPolicy:
+                            cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+                        override: true,
+                    },
                 },
                 customHeadersBehavior: {
                     customHeaders: [
@@ -157,6 +164,21 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         {
                             header: "Cross-Origin-Opener-Policy",
                             value: "same-origin",
+                            override: true,
+                        },
+                        // Denies the hardware and payment APIs no VAMS page or bundled viewer uses.
+                        //
+                        // Deliberately NOT restricted: fullscreen and xr-spatial-tracking (the
+                        // three.js VRButton/ARButton, Babylon and PlayCanvas viewers enter WebXR),
+                        // geolocation (the Potree map builds on OpenLayers, which reads it), the
+                        // motion sensors (DeviceOrientation drives viewer camera control), and camera
+                        // (immersive-ar sessions need it). Denying any of those breaks a viewer in a
+                        // way that surfaces only when that viewer is opened.
+                        {
+                            header: "Permissions-Policy",
+                            value:
+                                "microphone=(), payment=(), usb=(), serial=(), bluetooth=(), " +
+                                "hid=(), midi=(), idle-detection=()",
                             override: true,
                         },
                     ],

@@ -1611,6 +1611,14 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         help: "Required for certain viewer plugins. Consult your security team before enabling.",
     },
+    {
+        path: "app.webUi.allowLocalhostAuthCallbacks",
+        label: "Allow localhost auth callbacks",
+        input: "boolean",
+        section: "api-webui",
+        advanced: true,
+        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. Read only when Cognito SAML or OIDC federation is enabled. Leave off for a deployment that serves real users.",
+    },
 
     // ===== Metadata schema auto-load =====
     {

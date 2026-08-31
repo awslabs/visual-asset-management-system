@@ -35,11 +35,19 @@ Without `__init__.py` and `customLogging/logger.py`, Lambda will fail at import 
 
 Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on config flags.
 
-**CRITICAL — VPC Builder Updates:** New pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Missing any one of these causes deployment failures. Search for `useSplatToolbox` in the file to find all locations:
+**CRITICAL — VPC Builder Updates:** A new pipeline using AWS Batch, ECS, or Fargate must be added to condition blocks in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first, by looking at what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
 
-1. **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig`. Without this, the VPC has only isolated subnets and Batch compute environments fail with `"Resource subnets are required"`.
-2. **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, ECR Docker, and optionally EFS interface VPC endpoints. Without this, Batch jobs cannot pull container images or access AWS services.
-3. **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable. Without this, the ECS agent on Batch instances cannot register with the ECS service.
+| Block                                                                       | Isolated-subnet pipeline | Private-subnet pipeline |
+| --------------------------------------------------------------------------- | ------------------------ | ----------------------- |
+| 1. **Subnet creation** — pushes `subnetPublicConfig`/`subnetPrivateConfig`  | **No**                   | **Yes**                 |
+| 2. **Pipeline-only endpoints** — Batch, ECR API, ECR Docker, optionally EFS | **Yes**                  | **Yes**                 |
+| 3. **ECS endpoint** — the `needsEcsPrivate` variable                        | **No**                   | **Yes**                 |
+
+-   **Block 2 is required either way.** Without it, Batch jobs cannot pull their container image, and the pipeline fails at task start with no obvious cause.
+-   **Block 1 for a private-subnet pipeline only.** `subnetPrivateConfig` is `PRIVATE_WITH_EGRESS` and the `ec2.Vpc` sets no `natGateways`, so CDK creates **one NAT gateway per Availability Zone** (~$66/month at the default two AZs, plus data processing). Add an isolated-subnet pipeline here and that cost is incurred for subnets its ENIs never occupy. Omit it for a private-subnet pipeline and its compute environment fails with `"Resource subnets are required"`.
+-   **Block 3 for a private-subnet pipeline only.** This is the ECS **control-plane** endpoint, which the ECS agent on an EC2-launch-type container instance needs. **Fargate tasks do not use it** — they need ECR, Amazon S3 and CloudWatch Logs, which block 2 supplies. Each endpoint adds one ENI per AZ (~$15/month).
+
+Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in block 2 only. Four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`, which asserts both directions — no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one.
 
 ### Pipeline S3 Output Path Conventions
 

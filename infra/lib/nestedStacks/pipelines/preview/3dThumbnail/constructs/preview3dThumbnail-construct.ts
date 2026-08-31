@@ -26,7 +26,10 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
@@ -187,6 +190,8 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_Preview3dThumbnail",
             {
+                // Matches the 1-hour state machine timeout that encloses this job.
+                attemptDuration: cdk.Duration.hours(1),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -311,6 +316,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             this,
             "Preview3dThumbnailProcessing-StateMachineLogGroup",
             {
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 logGroupName:
                     "/aws/vendedlogs/VAMSstateMachine-Preview3dThumbnailPipeline" +
                     generateUniqueNameHash(
@@ -430,7 +436,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -447,7 +453,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*Preview3dThumbnailProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*Preview3dThumbnailProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -464,7 +470,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -481,7 +487,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecutePreview3dThumbnailPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecutePreview3dThumbnailPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -494,7 +500,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy and AWSXrayWriteOnlyAccess) required for Fargate container operations",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -509,7 +515,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container job uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy and AWSXrayWriteOnlyAccess) required for Fargate container operations",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

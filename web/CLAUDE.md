@@ -350,18 +350,18 @@ node scripts/cspInlineScriptHashes.js --ts
 #    infra/lib/helper/cspInlineScriptHashes.ts
 
 # 4. Confirm the drift guard passes
-cd ../infra && npx jest test/cspInlineScriptHashes.test.ts
+cd ../infra && npx jest test/web/cspInlineScriptHashes.test.ts
 ```
 
 Run the generator with no `--ts` for a human-readable listing of each block and its hash.
 
-| File                                        | Role                                                                     |
-| ------------------------------------------- | ------------------------------------------------------------------------ |
-| `web/index.html`                            | The inline scripts being hashed                                          |
-| `web/scripts/cspInlineScriptHashes.js`      | Generator -- hashes every inline block (skips any with `src`)            |
-| `infra/lib/helper/cspInlineScriptHashes.ts` | The generated constant. **Generated -- do not hand-edit**                |
-| `infra/lib/helper/security.ts`              | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
-| `infra/test/cspInlineScriptHashes.test.ts`  | Recomputes from `index.html` and fails on drift                          |
+| File                                           | Role                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                               | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`         | Generator -- hashes every inline block (skips any with `src`)            |
+| `infra/lib/helper/cspInlineScriptHashes.ts`    | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`                 | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/web/cspInlineScriptHashes.test.ts` | Recomputes from `index.html` and fails on drift                          |
 
 :::danger[A hash and `'unsafe-inline'` are mutually exclusive]
 A CSP may allow inline script by hash **or** by the `'unsafe-inline'` keyword, never both -- when a

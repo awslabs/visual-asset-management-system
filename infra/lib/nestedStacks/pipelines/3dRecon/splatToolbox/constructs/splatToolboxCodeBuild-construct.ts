@@ -191,13 +191,15 @@ def handler(event, context):
             true
         );
 
-        // IAM5: ecr:GetAuthorizationToken requires wildcard resource
+        // IAM5 on the build project and its role. Applied with applyToChildren, so the reason has to
+        // cover every wildcard shape in the subtree rather than only the ECR one: an ECR-only
+        // justification silently blankets the S3 and CloudWatch Logs wildcards as well.
         NagSuppressions.addResourceSuppressions(
             project,
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "ecr:GetAuthorizationToken requires resource '*' as it is an account-level operation, not scoped to a specific repository.",
+                    reason: "Three wildcard shapes, each required: ecr:GetAuthorizationToken is account-level and takes no repository ARN; the source-asset grant covers object keys under one bucket prefix; and CodeBuild writes to log streams and report groups whose names it generates per build.",
                 },
             ],
             true
