@@ -55,7 +55,7 @@ infra/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # Publishes 64 SSM String parameters (57 resource names + 7 legacy)
+        resourceNamesBuilder-nestedStack.ts  # 64 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
@@ -261,8 +261,8 @@ The two API builder stacks stay split, and consolidating them would remove headr
 
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
-| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 106, `apiBuilder2` 71                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.29 MB                  |
+| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 71                             |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.49 MB, `apiBuilder2` ~0.29 MB                  |
 | API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
@@ -630,6 +630,21 @@ npx cdk destroy      # Tear down stack
 
 Note: `test/platform/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock config. Tests may need updates when adding features.
 
+### Label a temporary test with a `TEMPORARY-TEST` comment
+
+Jest has no marker system, so a test written to prove one specific change landed — a removed construct, a
+deleted suppression entry, a renamed export — carries a `TEMPORARY-TEST` token in a comment directly above
+its `it(...)`, naming what it pins. Release cleanup finds them with `grep -rn "TEMPORARY-TEST" infra/test`.
+
+Most absence assertions in `infra/test` are **not** temporary and must not be labelled or removed: a
+weaker TLS policy, an `arn:aws:s3:::*` wildcard, a `cdk-nag` suppression hiding a finding, a HuggingFace
+token reaching a synthesized template, `'unsafe-inline'` in the base CSP. Each forbids something a future
+edit could plausibly write, so each guard can still fire for a good reason.
+
+The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** — a
+forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full criterion:
+root `CLAUDE.md` Rule 13.
+
 ### The T1 tier: synth assertions across all three config templates
 
 `test/support/templateSynth.ts` synthesizes the entire app from `config.template.{commercial,govcloud,eusovereign}.json` and exposes every emitted nested template for assertion. This is the **only** validation GovCloud and EU Sovereign get, because no environment exists for either — so a partition defect otherwise ships and surfaces as a `CREATE_FAILED` mid-deploy.
@@ -651,6 +666,25 @@ Four things to know before writing one:
 -   **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix and then a token boundary, so an assertion written that way passes while checking nothing. Use `SynthResult.flatten()`.
 
 The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
+
+**Enabling `useSplatToolbox` in a T1 synth requires `useCodeBuild: true`.** Splat is the only one of the
+fifteen pipeline Dockerfiles that is **not in the repository** —
+`backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
+Download Ignore", because it arrives from an upstream sync. With `useCodeBuild` false,
+`batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which
+resolves that path when the construct is built — before any bundling-skip logic, so stubbing Docker does
+not help — and a fresh checkout has no such file.
+
+That makes it a **CI-only failure**: locally a previous sync has left the file on disk and the synth
+succeeds, so the same commit is green on a developer machine and red on a runner with
+`«CannotFindFile»` pointing at `addContainer` rather than at the config. `templateSynth.ts` now refuses
+this configuration up front with a named explanation (`assertNoUntrackedDockerAsset`), so it fails
+locally too. The check is on the CONFIG, not on whether the file happens to be present — a
+presence check passes on any machine that synthesized splat recently, which is the trap itself.
+
+Setting the flag changes nothing a subnet, endpoint or Batch assertion looks at: the public/private
+subnet condition (`vpcBuilder-nestedStack.ts:348`) and `needsEcsPrivate` (`:750`) both key on
+`useSplatToolbox.enabled` alone, and only the image source moves. Finding `S37-CI-001`.
 
 ### Platform-Specific Native Bindings in the Lockfile
 

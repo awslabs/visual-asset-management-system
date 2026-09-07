@@ -23,7 +23,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, to_update_expr
 from common.s3 import is_object_version_archived, list_all_object_versions
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -1141,16 +1141,22 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
-    # Update only the editable fields
+    # Update only the editable fields. `edited_attributes` accumulates exactly what this
+    # request changes, so the write below touches nothing else on the record.
+    edited_attributes = {}
+
     if 'assetName' in update_data:
         asset['assetName'] = update_data['assetName']
-    
+        edited_attributes['assetName'] = update_data['assetName']
+
     if 'description' in update_data:
         asset['description'] = update_data['description']
-    
+        edited_attributes['description'] = update_data['description']
+
     if 'isDistributable' in update_data:
         asset['isDistributable'] = update_data['isDistributable']
-    
+        edited_attributes['isDistributable'] = update_data['isDistributable']
+
     if 'tags' in update_data:
         new_tags = update_data['tags']
         # Tags must resolve within this asset's own database partition plus the shared GLOBAL
@@ -1203,10 +1209,22 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
             logger.warning(f"Asset tag update rejected: {tag_error}")
             raise VAMSGeneralErrorResponse(str(tag_error))
         asset['tags'] = new_tags
+        edited_attributes['tags'] = new_tags
 
-    # Save the updated asset
+    # Save the updated asset. Only the edited attributes are written, so a field another
+    # writer changed between the read above and this write — an upload completion setting
+    # assetType or previewLocation, a version bump — is not reverted. Conditional on the
+    # record still existing so an asset archived mid-edit is not recreated.
     try:
-        asset_table.put_item(Item=asset)
+        if edited_attributes:
+            keys_map, values_map, expr = to_update_expr(edited_attributes)
+            asset_table.update_item(
+                Key={'databaseId': databaseId, 'assetId': assetId},
+                UpdateExpression=expr,
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+                ConditionExpression='attribute_exists(databaseId) AND attribute_exists(assetId)'
+            )
 
         # Record edit in asset history (best-effort)
         write_asset_history_record(
@@ -1228,6 +1246,12 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
             operation="update",
             timestamp=timestamp
         )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {assetId} in database {databaseId} no longer exists, asset record not updated")
+            raise VAMSGeneralErrorResponse("Asset not found in database")
+        logger.exception(f"Error updating asset: {e}")
+        raise VAMSGeneralErrorResponse(f"Error updating asset.")
     except Exception as e:
         logger.exception(f"Error updating asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error updating asset.")

@@ -1,8 +1,10 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import math
 import re
 import json
+import unicodedata
 from datetime import datetime
 
 from common.s3PathPatterns import PIPELINES_PREFIX, PIPELINE_OUTPUT_PREFIX
@@ -35,9 +37,17 @@ s3_bucket_name_pattern = r'^[a-z0-9][a-z0-9\.\-]{1,61}[a-z0-9]$'
 asset_path_pattern = r'^.+\/.+$'
 asset_folder_path_pattern = r'^.+\/.+\/$'
 asset_auxiliarypreview_path_pattern = r'^.+\/preview\/.+$'
+# A pipeline output path RELATIVE to the VAMS-owned area of the run I/O bucket, which is the form the
+# workflow state machine supplies. The bucket's baseAssetsPrefix is joined on by the end-state handler
+# AFTER this check (executionRecords.run_bucket_key), so the anchor stays at 'pipelines/': relaxing it
+# to admit a leading prefix would let a direct invocation of that handler name an arbitrary folder to
+# ingest from.
 asset_path_pipeline_pattern = r'^pipelines\/.+\/.+\/output\/.+\/$'
 
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
+# `\w` is Unicode-aware on a str pattern, so a user id issued by an external IDP in any script is
+# accepted. Two spellings of the same name are reconciled by NFKC (normalize_userid), and a
+# cross-script lookalike of an existing user id is refused at user creation (confusable_skeleton).
 userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 
 # UTC timestamp in the canonical form VAMS stores execution dates in ('%Y-%m-%dT%H:%M:%SZ').
@@ -346,13 +356,260 @@ def validate_userid(name, value):
         return (False, name + " is invalid. Must follow the regexp "+userid_pattern)
     return (True, '')
 
+
+# Cross-script characters that are drawn as a Latin character, mapped to the character they read as.
+# The mapping is deliberately partial: the Unicode confusables table is a data file this repository
+# does not carry, so it covers the Cyrillic and Greek letters that are visually identical to a Latin
+# one. A lookalike from another block — mathematical alphanumerics, Cherokee, Armenian — is NOT
+# folded, so the skeleton narrows the impersonation surface rather than closing it. Case is
+# preserved and the ASCII digit/letter pairs ('0'/'O', '1'/'l') are deliberately left alone: they are
+# distinguishable to a reader, and folding them would refuse ordinary user ids that differ only there.
+_CONFUSABLE_CHARACTERS = {
+    # Cyrillic
+    'а': 'a', 'А': 'A', 'е': 'e', 'Е': 'E', 'о': 'o', 'О': 'O',
+    'р': 'p', 'Р': 'P', 'с': 'c', 'С': 'C', 'у': 'y', 'У': 'Y',
+    'х': 'x', 'Х': 'X', 'і': 'i', 'І': 'I', 'ј': 'j', 'Ј': 'J',
+    'ѕ': 's', 'Ѕ': 'S', 'к': 'k', 'К': 'K', 'М': 'M', 'Н': 'H',
+    'В': 'B', 'Т': 'T',
+    # Greek
+    'α': 'a', 'Α': 'A', 'ο': 'o', 'Ο': 'O', 'ρ': 'p', 'Ρ': 'P',
+    'ε': 'e', 'Ε': 'E', 'ι': 'i', 'Ι': 'I', 'κ': 'k', 'Κ': 'K',
+    'ν': 'v', 'Ν': 'N', 'τ': 't', 'Τ': 'T', 'υ': 'u', 'Υ': 'Y',
+    'χ': 'x', 'Χ': 'X', 'Β': 'B', 'Ζ': 'Z', 'Η': 'H', 'Μ': 'M',
+}
+
+
+def trim_name(value):
+    """Trim leading and trailing whitespace from a name or id, before it is validated and stored.
+
+    `object_name_pattern` admits `\\s`, so ' Foo ', 'Foo\\n' and 'Foo' would otherwise be three
+    distinct records that render identically in the UI, and a grant written against the clean name
+    would not cover the padded one. Interior whitespace is deliberately preserved — 'My Asset' is a
+    legitimate name — so only the surrounding run is removed. Wire it as a `pre=True` validator so
+    the trimmed value is what the length and regex constraints see and what the model returns:
+
+        _trim_names = validator('tagName', 'tagTypeName', pre=True, allow_reuse=True)(trim_name)
+
+    A non-string passes through: the field's own type check reports it."""
+    if not isinstance(value, str):
+        return value
+    return value.strip()
+
+
+def normalize_userid(value):
+    """Reduce a user id to the single spelling VAMS validates, stores and looks up.
+
+    A user id arrives from several issuers (Cognito, an external OAuth IDP, an API key record) and is
+    stored verbatim as a DynamoDB key, so two compatibility spellings of the same name — a fullwidth
+    'ａ' for 'a', a decomposed accent for a composed one — would otherwise be two identities that
+    render identically. NFKC folds them together. Applied before validation and before storage, so
+    the value that was checked is the value that is written and the value a later lookup builds.
+    A non-string passes through: the caller's own type check reports it."""
+    if not isinstance(value, str):
+        return value
+    return unicodedata.normalize('NFKC', value)
+
+
+def normalize_userid_array(values):
+    """normalize_userid over a list of user ids, for the USERID_ARRAY fields."""
+    if not isinstance(values, list):
+        return values
+    return [normalize_userid(value) for value in values]
+
+
+def confusable_skeleton(value):
+    """A canonical representative of how a user id LOOKS, for comparing two ids at creation.
+
+    NFKC does not fold a Cyrillic or Greek letter onto its Latin lookalike, so 'аdmin' (Cyrillic
+    U+0430) stays a distinct key that reads as 'admin' in the constraint editor, the user-roles
+    listing and every audit line. Two ids with the same skeleton are indistinguishable to a reader."""
+    normalized = normalize_userid(value)
+    if not isinstance(normalized, str):
+        return normalized
+    return ''.join(_CONFUSABLE_CHARACTERS.get(character, character) for character in normalized)
+
+
+def find_confusable_userid(candidate, existing_userids):
+    """The first existing user id that reads the same as candidate, or None.
+
+    An id equal to the candidate is not reported: an exact duplicate is a separate condition the
+    caller already handles (Cognito answers it with UsernameExistsException)."""
+    skeleton = confusable_skeleton(candidate)
+    for existing in existing_userids:
+        if not isinstance(existing, str) or existing == candidate:
+            continue
+        if confusable_skeleton(existing) == skeleton:
+            return existing
+    return None
+
+
+# A pattern that compiles is not necessarily safe to evaluate. A REGEX value becomes part of a
+# Casbin `regexMatch(...)` clause that re.match re-evaluates for every policy line on every
+# authorization decision, with no runtime bound other than the Lambda timeout. Three shapes backtrack
+# ruinously against a long qualifying subject and are rejected at write time: a repeating quantifier
+# applied to a group that itself repeats or alternates ('(a+)+', '(a|a)*'), a backreference, and more
+# quantifier ambiguity than one evaluation can afford ('.*.*.*.*z', 'a*a*a*a*a*b'). Literals,
+# character classes, anchors, '.*', '|' and un-quantified groups — every operator the shipped
+# permission templates use — are unaffected.
+backreference_pattern = r'\\[1-9]|\\g<|\(\?P='
+backreference_regex = re.compile(backreference_pattern)
+
+# The longest subject a stored rule is matched against: OBJECT_NAME permits 256 characters, and the
+# entity name / category fields the Casbin rule builder compares against are bounded by it.
+MAX_REGEX_SUBJECT_LENGTH = 256
+# Ceiling on the estimated worst-case backtracking search space of a criterion value, measured rather
+# than guessed. Against a 256-character subject, three unbounded quantifiers separated by literals
+# ('.*a.*a.*az') estimate 2.8e6 and take 16 ms; a fourth estimates 1.7e8 and takes 0.97 s; a fifth
+# does not finish in 25 s. A chain of optionals costs less per quantifier and crosses the line where
+# it starts to matter: 23 of them estimate 8.4e6 and take ~80 ms, 24 estimate 1.7e7 and take 0.17 s.
+# The clause is re-evaluated per policy line per authorization decision, so the budget is set where
+# one evaluation stays in the tens of milliseconds.
+MAX_REGEX_SEARCH_SPACE = 10 * 1000 * 1000
+# comb() peaks at half the subject length and falls away after it, so the quantifier count is clamped
+# there — an even longer chain must not estimate LOWER than the peak.
+_MAX_COUNTED_QUANTIFIERS = MAX_REGEX_SUBJECT_LENGTH // 2
+
+_QUANTIFIER_BRACE = re.compile(r'\{(\d*)(,?)(\d*)\}')
+
+
+def _quantifier_at(pattern, index):
+    """(token width, repetition range) for a quantifier starting at `index`, else None.
+
+    The range is how many distinct repetition counts the quantifier admits, or None for an unbounded
+    one ('*', '+', '{m,}') whose cost is shared with every other unbounded quantifier over the same
+    subject. An exact '{m}' admits one count and so adds no ambiguity. A brace that is not a valid
+    quantifier is a literal to `re` and is reported as one here."""
+    character = pattern[index]
+    if character in ('*', '+'):
+        return 1, None
+    if character == '?':
+        return 1, 2
+    if character != '{':
+        return None
+    match = _QUANTIFIER_BRACE.match(pattern, index)
+    if not match:
+        return None
+    low, comma, high = match.group(1), match.group(2), match.group(3)
+    if not low and not high:
+        return None
+    width = match.end() - index
+    if not comma:
+        return width, 1
+    if not high:
+        return width, None
+    return width, max(1, int(high) - int(low or 0) + 1)
+
+
+def _backtracking_search_space(pattern):
+    """Estimated worst-case number of ways a subject can be divided among a pattern's quantifiers.
+
+    Unbounded quantifiers share one subject, so k of them contribute comb(subject_length, k) — the
+    ways to choose where each hands off to the next. A bounded quantifier contributes its own
+    repetition range. Walks the pattern rather than matching it, so an escaped metacharacter, a
+    character class, a group-extension marker and a lazy or possessive modifier are not read as
+    structure."""
+    unbounded = 0
+    bounded_product = 1
+    ceiling = MAX_REGEX_SEARCH_SPACE + 1
+    in_class = False
+    i = 0
+    while i < len(pattern):
+        character = pattern[i]
+        if character == '\\':
+            i += 2
+            continue
+        if in_class:
+            if character == ']':
+                in_class = False
+            i += 1
+            continue
+        if character == '[':
+            in_class = True
+            i += 1
+            continue
+        if character == '(' and i + 1 < len(pattern) and pattern[i + 1] == '?':
+            i += 2
+            continue
+        span = _quantifier_at(pattern, i)
+        if span is None:
+            i += 1
+            continue
+        width, repetitions = span
+        if repetitions is None:
+            unbounded += 1
+        else:
+            bounded_product = min(bounded_product * repetitions, ceiling)
+        i += width
+        if i < len(pattern) and pattern[i] in ('?', '+'):
+            i += 1
+        if bounded_product > MAX_REGEX_SEARCH_SPACE:
+            return ceiling
+    shared = math.comb(MAX_REGEX_SUBJECT_LENGTH, min(unbounded, _MAX_COUNTED_QUANTIFIERS))
+    return min(shared * bounded_product, ceiling)
+
+
+def _repeats_a_repeating_group(pattern):
+    """True when a repeating quantifier is applied to a group whose body repeats or alternates.
+
+    Walks the pattern instead of matching it, so an escaped metacharacter and a character class are
+    not mistaken for structure. '?' is not treated as repeating: an at-most-once outer quantifier
+    cannot produce the exponential blow-up."""
+    open_groups = []    # per open group: [body repeats, body alternates]
+    just_closed = None  # flags of the group whose ')' was the previous token
+    in_class = False
+    i = 0
+    while i < len(pattern):
+        character = pattern[i]
+        if character == '\\':
+            i += 2
+            just_closed = None
+            continue
+        if in_class:
+            if character == ']':
+                in_class = False
+            i += 1
+            continue
+        if character == '[':
+            in_class = True
+            just_closed = None
+        elif character in ('*', '+', '{'):
+            if just_closed is not None and any(just_closed):
+                return True
+            for flags in open_groups:
+                flags[0] = True
+            just_closed = None
+        elif character == '(':
+            open_groups.append([False, False])
+            just_closed = None
+            # Skip a group-extension marker so its '?' is not read as a quantifier.
+            if i + 1 < len(pattern) and pattern[i + 1] == '?':
+                i += 1
+        elif character == ')':
+            just_closed = open_groups.pop() if open_groups else [False, False]
+        elif character == '|':
+            for flags in open_groups:
+                flags[1] = True
+            just_closed = None
+        else:
+            just_closed = None
+        i += 1
+    return False
+
+
 def validate_regex(name, value):
     try:
         re.compile(value)
-        return (True, '')
     except re.error:
         return (False, name + " is invalid. Must be a properly formatted regex expression.")
-    
+    if backreference_regex.search(value) or _repeats_a_repeating_group(value):
+        return (False, name + " is invalid. Cannot repeat a group that itself repeats or"
+                              " alternates, and cannot use a backreference.")
+    if _backtracking_search_space(value) > MAX_REGEX_SEARCH_SPACE:
+        return (False, name + " is invalid. Too many open-ended quantifiers (*, +, ?, {n,}) to"
+                              " evaluate safely; simplify the expression.")
+    return (True, '')
+
+
 def validate_number(name, value):
     try:
         float(value)
@@ -441,6 +698,66 @@ def validate_s3_bucket_name(name, value):
     return (True, '')
 
 
+# Every validator name the dispatcher implements, mapped to the check it applies. This mapping IS
+# the set of known names -- there is no second list to keep in step with it. A name absent from it
+# has no rule, so validate() raises rather than reporting the field valid having checked nothing,
+# which is what a flat chain of `if` comparisons did when a name matched none of them.
+#
+# Each entry takes the field name and the whole validator spec, not just the value, because a few
+# checks read another key off the spec (ASSET_PATH reads isFolder).
+_VALIDATOR_DISPATCH = {
+    'ID': lambda k, v: validate_id(k, v['value']),
+    'ASSET_ID': lambda k, v: validate_asset_id(k, v['value']),
+    'UUID': lambda k, v: validate_uuid(k, v['value']),
+    'GUID': lambda k, v: validate_guid(k, v['value']),
+    'SAGEMAKER_NOTEBOOK_ID': lambda k, v: validate_sagemaker_notebook_id(k, v['value']),
+    'ID_ARRAY': lambda k, v: validate_id_array(k, v['value']),
+    'UUID_ARRAY': lambda k, v: validate_uuid_array(k, v['value']),
+    'EMAIL_ARRAY': lambda k, v: validate_email_array(k, v['value']),
+    'USERID_ARRAY': lambda k, v: validate_userid_array(k, v['value']),
+    'STRING_16384': lambda k, v: validate_string_max_length(k, v['value'], 16384),
+    'STRING_30': lambda k, v: validate_string_max_length_30(k, v['value']),
+    'STRING_256': lambda k, v: validate_string_max_length(k, v['value'], 256),
+    'STRING_256_ARRAY': lambda k, v: validate_string_max_length_array(k, v['value'], 256),
+    'STRING_JSON': lambda k, v: validate_string_json(k, v['value']),
+    'FILE_NAME': lambda k, v: validate_filename(k, v['value']),
+    'FILE_EXTENSION': lambda k, v: validate_string_fileType(k, v['value']),
+    'RELATIVE_FILE_PATH': lambda k, v: validate_relative_file_path(k, v['value']),
+    'RELATIVE_FILE_PATH_ARRAY': lambda k, v: validate_relative_file_path_array(k, v['value']),
+    'DOWNLOAD_KEY_ARRAY': lambda k, v: validate_download_key_array(k, v['value']),
+    'ASSET_PATH_PIPELINE': lambda k, v: validate_asset_path_pipeline(k, v['value']),
+    'ASSET_AUXILIARYPREVIEW_PATH': lambda k, v: validate_asset_auxiliarypreview_path(k, v['value']),
+    'OBJECT_NAME': lambda k, v: validate_objectName(k, v['value']),
+    'OBJECT_NAME_ARRAY': lambda k, v: validate_objectName_array(k, v['value']),
+    'EMAIL': lambda k, v: validate_email(k, v['value']),
+    'USERID': lambda k, v: validate_userid(k, v['value']),
+    'REGEX': lambda k, v: validate_regex(k, v['value']),
+    'NUMBER': lambda k, v: validate_number(k, v['value']),
+    'BOOL': lambda k, v: validate_bool(k, v['value']),
+    'ISO8601_UTC': lambda k, v: validate_iso8601_utc(k, v['value']),
+    'SQS_QUEUE_URL': lambda k, v: validate_sqs_queue_url(k, v['value']),
+    'EVENTBRIDGE_BUS_ARN': lambda k, v: validate_eventbridge_bus_arn(k, v['value']),
+    'EVENTBRIDGE_SOURCE': lambda k, v: validate_eventbridge_source(k, v['value']),
+    'EVENTBRIDGE_DETAIL_TYPE': lambda k, v: validate_eventbridge_detail_type(k, v['value']),
+    'ARN': lambda k, v: validate_arn(k, v['value']),
+    'CLOUDWATCH_LOG_GROUP_ARN': lambda k, v: validate_cloudwatch_log_group_arn(k, v['value']),
+    'CLOUDWATCH_LOG_GROUP_NAME': lambda k, v: validate_cloudwatch_log_group_name(k, v['value']),
+    'LOG_STREAM_NAME': lambda k, v: validate_log_stream_name(k, v['value']),
+    'S3_BUCKET_NAME': lambda k, v: validate_s3_bucket_name(k, v['value']),
+    'ASSET_PATH': lambda k, v: validate_asset_path(k, v['value'],
+                                                   _spec_bool_flag(v, 'isFolder', k)),
+}
+
+
+def _spec_bool_flag(spec, flag, name):
+    """Read a boolean modifier off a validator spec, rejecting a non-bool the way validate() does."""
+    if flag not in spec:
+        return False
+    if not isinstance(spec[flag], bool):
+        raise Exception("The " + flag + " field in validator for " + name + " field must be of type bool")
+    return spec[flag]
+
+
 def validate(values):
     for k, v in values.items():
 
@@ -462,22 +779,35 @@ def validate(values):
         #rest (use `continue`, not `return` — a `return` here would report the whole
         #request valid and silently skip every field ordered after an empty optional one).
         #Otherwise error on empty.
+        #The name is read defensively here so an absent or non-string one reaches the membership
+        #check below with its own message, rather than raising a TypeError out of an "_ARRAY" test.
+        validator_name = v.get('validator')
+        is_array_validator = isinstance(validator_name, str) and "_ARRAY" in validator_name
         if v['value'] is None:
             if optional:
                 continue
             else:
                 return (False, k + " is a required field.")
-        if not "_ARRAY" in v['validator'] and isinstance(v['value'], str) and v['value'] == '':
+        if not is_array_validator and isinstance(v['value'], str) and v['value'] == '':
             if optional:
                 continue
             else:
                 return (False, k + " is a required field.")
-        if "_ARRAY" in v['validator'] and isinstance(v['value'], (list)) and len(v['value']) == 0:
+        if is_array_validator and isinstance(v['value'], (list)) and len(v['value']) == 0:
             if optional:
                 continue
             else:
                 return (False, k + " is a required field.")
-            
+
+        #Resolve the check now, so an unimplemented name is refused before the type and GLOBAL
+        #rules below can report it as invalid caller input instead. The lookup IS the membership
+        #test: a name with no entry has no rule. Resolved AFTER the empty checks on purpose:
+        #an optional field with nothing in it is skipped before its name is ever consulted, so
+        #naming a validator is not required to say "there is nothing here to check".
+        check = _VALIDATOR_DISPATCH.get(validator_name) if isinstance(validator_name, str) else None
+        if check is None:
+            raise Exception("The validator named for the " + k + " field is not a known validator")
+
         #Check and allow for global keyword (initially case insensitive). Accepting the keyword
         #skips THIS field's type check only (`continue`, not `return` — a `return` here would
         #report the whole request valid and silently skip every field ordered after it).
@@ -500,163 +830,9 @@ def validate(values):
             return (False, k + " is invalid. Must be a string for non-array validators, not a " + str(type(v['value'])))
 
         #Type checks after we check for empties.
-        if v['validator'] == 'ID':
-            (valid, message) = validate_id(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'ASSET_ID':
-            (valid, message) = validate_asset_id(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'UUID':
-            (valid, message) = validate_uuid(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'GUID':
-            (valid, message) = validate_guid(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'SAGEMAKER_NOTEBOOK_ID':
-            (valid, message) = validate_sagemaker_notebook_id(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'ID_ARRAY':
-            (valid, message) = validate_id_array(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'UUID_ARRAY':
-            (valid, message) = validate_uuid_array(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'EMAIL_ARRAY':
-            (valid, message) = validate_email_array(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'USERID_ARRAY':
-            (valid, message) = validate_userid_array(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'STRING_30':
-            (valid, message) = validate_string_max_length_30(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'STRING_256':
-            (valid, message) = validate_string_max_length(k, v['value'], 256)
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'STRING_256_ARRAY':
-            (valid, message) = validate_string_max_length_array(k, v['value'], 256)
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'STRING_JSON':
-            (valid, message) = validate_string_json(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'FILE_NAME':
-            (valid, message) = validate_filename(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'FILE_EXTENSION':
-            (valid, message) = validate_string_fileType(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'RELATIVE_FILE_PATH':
-            (valid, message) = validate_relative_file_path(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'RELATIVE_FILE_PATH_ARRAY':
-            (valid, message) = validate_relative_file_path_array(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'DOWNLOAD_KEY_ARRAY':
-            (valid, message) = validate_download_key_array(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'ASSET_PATH':
-            isFolder = False
-            if 'isFolder' in v:
-                if isinstance(v['isFolder'], bool) and v['isFolder'] == True:
-                    isFolder = True
-                if not isinstance(v['isFolder'], bool):
-                    raise Exception("The isFolder field in validator for " + k + " field must be of type bool")
-            (valid, message) = validate_asset_path(k, v['value'], isFolder)
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'ASSET_PATH_PIPELINE':
-            (valid, message) = validate_asset_path_pipeline(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'ASSET_AUXILIARYPREVIEW_PATH':
-            (valid, message) = validate_asset_auxiliarypreview_path(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'OBJECT_NAME':
-            (valid, message) = validate_objectName(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'OBJECT_NAME_ARRAY':
-            (valid, message) = validate_objectName_array(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'EMAIL':
-            (valid, message) = validate_email(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'USERID':
-            (valid, message) = validate_userid(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'REGEX':
-            (valid, message) = validate_regex(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'NUMBER':
-            (valid, message) = validate_number(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'BOOL':
-            (valid, message) = validate_bool(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'ISO8601_UTC':
-            (valid, message) = validate_iso8601_utc(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'SQS_QUEUE_URL':
-            (valid, message) = validate_sqs_queue_url(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'EVENTBRIDGE_BUS_ARN':
-            (valid, message) = validate_eventbridge_bus_arn(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'EVENTBRIDGE_SOURCE':
-            (valid, message) = validate_eventbridge_source(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'EVENTBRIDGE_DETAIL_TYPE':
-            (valid, message) = validate_eventbridge_detail_type(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'ARN':
-            (valid, message) = validate_arn(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'CLOUDWATCH_LOG_GROUP_ARN':
-            (valid, message) = validate_cloudwatch_log_group_arn(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'CLOUDWATCH_LOG_GROUP_NAME':
-            (valid, message) = validate_cloudwatch_log_group_name(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'LOG_STREAM_NAME':
-            (valid, message) = validate_log_stream_name(k, v['value'])
-            if not valid:
-                return (valid, message)
-        if v['validator'] == 'S3_BUCKET_NAME':
-            (valid, message) = validate_s3_bucket_name(k, v['value'])
-            if not valid:
-                return (valid, message)
+        #Apply the field's check, resolved above.
+        (valid, message) = check(k, v)
+        if not valid:
+            return (valid, message)
 
     return (True, "")

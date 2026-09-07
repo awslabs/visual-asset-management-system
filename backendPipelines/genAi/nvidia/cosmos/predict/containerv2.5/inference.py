@@ -22,6 +22,11 @@ COSMOS_REPO_DIR = "/opt/cosmos-predict2.5"
 COSMOS_INFERENCE_SCRIPT = "/opt/cosmos-predict2.5/examples/inference.py"
 CONFIG_PATH = "/tmp/inference_config.json"
 
+# The name of the single inference sample this container submits. The framework writes each sample's
+# artifacts as `{output_dir}/{name}.mp4` alongside a `{name}.json`, so this also names the video the
+# container looks for afterwards -- one constant rather than the same literal in two files.
+INFERENCE_SAMPLE_NAME = "vams_inference"
+
 
 def build_inference_config(
     inference_type: str,
@@ -47,7 +52,7 @@ def build_inference_config(
     """
     config = {
         "inference_type": inference_type,
-        "name": "vams_inference",
+        "name": INFERENCE_SAMPLE_NAME,
         "prompt": prompt or "",
         "num_output_frames": num_output_frames,
         "seed": seed,

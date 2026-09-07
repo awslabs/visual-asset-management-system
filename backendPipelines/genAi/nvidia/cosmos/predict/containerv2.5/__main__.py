@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
-from inference import generate_preview_gif, run_inference
+from inference import INFERENCE_SAMPLE_NAME, generate_preview_gif, run_inference
 from manifest_io import fetch_input_configuration, InputConfigurationError
 from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 
@@ -188,23 +188,52 @@ def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
 
 def find_output_video(output_dir: Path) -> Optional[Path]:
     """
-    Find output video file in output directory.
+    Find the generated video in the output directory.
 
-    Cosmos Predict 2.5 writes output to a subdirectory structure under the
-    output dir. Search recursively for .mp4 files.
+    Cosmos Predict 2.5 writes one video per inference sample, named after the sample, so the file
+    this container is looking for is `{INFERENCE_SAMPLE_NAME}.mp4` -- identified by name rather than
+    guessed at. The directory is still searched recursively, because the upstream repository is
+    cloned at build time and a renamed or relocated artifact must not read as "no video generated";
+    a candidate that is not the expected one is used, and said so in the log.
+
+    Selection is by name and then by sorted order, never by `rglob`'s own. `rglob` yields directory
+    order, which is filesystem-dependent rather than sorted, so taking its first hit makes the choice
+    arbitrary whenever a second .mp4 is present -- and an unrelated file uploaded as the generated
+    video is a run that reports success with the wrong result.
 
     Args:
         output_dir: Directory to search
 
     Returns:
-        Path to first .mp4 file found, or None
+        Path to the generated video, or None when the directory holds no .mp4 at all
     """
-    for video_path in output_dir.rglob("*.mp4"):
-        logger.info(f"Found output video: {video_path}")
-        return video_path
+    expected_name = f"{INFERENCE_SAMPLE_NAME}.mp4"
+    candidates = sorted((path for path in output_dir.rglob("*.mp4") if path.is_file()),
+                        key=lambda path: str(path))
 
-    logger.warning(f"No .mp4 files found in {output_dir}")
-    return None
+    if not candidates:
+        logger.warning(f"No .mp4 files found in {output_dir}")
+        return None
+
+    if len(candidates) > 1:
+        logger.warning(
+            f"{len(candidates)} .mp4 files found in {output_dir} where one is expected: "
+            f"{', '.join(str(path.relative_to(output_dir)) for path in candidates)}"
+        )
+
+    for candidate in candidates:
+        if candidate.name == expected_name:
+            logger.info(f"Found output video: {candidate}")
+            return candidate
+
+    # No file carries the expected name. Sorted order rather than directory order decides, so the
+    # choice is at least reproducible, and the log says the expectation was not met -- which is how
+    # an upstream rename shows up as a named condition instead of a silently different artifact.
+    chosen = candidates[0]
+    logger.warning(
+        f"No {expected_name} was written; using {chosen.relative_to(output_dir)} instead"
+    )
+    return chosen
 
 
 def main():

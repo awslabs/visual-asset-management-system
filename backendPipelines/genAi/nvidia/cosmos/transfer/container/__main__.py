@@ -189,23 +189,45 @@ def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
 
 def find_output_video(output_dir: Path) -> Optional[Path]:
     """
-    Find output video file in output directory.
+    Find the generated video in the output directory.
 
-    Cosmos Transfer 2.5 writes output to a subdirectory structure under the
-    output dir. Search recursively for .mp4 files.
+    Cosmos Transfer 2.5 writes output to a subdirectory structure under the output dir, so the search
+    is recursive.
+
+    Selection is by sorted order, never by `rglob`'s own. `rglob` yields directory order, which is
+    filesystem-dependent rather than sorted, so taking its first hit makes the choice arbitrary
+    whenever a second .mp4 is present -- and an unrelated file uploaded as the generated video is a run
+    that reports success with the wrong result. Exactly one object is uploaded from this result, so the
+    choice is the result.
+
+    Unlike Cosmos Predict 2.5, this pipeline has no expected output NAME to key on: nothing in the
+    transfer inference path names the artifact it writes. So the name-matching half of that fix does
+    not apply here, and reproducible ordering plus a named warning is the whole of it -- a run with
+    more than one candidate says so in the log rather than choosing in silence.
 
     Args:
         output_dir: Directory to search
 
     Returns:
-        Path to first .mp4 file found, or None
+        Path to the selected video, or None when the directory holds no .mp4 at all
     """
-    for video_path in output_dir.rglob("*.mp4"):
-        logger.info(f"Found output video: {video_path}")
-        return video_path
+    candidates = sorted((path for path in output_dir.rglob("*.mp4") if path.is_file()),
+                        key=lambda path: str(path))
 
-    logger.warning(f"No .mp4 files found in {output_dir}")
-    return None
+    if not candidates:
+        logger.warning(f"No .mp4 files found in {output_dir}")
+        return None
+
+    if len(candidates) > 1:
+        logger.warning(
+            f"{len(candidates)} .mp4 files found in {output_dir} where one is expected; "
+            f"selecting the first in sorted order: "
+            f"{', '.join(str(path.relative_to(output_dir)) for path in candidates)}"
+        )
+
+    chosen = candidates[0]
+    logger.info(f"Found output video: {chosen}")
+    return chosen
 
 
 def main():

@@ -137,7 +137,7 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are flagged with validation errors and cannot be uploaded.
 
 :::note
-Preview files (filenames containing `.previewFile.`) are exempt from extension restrictions.
+Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.
 :::
 
 ### Preview Files

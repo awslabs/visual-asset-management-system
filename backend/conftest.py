@@ -41,6 +41,13 @@ os.environ['AUTH_TABLE_NAME'] = 'example-auth-table'
 os.environ['CONSTRAINTS_TABLE_NAME'] = 'test-constraint-table'
 os.environ['USER_ROLES_TABLE_NAME'] = 'example-user-roles-table'
 
+# The subscription handlers resolve these at module load and RAISE when they cannot, so the test
+# environment has to supply them or importing any of the three fails at collection. The break-glass env
+# override is the documented path for pytest (backend/CLAUDE.md Rule 10 resolution order); without it a
+# handler that correctly fails closed is indistinguishable from one that is broken.
+os.environ['SUBSCRIPTIONS_STORAGE_TABLE_NAME'] = 'subscriptionsStorageTable'
+os.environ['USER_STORAGE_TABLE_NAME'] = 'userStorageTable'
+
 # Pipeline/workflow V2 data-model tables (break-glass env overrides so V2 handlers resolve test
 # names without an SSM call at import).
 os.environ['PIPELINE_STORAGE_TABLE_V2_NAME'] = 'pipelineStorageTableV2'

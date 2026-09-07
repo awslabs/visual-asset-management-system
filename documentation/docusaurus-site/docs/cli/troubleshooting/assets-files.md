@@ -94,7 +94,7 @@ The database is configured with `restrictFileUploadsToExtensions`, which limits 
     ```
 
 :::note
-Asset preview uploads (`--asset-preview`) and preview auxiliary files (those containing `.previewFile.` in the name) skip extension validation. A database with no restriction configured accepts all file types.
+Asset preview uploads (`--asset-preview`) and preview auxiliary files (those containing `.previewFile.` in the name) skip the database's restriction list, but are validated against the allowed preview image extensions (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`) instead. For a `.previewFile.` name the extension is everything after the marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. A database with no restriction configured accepts all other file types.
 :::
 
 ### Preview File Rejected

@@ -480,7 +480,7 @@ def revert(ctx: click.Context, database: str, asset: str, version: str, comment:
 @asset_version.command()
 @click.option('-d', '--database', required=True, help='Database ID containing the asset')
 @click.option('-a', '--asset', required=True, help='Asset ID to list versions for')
-@click.option('--page-size', type=int, help='Number of items per page')
+@click.option('--page-size', type=int, help='Number of items per page (maximum 1000)')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')

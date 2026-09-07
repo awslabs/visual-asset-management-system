@@ -22,7 +22,10 @@ RUN apt-get update && apt-get install -y \
 RUN git lfs install
 
 # Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+# The installer URL carries the version, so a rebuild installs the CLI this image was built and
+# validated with rather than whatever is current. Override with --build-arg to move it.
+ARG AWS_CLI_VERSION=2.36.39
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
     unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
@@ -30,8 +33,21 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
 
-# Clone cosmos-predict2.5 repository
-RUN git clone https://github.com/nvidia-cosmos/cosmos-predict2.5.git /opt/cosmos-predict2.5
+# Clone cosmos-predict2.5, pinned to a commit. A clone with no ref makes the framework version part of
+# WHEN the image was built rather than of what VAMS commit built it, and two things here depend on the
+# revision being fixed: `uv sync --locked` below resolves against the lockfile AT this commit, and
+# entrypoint.sh patches checkpoint_db.py by matching an exact upstream source line, which silently
+# no-ops when upstream edits that line. Override with --build-arg to move the pin; a full
+# 40-character commit id is required, since the rev-parse check below rejects a branch or tag name
+# (both of which move).
+ARG COSMOS_PREDICT_REPO=https://github.com/nvidia-cosmos/cosmos-predict2.5.git
+ARG COSMOS_PREDICT_COMMIT=a2c298b0a3df3778b973fe65e9e58877b292d8a7
+RUN git clone ${COSMOS_PREDICT_REPO} /opt/cosmos-predict2.5 && \
+    cd /opt/cosmos-predict2.5 && \
+    git checkout --detach ${COSMOS_PREDICT_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${COSMOS_PREDICT_COMMIT}" && \
+    git rev-parse HEAD > /opt/cosmos-predict2.5/VAMS_UPSTREAM_COMMIT && \
+    git log -1 --format="cosmos-predict2.5 %H %ai %s"
 
 # Install Python dependencies using uv
 WORKDIR /opt/cosmos-predict2.5

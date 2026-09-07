@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { enforceableRequiredTagTypes, validateRequiredTagTypeSelected } from "./validations";
+import {
+    enforceableRequiredTagTypes,
+    validateRequiredTagTypeSelected,
+    firstIncompleteRequiredStep,
+} from "./validations";
 import { TagType } from "../Tag/TagType.interface";
 
 const tagType = (over: Partial<TagType> & { tagTypeName: string }): TagType =>
@@ -85,5 +89,47 @@ describe("validateRequiredTagTypeSelected", () => {
         const message = validateRequiredTagTypeSelected(["press"], types);
         expect(message).toContain("Site");
         expect(message).not.toContain("Empty");
+    });
+});
+
+describe("firstIncompleteRequiredStep — a skipped-past required step still blocks submit", () => {
+    // The wizard sets `allowSkipTo`, and `onNavigate` validates only the step being LEFT. So from a
+    // valid step 0, "Skip to Select Files to upload" bypasses the metadata step even though it is
+    // declared `isOptional: false`. Closing that in navigation would break skip-to, which a Playwright
+    // spec relies on, so the requirement gates SUBMIT instead (owner question 90, option B).
+
+    it("returns undefined when every required step has reported valid", () => {
+        // The arm that matters most: an ordinary complete run must still be able to submit.
+        expect(firstIncompleteRequiredStep([true, true, false, false, false])).toBeUndefined();
+    });
+
+    it("names the skipped metadata step when it never reported", () => {
+        // The defect: step 0 valid, step 1 skipped past and therefore still false.
+        expect(firstIncompleteRequiredStep([true, false, false, false, false])).toBe(1);
+    });
+
+    it("names the earliest incomplete step, not the last", () => {
+        // So the user is sent back to the first thing they need to fix rather than the final one.
+        expect(firstIncompleteRequiredStep([false, false, false, false, false])).toBe(0);
+    });
+
+    it("treats a missing entry as incomplete", () => {
+        // A step that has never reported is not a step that has passed. This is the shape that let
+        // index 3 read `undefined` while the array held only three entries.
+        expect(firstIncompleteRequiredStep([true])).toBe(1);
+        expect(firstIncompleteRequiredStep([])).toBe(0);
+    });
+
+    it("ignores the optional steps", () => {
+        // Control for the scope of the rule: relationships (2), file selection (3) and review (4) are
+        // `isOptional: true`, so leaving them invalid must NOT block submit. Without this the gate
+        // would be indistinguishable from "every step must be valid", which would break the documented
+        // flow where files are attached later.
+        expect(firstIncompleteRequiredStep([true, true, false, false, false])).toBeUndefined();
+    });
+
+    it("honours an explicit required-index list", () => {
+        expect(firstIncompleteRequiredStep([true, false, true], [0, 2])).toBeUndefined();
+        expect(firstIncompleteRequiredStep([true, false, true], [0, 1, 2])).toBe(1);
     });
 });

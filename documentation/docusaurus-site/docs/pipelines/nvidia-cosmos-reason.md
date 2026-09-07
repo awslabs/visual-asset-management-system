@@ -190,14 +190,14 @@ NVIDIA Cosmos Reason is a Vision Language Model (VLM) that reads video content a
 
 **Key Differences from Cosmos Predict:**
 
-| Feature              | Cosmos Predict                      | Cosmos Reason                               |
-| -------------------- | ----------------------------------- | ------------------------------------------- |
-| **Model Type**       | World generation (diffusion/flow)   | Vision Language Model (VLM)                 |
-| **Input**            | Text or image/video                 | Video or image                              |
-| **Output**           | Generated video file (MP4)          | Text analysis (JSON)                        |
-| **Use Case**         | Content generation, synthesis       | Content understanding, analysis, captioning |
-| **Inference Engine** | NVIDIA Transformer Engine           | vLLM                                        |
-| **GPU Requirements** | 24GB+ (2B), 40GB+ (14B) for Predict | 24GB+ (2B), 32GB+ (8B) for Reason           |
+| Feature              | Cosmos Predict                      | Cosmos Reason                                                                |
+| -------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
+| **Model Type**       | World generation (diffusion/flow)   | Vision Language Model (VLM)                                                  |
+| **Input**            | Text or image/video                 | Video only (the model reads still images; the pipeline does not accept them) |
+| **Output**           | Generated video file (MP4)          | Text analysis (JSON)                                                         |
+| **Use Case**         | Content generation, synthesis       | Content understanding, analysis, captioning                                  |
+| **Inference Engine** | NVIDIA Transformer Engine           | vLLM                                                                         |
+| **GPU Requirements** | 24GB+ (2B), 40GB+ (14B) for Predict | 24GB+ (2B), 32GB+ (8B) for Reason                                            |
 
 ### Input Prompt
 
@@ -211,7 +211,7 @@ The text prompt controls what type of analysis the model should perform. The pro
 
 -   "Caption the video in detail."
 -   "Describe the actions and events occurring in this video with timestamps."
--   "Analyze the spatial relationships between objects in this image."
+-   "Analyze the spatial relationships between objects in this video."
 -   "Explain the physics principles demonstrated in this video."
 -   "Provide a detailed description of the scene, including temporal events and spatial layout."
 
@@ -292,6 +292,18 @@ The models are cached on Amazon EFS (shared with Cosmos Predict pipelines) with 
 The Amazon EFS file system is shared across all VAMS Cosmos pipelines (Predict, Reason, Transfer). The total storage footprint depends on which pipelines are enabled. Monitor Amazon EFS costs and consider setting lifecycle policies for long-term cost optimization.
 :::
 
+:::warning[The Amazon S3 model cache bucket is RETAINED]
+Enabling this pipeline creates an Amazon S3 model cache bucket in addition to the Amazon EFS file system.
+It uses a `RETAIN` removal policy, so it and its contents **survive `cdk destroy`** and require a manual
+delete — unlike the EFS file system, which is removed with the stack. Cached weights make it one of the
+largest buckets in a deployment, and it occupies one of the account's Amazon S3 bucket slots (100 by
+default) until deleted.
+
+The bucket is auto-named, so a retained copy does **not** block a redeploy. See
+[AWS resources](../architecture/aws-resources.md#amazon-s3-buckets) for the full inventory and
+[Uninstall the solution](../deployment/uninstall.md#step-2-delete-s3-buckets) for the cleanup steps.
+:::
+
 ## Warm vs Cold Instances
 
 The `useWarmInstances` configuration option controls whether AWS Batch compute instances remain running when idle. This setting is shared across all Cosmos pipelines (Predict, Reason, Transfer).
@@ -316,14 +328,14 @@ Keeping warm instances running incurs continuous compute costs. A single g5.12xl
 
 ## Metadata Reference
 
-The Cosmos Reason pipeline uses metadata keys to configure the analysis prompt. All metadata must be set on **file-level metadata** (not asset metadata) because Reason operates on a specific video or image file.
+The Cosmos Reason pipeline uses metadata keys to configure the analysis prompt. All metadata must be set on **file-level metadata** (not asset metadata) because Reason operates on a specific video file.
 
 | Metadata Key           | Scope             | Description                                                                                                                     | Default                          |
 | ---------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `COSMOS_REASON_PROMPT` | **File metadata** | Analysis prompt describing what to analyze or caption. Set on the **specific video file** that the pipeline will process. | `"Caption the video in detail."` |
 
 :::warning[File metadata only]
-The `COSMOS_REASON_PROMPT` must be set as **file-level metadata** on the specific video or image file you want to analyze. Setting it on asset-level metadata will NOT work -- the pipeline reads from `fileMetadata` in the VAMS metadata structure, not `assetMetadata`.
+The `COSMOS_REASON_PROMPT` must be set as **file-level metadata** on the specific video file you want to analyze. Setting it on asset-level metadata will NOT work -- the pipeline reads from `fileMetadata` in the VAMS metadata structure, not `assetMetadata`.
 :::
 
 **Prompt examples for different use cases:**

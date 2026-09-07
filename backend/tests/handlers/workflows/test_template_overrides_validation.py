@@ -265,9 +265,9 @@ class TestJsonBodyPlaceholderText:
 
     def test_a_typed_tag_cannot_be_declared_optional_without_a_default(self):
         # A blank integer/number/boolean has no value to materialize, so a body referencing one would
-        # fail EVERY execution as an unmatched tag — including headless trigger runs, whose only trace
-        # is a dispatcher log line. The declaration is where it is caught, so the tag is either
-        # required or carries a default and validate_tags can always fill it.
+        # deliver the literal {{tag}} to the pipeline on EVERY execution — including headless trigger
+        # runs, whose only trace is a dispatcher log line. The declaration is where it is caught, so
+        # the tag is either required or carries a default and validate_tags can always fill it.
         for tag_type in sorted(ts.TYPES_WITHOUT_EMPTY_VALUE):
             errs = ts.validate_tag_schema([{"tagKey": "v", "type": tag_type}])
             assert any("no blank form" in e for e in errs), tag_type

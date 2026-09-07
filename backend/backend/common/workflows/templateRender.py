@@ -20,10 +20,13 @@ Design:
     to sit inside existing quotes (``"databaseId": "{{firstAssetFileDatabaseId}}"``); a ``json`` tag
     substitutes a JSON literal (object / array / number) meant to sit WITHOUT surrounding quotes
     (``"files": {{assetFileKeyArray}}``). Each tag's kind is fixed and documented.
-  - **Strict.** An unknown ``{{tag}}`` (one not in the catalog below) raises
-    ``MissingTemplateTagError`` rather than being left in place or blanked. This surfaces typos and
-    reserves the space for the future dynamic tags (``{{metadata_<key>}}`` and user-defined
-    per-pipeline tags) — which are NOT implemented yet and therefore error today.
+  - **Strict by default.** An unknown ``{{tag}}`` (one not in the catalog below) raises
+    ``MissingTemplateTagError`` rather than being left in place or blanked, so a typo in a value VAMS
+    itself consumes is a caller error — an output path extension becomes part of every output object
+    key. A caller rendering a configuration BODY passes ``strict=False``: an unknown tag keeps its own
+    text and the pipeline receives the literal ``{{tag}}``, the body being the pipeline's to
+    interpret. The reserved dynamic-tag names (``{{metadata_<key>}}``) are not in the catalog and are
+    not resolved here.
   - **Empty-not-error for absent sources.** A defined tag whose underlying value is absent (e.g.
     ``{{firstAssetFileAssetId}}`` when the manifest carries no input files) resolves to an empty
     string / ``[]`` / ``0`` rather than raising, so no-input-files executions render cleanly.
@@ -332,19 +335,23 @@ def _metadata_context(metadata_payload):
     return context
 
 
-def _substitute(text, context, config_format=CONFIG_FORMAT_JSON, limit=MAX_RENDERED_CONFIG_LENGTH):
-    """Replace every ``{{tag}}`` in ``text`` using ``context`` ({tag: (kind, value)}). Raises
-    MissingTemplateTagError listing any tags not in the context. Scalars are escaped for
-    ``config_format`` (see escape_scalar) so they sit safely inside the template's own quotes; json
-    values are emitted as JSON literals.
+def _substitute(text, context, config_format=CONFIG_FORMAT_JSON, limit=MAX_RENDERED_CONFIG_LENGTH,
+                strict=True):
+    """Replace every ``{{tag}}`` in ``text`` using ``context`` ({tag: (kind, value)}). Scalars are
+    escaped for ``config_format`` (see escape_scalar) so they sit safely inside the template's own
+    quotes; json values are emitted as JSON literals.
+
+    ``strict`` raises MissingTemplateTagError listing any tags not in the context. Non-strict leaves
+    such a tag in place, so the literal ``{{tag}}`` text is what the caller receives.
 
     Raises RenderedConfigTooLargeError once the output passes ``limit``. The pieces are accumulated
     and measured as they are produced, so an amplifying body stops at the limit rather than building
     the whole result first and being told afterwards."""
-    found = set(_TAG_PATTERN.findall(text))
-    unknown = found - set(context.keys())
-    if unknown:
-        raise MissingTemplateTagError(unknown)
+    if strict:
+        found = set(_TAG_PATTERN.findall(text))
+        unknown = found - set(context.keys())
+        if unknown:
+            raise MissingTemplateTagError(unknown)
 
     # Each tag's substitution is rendered once and reused: the same value repeated N times costs one
     # serialization rather than N, which matters most for a metadata-content payload.
@@ -362,7 +369,10 @@ def _substitute(text, context, config_format=CONFIG_FORMAT_JSON, limit=MAX_RENDE
     position = 0
     for match in _TAG_PATTERN.finditer(text):
         pieces.append(text[position:match.start()])
-        pieces.append(_rendered(match.group(1)))
+        name = match.group(1)
+        # Non-strict only: a name with no context entry keeps its own text. The limit accounting
+        # below counts it like any other piece, so a body of literals is still bounded.
+        pieces.append(_rendered(name) if name in context else match.group(0))
         total += (match.start() - position) + len(pieces[-1])
         if total > limit:
             raise RenderedConfigTooLargeError(limit)
@@ -500,7 +510,7 @@ def json_body_placeholder_text(text, structured_as_string=False, tag_schema=None
 
 
 def render_config(text, manifest, execution, metadata_loader=None, now=None,
-                  config_format=CONFIG_FORMAT_JSON):
+                  config_format=CONFIG_FORMAT_JSON, strict=True):
     """Render an input-configuration text (or any templated field) against a task's manifest +
     execution context. Returns the rendered text unchanged when it contains no tags.
 
@@ -514,8 +524,13 @@ def render_config(text, manifest, execution, metadata_loader=None, now=None,
     a value that its parser rejects or reads as markup. The default suits a plain templated field (an
     output path, a name), which carries no declared format.
 
-    Raises MissingTemplateTagError on an unknown tag (strict) and RenderedConfigTooLargeError when the
-    text renders past MAX_RENDERED_CONFIG_LENGTH."""
+    ``strict`` (the default) raises MissingTemplateTagError on a tag that is not in the catalog. A
+    caller rendering a configuration BODY passes ``strict=False``: a ``{{tag}}`` with no template-tag
+    declaration behind it is delivered to the pipeline unreplaced, rather than failing the run.
+    A caller rendering a value VAMS itself consumes keeps the default — a literal ``{{tag}}`` in an
+    output path extension would become part of every output object key.
+
+    Raises RenderedConfigTooLargeError when the text renders past MAX_RENDERED_CONFIG_LENGTH."""
     if not uses_template_tags(text):
         return text
 
@@ -530,4 +545,4 @@ def render_config(text, manifest, execution, metadata_loader=None, now=None,
         # they are not populated; they never trip the strict unknown-tag check.
         context.update(_metadata_context({}))
 
-    return _substitute(text, context, config_format)
+    return _substitute(text, context, config_format, strict=strict)

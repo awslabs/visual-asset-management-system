@@ -244,7 +244,7 @@ ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 
 CDK publishes each resource name as an SSM parameter under `VAMS_RESOURCE_PARAM_PREFIX` (see `ResourceNamesBuilder` nested stack; Lambda env is set via `globalLambdaEnvironmentsAndPermissions`). Keys are defined in `infra/common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS.*`) and mirrored in `backend/backend/common/resourceNames.py` (`ResourceKeys`).
 
-**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
+**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
 
 ### **Pattern 5: Multi-Partition Support**
 
@@ -389,8 +389,65 @@ The skills in `.claude/commands/` scaffold work by restating steering-document r
 | `/deploy-check`                | Root development commands (lint/prettier from repo root), config validation rules                                                                                                     |
 | `/update-docs`, `/verify-docs` | `documentation/CLAUDE.md` (writing style, source-to-doc mappings, dual API doc sources)                                                                                               |
 | `/update-changelog`            | Root git workflow / changelog format                                                                                                                                                  |
-| `/refresh-steering-docs`       | Root Rules 11–12                                                                                                                                                                      |
+| `/refresh-steering-docs`       | Root Rules 11–13                                                                                                                                                                      |
 | `/vams-agent`                  | `tools/VamsAgentSkill/SKILL.md` (canonical definition), VAMS entity/order-of-operations rules, `tools/VamsCLI` auth and permission commands                                           |
+
+### **Rule 13: Label a Temporary Test So It Can Be Found and Removed**
+
+A test written to prove one specific change landed is a different artifact from a test that holds a
+rule in place, and **the two are indistinguishable by reading them afterwards.** Both may scan source,
+both may assert an absence, and both may carry a careful docstring explaining why. So the distinction
+has to be recorded when the test is written — it cannot be reconstructed at release time.
+
+Mark a temporary test at the point of writing:
+
+| Stack                                                                    | Marker                                                             |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Python (`backend`, `backendPipelines`, `tools/VamsCLI`, `tools/VamsMCP`) | `@pytest.mark.temporary` on the test or its class                  |
+| TypeScript (`web`, `infra`)                                              | a `TEMPORARY-TEST` token in a comment directly above the `it(...)` |
+
+Add one line naming what it pins, so a later reader does not have to re-derive it:
+
+```python
+@pytest.mark.temporary  # pins the removal of the duplicated tag block in tagService.py
+```
+
+Finding them is then one command per stack, which is the whole point of the marker:
+
+```bash
+cd backend && python -m pytest -m temporary -q --collect-only     # also tools/VamsCLI, tools/VamsMCP
+grep -rn "TEMPORARY-TEST" web/src web/e2e infra/test
+```
+
+The marker is registered in `backend/pytest.ini`, `tools/VamsCLI/pyproject.toml`, and
+`tools/VamsMCP/pyproject.toml`. **`backend` and `tools/VamsCLI` run `--strict-markers`**, so an
+unregistered marker fails those suites outright rather than being ignored — register it before using
+it in a new Python test tree there. `backendPipelines` has no pytest configuration at all (which is
+why its existing `@pytest.mark.unit` is unregistered too), so a marker there only warns; `-m temporary`
+still selects correctly.
+
+**Which tests are temporary.** Ask whether a future edit could plausibly reintroduce what the test
+forbids:
+
+-   **Durable — do not mark, do not remove.** The forbidden thing is still writable, so the guard can
+    still fire for a good reason: a weaker TLS policy, a broader IAM wildcard, a `cdk-nag` suppression,
+    `'unsafe-inline'` in the base CSP, a mutating client call from a read-only path, a credential
+    reaching a synthesized template. Also durable: a positive or negative **control** for another
+    assertion, whose subject is deliberately a string that does not exist.
+-   **Temporary — mark it.** The test pins one past edit that nothing would reintroduce: a named file
+    that was deleted, a removed test seam, a specific dead branch, a comment string that was reworded.
+    It went green once, and its only remaining way to fail is an innocent refactor of the file it reads.
+
+:::warning[Absence of the literal does NOT identify a temporary test]
+The tempting shortcut — "the forbidden string appears nowhere in the source, so the test is spent" — is
+**wrong**, and it yields confident false positives. A forbid-forever guardrail also has zero
+occurrences; that absence is the guard succeeding, not the test expiring. `TLS13_1_3_2025_09`,
+`arn:aws:s3:::*`, and an `AwsSolutions-EKS1` suppression each appear nowhere precisely because a test
+forbids them. Judge by whether the construct is re-writable, never by counting occurrences.
+:::
+
+Scanning source is not the signal either: `backend/tests/common/test_userid_identity_normalization.py`
+walks the handler tree and fails on a route that does not normalize, which must keep holding forever.
 
 ---
 

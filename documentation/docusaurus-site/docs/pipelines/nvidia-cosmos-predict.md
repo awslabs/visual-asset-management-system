@@ -483,6 +483,18 @@ The models are cached on Amazon EFS with backup to Amazon S3. Subsequent pipelin
 The Amazon EFS file system stores model weights and incurs standard Amazon EFS storage costs. The pipeline uses General Purpose performance mode with elastic throughput. Monitor Amazon EFS costs and consider setting lifecycle policies for long-term cost optimization.
 :::
 
+:::warning[The Amazon S3 model cache bucket is RETAINED]
+Enabling this pipeline creates an Amazon S3 model cache bucket in addition to the Amazon EFS file system.
+It uses a `RETAIN` removal policy, so it and its contents **survive `cdk destroy`** and require a manual
+delete — unlike the EFS file system, which is removed with the stack. Cached weights make it one of the
+largest buckets in a deployment, and it occupies one of the account's Amazon S3 bucket slots (100 by
+default) until deleted.
+
+The bucket is auto-named, so a retained copy does **not** block a redeploy. See
+[AWS resources](../architecture/aws-resources.md#amazon-s3-buckets) for the full inventory and
+[Uninstall the solution](../deployment/uninstall.md#step-2-delete-s3-buckets) for the cleanup steps.
+:::
+
 ## Warm vs Cold Instances
 
 The `useWarmInstances` configuration option controls whether AWS Batch compute instances remain running when idle:

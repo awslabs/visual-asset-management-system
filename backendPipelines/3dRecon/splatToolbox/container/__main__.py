@@ -3,10 +3,18 @@
 
 import json
 import os
+import shutil
 import sys
 import subprocess
 import boto3
 from vams_utils import manifest_io
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 def resolve_output_env(bucket_name: str, object_dir: str, job_name: str) -> tuple:
     """The (S3_OUTPUT, UUID) pair for an output-files prefix, as `main.py` expects them.
@@ -22,6 +30,81 @@ def resolve_output_env(bucket_name: str, object_dir: str, job_name: str) -> tupl
     trimmed = str(object_dir or "").strip("/")
     parent, _, leaf = trimmed.rpartition("/")
     return f"s3://{bucket_name}/{parent}", (leaf or job_name)
+
+
+def output_listing_prefix(s3_output: str, job_uuid: str) -> tuple:
+    """The (bucket, key prefix) an (S3_OUTPUT, UUID) pair addresses, as `main.py` joins them.
+
+    Derived from the pair the run was actually given rather than recomputed from the pipeline
+    definition, so it cannot name a different place than the one the outputs were written to.
+    """
+    without_scheme = s3_output[len("s3://"):] if s3_output.startswith("s3://") else s3_output
+    bucket_name, _, parent = without_scheme.partition("/")
+    key_prefix = "/".join(segment for segment in (parent.strip("/"), job_uuid.strip("/")) if segment)
+    return bucket_name, f"{key_prefix}/" if key_prefix else ""
+
+
+def missing_output_cause(bucket_name: str, key_prefix: str, s3_client):
+    """The reason a run that exited 0 wrote nothing, or None when it wrote something or cannot be read.
+
+    Asks for a single key, since the only question is whether the prefix is empty. `main.py` exits 0
+    having uploaded nothing whenever its upload steps are skipped, and the workflow's process-output
+    step finds no files and records the execution as complete, so exit status alone does not tell an
+    operator whether a job that ran for hours produced anything. A listing that FAILS returns None
+    rather than a cause: the job role holds `s3:ListBucket` on the asset buckets, so a failure here is
+    something other than an empty result, and discarding a finished GPU run over it would cost more
+    than the check saves.
+    """
+    try:
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=key_prefix, MaxKeys=1)
+    except Exception as error:
+        print(f"Could not list s3://{bucket_name}/{key_prefix} to confirm the run wrote output: "
+              f"{error}")
+        return None
+    if response.get('Contents'):
+        return None
+    return f"Pipeline exited 0 but wrote no output under s3://{bucket_name}/{key_prefix}"
+
+
+# Models baked into the image by `build_models_tar.py --bake`, and where the image holds them. The
+# image's own MODEL_PATH is where upstream expects a model channel to be mounted; this launch
+# sequence repoints MODEL_PATH at the volume it unpacks inputs on, so the baked files are linked
+# across into it.
+BAKED_MODEL_DIR = '/opt/ml/input/data/model'
+BAKED_MODEL_FILES = ('sam2.1_hiera_large.pt',)
+
+
+def stage_baked_models(model_path: str, baked_dir: str = BAKED_MODEL_DIR) -> list:
+    """The baked model files made reachable under the run's MODEL_PATH, by name.
+
+    `remove_background_sam2.py` composes its checkpoint path as `{MODEL_PATH}/sam2.1_hiera_large.pt`,
+    which is the image's MODEL_PATH only when nothing has repointed it. The u2net weights need no
+    step here: `backgroundremover` reads them from `U2NET_PATH`, which the image sets to where they
+    are baked. Linking rather than copying keeps a several-hundred-megabyte checkpoint out of every
+    job's startup; the two paths sit on different mounts, so a copy is the fallback for a filesystem
+    that refuses the link. A model absent from the image is reported and skipped — only the options
+    that consume it are affected, and the rest of the run is unrelated to them.
+    """
+    staged = []
+    for name in BAKED_MODEL_FILES:
+        source = os.path.join(baked_dir, name)
+        target = os.path.join(model_path, name)
+        if not os.path.exists(source):
+            print(f"Baked model {name} is not in the image at {source}; the options that use it "
+                  f"will fail if they are enabled")
+            continue
+        if os.path.exists(target):
+            print(f"Baked model {name} is already present at {target}")
+            staged.append(name)
+            continue
+        try:
+            os.symlink(source, target)
+        except OSError as error:
+            print(f"Could not link {source} to {target} ({error}); copying instead")
+            shutil.copyfile(source, target)
+        print(f"Staged baked model {name} at {target}")
+        staged.append(name)
+    return staged
 
 
 METADATA_SCHEMA_VERSION_GROUPED = 2
@@ -256,6 +339,26 @@ runpy.run_path({script_path!r}, run_name='__main__')
 """
 
 
+# Config keys this launch sequence owns. They are members of the runtime allowlist, but the values
+# offered for them arrive from an asset's own metadata and from a template's config body, both of
+# which an operator edits: `LOCAL_DEBUG` turns off the input download and every output upload while
+# the run still exits 0, `CODE_PATH` moves the directory `main.py` resolves its scripts and
+# checkpoints against, and `TASK_TOKEN` is the workflow callback. The input and output pair is set
+# further down from the pipeline definition. A value offered for any of these is dropped rather than
+# applied, so the allowlist being upstream-synced does not decide what an asset can reach.
+RESERVED_CONFIG_KEYS = frozenset({
+    'CODE_PATH',
+    'DATASET_PATH',
+    'MODEL_PATH',
+    'LOCAL_DEBUG',
+    'TASK_TOKEN',
+    'S3_INPUT',
+    'S3_OUTPUT',
+    'UUID',
+    'FILENAME',
+})
+
+
 def set_config_parameters(params: dict, metadata: dict):
     """
     Set environment variables for valid config parameters.
@@ -280,7 +383,10 @@ def set_config_parameters(params: dict, metadata: dict):
     
     # Set environment variables for valid config keys only
     for key, value in combined.items():
-        if key in config_keys:
+        if key in RESERVED_CONFIG_KEYS:
+            # The key without its value: one of these is the workflow callback token
+            print(f"Skipping {key} (set by the container, not by an input)")
+        elif key in config_keys:
             os.environ[key] = str(value)
             source = "metadata" if key in metadata else "parameters"
             print(f"Set config {key}={value} (from {source})")
@@ -381,11 +487,14 @@ def main():
     
     # Don't set MODEL_INPUT - this will skip model download in main.py
     # The container has pre-built models that should work
-    
+
     # Create required directories
     os.makedirs('/tmp/input/train', exist_ok=True)
     os.makedirs('/tmp/input/model', exist_ok=True)
-    
+
+    # Make the models baked into the image reachable under this run's MODEL_PATH
+    stage_baked_models(os.environ['MODEL_PATH'])
+
     # Create empty models.tar.gz so untar_gz doesn't fail
     import tarfile
     models_path = '/tmp/input/model/models.tar.gz'
@@ -421,12 +530,30 @@ def main():
                               env=env,
                               check=True)
         print("Pipeline completed successfully")
-        
+
+        # A zero exit status does not mean the run uploaded anything (see missing_output_cause)
+        region = os.environ.get('AWS_REGION', 'us-east-1')
+        output_bucket, output_prefix = output_listing_prefix(
+            os.environ['S3_OUTPUT'], os.environ['UUID'])
+        no_output_cause = missing_output_cause(
+            output_bucket, output_prefix, boto3.client('s3', region_name=region, config=retry_config))
+        if no_output_cause:
+            print(no_output_cause)
+            if task_token:
+                print("Sending failure callback with task token")
+                sfn_client = boto3.client('stepfunctions', region_name=region, config=retry_config)
+                sfn_client.send_task_failure(
+                    taskToken=task_token,
+                    error='Pipeline Failure',
+                    cause=no_output_cause[:FAILURE_CAUSE_MAX_LENGTH]
+                )
+                print("Failure callback sent")
+            sys.exit(1)
+
         # Send success callback if task token exists
         if task_token:
             print(f"Sending success callback with task token")
-            region = os.environ.get('AWS_REGION', 'us-east-1')
-            sfn_client = boto3.client('stepfunctions', region_name=region)
+            sfn_client = boto3.client('stepfunctions', region_name=region, config=retry_config)
             sfn_client.send_task_success(
                 taskToken=task_token,
                 output=json.dumps({'status': 'Pipeline Success'})
@@ -441,7 +568,7 @@ def main():
         if task_token:
             print(f"Sending failure callback with task token")
             region = os.environ.get('AWS_REGION', 'us-east-1')
-            sfn_client = boto3.client('stepfunctions', region_name=region)
+            sfn_client = boto3.client('stepfunctions', region_name=region, config=retry_config)
             sfn_client.send_task_failure(
                 taskToken=task_token,
                 error='Pipeline Failure',

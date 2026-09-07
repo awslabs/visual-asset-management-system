@@ -109,8 +109,14 @@ def validate_file_for_upload(file_path: Path, upload_type: str, relative_key: st
                 f"(actual size: {file_size / (1024*1024):.1f}MB)"
             )
         
-        # Check file extension
-        file_extension = file_path.suffix.lower()
+        # Check file extension. For a `.previewFile.` companion the extension is
+        # everything AFTER the marker rather than the text after the last dot, which is
+        # how the API computes it -- a last-dot reading accepts `x.previewFile.p.png`,
+        # which the API rejects for its `.p.png` extension.
+        if is_preview_file:
+            file_extension = '.' + relative_key.split('.previewFile.')[1].lower()
+        else:
+            file_extension = file_path.suffix.lower()
         if file_extension not in ALLOWED_PREVIEW_EXTENSIONS:
             raise PreviewFileError(
                 f"Preview file {file_path.name} has unsupported extension '{file_extension}'. "

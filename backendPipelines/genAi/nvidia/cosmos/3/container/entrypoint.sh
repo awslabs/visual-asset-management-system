@@ -3,6 +3,12 @@ set -e
 
 cd /opt/cosmos-framework
 
+# The upstream framework commit the image was built from, so a run's log names the inference code it
+# actually ran.
+if [ -f /opt/cosmos-framework/VAMS_UPSTREAM_COMMIT ]; then
+    echo "cosmos-framework commit: $(cat /opt/cosmos-framework/VAMS_UPSTREAM_COMMIT)"
+fi
+
 # HF transport hardening (observed xet client deadlocks mid-download in the
 # predict pipeline). Fall back to the standard HF transport.
 export HF_HUB_DISABLE_XET=1

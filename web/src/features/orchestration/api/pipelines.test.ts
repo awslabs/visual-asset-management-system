@@ -179,6 +179,37 @@ describe("pipelines service", () => {
                 {}
             );
         });
+
+        // The backend puts `warnings` BESIDE `message`, not inside it. `unwrapMessage` returns
+        // `resp.message` whenever a response carries one, so the plain `toTuple` reader hands the
+        // component the string "Template deleted" and the array is gone before anything can read
+        // it — a delete that left a trigger permanently failing shows a clean success toast.
+        const TRIGGER_WARNING =
+            "this template was chosen as a default template by the trigger(s) of auto-triggered " +
+            "workflow(s) 'db1:wf1' (trigger 'fileUpload'). Triggered executions of those workflows " +
+            "will fail until each trigger picks a different default template for this pipeline.";
+
+        it("keeps the trigger-reference warnings returned alongside the message", async () => {
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: "Template deleted",
+                warnings: [TRIGGER_WARNING],
+            });
+            const [ok, result] = await deleteTemplate("db1", "p1", "t1");
+            expect(ok).toBe(true);
+            expect(typeof result).not.toBe("string");
+            expect((result as any).warnings).toEqual([TRIGGER_WARNING]);
+            // The message is still unwrapped, so nothing that reads it has to change.
+            expect((result as any).message).toBe("Template deleted");
+        });
+
+        it("reports no warnings for a clean delete rather than undefined", async () => {
+            // An always-truthy notice in the UI would pass the arm above; this is what makes the
+            // notice response-driven.
+            (apiClient.del as jest.Mock).mockResolvedValue({ message: "Template deleted" });
+            const [ok, result] = await deleteTemplate("db1", "p1", "t1");
+            expect(ok).toBe(true);
+            expect((result as any).warnings).toEqual([]);
+        });
     });
 
     describe("getTagSchema", () => {

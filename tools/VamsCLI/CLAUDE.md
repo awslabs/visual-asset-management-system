@@ -33,7 +33,7 @@ tools/VamsCLI/
     commands/
       setup.py               # Initial CLI configuration
       auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
-      apiKey.py              # API key management (admin) + 'user' sub-group (self-service own keys)
+      apiKey.py              # API key management (admin: list/get/create/update/delete) + 'user' sub-group (self-service own keys)
       assets.py              # Asset CRUD operations + lifecycle history lookup (history)
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management
@@ -43,7 +43,9 @@ tools/VamsCLI/
       tag.py                 # Tag management
       tag_type.py            # Tag type management
       metadata.py            # Metadata operations (unified API)
-      metadata_schema.py     # Metadata schema management
+      metadata_schema.py     # Metadata schema management (list, get, create, update, delete)
+      comment.py             # Asset version comments (list, get, add, update, delete)
+      subscription.py        # Asset event subscriptions (list, create, update, delete, unsubscribe, check)
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch integration)
       sync.py                # Directory sync (sync file push/pull)
@@ -63,7 +65,7 @@ tools/VamsCLI/
     utils/
       api_client.py          # APIClient class (HTTP, retries, error mapping)
       profile.py             # ProfileManager (multi-profile, config dirs)
-      exceptions.py          # Two-tier exception hierarchy (~60 classes)
+      exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
       decorators.py          # @requires_setup_and_auth, @requires_feature
       json_output.py         # output_result(), output_error(), output_status()
@@ -78,17 +80,17 @@ tools/VamsCLI/
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
-    test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
+    test_*.py                # 59 test files, one per command group or behavior area
 ```
 
-### Command Groups (22 top-level)
+### Command Groups (24 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
-tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
-pipeline, execution, industry, user, role, api-key
+tag, tag-type, metadata, metadata-schema, comment, subscription, features,
+search, sync, workflow, pipeline, execution, industry, user, role, api-key
 ```
 
 Sync has a nested sub-command group:
@@ -100,6 +102,11 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
 -   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+
+Comment and subscription cover the comments and subscriptions APIs:
+
+-   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
+-   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
 
 Industry has nested sub-command groups:
 
@@ -139,6 +146,9 @@ VamsCLIError (base)
     TagError (+ 7 subclasses)
     AssetVersionError (+ 5 subclasses, includes AssetVersionArchiveError)
     AssetLinkError (+ 7 subclasses)
+    CommentError (+ 2 subclasses)
+    SubscriptionError (+ 3 subclasses)
+    MetadataSchemaError (+ 3 subclasses)
     SearchError (+ 5 subclasses)
     WorkflowError (+ 4 subclasses)
     CognitoUserError (+ 4 subclasses)
@@ -327,6 +337,25 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
 2. Upload/download limits are constants, not magic numbers
 3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`)
 4. Retry config defaults are constants, overridable via env vars
+5. **Every `API_*` path constant must name a route the API actually registers.** `constants.py` is
+   the authority a new consumer trusts, so a path the backend never declared is a trap that fails
+   only at runtime against a live deployment — API Gateway rejects an unmatched path before any
+   handler runs, and neither import nor build catches it. `tests/test_constants_contract.py`
+   cross-checks every constant against the `ApiRoute` declarations in
+   `backend/backend/common/apiRoutes.py`. Two such constants shipped in this release: one formatted
+   by a live `APIClient` method, and one imported but never formatted, which read like working code.
+   A constant used as a path **prefix** (concatenated at the call site rather than formatted) needs
+   an entry in `_PREFIX_ONLY_CONSTANTS` naming why; prefer a format-string constant matching a
+   registered route, since the exemption list is the one place this check can be widened.
+
+6. **One route cannot be reached with `str.format`.** `API_COMMENTS_ASSET_VERSION_COMMENT` ends in
+   `{assetVersionId:commentId}` — the API's composite sort key, which is two values joined by a
+   colon inside a single path segment. `str.format` reads everything after the colon as a format
+   spec, so formatting that constant raises `ValueError`. `build_comment_path()` (module level in
+   `utils/api_client.py`) substitutes the parts instead, and is the only place that should: it also
+   rejects a colon in either part, because the handlers split the segment and read element `[1]` as
+   the commentId — an extra colon shifts which value is validated, and a missing one makes that
+   index raise, which surfaces as a `500` rather than a rejected request.
 
 ### 8. Authentication Flow
 
@@ -350,6 +379,8 @@ Password changes (Cognito only):
 -   `CognitoAuthenticator.change_password(access_token, previous_password, proposed_password)` wraps the Cognito `ChangePassword` API. `vamscli auth change-password` signs in with the current password (`interactive=False`) and then changes it, also satisfying a forced change in one step.
 -   `CognitoAuthenticator.forgot_password(username)` and `confirm_forgot_password(username, code, new_password)` wrap the Cognito `ForgotPassword` / `ConfirmForgotPassword` APIs (self-service reset, no current password needed). `vamscli auth forgot-password` is a single two-phase command: with no `--code` it requests an emailed code; with `--code` + `--new-password` it confirms. Interactive mode prompts through both phases; `--json-output` requests-only or confirms when both are supplied.
 -   These flows call the `cognito-idp` client directly (boto3), not a VAMS API route, so they have no `constants.py` endpoint entry.
+-   **The `cognito-idp` client is built with `signature_version=UNSIGNED` and must stay that way.** Every operation these flows reach — `initiate_auth`, `respond_to_auth_challenge`, `forgot_password`, `confirm_forgot_password`, `change_password` — is an unauthenticated Cognito user-pool API that takes no SigV4 signature, and botocore skips credential resolution entirely for an unsigned client. A signed client walks the AWS credential chain inside `create_client`, so a configured-but-failing provider (an expired SSO session, a `credential_process` helper that now returns non-zero) aborts `vamscli auth login` with a raw `CredentialRetrievalError` before any Cognito call — the CLI's front door, blocked by an AWS configuration it does not use. A machine with no AWS configuration at all resolves to `None` and proceeds, which is why CI never sees it. Pinned by `tests/test_auth_cognito_unsigned.py`.
+-   A test building a `CognitoAuthenticator` must patch `vamscli.auth.cognito.boto3.client` **around** the constructor, not assign over `.client` afterwards: the client is built in `__init__`, so a later assignment leaves a real one already constructed and makes the test depend on ambient AWS configuration. `tests/test_auth_password.py::_make_authenticator` is the reference shape, and `tests/conftest.py::isolate_aws_credentials` sets dummy credentials suite-wide as a second line of defence.
 
 Override tokens (external auth):
 
@@ -416,9 +447,13 @@ from .logging import redact_sensitive # returns a redacted copy of the object
 logger.debug(f"Response body: {redact_to_text(response_data)}")
 ```
 
-The three existing sinks are already wired: `output_result` (`utils/json_output.py`), `log_api_request`,
-and `log_api_response` (`utils/logging.py`). **Adding a fourth sink means adding the redactor call** —
-there is no automatic interception, because the payload reaches the logger as an already-formatted string.
+The five existing sinks are already wired: `output_result` (`utils/json_output.py`), `log_api_request`
+and `log_api_response` (`utils/logging.py`), and the command-result lines in `@requires_setup_and_auth`
+(`utils/decorators.py`) and `@handle_global_exceptions()` (`utils/global_exceptions.py`). **Adding a sixth
+sink means adding the redactor call** — there is no automatic interception, because the payload reaches the
+logger as an already-formatted string. `tests/test_log_redaction_sink_inventory.py` scans the package for a
+log call that interpolates an unredacted payload, so a sixth sink added without the redactor fails there
+rather than at an audit. Redaction runs before truncation, so the length cut cannot reveal anything.
 
 **How the redactor decides:**
 
@@ -519,7 +554,7 @@ Treat a command whose output includes another command's output as this bug until
 ### Framework and Configuration
 
 -   **Framework**: pytest with Click's `CliRunner`
--   **Test files**: `tests/test_*.py` (~24 files)
+-   **Test files**: `tests/test_*.py` (59 files)
 -   **Shared fixtures**: `tests/conftest.py`
 
 ### Key Fixtures (conftest.py)
@@ -527,6 +562,8 @@ Treat a command whose output includes another command's output as this bug until
 | Fixture                    | Scope    | Purpose                                        |
 | -------------------------- | -------- | ---------------------------------------------- |
 | `isolate_logging_globals`  | autouse  | Restores `_verbose_mode` / `_logger` per test  |
+| `isolate_aws_credentials`  | autouse  | Dummy AWS credentials; clears `AWS_PROFILE`    |
+| `redirect_log_dir`         | autouse  | Points `get_log_dir` at a temp directory       |
 | `CoroutineClosingMock`     | class    | `asyncio.run` mock that closes the coroutine   |
 | `mock_logging`             | autouse  | Prevents file system operations during tests   |
 | `cli_runner`               | function | Pre-configured `CliRunner` instance            |
@@ -632,7 +669,23 @@ python -m pytest tests/test_database_commands.py::TestDatabaseList::test_list_da
 
 # Run with coverage
 python -m pytest tests/ --cov=vamscli --cov-report=term-missing
+
+# List every test that pins one past change rather than a durable rule (root CLAUDE.md Rule 13)
+python -m pytest -m temporary --collect-only
 ```
+
+### Mark a Temporary Test with `@pytest.mark.temporary`
+
+A test written to prove one specific change landed — a deleted branch, a removed helper, a reworded
+message — carries `@pytest.mark.temporary` (registered in `pyproject.toml`) plus a line saying what it
+pins. This suite runs `--strict-markers`, so the marker must stay registered or every test using it
+fails.
+
+The marker exists because a temporary test and a durable guardrail cannot be told apart by reading them
+later: both scan source, both assert an absence, both explain themselves. Do **not** mark a test whose
+forbidden construct is still writable — `test_api_error_body.py::test_every_error_path_in_the_client_uses_the_helper`
+and the `test_log_redaction.py` guards must keep holding — nor a control whose subject is deliberately
+a string that does not exist. Full criterion: root `CLAUDE.md` Rule 13.
 
 ---
 
@@ -966,15 +1019,25 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 ### Feature Switches
 
-| Constant                                | Value                             | Meaning              |
-| --------------------------------------- | --------------------------------- | -------------------- |
-| `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | GovCloud deployment  |
-| `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode  |
-| `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled  |
-| `FEATURE_AUTHPROVIDER_COGNITO`          | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled |
-| `FEATURE_AUTHPROVIDER_COGNITO_SAML`     | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth    |
-| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`     | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth    |
-| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP   |
+One constant per member of `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), which is the set a
+deployment publishes through `/secure-config`. The two lists must stay equal in both directions — a
+missing constant is a gate no command can name, and an extra one names a gate no deployment publishes.
+`tests/test_constants_contract.py` parses the enum and fails on either drift.
+
+| Constant                                | Value                             | Meaning                  |
+| --------------------------------------- | --------------------------------- | ------------------------ |
+| `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | Restricted partition     |
+| `FEATURE_ALLOWUNSAFEEVAL`               | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
+| `FEATURE_LOCATIONSERVICES`              | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode      |
+| `FEATURE_CLOUDFRONTDEPLOY`              | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
+| `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
+| `FEATURE_AUTHPROVIDER_COGNITO`          | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
+| `FEATURE_AUTHPROVIDER_COGNITO_SAML`     | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
+| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`     | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
+| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
+| `FEATURE_PHYSNA_ADDON`                  | `"PHYSNA_ADDON"`                  | Physna add-on features   |
+| `FEATURE_DEADLINECLOUD_PIPELINES`       | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
 
 ---
 
@@ -989,7 +1052,7 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 | `vamscli/auth/cognito.py`            | Cognito SRP + USER_PASSWORD_AUTH implementation        |
 | `vamscli/utils/api_client.py`        | APIClient: HTTP, retries, error mapping                |
 | `vamscli/utils/profile.py`           | ProfileManager: multi-profile config management        |
-| `vamscli/utils/exceptions.py`        | Two-tier exception hierarchy (~60 classes)             |
+| `vamscli/utils/exceptions.py`        | Two-tier exception hierarchy (~140 classes)            |
 | `vamscli/utils/global_exceptions.py` | `@handle_global_exceptions()` decorator                |
 | `vamscli/utils/decorators.py`        | `@requires_setup_and_auth`, `@requires_feature`        |
 | `vamscli/utils/json_output.py`       | `output_result()`, `output_error()`, `output_status()` |

@@ -18,6 +18,7 @@ import {
     ALLOWED_API_ROUTES_CACHE_KEY,
     ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
 } from "../../common/constants/authRoutes";
+import { API_KEY_LISTING_PAGE_SIZE } from "../../common/constants/apiKeys";
 import ApiKeys from "./ApiKeys";
 
 const mockFetchApiKeys = jest.fn();
@@ -110,5 +111,111 @@ describe("ApiKeys mode resolution", () => {
         expect(mockFetchApiKeys).not.toHaveBeenCalled();
         expect(mockFetchAllowedApiRoutes).not.toHaveBeenCalled(); // answered from cache
         expect(screen.getByText("My API Keys")).toBeInTheDocument();
+    });
+});
+
+/**
+ * The listing follows the endpoint's paging contract: a page that reports a NextToken offers a
+ * next page, and moving to it issues a fresh request carrying that token. Without this the page
+ * would show whatever the first response happened to hold and call the listing complete.
+ */
+describe("ApiKeys server-side paging", () => {
+    const key = (id: string) => ({
+        apiKeyId: id,
+        apiKeyName: `name-${id}`,
+        userId: "u1",
+        isActive: "true",
+    });
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        cacheRoutes("/auth/api-keys");
+        mockFetchUserApiKeys.mockResolvedValue({ Items: [] });
+    });
+
+    it("requests the backend's page size and no token on the first page", async () => {
+        mockFetchApiKeys.mockResolvedValue({ Items: [key("k1")] });
+
+        render(<ApiKeys />);
+
+        await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
+        expect(mockFetchApiKeys).toHaveBeenCalledWith({
+            pageSize: API_KEY_LISTING_PAGE_SIZE,
+            startingToken: undefined,
+        });
+    });
+
+    it("moving to page two re-requests with the NextToken from page one", async () => {
+        mockFetchApiKeys
+            .mockResolvedValueOnce({ Items: [key("k1")], NextToken: "tok-2", truncated: true })
+            .mockResolvedValueOnce({ Items: [key("k2")] });
+
+        render(<ApiKeys />);
+
+        await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
+
+        const nextPage = await screen.findByLabelText("Next page of API keys");
+        await userEvent.click(nextPage);
+
+        await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalledTimes(2));
+        expect(mockFetchApiKeys).toHaveBeenLastCalledWith({
+            pageSize: API_KEY_LISTING_PAGE_SIZE,
+            startingToken: "tok-2",
+        });
+        await waitFor(() => expect(screen.getByText("name-k2")).toBeInTheDocument());
+        expect(screen.queryByText("name-k1")).not.toBeInTheDocument();
+    });
+
+    it("says the filter and sort are page-scoped only while more keys remain", async () => {
+        mockFetchApiKeys.mockResolvedValue({
+            Items: [key("k1")],
+            NextToken: "tok-2",
+            truncated: true,
+        });
+
+        render(<ApiKeys />);
+
+        await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
+        expect(
+            screen.getByText(/the filter and column sorting apply to the page shown/)
+        ).toBeInTheDocument();
+    });
+
+    it("negative control: a complete listing offers no next page and issues one request", async () => {
+        mockFetchApiKeys.mockResolvedValue({ Items: [key("k1"), key("k2")] });
+
+        render(<ApiKeys />);
+
+        await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
+        expect(screen.getByText("name-k2")).toBeInTheDocument();
+        expect(mockFetchApiKeys).toHaveBeenCalledTimes(1);
+        expect(
+            screen.queryByText(/the filter and column sorting apply to the page shown/)
+        ).not.toBeInTheDocument();
+        // pagesCount stays at 1, so no page-two control is rendered at all.
+        expect(screen.queryByLabelText("Page 2 of API keys")).not.toBeInTheDocument();
+    });
+
+    it("switching to My Keys restarts the walk from page one", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+        mockFetchApiKeys.mockResolvedValue({
+            Items: [key("k1")],
+            NextToken: "tok-2",
+            truncated: true,
+        });
+        mockFetchUserApiKeys.mockResolvedValue({ Items: [key("mine")] });
+
+        render(<ApiKeys />);
+
+        await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
+
+        await userEvent.click(screen.getByText("My Keys"));
+
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        expect(mockFetchUserApiKeys).toHaveBeenLastCalledWith({
+            pageSize: API_KEY_LISTING_PAGE_SIZE,
+            startingToken: undefined,
+        });
     });
 });

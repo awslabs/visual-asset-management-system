@@ -19,8 +19,7 @@
             "objectType": "web",
             "criteriaAnd": [],
             "criteriaOr": [
-                { "field": "route__path", "operator": "starts_with", "value": "/tags" },
-                { "field": "route__path", "operator": "starts_with", "value": "/tag-types" }
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/tags" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },

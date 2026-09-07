@@ -18,6 +18,8 @@ from .commands.tag import tag
 from .commands.tag_type import tag_type
 from .commands.metadata import metadata
 from .commands.metadata_schema import metadata_schema
+from .commands.comment import comment
+from .commands.subscription import subscription
 from .commands.features import features
 from .commands.search import search
 from .commands.sync import sync
@@ -178,6 +180,8 @@ cli.add_command(tag)
 cli.add_command(tag_type)
 cli.add_command(metadata)
 cli.add_command(metadata_schema)
+cli.add_command(comment)
+cli.add_command(subscription)
 cli.add_command(features)
 cli.add_command(search)
 cli.add_command(sync)

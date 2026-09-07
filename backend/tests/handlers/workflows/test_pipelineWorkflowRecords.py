@@ -198,6 +198,81 @@ class TestTemplateBodyStorage:
         out = tbs.rehydrate_template_bodies(s3, "bucket", row)
         assert out == {"configBody": "CB", "webFormJson": "WF"}
 
+    # ---- key_fn: the parameter both production callers pass and nothing above exercises ----
+    #
+    # The two tests above call rehydrate with three arguments, so they run the `key_fn=None`
+    # identity branch. Both real callers -- executeWorkflow._rehydrate_template_row and
+    # pipelineTemplateService._rehydrate_template -- always pass key_fn, because a row's stored
+    # keys are relative to the prefix VAMS owns inside the default bucket. So the covered branch
+    # is the one production never takes, and the branch that decides which S3 object is read had
+    # no coverage at all.
+
+    def _recording_s3(self):
+        """A client that records every Key it is asked for and echoes it back as the body."""
+        seen = []
+
+        def get_object(Bucket, Key):
+            seen.append(Key)
+            return {"Body": MagicMock(read=lambda k=Key: k.encode("utf-8"))}
+
+        s3 = MagicMock()
+        s3.get_object.side_effect = get_object
+        return s3, seen
+
+    def _s3_row(self, **overrides):
+        row = {
+            "bodyStorage": "s3",
+            "configBodyS3Key": "pipelines/templates/db/p/t/configBody",
+            "webFormS3Key": "pipelines/templates/db/p/t/webForm.json",
+        }
+        row.update(overrides)
+        return row
+
+    def test_key_fn_maps_both_body_keys_not_just_the_first(self):
+        s3, seen = self._recording_s3()
+        out = tbs.rehydrate_template_bodies(
+            s3, "bucket", self._s3_row(), key_fn=lambda key: f"vams-root/{key}")
+
+        # Asserting on the keys REQUESTED is what makes this a real check: an implementation that
+        # accepted key_fn and ignored it would return the unprefixed keys here and fail.
+        assert seen == ["vams-root/pipelines/templates/db/p/t/configBody",
+                        "vams-root/pipelines/templates/db/p/t/webForm.json"]
+        assert out["configBody"] == "vams-root/pipelines/templates/db/p/t/configBody"
+        assert out["webFormJson"] == "vams-root/pipelines/templates/db/p/t/webForm.json"
+
+    def test_without_key_fn_the_relative_key_is_read_verbatim(self):
+        # Pins the identity fallback. This is the shape a caller that FORGETS key_fn produces: the
+        # read goes to the bucket root rather than the prefix VAMS owns, so it misses or -- worse --
+        # resolves to an unrelated object. Documented here so the fallback is a deliberate default
+        # rather than something a future change can quietly rely on.
+        s3, seen = self._recording_s3()
+        tbs.rehydrate_template_bodies(s3, "bucket", self._s3_row())
+        assert seen == ["pipelines/templates/db/p/t/configBody",
+                        "pipelines/templates/db/p/t/webForm.json"]
+
+    def test_key_fn_is_never_called_for_an_inline_row(self):
+        # The docstring promises key_fn is called "only for a row that actually carries an offloaded
+        # body". An inline row must not touch S3 or the resolver at all.
+        calls = []
+        row = {"bodyStorage": "inline", "configBody": "cb", "webFormJson": "wf"}
+        s3 = MagicMock()
+        out = tbs.rehydrate_template_bodies(
+            s3, "bucket", row, key_fn=lambda key: calls.append(key) or key)
+        assert out == {"configBody": "cb", "webFormJson": "wf"}
+        assert calls == []
+        s3.get_object.assert_not_called()
+
+    def test_key_fn_is_not_called_for_a_body_the_row_does_not_carry(self):
+        # An s3 row with only one of the two keys resolves only that one. A resolver invoked for an
+        # absent key would be handed None and, for a key_fn that concatenates, would read a bogus
+        # object rather than returning the empty string the caller expects.
+        s3, seen = self._recording_s3()
+        row = self._s3_row()
+        del row["webFormS3Key"]
+        out = tbs.rehydrate_template_bodies(s3, "bucket", row, key_fn=lambda key: f"root/{key}")
+        assert seen == ["root/pipelines/templates/db/p/t/configBody"]
+        assert out["webFormJson"] == ""
+
     def test_write_and_read_roundtrip_via_injected_client(self):
         store = {}
         s3 = MagicMock()

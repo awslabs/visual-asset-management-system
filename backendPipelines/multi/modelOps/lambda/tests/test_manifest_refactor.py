@@ -240,10 +240,17 @@ class TestConstructPipelineReadsConfigFromS3:
         # The template's own keys must survive alongside the injected state.
         assert sent["outputType"] == ".usdz"
 
-    def test_no_config_returns_error_string(self):
+    def test_no_config_fails_the_task_token(self):
+        """The ECS task resolves its container command from this lambda's ``commands`` output, so a
+        missing configuration must raise and report the workflow's callback token rather than hand a
+        value back. The full set of failure routes is in
+        ``tests/test_construct_pipeline_failure_reporting.py``."""
         mod = self._load()
         s3 = MagicMock()
         s3.get_object.side_effect = Exception("missing")  # fetch_input_configuration -> {}
-        with patch.object(mod, "s3", s3):
-            out = mod.lambda_handler(self._event(), MagicMock())
-        assert out["commands"] == "Error: No configuration file detected."
+        sfn = MagicMock()
+        with patch.object(mod, "s3", s3), patch.object(mod, "sfn", sfn):
+            with pytest.raises(Exception):
+                mod.lambda_handler(self._event(), MagicMock())
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok"

@@ -26,13 +26,13 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                  |
-| --------------- | -------- | ------- | -------- | -------------------------------------------- |
-| `databaseId`    | path     | string  | Yes      | Database identifier.                         |
-| `assetId`       | path     | string  | Yes      | Asset identifier.                            |
-| `maxItems`      | query    | integer | No       | Maximum number of files to return.           |
-| `pageSize`      | query    | integer | No       | Page size for pagination.                    |
-| `startingToken` | query    | string  | No       | Continuation token from a previous response. |
+| Parameter       | Location | Type    | Required | Description                                                                             |
+| --------------- | -------- | ------- | -------- | --------------------------------------------------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier.                                                                    |
+| `assetId`       | path     | string  | Yes      | Asset identifier.                                                                       |
+| `maxItems`      | query    | integer | No       | Maximum number of files to return. Default: `10000`. No maximum.                        |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. No maximum. |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response.                                            |
 
 **Response:**
 
@@ -598,6 +598,10 @@ Each entry in `files` is an object:
 
 :::info[Blocked File Types]
 For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked.
+:::
+
+:::info[Preview File Extensions]
+An `assetPreview` file, and any file-level preview companion (a `relativeKey` containing `.previewFile.`) inside an `assetFile` upload, must carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. For a companion the extension is everything after the `.previewFile.` marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. One offending file rejects the entire request with `400`; no multipart upload is created for any file in it.
 :::
 
 ---

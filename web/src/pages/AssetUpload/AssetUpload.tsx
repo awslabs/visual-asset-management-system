@@ -49,6 +49,7 @@ import {
     validateNonZeroLengthTextAsYouType,
     validateRequiredTagTypeSelected,
     enforceableRequiredTagTypes,
+    firstIncompleteRequiredStep,
 } from "./validations";
 import { DisplayKV, FileUpload } from "./components";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
@@ -64,10 +65,13 @@ import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 import Alert from "@cloudscape-design/components/alert";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { safeGetFile } from "../../utils/fileHandleCompat";
 import {
     validateFiles,
     formatValidationErrors,
+    getPreviewFileExtension,
+    isPreviewExtensionAllowed,
     ValidationResult,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
@@ -419,6 +423,10 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
     // and the validator all derive from the same fetch, so they have to change together.
     const [tagTypes, setTagTypes] = useState<TagType[]>([]);
     const [tagOptions, setTagOptions] = useState<any[]>([]);
+    // An empty `tagTypes` reads as "this database has no required tag types", which is also what it
+    // holds before the fetch settles. `tagsLoaded` separates the two so the step is not reported
+    // valid on a requirement that is merely unknown.
+    const [tagsLoaded, setTagsLoaded] = useState(false);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -445,12 +453,14 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
             setTagsValid(false);
         }
 
-        const isValid = !(
-            validation.assetId ||
-            validation.databaseId ||
-            validation.description ||
-            validation.tags
-        );
+        const isValid =
+            tagsLoaded &&
+            !(
+                validation.assetId ||
+                validation.databaseId ||
+                validation.description ||
+                validation.tags
+            );
         setValid(isValid);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
@@ -459,6 +469,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
         assetDetailState.description,
         assetDetailState.tags,
         tagTypes,
+        tagsLoaded,
     ]);
 
     // Tag types and tags are both scoped to GLOBAL + the selected database, matching the backend's
@@ -479,50 +490,68 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
             setTagTypes([]);
             setTagOptions([]);
             setConstraintText({});
+            setTagsLoaded(false);
             return;
         }
 
-        Promise.all([
-            fetchTagTypesForAsset({ databaseId }),
-            fetchTagsForAsset({ databaseId }),
-        ]).then(([typesRes, tagsRes]) => {
-            if (seq !== requestSeq.current) return;
+        // Reset before the request so a switch to another database re-opens the gate rather than
+        // validating against the previous database's requirements.
+        setTagsLoaded(false);
 
-            // Each service returns an array on success, or an error message string / false on
-            // failure. Surface failures instead of silently leaving the form blank.
-            if (!Array.isArray(typesRes) || !Array.isArray(tagsRes)) {
-                const failed = !Array.isArray(typesRes) ? typesRes : tagsRes;
+        Promise.all([fetchTagTypesForAsset({ databaseId }), fetchTagsForAsset({ databaseId })])
+            .then(([typesRes, tagsRes]) => {
+                if (seq !== requestSeq.current) return;
+
+                // Each service returns an array on success, or an error message string / false on
+                // failure. Surface failures instead of silently leaving the form blank.
+                if (!Array.isArray(typesRes) || !Array.isArray(tagsRes)) {
+                    const failed = !Array.isArray(typesRes) ? typesRes : tagsRes;
+                    setTagTypes([]);
+                    setTagOptions([]);
+                    setConstraintText({});
+                    setLoadError(
+                        typeof failed === "string" && failed.trim() !== ""
+                            ? failed
+                            : "Failed to load tags. Please try refreshing the page."
+                    );
+                    // Settled, so the step is releasable: the requirements cannot be computed here
+                    // and the create call remains the authority on them.
+                    setTagsLoaded(true);
+                    return;
+                }
+
+                setTagTypes(typesRes);
+                // Grouped, scope-labelled and ordered by the shared helper so this picker and the
+                // asset edit form present tags identically. The grouping metadata comes from the
+                // types just fetched: the `tagTypes` localStorage entry another page happens to
+                // write is absent on a fresh browser, which left every group ungrouped.
+                setTagOptions(buildTagOptionGroups(tagsRes, typesRes));
+
+                // A required tag type with no tags cannot be satisfied, so it is not announced as a
+                // constraint either — the same set the validator enforces.
+                const requiredTagTypes = enforceableRequiredTagTypes(typesRes);
+                if (requiredTagTypes.length) {
+                    setConstraintText({
+                        tags:
+                            "The following tag types, listed in parentheses, require at least one selection: " +
+                            requiredTagTypes.map((tagType) => tagType.tagTypeName).join(", "),
+                    });
+                } else {
+                    setConstraintText({});
+                }
+
+                setTagsLoaded(true);
+            })
+            .catch((error: any) => {
+                if (seq !== requestSeq.current) return;
                 setTagTypes([]);
                 setTagOptions([]);
                 setConstraintText({});
                 setLoadError(
-                    typeof failed === "string" && failed.trim() !== ""
-                        ? failed
-                        : "Failed to load tags. Please try refreshing the page."
+                    error?.message || "Failed to load tags. Please try refreshing the page."
                 );
-                return;
-            }
-
-            setTagTypes(typesRes);
-            // Grouped, scope-labelled and ordered by the shared helper so this picker and the asset
-            // edit form present tags identically. The grouping metadata comes from the types just
-            // fetched: the `tagTypes` localStorage entry another page happens to write is absent on a
-            // fresh browser, which left every group ungrouped.
-            setTagOptions(buildTagOptionGroups(tagsRes, typesRes));
-
-            // A required tag type with no tags cannot be satisfied, so it is not announced as a
-            // constraint either — the same set the validator enforces.
-            const requiredTagTypes = enforceableRequiredTagTypes(typesRes);
-            if (requiredTagTypes.length) {
-                setConstraintText({
-                    tags:
-                        "The following tag types, listed in parentheses, require at least one selection: " +
-                        requiredTagTypes.map((tagType) => tagType.tagTypeName).join(", "),
-                });
-            } else {
-                setConstraintText({});
-            }
-        });
+                setTagsLoaded(true);
+            });
     }, [selectedDatabaseId]);
 
     return (
@@ -652,10 +681,20 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
 
                 <FormField
                     label="Tags"
-                    constraintText={constraintText.tags}
+                    constraintText={
+                        selectedDatabaseId && !tagsLoaded ? (
+                            <StatusIndicator type="loading">
+                                Loading tag requirements
+                            </StatusIndicator>
+                        ) : (
+                            constraintText.tags
+                        )
+                    }
                     errorText={showErrors || !tagsValid ? validationText.tags : null}
                 >
                     <Multiselect
+                        statusType={selectedDatabaseId && !tagsLoaded ? "loading" : "finished"}
+                        loadingText="Loading tags"
                         selectedOptions={selectedTags}
                         onChange={({ detail }) => {
                             assetTags = [];
@@ -677,6 +716,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                         }}
                         placeholder="Tags"
                         options={tagOptions}
+                        data-testid="tags-multiselect"
                     />
                 </FormField>
             </SpaceBetween>
@@ -807,7 +847,9 @@ const AssetMetadataInfo = ({
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState } = assetDetailContext;
     const [hasPendingChanges, setHasPendingChanges] = useState(false);
-    const [hasRequiredFieldsFilled, setHasRequiredFieldsFilled] = useState(true);
+    // Starts unfilled: MetadataContainer reports its required-field state only once the schema
+    // fetch has settled, so anything before that is unknown rather than satisfied.
+    const [hasRequiredFieldsFilled, setHasRequiredFieldsFilled] = useState(false);
 
     // Memoize the metadata array to prevent creating new array on every render
     const metadataArray = useMemo(() => {
@@ -1000,11 +1042,21 @@ const AssetFileInfo = ({
         });
     };
 
-    // Function to handle preview file selection with size validation
+    // Function to handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
         if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
             setPreviewFileError("Preview file exceeds maximum allowed size of 5MB");
             // Don't update the state with the oversized file
+            return;
+        }
+
+        if (file && !isPreviewExtensionAllowed(file.name)) {
+            setPreviewFileError(
+                `Extension ${getPreviewFileExtension(
+                    file.name
+                )} is not allowed. Preview files must be one of: ${previewFileFormatsStr}`
+            );
+            // Don't update the state with the unsupported file
             return;
         }
 
@@ -1039,7 +1091,8 @@ const AssetFileInfo = ({
                                 <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
                                     <em>
                                         Note: Preview files (containing {PREVIEW_FILE_PATTERN} in
-                                        the filename) are exempt from these restrictions.
+                                        the filename) are exempt from these restrictions, but must
+                                        still be one of {previewFileFormatsStr}.
                                     </em>
                                 </div>
                             </SpaceBetween>
@@ -1050,22 +1103,22 @@ const AssetFileInfo = ({
                 {fileValidationResult && !fileValidationResult.isValid && (
                     <Alert header="Invalid Files Selected" type="error">
                         <SpaceBetween direction="vertical" size="xs">
-                            <div>
-                                The following files cannot be uploaded because their extensions are
-                                not allowed for this database:
-                            </div>
+                            <div>The following files cannot be uploaded:</div>
                             <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
                                 {fileValidationResult.invalidFiles.map((file, index) => (
                                     <li key={index}>
-                                        <strong>{file.fileName}</strong> - Extension{" "}
-                                        {file.extension} not allowed
+                                        <strong>{file.fileName}</strong> -{" "}
+                                        {file.errorMessage ||
+                                            `Extension ${file.extension} not allowed`}
                                     </li>
                                 ))}
                             </ul>
-                            <div>
-                                <strong>Allowed extensions:</strong>{" "}
-                                {fileValidationResult.allowedExtensions?.join(", ")}
-                            </div>
+                            {fileValidationResult.allowedExtensions !== null && (
+                                <div>
+                                    <strong>Allowed extensions:</strong>{" "}
+                                    {fileValidationResult.allowedExtensions.join(", ")}
+                                </div>
+                            )}
                         </SpaceBetween>
                     </Alert>
                 )}
@@ -1424,7 +1477,9 @@ const UploadForm = () => {
     });
     const [isCancelVisible, setCancelVisible] = useState(false);
     const [showErrorsForPage, setShowErrorsForPage] = useState(-1);
-    const [validSteps, setValidSteps] = useState([false, false, false]);
+    // One entry per wizard step. Sized to the step count: the setters below write indices 0-3, so a
+    // 3-element initial value left index 3 `undefined` until that step first reported.
+    const [validSteps, setValidSteps] = useState([false, false, false, false, false]);
 
     useEffect(() => {
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
@@ -1563,20 +1618,41 @@ const UploadForm = () => {
                         }
                     }}
                     activeStepIndex={activeStepIndex}
-                    onSubmit={onSubmit({
-                        assetDetail: assetDetailState,
-                        setFreezeWizardButtons,
-                        metadata,
-                        execStatus,
-                        setExecStatus,
-                        setShowUploadAndExecProgress,
-                        moveToQueued,
-                        updateProgressForFileUploadItem,
-                        fileUploadComplete,
-                        fileUploadError,
-                        setPreviewUploadProgress,
-                        setUploadExecutionProps,
-                    })}
+                    onSubmit={(submitEvent) => {
+                        // A non-optional step that was SKIPPED PAST must still block the upload.
+                        //
+                        // `allowSkipTo` is deliberately kept (a Playwright spec and other flows rely on
+                        // it), and `onNavigate` above can only validate the step being left -- so from a
+                        // valid step 0, "Skip to Select Files to upload" jumps over the metadata step
+                        // even though it is declared `isOptional: false`. Gating navigation cannot close
+                        // that; gating SUBMIT can, which is the shape chosen for it.
+                        //
+                        // Indices are the `isOptional: false` steps in the `steps` array below —
+                        // 0 (Asset Details) and 1 (Asset Metadata). Kept as an explicit list rather than
+                        // derived, because `steps` is defined inline further down and is not in scope here.
+                        const firstInvalid = firstIncompleteRequiredStep(validSteps);
+                        if (firstInvalid !== undefined) {
+                            // Send the user to the offending step with its errors shown, rather than
+                            // failing the upload at the API and reporting it as a server rejection.
+                            setShowErrorsForPage(firstInvalid);
+                            setActiveStepIndex(firstInvalid);
+                            return;
+                        }
+                        return onSubmit({
+                            assetDetail: assetDetailState,
+                            setFreezeWizardButtons,
+                            metadata,
+                            execStatus,
+                            setExecStatus,
+                            setShowUploadAndExecProgress,
+                            moveToQueued,
+                            updateProgressForFileUploadItem,
+                            fileUploadComplete,
+                            fileUploadError,
+                            setPreviewUploadProgress,
+                            setUploadExecutionProps,
+                        })(submitEvent);
+                    }}
                     allowSkipTo
                     steps={[
                         {

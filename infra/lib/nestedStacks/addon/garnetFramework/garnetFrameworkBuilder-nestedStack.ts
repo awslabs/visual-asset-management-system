@@ -76,8 +76,23 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
             props.isolatedSubnets
         );
 
+        // Matches the core indexers' redrive policy (searchBuilder-nestedStack.ts), so a Garnet
+        // record that keeps failing lands in a DLQ after the same number of attempts.
+        const garnetIndexerQueueMaxReceiveCount = 3;
+
         // Create SQS queues for Garnet indexers and subscribe to SNS topics
         // Garnet Database indexer SQS queue
+        // Dead-letter queue for the Garnet database indexer. One per source queue, so this
+        // indexer's poison records stay distinguishable from the other two.
+        const garnetDatabaseIndexerSqsDlq = new sqs.Queue(this, "GarnetDatabaseIndexerSqsDLQ", {
+            retentionPeriod: cdk.Duration.days(14),
+            encryption: props.storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: props.storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+
         const garnetDatabaseIndexerSqsQueue = new sqs.Queue(this, "GarnetDatabaseIndexerSqsQueue", {
             queueName: `${props.config.name}-${props.config.app.baseStackName}-garnetDatabaseIndexer`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's timeout is 900
@@ -86,6 +101,10 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                 : sqs.QueueEncryption.SQS_MANAGED,
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
+            deadLetterQueue: {
+                queue: garnetDatabaseIndexerSqsDlq,
+                maxReceiveCount: garnetIndexerQueueMaxReceiveCount,
+            },
         });
 
         // Subscribe Garnet database indexer queue to database indexer SNS topic
@@ -105,6 +124,7 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                     target: garnetDatabaseIndexerFunction,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
             const cfnEsmGarnetDatabase = esmGarnetDatabase.node
@@ -115,11 +135,23 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                 new eventsources.SqsEventSource(garnetDatabaseIndexerSqsQueue, {
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 })
             );
         }
 
         // Garnet Asset indexer SQS queue
+        // Dead-letter queue for the Garnet asset indexer. One per source queue, so this
+        // indexer's poison records stay distinguishable from the other two.
+        const garnetAssetIndexerSqsDlq = new sqs.Queue(this, "GarnetAssetIndexerSqsDLQ", {
+            retentionPeriod: cdk.Duration.days(14),
+            encryption: props.storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: props.storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+
         const garnetAssetIndexerSqsQueue = new sqs.Queue(this, "GarnetAssetIndexerSqsQueue", {
             queueName: `${props.config.name}-${props.config.app.baseStackName}-garnetAssetIndexer`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's timeout is 900
@@ -128,6 +160,10 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                 : sqs.QueueEncryption.SQS_MANAGED,
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
+            deadLetterQueue: {
+                queue: garnetAssetIndexerSqsDlq,
+                maxReceiveCount: garnetIndexerQueueMaxReceiveCount,
+            },
         });
 
         // Subscribe Garnet asset indexer queue to asset indexer SNS topic
@@ -147,6 +183,7 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                     target: garnetAssetIndexerFunction,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
             const cfnEsmGarnetAsset = esmGarnetAsset.node
@@ -157,11 +194,23 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                 new eventsources.SqsEventSource(garnetAssetIndexerSqsQueue, {
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 })
             );
         }
 
         // Garnet File indexer SQS queue
+        // Dead-letter queue for the Garnet file indexer. One per source queue, so this
+        // indexer's poison records stay distinguishable from the other two.
+        const garnetFileIndexerSqsDlq = new sqs.Queue(this, "GarnetFileIndexerSqsDLQ", {
+            retentionPeriod: cdk.Duration.days(14),
+            encryption: props.storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: props.storageResources.encryption.kmsKey,
+            enforceSSL: true,
+        });
+
         const garnetFileIndexerSqsQueue = new sqs.Queue(this, "GarnetFileIndexerSqsQueue", {
             queueName: `${props.config.name}-${props.config.app.baseStackName}-garnetFileIndexer`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's timeout is 900
@@ -170,6 +219,10 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                 : sqs.QueueEncryption.SQS_MANAGED,
             encryptionMasterKey: props.storageResources.encryption.kmsKey,
             enforceSSL: true,
+            deadLetterQueue: {
+                queue: garnetFileIndexerSqsDlq,
+                maxReceiveCount: garnetIndexerQueueMaxReceiveCount,
+            },
         });
 
         // Subscribe Garnet file indexer queue to file indexer SNS topic
@@ -189,6 +242,7 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                     target: garnetFileIndexerFunction,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
             const cfnEsmGarnetFile = esmGarnetFile.node
@@ -199,6 +253,7 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
                 new eventsources.SqsEventSource(garnetFileIndexerSqsQueue, {
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 })
             );
         }
@@ -209,7 +264,7 @@ export class GarnetFrameworkBuilderNestedStack extends NestedStack {
             [
                 {
                     id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Files easily redriven based on the logic of assets.",
+                    reason: "Each Garnet indexer queue redrives to its own dead-letter queue; the finding remains only on those dead-letter queues, which terminate the redrive chain by definition.",
                 },
             ],
             true

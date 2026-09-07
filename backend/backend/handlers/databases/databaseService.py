@@ -4,6 +4,7 @@
 import json
 import base64
 import boto3
+from botocore.config import Config
 from boto3.dynamodb.conditions import Attr, Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -20,8 +21,9 @@ from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_err
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
 # Configure AWS clients
-dynamodb = boto3.resource('dynamodb')
-dbClient = boto3.client('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dbClient = boto3.client('dynamodb', config=retry_config)
 deserializer = TypeDeserializer()
 logger = safeLogger(service_name="DatabaseService")
 

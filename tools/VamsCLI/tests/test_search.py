@@ -112,7 +112,10 @@ class TestSearchAssetsCommand:
                             "_source": {
                                 "str_assetname": "metadata-asset",
                                 "str_databaseid": "test-db",
-                                "MD_str_product": "Training"
+                                # Metadata reaches a hit inside one MD_ object with the key
+                                # verbatim -- the submitted MD_str_product spelling below is an
+                                # accepted alias for the query, never a stored field name.
+                                "MD_": {"product": "Training"}
                             },
                             "_score": 0.95
                         }
@@ -568,7 +571,7 @@ class TestSearchSimpleCommand:
                             "_index_type": "asset",
                             "_source": {
                                 "str_assetname": "metadata-asset",
-                                "MD_str_product": "Training"
+                                "MD_": {"product": "Training"}
                             },
                             "_score": 0.95
                         }

@@ -1393,6 +1393,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         )
                         shareable_links = []
                         skipped_links = []
+                        # The reason each file was skipped, keyed by relative path.
+                        # generate_presigned_urls records one per key -- including the request-level
+                        # error when a whole chunk fails -- and the file-download branch below already
+                        # reads it. Dropping it here reported a 400 "Asset not distributable" as
+                        # "25 file(s) skipped - not available for download", which names neither the
+                        # cause nor anything the caller can act on.
+                        skipped_reasons = {}
                         for file_item in target_files:
                             relative_path = file_item.get('relativePath', '')
                             url_entry = url_map.get(relative_path, {})
@@ -1405,11 +1412,16 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                 })
                             else:
                                 skipped_links.append(relative_path)
+                                skipped_reasons[relative_path] = url_entry.get(
+                                    'error', 'URL generation failed')
 
                         message = "Shareable links generated successfully"
                         if skipped_links:
-                            message += (f" ({len(skipped_links)} file(s) skipped - "
-                                        "not available for download)")
+                            # One shared reason is the common case (a request-level rejection applies to
+                            # every key in the chunk), so it is stated once rather than per file.
+                            distinct = sorted(set(skipped_reasons.values()))
+                            detail = distinct[0] if len(distinct) == 1 else "; ".join(distinct[:3])
+                            message += (f" ({len(skipped_links)} file(s) skipped - {detail})")
                         result = {
                             "shareableLinks": shareable_links,
                             "totalFiles": len(shareable_links),
@@ -1417,6 +1429,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         }
                         if skipped_links:
                             result["skippedFiles"] = skipped_links
+                            result["skippedFileReasons"] = skipped_reasons
                         
                 except Exception as e:
                     raise AssetDownloadError(f"Failed to generate shareable links: {e}")

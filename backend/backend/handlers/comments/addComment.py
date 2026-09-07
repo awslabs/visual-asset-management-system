@@ -3,6 +3,7 @@
 
 import copy
 import boto3
+from botocore.config import Config
 import json
 import datetime
 from common.resourceNames import get_table_name, ResourceKeys
@@ -19,8 +20,9 @@ claims_and_roles = {}
 
 logger = safeLogger(service="AddComment")
 
-dynamodb = boto3.resource("dynamodb")
-s3c = boto3.client("s3")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+s3c = boto3.client("s3", config=retry_config)
 
 main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
@@ -172,7 +174,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
             logger.info("Validating body")
             (valid, message) = validate(
                 {
-                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING"},
+                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING_16384"},
                 }
             )
             if not valid:

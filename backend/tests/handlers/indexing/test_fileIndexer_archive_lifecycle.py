@@ -109,8 +109,13 @@ class TestLookupDatabaseIdStripsDeletedSuffix:
     def test_single_match_in_archived_partition(self, fileIndexer):
         fileIndexer.asset_storage_table = MagicMock()
         fileIndexer.asset_storage_table.query.return_value = {
-            "Items": [{"databaseId": "db1#deleted", "assetId": "a1"}]
+            "Items": [{"databaseId": "db1#deleted", "assetId": "a1", "bucketId": "b1"}]
         }
+        # The record has to be confirmed against the event's bucket before its
+        # databaseId is usable; the bucket is registered at the root, which the event
+        # spells '/' and the registration ''.
+        fileIndexer.get_bucket_details = MagicMock(return_value={
+            "bucketId": "b1", "bucketName": "bucket", "baseAssetsPrefix": ""})
         db_id, ok = fileIndexer.lookup_database_id_for_permanent_delete("a1", "bucket", "/")
         assert ok is True and db_id == "db1"
 
@@ -208,7 +213,38 @@ class TestUnarchiveNotTreatedAsPermanentDelete:
         fileIndexer.process_file_index_request.assert_not_called()
 
     def test_truly_permanent_delete_still_deletes(self, fileIndexer):
-        # No versions and no markers -> permanent-delete branch as before
+        # No versions and no markers -> permanent-delete branch as before.
+        #
+        # The record carries the bucketId the event came from, which is what makes its databaseId
+        # usable: assetId is unique within a database, not across them, so a single assetIdGSI match
+        # identifies the right database only once its registered bucket and baseAssetsPrefix agree
+        # with the event's. See the bucketId-less arm below for the other half.
+        fileIndexer.s3_client = MagicMock()
+        fileIndexer.s3_client.list_object_versions.return_value = {
+            "Versions": [], "DeleteMarkers": [],
+        }
+        fileIndexer.asset_storage_table = MagicMock()
+        fileIndexer.asset_storage_table.query.return_value = {
+            "Items": [{"databaseId": "db1", "assetId": "a1", "bucketId": "b-1"}]
+        }
+        fileIndexer.get_bucket_details = MagicMock(
+            return_value={"bucketId": "b-1", "bucketName": "bucket", "baseAssetsPrefix": ""}
+        )
+        fileIndexer.delete_file_document = MagicMock(return_value=True)
+        result = fileIndexer.handle_s3_notification(self._s3_record())
+        assert result.operation == "delete"
+        fileIndexer.delete_file_document.assert_called_once_with("db1", "a1", "/file.txt")
+
+    def test_a_record_without_a_bucket_id_is_not_deleted_by_exact_id(self, fileIndexer):
+        """The paired arm: an unverifiable record must not authorize an exact-_id delete.
+
+        `bucketId` is optional on the asset record (`assetsV3.py` declares it `str = None`, and
+        `assetService.py` carries an explicit `if not item.get('bucketId')` branch), so records
+        without one exist. Since `assetId` is not unique across databases, such a record cannot be
+        shown to belong to the bucket the event came from -- and using it anyway is what deleted
+        another database's live document. The exact-_id delete is therefore skipped and the caller
+        falls through to the prefix-scoped orphan cleanup, which is bounded by the event's own key.
+        """
         fileIndexer.s3_client = MagicMock()
         fileIndexer.s3_client.list_object_versions.return_value = {
             "Versions": [], "DeleteMarkers": [],
@@ -218,9 +254,11 @@ class TestUnarchiveNotTreatedAsPermanentDelete:
             "Items": [{"databaseId": "db1", "assetId": "a1"}]
         }
         fileIndexer.delete_file_document = MagicMock(return_value=True)
+
         result = fileIndexer.handle_s3_notification(self._s3_record())
-        assert result.operation == "delete"
-        fileIndexer.delete_file_document.assert_called_once_with("db1", "a1", "/file.txt")
+
+        assert result.operation == "skip"
+        fileIndexer.delete_file_document.assert_not_called()
 
 
 @pytest.mark.unit
@@ -537,6 +575,65 @@ class TestOrphanCleanupFallback:
         assert deleted == 0
         client.search.assert_not_called()
         client.delete.assert_not_called()
+
+    @pytest.mark.parametrize("deleted_prefix,expected_id", [
+        ("prefix-a/", "dbA#a1#/file.txt"),
+        ("prefix-b/", "dbB#a1#/file.txt"),
+    ])
+    def test_only_the_matching_prefixes_document_is_removed(
+            self, fileIndexer, deleted_prefix, expected_id):
+        """S2-BACKEND-096 as behaviour rather than as a query shape.
+
+        Two databases can be backed by one bucket under different
+        baseAssetsPrefix values and each hold an asset with the same assetId
+        (uniqueness is enforced only per database), and str_key is asset-relative
+        -- so both documents share every other filter term. Only the document
+        under the deleted key's prefix may go; the other database's file is still
+        live in S3.
+
+        Both arms are also the positive control: the document that SHOULD be
+        cleaned up is still cleaned up, so scoping the filter did not turn the
+        orphan cleanup into a no-op.
+        """
+        docs = {
+            "dbA#a1#/file.txt": {"str_assetid": "a1", "str_key": "/file.txt",
+                                 "str_bucketname": "bucket",
+                                 "str_bucketprefix": "prefix-a/"},
+            "dbB#a1#/file.txt": {"str_assetid": "a1", "str_key": "/file.txt",
+                                 "str_bucketname": "bucket",
+                                 "str_bucketprefix": "prefix-b/"},
+        }
+        deleted_ids = set()
+
+        def search(index, body):
+            # Match the way OpenSearch would, so the assertion is about which
+            # documents the filter selects rather than about the terms present.
+            terms = {}
+            for clause in body["query"]["bool"]["filter"]:
+                (field, value), = clause["term"].items()
+                terms[field.replace(".keyword", "")] = value
+            return {"hits": {"hits": [
+                {"_id": doc_id} for doc_id, doc in docs.items()
+                if doc_id not in deleted_ids
+                and all(doc.get(f) == v for f, v in terms.items())
+            ]}}
+
+        client = MagicMock()
+        client.search.side_effect = search
+        client.delete.side_effect = (
+            lambda index, id, ignore=None: deleted_ids.add(id))
+        fileIndexer.opensearch_manager = MagicMock()
+        fileIndexer.opensearch_manager.is_available.return_value = True
+        fileIndexer.opensearch_manager.get_client.return_value = client
+
+        deleted = fileIndexer.delete_file_documents_by_asset_and_path(
+            "a1", "/file.txt", "bucket", deleted_prefix)
+
+        assert deleted_ids == {expected_id}, (
+            f"the cleanup removed {deleted_ids}; a document belonging to another "
+            f"database on the same bucket is still live in S3"
+        )
+        assert deleted == 1
 
 
 @pytest.mark.unit

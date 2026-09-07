@@ -28,10 +28,23 @@
 
 import type { ConfigShape, Rule } from "./types";
 import { getByPath } from "./pathUtils";
+import { isCidr, isVpceId } from "./fields/presignedUrlFormats";
+import { ipAddressFamily } from "./fields/ipAddressFormats";
 
 /** config.ts treats null / "" / "UNDEFINED" (and missing) all as unset. */
 function isUnset(value: unknown): boolean {
     return value == null || value === "" || value === "UNDEFINED";
+}
+
+/**
+ * True for the values `getConfig()`'s `== undefined` backfills treat as absent — null and undefined,
+ * and nothing else. A field that is absent from `config.json` is filled with its default before the
+ * matching check runs, so a rule guarded by this stays silent rather than reporting a value the
+ * deployment would supply for itself. `""` is deliberately NOT absent: `getConfig()` does not backfill
+ * it, so an empty string reaches the check and is rejected there.
+ */
+function isAbsent(value: unknown): boolean {
+    return value == null;
 }
 
 /** HuggingFace token check also rejects whitespace-only (config.ts: the `huggingFaceToken.trim() === ""` checks). */
@@ -45,8 +58,6 @@ function g(cfg: ConfigShape, path: string): any {
 
 // Regexes copied verbatim from config.ts.
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
-const IPV4_PATTERN =
-    /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 /**
  * Region-name prefix to partition name and DNS suffix, matching what
  * `region_info.RegionInfo.get(region)` resolves at synth time (config.ts: "garnetIngestionQueueSqsUrl
@@ -139,6 +150,18 @@ function isAllowedOcu(value: unknown): boolean {
 }
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SECRETSMANAGER_ARN_PATTERN = /^arn:aws[a-z-]*:secretsmanager:/;
+
+// Amazon Cognito's username limit, mirroring COGNITO_USERNAME_MAX_LENGTH in infra/config/config.ts.
+const COGNITO_USERNAME_MAX_LENGTH = 128;
+
+// The taskTimeout the RapidPipeline EKS bundle declares, mirroring
+// RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS in infra/config/config.ts. The parent workflow waits
+// this long for the pipeline's task-token callback, so the Kubernetes job must not outlive it.
+const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
+
+// The API implementation types the deployment accepts, mirroring SUPPORTED_API_TYPES in
+// infra/config/config.ts.
+const SUPPORTED_API_TYPES = ["APIGATEWAY_REST"];
 
 /** True when a value looks like a valid URL (config.ts uses `new URL(...)`). */
 function isValidUrl(value: unknown): boolean {
@@ -288,6 +311,36 @@ function unverifiedGpuInstanceTypes(cfg: ConfigShape, path: string): string[] {
     return types.filter((t) => GPU_COUNT_BY_INSTANCE_TYPE[String(t)] === undefined);
 }
 
+/** The three NVIDIA Cosmos 3 Super variants that share one AWS Batch compute environment. */
+const COSMOS3_SUPER_MODELS = ["super64B", "superText2Image64B", "superImage2Video64B"];
+
+/**
+ * The instanceTypes lists of the enabled Super variants, keyed by variant name (config.ts: "the
+ * enabled useNvidiaCosmos3.modelsOmni Super variants share one"). The variants share one compute
+ * environment, so the pool it can launch on is the intersection of these lists.
+ */
+function enabledSuperInstanceTypeLists(cfg: ConfigShape): [string, string[] | undefined][] {
+    return COSMOS3_SUPER_MODELS.filter((model) =>
+        g(cfg, `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.enabled`)
+    ).map((model): [string, string[] | undefined] => [
+        model,
+        g(cfg, `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.instanceTypes`),
+    ]);
+}
+
+/** The instance types every supplied list permits, mirroring intersectInstanceTypes in config.ts. */
+function intersectInstanceTypes(lists: (string[] | undefined)[]): string[] {
+    const present = lists.filter(
+        (list): list is string[] => Array.isArray(list) && list.length > 0
+    );
+    if (present.length === 0) return [];
+    return present.reduce((common, list) => common.filter((type) => list.includes(type)));
+}
+
+/**
+ * Pipelines whose containers run in (or reach an endpoint in) PUBLIC subnets (config.ts: the
+ * `useAlb.usePublicSubnet` / RapidPipeline public-subnet check).
+ */
 function usesContainerVpcPipeline(cfg: ConfigShape): boolean {
     return (
         !!g(cfg, "app.pipelines.useRapidPipeline.useEcs.enabled") ||
@@ -296,11 +349,108 @@ function usesContainerVpcPipeline(cfg: ConfigShape): boolean {
     );
 }
 
+/**
+ * Pipelines that require a PRIVATE subnet in an imported VPC (config.ts: "If using a pipeline that
+ * runs in (or reaches an endpoint in) private subnets"). A longer list than the public-subnet one —
+ * every AWS Batch pipeline places its compute environment in private subnets.
+ */
+function usesPrivateSubnetPipeline(cfg: ConfigShape): boolean {
+    return (
+        usesContainerVpcPipeline(cfg) ||
+        !!g(cfg, "app.pipelines.useSplatToolbox.enabled") ||
+        !!g(cfg, "app.pipelines.useIsaacLabTraining.enabled") ||
+        !!g(cfg, "app.pipelines.useNvidiaCosmos.enabled") ||
+        !!g(cfg, "app.pipelines.useNvidiaCosmos3.enabled") ||
+        !!g(cfg, "app.pipelines.useNvidiaGr00t.enabled")
+    );
+}
+
 function hasExternalVpc(cfg: ConfigShape): boolean {
     return (
         !!g(cfg, "app.useGlobalVpc.enabled") &&
         !isUnset(g(cfg, "app.useGlobalVpc.optionalExternalVpcId"))
     );
+}
+
+/** The configured external asset bucket entries, as an array whatever the field holds. */
+function externalBuckets(cfg: ConfigShape): any[] {
+    const value = g(cfg, "app.assetBuckets.externalAssetBuckets");
+    return Array.isArray(value) ? value.filter((entry) => !!entry) : [];
+}
+
+/**
+ * A `baseAssetsPrefix` reduced to a comparable form (config.ts: `normalizePrefix` in
+ * validateExternalAssetBuckets). "", "/" and missing all mean the bucket root; anything else gets a
+ * single trailing slash.
+ */
+function normalizeExternalPrefix(prefix: unknown): string {
+    if (isUnset(prefix) || typeof prefix !== "string" || prefix === "/") return "/";
+    return prefix.endsWith("/") ? prefix : prefix + "/";
+}
+
+/**
+ * True when one prefix is a path-prefix of the other, so Amazon S3 cannot route an object-created
+ * event to a single prefix-filtered notification (config.ts: `prefixesOverlap`). The root overlaps
+ * everything.
+ */
+function externalPrefixesOverlap(a: string, b: string): boolean {
+    if (a === "/" || b === "/") return true;
+    return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+/** A per-bucket attribute reduced to undefined when unset (config.ts: `normalizeOptional`). */
+function normalizeExternalAttribute(value: unknown): string | undefined {
+    return isUnset(value) ? undefined : String(value);
+}
+
+/**
+ * External asset bucket ARNs registered more than once with overlapping `baseAssetsPrefix` values
+ * (config.ts: "has overlapping baseAssetsPrefix values").
+ */
+function externalBucketsWithOverlappingPrefixes(cfg: ConfigShape): string[] {
+    const seen = new Map<string, string[]>();
+    const offenders: string[] = [];
+    for (const bucket of externalBuckets(cfg)) {
+        const arn = String(bucket.bucketArn ?? "");
+        const prefix = normalizeExternalPrefix(bucket.baseAssetsPrefix);
+        const registered = seen.get(arn);
+        if (!registered) {
+            seen.set(arn, [prefix]);
+            continue;
+        }
+        if (registered.some((other) => externalPrefixesOverlap(prefix, other))) {
+            offenders.push(arn);
+        }
+        registered.push(prefix);
+    }
+    return [...new Set(offenders)];
+}
+
+/**
+ * External asset bucket ARNs whose entries disagree on account, region, or KMS key (config.ts: "is
+ * registered with inconsistent"). One ARN is one physical bucket, so those attributes must match
+ * across every entry for it.
+ */
+function externalBucketsWithInconsistentAttributes(cfg: ConfigShape): string[] {
+    const seen = new Map<string, (string | undefined)[]>();
+    const offenders: string[] = [];
+    for (const bucket of externalBuckets(cfg)) {
+        const arn = String(bucket.bucketArn ?? "");
+        const attributes = [
+            normalizeExternalAttribute(bucket.bucketAccountId),
+            normalizeExternalAttribute(bucket.bucketRegion),
+            normalizeExternalAttribute(bucket.bucketKmsKeyArn),
+        ];
+        const first = seen.get(arn);
+        if (!first) {
+            seen.set(arn, attributes);
+            continue;
+        }
+        if (attributes.some((value, index) => value !== first[index])) {
+            offenders.push(arn);
+        }
+    }
+    return [...new Set(offenders)];
 }
 
 /** True for every ISO partition variant (aws-iso, aws-iso-b, aws-iso-e, aws-iso-f). */
@@ -543,6 +693,41 @@ export const RULES: Rule[] = [
             "Isaac Lab Training requires accepting the NVIDIA EULA — set useIsaacLabTraining.acceptNvidiaEula to true.",
     },
 
+    // ----- Pipeline upload trigger without registration
+    // (config.ts: "The upload trigger ships with the VamsSchemaRegistration custom resource") -----
+    //
+    // The trigger is created by the registration custom resource, which exists only when
+    // autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded
+    // silently. One rule per pipeline, over the same five config.ts iterates, so the marker lands on
+    // the pipeline whose two adjacent toggles disagree.
+    ...(
+        [
+            "useConversionCadMeshMetadataExtraction",
+            "useConversionCoordinateTransform",
+            "usePreviewPcPotreeViewer",
+            "usePreview3dThumbnail",
+            "useGenAiMetadata3dLabeling",
+        ] as const
+    ).map((name): Rule => {
+        const base = `app.pipelines.${name}`;
+        return {
+            id: `pipeline-armed-trigger-unregistered-${name}`,
+            severity: "warning",
+            fieldPaths: [
+                `${base}.autoRegisterWithVAMS`,
+                `${base}.autoRegisterAutoTriggerOnFileUpload`,
+            ],
+            appliesWhen: (c) =>
+                !!g(c, `${base}.enabled`) &&
+                !!g(c, `${base}.autoRegisterAutoTriggerOnFileUpload`) &&
+                g(c, `${base}.autoRegisterWithVAMS`) !== true,
+            message:
+                `pipelines.${name}.autoRegisterAutoTriggerOnFileUpload is true but autoRegisterWithVAMS ` +
+                `is not, so no registration and no upload trigger are created. Set autoRegisterWithVAMS ` +
+                `to true to arm the trigger.`,
+        };
+    }),
+
     // ----- NVIDIA Cosmos (config.ts: "Cosmos Predict/Transfer validation") -----
     {
         id: "cosmos-no-model",
@@ -688,6 +873,40 @@ export const RULES: Rule[] = [
             'useRapidPipeline.useEks.eksClusterVersion must be an Amazon EKS Kubernetes minor version of the form "1.NN" (for example "1.31").',
     },
 
+    // ----- RapidPipeline EKS job timeout
+    // (config.ts: "The job timeout sits in the middle of a three-link chain") -----
+    //
+    // The state machine derives its poll ceiling from this value, the Kubernetes pod's
+    // activeDeadlineSeconds is set from it, and the registered pipeline bundle declares a taskTimeout
+    // the parent workflow waits for. An inconsistent value produces a wrong outcome rather than an
+    // error: a pod outliving the poll makes the execution report FAILED while it keeps writing output.
+    {
+        id: "rapidpipeline-eks-job-timeout",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useRapidPipeline.useEks.jobTimeout"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useRapidPipeline.useEks.enabled")) return false;
+            const timeout = g(c, "app.pipelines.useRapidPipeline.useEks.jobTimeout");
+            return typeof timeout !== "number" || !Number.isInteger(timeout) || timeout <= 0;
+        },
+        message: "useRapidPipeline.useEks.jobTimeout must be a positive integer number of seconds.",
+    },
+    {
+        id: "rapidpipeline-eks-job-timeout-exceeds-task-timeout",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useRapidPipeline.useEks.jobTimeout"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useRapidPipeline.useEks.enabled") &&
+            Number(g(c, "app.pipelines.useRapidPipeline.useEks.jobTimeout")) >
+                RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS,
+        message:
+            `useRapidPipeline.useEks.jobTimeout exceeds the ` +
+            `${RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS}s taskTimeout the registered pipeline ` +
+            `declares, so the parent workflow would stop waiting while the Kubernetes job is still ` +
+            `allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
+            `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`,
+    },
+
     // ----- NVIDIA Cosmos 3
     // (config.ts: the `useNvidiaCosmos3.enabled` block, "Enable at least one model in
     // useNvidiaCosmos3.modelsOmni.") -----
@@ -798,14 +1017,12 @@ export const RULES: Rule[] = [
     {
         id: "cosmos3-super-instancetypes-gpu-count",
         severity: "error",
-        fieldPaths: [
-            "app.pipelines.useNvidiaCosmos3.modelsOmni.super64B.instanceTypes",
-            "app.pipelines.useNvidiaCosmos3.modelsOmni.superText2Image64B.instanceTypes",
-            "app.pipelines.useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes",
-        ],
+        fieldPaths: COSMOS3_SUPER_MODELS.map(
+            (model) => `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.instanceTypes`
+        ),
         appliesWhen: (c) =>
             g(c, "app.pipelines.useNvidiaCosmos3.enabled") &&
-            ["super64B", "superText2Image64B", "superImage2Video64B"].some(
+            COSMOS3_SUPER_MODELS.some(
                 (model) =>
                     g(c, `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.enabled`) &&
                     underGpuInstanceTypes(
@@ -818,6 +1035,50 @@ export const RULES: Rule[] = [
             `A useNvidiaCosmos3 Super tier's instanceTypes includes an instance type with fewer than ` +
             `${COSMOS3_SUPER_GPU_COUNT} GPUs. Super jobs reserve ${COSMOS3_SUPER_GPU_COUNT}, so AWS ` +
             `Batch can never place them on it and they stay RUNNABLE without reporting an error.`,
+    },
+    {
+        id: "cosmos3-super-instancetypes-gpu-unverified",
+        severity: "warning",
+        fieldPaths: COSMOS3_SUPER_MODELS.map(
+            (model) => `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.instanceTypes`
+        ),
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useNvidiaCosmos3.enabled") &&
+            COSMOS3_SUPER_MODELS.some(
+                (model) =>
+                    g(c, `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.enabled`) &&
+                    unverifiedGpuInstanceTypes(
+                        c,
+                        `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.instanceTypes`
+                    ).length > 0
+            ),
+        message:
+            `A useNvidiaCosmos3 Super tier's instanceTypes includes an instance type whose GPU count ` +
+            `cannot be verified here. Super jobs reserve ${COSMOS3_SUPER_GPU_COUNT} GPUs; confirm the ` +
+            `type carries at least that many.`,
+    },
+
+    // ----- NVIDIA Cosmos 3 shared Super compute environment
+    // (config.ts: "the enabled useNvidiaCosmos3.modelsOmni Super variants share one") -----
+    //
+    // The enabled Super variants share ONE compute environment, so its instance pool is the
+    // intersection of their lists. Disjoint lists leave no type any variant permits, rendering a
+    // compute environment that can launch nothing while its jobs sit RUNNABLE forever without an
+    // error — and the symptom gives no hint that two unrelated config blocks are what disagree.
+    {
+        id: "cosmos3-super-instancetypes-disjoint",
+        severity: "error",
+        fieldPaths: COSMOS3_SUPER_MODELS.map(
+            (model) => `app.pipelines.useNvidiaCosmos3.modelsOmni.${model}.instanceTypes`
+        ),
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useNvidiaCosmos3.enabled")) return false;
+            const enabled = enabledSuperInstanceTypeLists(c);
+            if (enabled.length < 2) return false;
+            return intersectInstanceTypes(enabled.map(([, list]) => list)).length === 0;
+        },
+        message:
+            "The enabled useNvidiaCosmos3.modelsOmni Super variants share one AWS Batch compute environment, and their instanceTypes have no type in common. Give them at least one instance type in common, or enable only one Super variant per deployment.",
     },
 
     // ----- Asset buckets
@@ -922,6 +1183,107 @@ export const RULES: Rule[] = [
         message:
             "Every app.assetBuckets.externalAssetBuckets entry must set defaultSyncDatabaseId.",
     },
+    {
+        id: "externalbucket-arn-partition-matches-deployment",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets", "env.region"],
+        // config.ts: "uses partition '...' which does not match the deployment partition". Silent when
+        // the region is unset, because the deploy-time partition is then unknowable here.
+        appliesWhen: (c) => {
+            const partition = isUnset(g(c, "env.region"))
+                ? undefined
+                : partitionForRegionName(g(c, "env.region"));
+            if (!partition) return false;
+            return externalBuckets(c).some((b) => {
+                const arnPartition = String(b.bucketArn ?? "").split(":")[1];
+                return !!arnPartition && arnPartition !== partition;
+            });
+        },
+        message:
+            "Every app.assetBuckets.externalAssetBuckets bucketArn must use the same AWS partition as the deployment region.",
+    },
+    {
+        id: "externalbucket-overlapping-prefixes",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        // One bucket ARN may be registered under several prefixes, but Amazon S3 permits one
+        // notification configuration per bucket and cannot route an object to an ambiguous prefix.
+        // "/" and "" both mean the bucket root, so either overlaps every other prefix.
+        appliesWhen: (c) => externalBucketsWithOverlappingPrefixes(c).length > 0,
+        message:
+            "An app.assetBuckets.externalAssetBuckets bucketArn is registered with overlapping baseAssetsPrefix values. Prefixes registered for the same bucket must not overlap, and the bucket root ('/' or empty) overlaps every prefix.",
+    },
+    {
+        id: "externalbucket-inconsistent-attributes",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) => externalBucketsWithInconsistentAttributes(c).length > 0,
+        message:
+            "An app.assetBuckets.externalAssetBuckets bucketArn is registered with inconsistent bucketAccountId, bucketRegion, or bucketKmsKeyArn values across its entries. One ARN is one physical bucket, so those must match on every entry for it.",
+    },
+    {
+        id: "externalbucket-account-matches-deployment-warn",
+        severity: "warning",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets", "env.account"],
+        appliesWhen: (c) => {
+            const account = g(c, "env.account");
+            if (isUnset(account)) return false;
+            return externalBuckets(c).some(
+                (b) => !isUnset(b.bucketAccountId) && String(b.bucketAccountId) === String(account)
+            );
+        },
+        message:
+            "An app.assetBuckets.externalAssetBuckets bucketAccountId matches the deployment account, so that bucket is not actually cross-account. Leave bucketAccountId unset for a same-account bucket.",
+    },
+
+    // ----- Presigned URL network restrictions (config.ts: validatePresignedUrlRestrictions) -----
+    //
+    // A request arrives either over the public path (aws:SourceIp) or through a VPC endpoint
+    // (aws:SourceVpce), so a deployment restricts on one dimension. Entry formats come from
+    // `fields/presignedUrlFormats`, transcribed from that function so the builder marks exactly the
+    // entries a `cdk synth` would reject.
+    {
+        id: "presigned-restrictions-mutually-exclusive",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.presignedUrlNetworkRestrictions"],
+        appliesWhen: (c) => {
+            const base = "app.assetBuckets.presignedUrlNetworkRestrictions";
+            const ranges = g(c, `${base}.allowedIpRanges`);
+            const vpceIds = g(c, `${base}.allowedVpceIds`);
+            return (
+                Array.isArray(ranges) &&
+                ranges.length > 0 &&
+                Array.isArray(vpceIds) &&
+                vpceIds.length > 0
+            );
+        },
+        message:
+            "app.assetBuckets.presignedUrlNetworkRestrictions cannot set both allowedIpRanges and allowedVpceIds. Restrict presigned URLs by IP range or by VPC endpoint, not both.",
+    },
+    {
+        id: "presigned-restrictions-ip-range-format",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.presignedUrlNetworkRestrictions"],
+        appliesWhen: (c) => {
+            const ranges = g(c, "app.assetBuckets.presignedUrlNetworkRestrictions.allowedIpRanges");
+            if (!Array.isArray(ranges)) return false;
+            return ranges.some((entry) => !isCidr(String(entry)));
+        },
+        message:
+            "Every app.assetBuckets.presignedUrlNetworkRestrictions allowedIpRanges entry must be an IPv4 or IPv6 CIDR (address/prefixLength), for example 203.0.113.0/24.",
+    },
+    {
+        id: "presigned-restrictions-vpce-id-format",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.presignedUrlNetworkRestrictions"],
+        appliesWhen: (c) => {
+            const vpceIds = g(c, "app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds");
+            if (!Array.isArray(vpceIds)) return false;
+            return vpceIds.some((entry) => !isVpceId(String(entry)));
+        },
+        message:
+            "Every app.assetBuckets.presignedUrlNetworkRestrictions allowedVpceIds entry must be a VPC endpoint ID (vpce- followed by at least eight hexadecimal digits).",
+    },
 
     // ----- VPC-requiring features (config.ts: "Features that require a VPC") -----
     // config.ts collects every enabled feature that needs a VPC and rejects the configuration
@@ -965,12 +1327,15 @@ export const RULES: Rule[] = [
         id: "vpc-private-subnets",
         severity: "error",
         fieldPaths: ["app.useGlobalVpc.optionalExternalPrivateSubnetIds"],
+        // The private-subnet list is wider than the public-subnet one: every AWS Batch pipeline places
+        // its compute environment in private subnets, so Splat Toolbox, Isaac Lab Training and the
+        // three NVIDIA pipelines require one too, not only RapidPipeline and ModelOps.
         appliesWhen: (c) =>
             hasExternalVpc(c) &&
-            usesContainerVpcPipeline(c) &&
+            usesPrivateSubnetPipeline(c) &&
             isUnset(g(c, "app.useGlobalVpc.optionalExternalPrivateSubnetIds")),
         message:
-            "Must define at least one private subnet ID when using RapidPipeline/ModelOps with an external VPC.",
+            "Must define at least one private subnet ID when using an external VPC with a pipeline that requires private subnets (RapidPipeline, ModelOps, Splat Toolbox, Isaac Lab Training, or an NVIDIA pipeline).",
     },
     {
         id: "vpc-public-subnets",
@@ -988,13 +1353,26 @@ export const RULES: Rule[] = [
     // ----- Front-end CloudFront / ALB
     // (config.ts: "Cloudfront + ALB check (not more than 1)", "Cloudfront + ALB neither warning
     // check", "CloudFront Custom Domain Configuration Validation") -----
+    //
+    // Take the severities from the two branches, not from those two leading comments: in config.ts
+    // the comment naming a check sits above the OTHER one's branch. Enabling BOTH distributions is
+    // the `throw new Error("...cannot have both enabled.")`; enabling NEITHER is the
+    // `console.warn("...API-DRIVEN SOLUTION-ONLY DEPLOYMENT.")`, which is a supported topology.
+    {
+        id: "frontend-both",
+        severity: "error",
+        fieldPaths: ["app.useCloudFront.enabled", "app.useAlb.enabled"],
+        appliesWhen: (c) => g(c, "app.useCloudFront.enabled") && g(c, "app.useAlb.enabled"),
+        message:
+            "Must choose either CloudFront or ALB for static website hosting (or neither) — both cannot be enabled.",
+    },
     {
         id: "frontend-neither",
-        severity: "error",
+        severity: "warning",
         fieldPaths: ["app.useCloudFront.enabled", "app.useAlb.enabled"],
         appliesWhen: (c) => !g(c, "app.useCloudFront.enabled") && !g(c, "app.useAlb.enabled"),
         message:
-            "Must enable either CloudFront or ALB for static website hosting (one of the two).",
+            "Neither CloudFront nor ALB is enabled, so no VAMS front-end website is deployed. This is an API-driven, solution-only deployment — verify this is intended.",
     },
     {
         id: "cloudfront-domain-fields",
@@ -1035,7 +1413,9 @@ export const RULES: Rule[] = [
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
     },
 
-    // ----- Admin identity (config.ts: "Must specify an initial admin email address") -----
+    // ----- Admin identity
+    // (config.ts: "Must specify an initial admin email address", "Only what Amazon Cognito itself
+    // rejects", "The admin user is a CloudFormation-managed resource keyed on its username") -----
     {
         id: "admin-email",
         severity: "error",
@@ -1050,9 +1430,50 @@ export const RULES: Rule[] = [
         appliesWhen: (c) => isUnset(g(c, "app.adminUserId")),
         message: "Must specify an initial admin user ID.",
     },
+    {
+        id: "admin-userid-length",
+        severity: "error",
+        fieldPaths: ["app.adminUserId"],
+        appliesWhen: (c) => {
+            const userId = g(c, "app.adminUserId");
+            return typeof userId === "string" && userId.length > COGNITO_USERNAME_MAX_LENGTH;
+        },
+        message: `app.adminUserId must be at most ${COGNITO_USERNAME_MAX_LENGTH} characters — the Amazon Cognito username limit. A longer value fails CreateUser mid-deploy, which rolls the whole core stack back.`,
+    },
+    {
+        id: "admin-userid-whitespace",
+        severity: "error",
+        fieldPaths: ["app.adminUserId"],
+        appliesWhen: (c) => {
+            const userId = g(c, "app.adminUserId");
+            return typeof userId === "string" && /\s/.test(userId);
+        },
+        message:
+            "app.adminUserId cannot contain whitespace — Amazon Cognito does not accept it in a username.",
+    },
+    {
+        id: "admin-userid-differs-from-email-warn",
+        severity: "warning",
+        fieldPaths: ["app.adminUserId", "app.adminEmailAddress"],
+        // Both fields are immutable after the first deployment: the admin user is a
+        // CloudFormation-managed resource keyed on its username, so changing either replaces it —
+        // failing the deployment if the new username already exists in the pool, and otherwise
+        // orphaning the previous admin. A warning, because an operator who accepts that must still be
+        // able to deploy.
+        appliesWhen: (c) => {
+            const userId = g(c, "app.adminUserId");
+            const email = g(c, "app.adminEmailAddress");
+            if (isUnset(userId) || isUnset(email)) return false;
+            return userId !== email;
+        },
+        message:
+            "app.adminUserId and app.adminEmailAddress differ. Both are immutable after the first deployment: changing either replaces the Amazon Cognito admin user, which fails the deployment if the new username already exists in the pool and otherwise orphans the previous admin. Grant additional administrators through roles instead of by editing these fields.",
+    },
 
     // ----- OpenSearch
-    // (config.ts: "Error check when implementing openSearch", "Error check for reindexOnDeploy") -----
+    // (config.ts: "Error check when implementing openSearch", "OpenSearch provisioned only supports a
+    // zone-aware domain", "OpenSearch provisioned shard count must be a positive integer",
+    // "Error check for reindexOnDeploy") -----
     {
         id: "opensearch-one",
         severity: "error",
@@ -1064,6 +1485,43 @@ export const RULES: Rule[] = [
             g(c, "app.openSearch.useServerless.enabled") &&
             g(c, "app.openSearch.useProvisioned.enabled"),
         message: "Must enable at most one OpenSearch method (Serverless or Provisioned, not both).",
+    },
+    {
+        id: "opensearch-provisioned-az-count",
+        severity: "error",
+        fieldPaths: [
+            "app.openSearch.useProvisioned.enabled",
+            "app.openSearch.useProvisioned.availabilityZoneCount",
+        ],
+        // config.ts: "OpenSearch provisioned only supports a zone-aware domain spread across 2 or 3
+        // Availability Zones." 1 is the intuitive value for a low-cost development domain and the
+        // form offers no hint that the minimum is 2.
+        appliesWhen: (c) => {
+            if (!g(c, "app.openSearch.useProvisioned.enabled")) return false;
+            const count = g(c, "app.openSearch.useProvisioned.availabilityZoneCount");
+            if (isAbsent(count)) return false; // backfilled to 2
+            return count !== 2 && count !== 3;
+        },
+        message:
+            "openSearch.useProvisioned.availabilityZoneCount must be either 2 or 3. Amazon OpenSearch Service supports only a zone-aware domain spread across 2 or 3 Availability Zones.",
+    },
+    {
+        id: "opensearch-provisioned-shards",
+        severity: "error",
+        fieldPaths: [
+            "app.openSearch.useProvisioned.enabled",
+            "app.openSearch.useProvisioned.numberOfShards",
+        ],
+        // config.ts: "OpenSearch provisioned shard count must be a positive integer."
+        appliesWhen: (c) => {
+            if (!g(c, "app.openSearch.useProvisioned.enabled")) return false;
+            const shards = g(c, "app.openSearch.useProvisioned.numberOfShards");
+            if (isAbsent(shards)) return false; // backfilled to 1
+            const count = Number(shards);
+            return !Number.isInteger(count) || count < 1;
+        },
+        message:
+            "openSearch.useProvisioned.numberOfShards must be an integer of 1 or greater. Changing it later requires re-creating the index (disable and re-enable OpenSearch, then reindex).",
     },
     {
         id: "reindex-requires-opensearch",
@@ -1132,6 +1590,18 @@ export const RULES: Rule[] = [
             "useCognito.useSaml is supported only in the commercial partition. The Amazon Cognito hosted UI " +
             "used for SAML federation is unavailable in GovCloud, the EU Sovereign Cloud, and the ISO partitions.",
     },
+    {
+        id: "saml-requires-provider-settings",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.useCognito.useSaml"],
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.useSaml"),
+        message:
+            "SAML federation also needs provider settings in infra/config/saml-config.ts (provider name, " +
+            "Cognito domain prefix, and the provider metadata). getConfig() rejects the shipped placeholder " +
+            "values, and those settings are not part of config.json so they cannot be set here.",
+    },
 
     {
         id: "saml-and-oidc-mutually-exclusive",
@@ -1184,28 +1654,136 @@ export const RULES: Rule[] = [
             "app.pipelines.deadlineCloudExecutionTypeEnabled to false for this deployment Region.",
     },
 
-    // ----- API throttling (config.ts: "API Configuration Error Checks") -----
+    // ----- API type, throttling and endpoint type
+    // (config.ts: "API Configuration Error Checks") -----
+    //
+    // The throttling fields live under `app.api.apiGatewayRest`, alongside the endpoint type and the
+    // integration timeout — not directly under `app.api`, which holds only `apiType`.
+    {
+        id: "api-type-supported",
+        severity: "error",
+        fieldPaths: ["app.api.apiType"],
+        // An absent apiType is backfilled to the default before config.ts checks it.
+        appliesWhen: (c) => {
+            const apiType = g(c, "app.api.apiType");
+            if (isAbsent(apiType)) return false;
+            return SUPPORTED_API_TYPES.indexOf(String(apiType)) === -1;
+        },
+        message: `app.api.apiType must be one of [${SUPPORTED_API_TYPES.join(", ")}].`,
+    },
     {
         id: "api-rate-positive",
         severity: "error",
-        fieldPaths: ["app.api.globalRateLimit"],
-        appliesWhen: (c) => Number(g(c, "app.api.globalRateLimit")) <= 0,
-        message: "API globalRateLimit must be a positive number greater than 0.",
+        fieldPaths: ["app.api.apiGatewayRest.globalRateLimit"],
+        appliesWhen: (c) => Number(g(c, "app.api.apiGatewayRest.globalRateLimit")) <= 0,
+        message: "app.api.apiGatewayRest.globalRateLimit must be a positive number greater than 0.",
     },
     {
         id: "api-burst-positive",
         severity: "error",
-        fieldPaths: ["app.api.globalBurstLimit"],
-        appliesWhen: (c) => Number(g(c, "app.api.globalBurstLimit")) <= 0,
-        message: "API globalBurstLimit must be a positive number greater than 0.",
+        fieldPaths: ["app.api.apiGatewayRest.globalBurstLimit"],
+        appliesWhen: (c) => Number(g(c, "app.api.apiGatewayRest.globalBurstLimit")) <= 0,
+        message:
+            "app.api.apiGatewayRest.globalBurstLimit must be a positive number greater than 0.",
     },
     {
         id: "api-burst-ge-rate",
         severity: "error",
-        fieldPaths: ["app.api.globalBurstLimit", "app.api.globalRateLimit"],
+        fieldPaths: [
+            "app.api.apiGatewayRest.globalBurstLimit",
+            "app.api.apiGatewayRest.globalRateLimit",
+        ],
         appliesWhen: (c) =>
-            Number(g(c, "app.api.globalBurstLimit")) < Number(g(c, "app.api.globalRateLimit")),
-        message: "API globalBurstLimit must be greater than or equal to globalRateLimit.",
+            Number(g(c, "app.api.apiGatewayRest.globalBurstLimit")) <
+            Number(g(c, "app.api.apiGatewayRest.globalRateLimit")),
+        message:
+            "app.api.apiGatewayRest.globalBurstLimit must be greater than or equal to globalRateLimit.",
+    },
+    {
+        id: "api-endpoint-type-valid",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.endpointType"],
+        // An absent endpointType is backfilled to "REGIONAL" before config.ts checks it.
+        appliesWhen: (c) => {
+            const type = g(c, "app.api.apiGatewayRest.endpointType");
+            if (isAbsent(type)) return false;
+            return type !== "REGIONAL" && type !== "PRIVATE";
+        },
+        message: "app.api.apiGatewayRest.endpointType must be 'REGIONAL' or 'PRIVATE'.",
+    },
+
+    // ----- PRIVATE API endpoint topology (config.ts: the `endpointType === "PRIVATE"` block) -----
+    //
+    // A PRIVATE API is reachable only from inside the VPC, so it needs the VPC, an execute-api
+    // interface endpoint, and an ALB in non-public subnets to front it. Each condition is a separate
+    // rule so the marker lands on the field the operator would change.
+    {
+        id: "api-private-requires-vpc",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.endpointType", "app.useGlobalVpc.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE" &&
+            !g(c, "app.useGlobalVpc.enabled"),
+        message:
+            "app.api.apiGatewayRest.endpointType 'PRIVATE' requires app.useGlobalVpc.enabled to be true.",
+    },
+    {
+        id: "api-private-requires-vpc-endpoint",
+        severity: "error",
+        fieldPaths: [
+            "app.api.apiGatewayRest.endpointType",
+            "app.useGlobalVpc.addVpcEndpoints",
+            "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE" &&
+            !g(c, "app.useGlobalVpc.addVpcEndpoints") &&
+            isUnset(g(c, "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId")),
+        message:
+            "app.api.apiGatewayRest.endpointType 'PRIVATE' requires an execute-api interface VPC endpoint. Set app.useGlobalVpc.addVpcEndpoints to true to have VAMS create one, or supply app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId with an existing endpoint id.",
+    },
+    {
+        id: "api-private-incompatible-with-cloudfront",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.endpointType", "app.useCloudFront.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE" &&
+            g(c, "app.useCloudFront.enabled"),
+        message:
+            "app.api.apiGatewayRest.endpointType 'PRIVATE' is incompatible with public CloudFront. Use ALB/VPC fronting instead.",
+    },
+    {
+        id: "api-private-requires-alb",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.endpointType", "app.useAlb.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE" &&
+            !g(c, "app.useAlb.enabled"),
+        message:
+            "app.api.apiGatewayRest.endpointType 'PRIVATE' requires app.useAlb.enabled to be true — a private API must be fronted by the ALB.",
+    },
+    {
+        id: "api-private-requires-private-alb-subnets",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.endpointType", "app.useAlb.usePublicSubnet"],
+        appliesWhen: (c) =>
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE" &&
+            g(c, "app.useAlb.usePublicSubnet"),
+        message:
+            "app.api.apiGatewayRest.endpointType 'PRIVATE' requires app.useAlb.usePublicSubnet to be false. A public-subnet ALB would expose an internet-facing path to the private API.",
+    },
+    {
+        id: "api-regional-vpce-unused-warn",
+        severity: "warning",
+        fieldPaths: [
+            "app.api.apiGatewayRest.endpointType",
+            "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.api.apiGatewayRest.endpointType") !== "PRIVATE" &&
+            !isUnset(g(c, "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId")),
+        message:
+            "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId is set but will not be used. It applies only to a PRIVATE endpoint; a REGIONAL endpoint is public and does not route through a VPC endpoint.",
     },
 
     // ----- API integration timeout
@@ -1245,6 +1823,9 @@ export const RULES: Rule[] = [
         message: "Each IP range must be an array of exactly 2 IP addresses [min, max].",
     },
     {
+        // IPv6 is supported: the authorizer compares numerically with Python's `ipaddress`, so an
+        // IPv6 range is expressible and matches. An IPv4-only pattern here rejected a configuration
+        // the deployment accepts.
         id: "ip-range-format",
         severity: "error",
         fieldPaths: ["app.authProvider.authorizerOptions.allowedIpRanges"],
@@ -1255,11 +1836,30 @@ export const RULES: Rule[] = [
                 (r: any) =>
                     Array.isArray(r) &&
                     r.length === 2 &&
-                    (!IPV4_PATTERN.test(r[0]) || !IPV4_PATTERN.test(r[1]))
+                    (ipAddressFamily(r[0]) === undefined || ipAddressFamily(r[1]) === undefined)
             );
         },
         message:
-            'Invalid IP address format in an allowed IP range. Expected e.g. ["192.168.1.1", "192.168.1.255"].',
+            'Each allowed IP range endpoint must be an IPv4 or IPv6 literal, for example ["192.168.1.1", "192.168.1.255"] or ["2001:db8::", "2001:db8::ffff"]. A CIDR, a zone index, or a hostname is rejected.',
+    },
+    {
+        // A mixed pair has no ordering, so the authorizer refuses to compare it and the entry admits
+        // nobody. Rejecting it at authoring time is what stops a range that silently never matches.
+        id: "ip-range-family",
+        severity: "error",
+        fieldPaths: ["app.authProvider.authorizerOptions.allowedIpRanges"],
+        appliesWhen: (c) => {
+            const ranges = g(c, "app.authProvider.authorizerOptions.allowedIpRanges");
+            if (!Array.isArray(ranges)) return false;
+            return ranges.some((r: any) => {
+                if (!Array.isArray(r) || r.length !== 2) return false;
+                const min = ipAddressFamily(r[0]);
+                const max = ipAddressFamily(r[1]);
+                return min !== undefined && max !== undefined && min !== max;
+            });
+        },
+        message:
+            "Both ends of an allowed IP range must be the same address family. A mixed IPv4/IPv6 pair has no ordering and is ignored by the authorizer, so the range would admit nobody.",
     },
 
     // ----- Garnet Framework (config.ts: "Garnet Framework Configuration Validation") -----
@@ -1454,12 +2054,18 @@ export const RULES: Rule[] = [
             "Add VPC Endpoints is disabled. Ensure the VPC already has all required interface endpoints for VAMS to operate.",
     },
     {
-        id: "frontend-both-warn",
+        id: "vpc-all-lambdas-needs-ssm-endpoint-warn",
         severity: "warning",
-        fieldPaths: ["app.useCloudFront.enabled", "app.useAlb.enabled"],
-        appliesWhen: (c) => g(c, "app.useCloudFront.enabled") && g(c, "app.useAlb.enabled"),
+        fieldPaths: ["app.useGlobalVpc.useForAllLambdas", "app.useGlobalVpc.addVpcEndpoints"],
+        // config.ts: "requires an operator-managed SSM interface VPC endpoint". Every VAMS Lambda
+        // resolves its resource names from SSM Parameter Store at cold start, so without that endpoint
+        // an in-VPC deployment fails on the first request rather than at deploy.
+        appliesWhen: (c) =>
+            g(c, "app.useGlobalVpc.enabled") &&
+            g(c, "app.useGlobalVpc.useForAllLambdas") &&
+            !g(c, "app.useGlobalVpc.addVpcEndpoints"),
         message:
-            "Both CloudFront and ALB are enabled. Typically only one front-end distribution is used.",
+            "useGlobalVpc.useForAllLambdas with addVpcEndpoints=false requires an operator-managed SSM interface VPC endpoint (com.amazonaws.<region>.ssm). All VAMS Lambda functions resolve resource names from SSM Parameter Store at cold start and fail without it.",
     },
     {
         id: "auth-userpassword-warn",
@@ -1592,6 +2198,57 @@ export const RULES: Rule[] = [
             "Each OpenSearch Serverless maximum OCU must be greater than or equal to its matching minimum (maxIndexingOcu >= minIndexingOcu, maxSearchOcu >= minSearchOcu).",
     },
 
+    // ----- OpenSearch Serverless network access
+    // (config.ts: "cannot use a public OpenSearch Serverless collection", "Public Serverless in
+    // GovCloud/EU Sovereign Cloud is allowed but not recommended", "will deploy WITHOUT its
+    // data-plane VPC endpoint") -----
+    {
+        id: "aoss-public-with-all-lambdas-in-vpc",
+        severity: "error",
+        fieldPaths: [
+            "app.openSearch.useServerless.enabled",
+            "app.openSearch.useServerless.allowPublic",
+            "app.useGlobalVpc.useForAllLambdas",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            g(c, "app.openSearch.useServerless.allowPublic") &&
+            g(c, "app.useGlobalVpc.enabled") &&
+            g(c, "app.useGlobalVpc.useForAllLambdas"),
+        message:
+            "A deployment that places all Lambdas behind the VPC (useGlobalVpc.enabled and useForAllLambdas both true) cannot use a public OpenSearch Serverless collection. Set openSearch.useServerless.allowPublic to false to place the collection behind a VPC endpoint.",
+    },
+    {
+        id: "aoss-public-in-restricted-partition-warn",
+        severity: "warning",
+        fieldPaths: ["app.openSearch.useServerless.allowPublic", "app.govCloud.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            g(c, "app.openSearch.useServerless.allowPublic") &&
+            g(c, "app.govCloud.enabled"),
+        message:
+            "A public OpenSearch Serverless collection (allowPublic=true) is not recommended for GovCloud or EU Sovereign Cloud deployments. Consider setting allowPublic to false.",
+    },
+    {
+        id: "aoss-private-nextgen-deferred-endpoint-warn",
+        severity: "warning",
+        fieldPaths: [
+            "app.openSearch.useServerless.allowPublic",
+            "app.openSearch.useServerless.nextGen",
+            "app.useGlobalVpc.addVpcEndpoints",
+        ],
+        // A private NEXTGEN collection is reached through a standard EC2 interface endpoint, which
+        // VAMS creates only when addVpcEndpoints is true. Without it the deployment comes up with no
+        // data-plane endpoint, no network access policy, and no index mappings, and nothing else says so.
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            !g(c, "app.openSearch.useServerless.allowPublic") &&
+            g(c, "app.openSearch.useServerless.nextGen") &&
+            !g(c, "app.useGlobalVpc.addVpcEndpoints"),
+        message:
+            "A private next-gen OpenSearch Serverless collection (allowPublic=false, nextGen=true) with useGlobalVpc.addVpcEndpoints=false deploys WITHOUT its data-plane VPC endpoint and network access policy, and index creation is skipped. Create the com.amazonaws.<region>.aoss-data interface endpoint and a matching network access policy naming it in SourceVPCEs, then set openSearch.useServerless.deployDeferredIndexSchema to true for one deployment and reindex.",
+    },
+
     // ----- Marketplace container images (config.ts: "is enabled but ecrContainerImageURI is not set to a real image") -----
     ...(
         [
@@ -1638,14 +2295,15 @@ export const RULES: Rule[] = [
     {
         id: "bedrock-model-id-commercial-only-prefix",
         severity: "error",
-        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId", "env.partition"],
+        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId", "env.region"],
+        // Keyed on the partition the configured region resolves to. `env.partition` is derived at
+        // synth from that region and is not part of config.json, so it is never present here.
         appliesWhen: (c) => {
             if (!g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled")) return false;
             const id = String(
                 g(c, "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId") ?? ""
             );
-            const partition = String(g(c, "env.partition") ?? "aws");
-            return partition !== "aws" && (id.startsWith("global.") || id.startsWith("us."));
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
         },
         message:
             'bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',

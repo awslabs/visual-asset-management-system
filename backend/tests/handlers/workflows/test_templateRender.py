@@ -212,6 +212,12 @@ class TestMetadataTags:
 
 @pytest.mark.unit
 class TestStrictUnknownTags:
+    """Strict is the default, and it is what a value VAMS itself consumes is rendered under.
+
+    The output base path extension is the live example: a literal {{tag}} there becomes part of every
+    output object key, so an undefined name has to be a caller error rather than a placeholder.
+    """
+
     def test_unknown_tag_raises(self):
         with pytest.raises(tr.MissingTemplateTagError) as ei:
             tr.render_config('{"x": "{{notARealTag}}"}', _manifest(), _execution())
@@ -226,6 +232,49 @@ class TestStrictUnknownTags:
         with pytest.raises(tr.MissingTemplateTagError) as ei:
             tr.render_config('{"a": "{{fooBar}}", "b": "{{bazQux}}"}', _manifest(), _execution())
         assert ei.value.unknown_tags == ["bazQux", "fooBar"]
+
+
+@pytest.mark.unit
+class TestNonStrictUnknownTags:
+    """A configuration BODY is rendered non-strictly: an unknown tag keeps its own text.
+
+    The body is the pipeline's to interpret, so a {{tag}} with no template tag declared behind it is
+    delivered as the literal placeholder rather than failing the launch — or, for step 2 of a
+    multi-step workflow, failing mid-run.
+    """
+
+    def test_unknown_tag_is_left_in_place(self):
+        out = tr.render_config('{"x": "{{notARealTag}}"}', _manifest(), _execution(), strict=False)
+        assert out == '{"x": "{{notARealTag}}"}'
+
+    def test_known_tags_still_substitute_alongside_an_unknown_one(self):
+        # The paired arm: a renderer that stopped substituting would also leave the unknown tag in
+        # place and pass the assertion above, so a known tag must be proven substituted in the SAME
+        # body.
+        out = json.loads(tr.render_config(
+            '{"j": "{{jobName}}", "x": "{{notARealTag}}"}', _manifest(), _execution(),
+            strict=False))
+        assert out["x"] == "{{notARealTag}}"
+        assert out["j"] and out["j"] != "{{jobName}}"
+
+    def test_whitespace_inside_the_braces_is_preserved(self):
+        # The pattern tolerates inner whitespace, so the literal that survives is the caller's own
+        # text rather than a normalized form of it.
+        out = tr.render_config('{"x": "{{  notARealTag  }}"}', _manifest(), _execution(),
+                               strict=False)
+        assert out == '{"x": "{{  notARealTag  }}"}'
+
+    def test_future_metadata_key_tag_is_left_in_place(self):
+        out = tr.render_config('{"loc": "{{metadata_location}}"}', _manifest(), _execution(),
+                               strict=False)
+        assert out == '{"loc": "{{metadata_location}}"}'
+
+    def test_a_body_of_literals_is_still_bounded(self):
+        # Rule 15: leniency must not remove the render ceiling. A literal counts toward the limit
+        # like any substituted value.
+        body = '{"x": "' + "{{notARealTag}}" * 200 + '"}'
+        with pytest.raises(tr.RenderedConfigTooLargeError):
+            tr._substitute(body, {}, tr.CONFIG_FORMAT_JSON, limit=100, strict=False)
 
 
 @pytest.mark.unit

@@ -940,12 +940,122 @@ describe("ExecutionsBoard re-run feedback", () => {
 });
 
 /**
+ * Abort must report a sub-process it could not stop.
+ *
+ * The abort itself always succeeds and the execution reads ABORTED, so a plain success toast is
+ * indistinguishable from an abort that left a Batch or Deadline Cloud job running and still billing.
+ * The backend says so in a `warnings` array beside `message`; the api reader keeps it (covered in
+ * api/executions.test.ts) and this board is where it has to become visible.
+ */
+describe("ExecutionsBoard abort feedback", () => {
+    let queryClient: QueryClient;
+    const RUNNING_ROW: Execution = {
+        workflowExecutionId: "exec-running",
+        workflowId: "wf-1",
+        workflowDatabaseId: "db-1",
+        // Abort is disabled outside NEW / RUNNING (ExecutionRowActions), so a terminal row would make
+        // every assertion below vacuous.
+        executionStatus: "RUNNING",
+        triggeredByUserId: "u1",
+        triggerType: "manual",
+        executionStartDate: "2026-08-01T10:00:00Z",
+    };
+
+    const setup = (abortImpl: jest.Mock, row: Execution = RUNNING_ROW) => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const { useExecutions, useExecutionActions } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+        useExecutionActions.mockReturnValue({
+            abortExecution: { mutateAsync: abortImpl },
+            rerunExecution: { mutateAsync: jest.fn() },
+            permanentDeleteExecution: { mutateAsync: jest.fn() },
+        });
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: [row] }], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+        return render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    /** Row menu -> Abort -> the confirmation dialog's Abort button. */
+    const clickAbort = async () => {
+        await userEvent.click(screen.getByRole("button", { name: "Execution actions" }));
+        await userEvent.click(await screen.findByText("Abort"));
+        const dialogButtons = await screen.findAllByRole("button", { name: "Abort" });
+        await userEvent.click(dialogButtons[dialogButtons.length - 1]);
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockToast.success.mockClear();
+        mockToast.error.mockClear();
+        mockToast.warning.mockClear();
+    });
+
+    const SUBPROCESS_WARNING = "Batch job 1234 could not be terminated and may still be running.";
+
+    it("raises a WARNING toast, not a plain success, when a sub-process could not be stopped", async () => {
+        setup(
+            jest
+                .fn()
+                .mockResolvedValue({ message: "Execution aborted", warnings: [SUBPROCESS_WARNING] })
+        );
+        await clickAbort();
+        await waitFor(() => expect(mockToast.warning).toHaveBeenCalled());
+        expect(mockToast.success).not.toHaveBeenCalled();
+        expect(mockToast.warning.mock.calls[0][1].description).toContain("still be running");
+    });
+
+    it("leaves a durable role=status notice on the board", async () => {
+        setup(
+            jest
+                .fn()
+                .mockResolvedValue({ message: "Execution aborted", warnings: [SUBPROCESS_WARNING] })
+        );
+        await clickAbort();
+        const notice = await screen.findByRole("status");
+        expect(notice).toHaveTextContent("Batch job 1234");
+    });
+
+    it("renders NO notice and a plain success toast for a clean abort", async () => {
+        // The paired arm: without it an always-rendered banner satisfies the arm above.
+        setup(jest.fn().mockResolvedValue({ message: "Execution aborted", warnings: [] }));
+        await clickAbort();
+        await waitFor(() => expect(mockToast.success).toHaveBeenCalled());
+        expect(mockToast.warning).not.toHaveBeenCalled();
+        expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("still reports a failed abort as an error", async () => {
+        setup(jest.fn().mockRejectedValue(new Error("execution already terminal")));
+        await clickAbort();
+        await waitFor(() => expect(mockToast.error).toHaveBeenCalled());
+        expect(mockToast.error.mock.calls[0][1].description).toContain("already terminal");
+        expect(mockToast.warning).not.toHaveBeenCalled();
+        expect(mockToast.success).not.toHaveBeenCalled();
+    });
+});
+
+/**
  * The asset tab's Workflow filter.
  *
  * It is a separate control from the global board's pair of dropdowns: it carries the whole composite
- * "databaseId:workflowId" in one value, because a workflowId is unique only within its database and
- * the asset tab has no database dropdown to pair with. Its options come from the loaded rows (the
- * workflows this asset has actually run) rather than from the full workflow catalog.
+ * "databaseId:workflowId" in one value because the asset tab has no database dropdown to pair with,
+ * and the value splits back into the two request filters. A workflow id is unique across every
+ * database, so the database half narrows rather than disambiguates — it is read off the row, so it is
+ * the workflow's own. Its options come from the loaded rows (the workflows this asset has actually
+ * run) rather than from the full workflow catalog.
  */
 describe("ExecutionsBoard asset-scope workflow filter", () => {
     let queryClient: QueryClient;

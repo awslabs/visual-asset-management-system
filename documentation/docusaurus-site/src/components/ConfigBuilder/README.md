@@ -15,7 +15,7 @@ already ships (React, `clsx`, `prism-react-renderer`).
 | `defaults.ts`       | Commercial, GovCloud & EU Sovereign Cloud presets — literal copies of the three template JSONs. |
 | `serialize.ts`      | `toConfigJson()` — strict JSON (4-space), normalizes `"UNDEFINED"` → `null`.                    |
 | `validation.ts`     | `RULES` ported rule-by-rule from `getConfig()` + `evaluateRules()`.                             |
-| `derived.ts`        | Auto-toggle engine (force VPC on) + GovCloud-safe defaults helper.                              |
+| `derived.ts`        | `applyDerived()` pass-through (forces nothing today) + GovCloud-safe defaults helper.           |
 | `schema.ts`         | `SECTIONS` + `FIELDS` declarative metadata; `makeModelFields()` GPU factory.                    |
 | `fields/`           | Input primitives mapped to `FieldMeta.input`.                                                   |
 | `panels/`           | Section, validation summary, output (preview/download/copy), profile switcher.                  |
@@ -53,7 +53,7 @@ changes, update the corresponding files here:
    pipeline added to the VPC-requiring set → extend the matching table in
    `validation.ts` (`VPC_REQUIRING_FEATURES` for that one). Omitting it means
    the builder approves a config that then fails at `cdk synth`.
-6. **Run the drift check** — `infra/test/configBuilderSync.test.ts` (part of
+6. **Run the drift check** — `infra/test/config/configBuilderSync.test.ts` (part of
    `npm test` in `infra/`). It covers `schema.ts` field coverage and the
    `defaults.ts` presets only. **`validation.ts` and `derived.ts` are outside
    it**, so steps 3 to 5 are held by review discipline alone.

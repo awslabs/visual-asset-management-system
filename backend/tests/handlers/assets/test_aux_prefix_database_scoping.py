@@ -59,7 +59,8 @@ class TestAssetVersionsAuxPrefix:
                 patch.object(av, 'delete_assetAuxiliary_files') as mock_delete, \
                 patch.object(av, 'save_asset_file_versions', return_value=True), \
                 patch.object(av, 'save_asset_metadata_version', return_value=True), \
-                patch.object(av, 'update_asset_version_metadata', MagicMock()), \
+                patch.object(av, 'reserve_next_asset_version', return_value='2'), \
+                patch.object(av, 'finalize_asset_version', MagicMock()), \
                 patch.object(av, 'send_subscription_email', MagicMock()):
             response = av.revert_asset_version("db1", "asset-1", request, {"tokens": ["alice"]})
 

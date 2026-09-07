@@ -5,7 +5,8 @@ Orchestrates the full pipeline:
 1. Load pipeline definition from sys.argv[1]
 2. Ensure base model cached (EFS -> S3 -> HuggingFace)
 3. Download asset files from S3 (excluding gr00tOutput_* folders)
-4. Resolve config: gr00t_config.json (1st) > asset metadata (2nd) > inputParameters (3rd) > defaults
+4. Resolve config: the asset's own gr00t_config.json (1st) > the template's configuration body (2nd)
+   > GROOT_* asset metadata (3rd) > defaults
 5. Run fine-tuning via gr00t FinetuneWorkflow
 6. Upload checkpoint outputs to S3
 
@@ -17,13 +18,15 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import manifest_io
 from evaluation import run_evaluation
@@ -236,6 +239,118 @@ def upload_output_to_s3(local_dir: Path, s3_output_path: str, output_folder_name
     return s3_dest
 
 
+def log_free_space(path: Path) -> Optional[int]:
+    """Log (and return) the free space in MiB on the filesystem holding `path`; None when unreadable.
+
+    Checkpoints accumulate on the container's own volume while training runs, and a container the
+    kernel kills for filling it leaves NO Python-level error: the process is gone, so neither a
+    traceback nor main()'s failure handler runs. Recording the number as it changes is what turns an
+    out-of-disk kill into a one-line diagnosis. Never raises -- this is diagnostics.
+    """
+    try:
+        free_mib = shutil.disk_usage(str(path)).free // (1024 * 1024)
+    except Exception as e:
+        logger.warning(f"Could not read free space for {path} (non-fatal): {e}")
+        return None
+    logger.info(f"Free space on the volume holding {path}: {free_mib} MiB")
+    return free_mib
+
+
+# How often the output folder is synced to S3 while training runs. Training writes every checkpoint to
+# a container-local directory, so a single upload after it returns means an attempt that dies partway
+# -- the 8-hour Batch attempt timeout, an instance failure -- loses every hour of GPU work it had
+# already saved. The sync goes to the SAME destination the final upload uses, so whatever reached S3
+# before the interruption stays there; `aws s3 sync` transfers only what changed, so repeating it costs
+# a listing.
+#
+# WHERE THAT IS, precisely, because it is NOT where a later run looks for a checkpoint:
+# outputS3AssetFilesPath is the execution's own STAGING prefix
+# (pipelines/{pipelineName}/{jobName}/output/{executionId}/files/, executionRecords
+# .pipeline_output_prefixes), which the workflow's process-output step promotes onto the asset when the
+# run SUCCEEDS. resolve_checkpoint_folder and download_checkpoint_from_s3 read the ASSET prefix
+# (inputS3AssetPath), and a failed or timed-out attempt never reaches process-output, so an interrupted
+# run's checkpoints are durable in S3 but invisible to a following evaluation run: recovering them is a
+# copy from the staging prefix onto the asset. __enter__ logs the exact URI for that reason.
+CHECKPOINT_UPLOAD_INTERVAL_SECONDS = 300
+# How long the final upload waits for a sync already in flight. Bounded rather than unbounded: a
+# stalled sync must not hold the container past the work it has already done.
+CHECKPOINT_UPLOAD_JOIN_SECONDS = 600
+
+
+class PeriodicOutputUpload:
+    """Sync the output folder to S3 on an interval for the duration of a `with` block.
+
+    Best-effort by design. A cycle that fails is logged and the next one retries, because the FINAL
+    upload after training is what decides the run's outcome (it raises), and failing the run here would
+    discard hours of GPU work for a transient S3 error. What it buys is recoverability: whatever
+    reached S3 before an interruption stays there.
+
+    A cycle can copy a checkpoint the trainer is still writing, so an interrupted run's newest
+    checkpoint may be incomplete -- the final sync re-transfers anything whose size or timestamp moved,
+    so a run that finishes is consistent either way. The older checkpoints, which are the ones worth
+    recovering, are complete by the time a later cycle sees them.
+
+    The sync runs on its own thread rather than between output lines of the training subprocess: an
+    upload of a multi-GB checkpoint takes minutes, and a reader that stops draining the child's pipe
+    for minutes leaves the child blocked on write() for that long -- pausing training for every upload.
+    """
+
+    def __init__(self, s3_output_path: str, output_folder_name: str,
+                 interval_seconds: int = None):
+        self._s3_output_path = s3_output_path
+        self._output_folder_name = output_folder_name
+        self._interval = (CHECKPOINT_UPLOAD_INTERVAL_SECONDS if interval_seconds is None
+                          else interval_seconds)
+        self._stop = threading.Event()
+        self._thread = None
+        self.cycles_uploaded = 0
+        self.cycles_failed = 0
+
+    def __enter__(self):
+        logger.info(
+            f"Syncing intermediate output to S3 every {self._interval}s while training runs")
+        # The one line an operator needs after an interrupted attempt. It names the staging URI the
+        # checkpoints are recoverable FROM, which is not the asset prefix a following evaluation run
+        # searches, so without it recovery starts by working out where the bytes went.
+        logger.info(
+            "Intermediate checkpoints are recoverable from "
+            f"{self._s3_output_path.rstrip('/')}/{self._output_folder_name}/ -- this is the "
+            "execution's staging prefix, which is promoted onto the asset only when the run "
+            "succeeds. After an interrupted attempt, copy that folder onto the asset to evaluate or "
+            "resume from it.")
+        self._thread = threading.Thread(
+            target=self._run, name="gr00t-output-upload", daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback_obj):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=CHECKPOINT_UPLOAD_JOIN_SECONDS)
+            if self._thread.is_alive():
+                logger.warning(
+                    "An intermediate output sync is still running; the final upload proceeds anyway.")
+        logger.info(
+            f"Intermediate output syncs: {self.cycles_uploaded} succeeded, {self.cycles_failed} failed")
+        return False
+
+    def _run(self):
+        # Waits BEFORE the first cycle: a run that finishes inside one interval has nothing to recover
+        # and the final upload covers it.
+        while not self._stop.wait(self._interval):
+            self.sync_once()
+
+    def sync_once(self):
+        """One incremental sync of the output folder. Records the outcome; never raises."""
+        log_free_space(OUTPUT_DIR)
+        try:
+            upload_output_to_s3(OUTPUT_DIR, self._s3_output_path, self._output_folder_name)
+            self.cycles_uploaded += 1
+        except Exception as e:
+            self.cycles_failed += 1
+            logger.warning(f"Intermediate output sync failed (non-fatal, will retry): {e}")
+
+
 # The HuggingFace owners a base model may be pulled from. baseModelPath reaches from_pretrained, which
 # downloads the named repository into the shared EFS HuggingFace cache that every later run restores
 # from, so the owner set is the trust boundary: NVIDIA's own GR00T releases. A deployment with its own
@@ -302,14 +417,95 @@ def validate_base_model_path(base_model_path):
         "an absolute path to a model already available to the container.")
 
 
+class AssetConfigurationError(RuntimeError):
+    """Raised when the asset's gr00t_config.json exists but cannot be read as a JSON object."""
+
+
+def load_asset_config_file(config_file: Path) -> Dict:
+    """The asset's own gr00t_config.json, parsed. ``{}`` for an empty file.
+
+    Raises ``AssetConfigurationError`` when the file exists but is unreadable, is not valid JSON, or is
+    not a JSON object. This is the HIGHEST-priority configuration source, so tolerating a parse failure
+    runs the job on the lower-priority values -- a trailing comma trains 6000 default steps instead of
+    the 20000 the file asked for, writes a checkpoint, and records the execution as a success with none
+    of the requested parameters applied. Same reasoning, and the same shape, as
+    ``manifest_io.fetch_input_configuration``.
+    """
+    try:
+        body = config_file.read_text(encoding="utf-8")
+    except OSError as e:
+        raise AssetConfigurationError(f"Could not read {config_file}: {e}")
+    if not body.strip():
+        logger.info(f"{config_file} is empty; no overrides applied")
+        return {}
+    try:
+        parsed = json.loads(body)
+    except ValueError as e:
+        raise AssetConfigurationError(f"{config_file} is not valid JSON: {e}")
+    if not isinstance(parsed, dict):
+        raise AssetConfigurationError(
+            f"{config_file} is not a JSON object (found {type(parsed).__name__})")
+    return parsed
+
+
+def _reject_unusable_relative_path(text: str, field_name: str) -> None:
+    """Raise on a value that cannot name a folder inside the asset. Message-quality only -- the
+    containment check below is what actually decides."""
+    if "\x00" in text:
+        raise ValueError(f"{field_name} contains a NUL byte.")
+    if "://" in text:
+        raise ValueError(
+            f"{field_name} '{text}' is a URI. It must name a folder within the asset.")
+    if "\\" in text:
+        raise ValueError(
+            f"{field_name} '{text}' contains a backslash. Separate folders with '/'.")
+    if text.startswith("/"):
+        raise ValueError(
+            f"{field_name} '{text}' is an absolute path. It must name a folder within the asset.")
+
+
+def resolve_asset_relative_path(base_dir: Path, value, field_name: str) -> Path:
+    """`value` resolved beneath `base_dir`, or raise.
+
+    Joining a caller-supplied path onto a base directory does not confine it: an absolute value
+    REPLACES the base (``PurePosixPath('/tmp/input') / '/mnt/efs/x'`` is ``/mnt/efs/x``) and ``..``
+    segments are not normalized away. Every source of this value -- GROOT_* asset metadata, the
+    template's configuration body, the asset's own gr00t_config.json -- is writable by anyone who can
+    edit the asset, and the resolved path is both read (training, evaluation) and WRITTEN (evaluation's
+    modality repair) while the shared EFS model cache is mounted read-write, so existence is not
+    enough: it has to be inside the per-job download directory.
+
+    The percent-decoded form is held to the same test, so an encoded traversal is judged on what it
+    denotes; the path returned is the one the asset actually names, so a folder whose name contains a
+    '%' is not rewritten.
+    """
+    text = "" if value is None else str(value).strip()
+    if not text:
+        raise ValueError(
+            f"{field_name} is empty. Name the folder within the asset that holds it.")
+
+    base = Path(os.path.realpath(str(base_dir)))
+    for candidate in dict.fromkeys((text, unquote(text))):
+        _reject_unusable_relative_path(candidate, field_name)
+        resolved = Path(os.path.realpath(str(base / candidate)))
+        if resolved != base and base not in resolved.parents:
+            raise ValueError(
+                f"{field_name} '{text}' resolves to {resolved}, outside the asset directory {base}. "
+                "It must name a folder within the asset.")
+    return Path(os.path.realpath(str(base / text)))
+
+
 def resolve_config(definition: Dict, asset_dir: Path) -> Dict:
     """
     Resolve training config using 3-tier priority:
-    1. gr00t_config.json in asset (highest)
-    2. Asset metadata / merged gr00tConfig from Lambda (middle)
+    1. gr00t_config.json in the asset (highest)
+    2. The merged gr00tConfig from the Lambda -- the template's configuration body over GROOT_* asset
+       metadata, in that order, so the value the operator supplied on the execute screen wins over a
+       standing value saved on the asset
     3. Defaults (lowest)
 
-    Returns merged config dict. Raises when the merged baseModelPath is not an allowed base model.
+    Returns merged config dict. Raises when gr00t_config.json cannot be read as a JSON object, and when
+    the merged baseModelPath is not an allowed base model.
     """
     config = dict(DEFAULTS)
 
@@ -328,15 +524,15 @@ def resolve_config(definition: Dict, asset_dir: Path) -> Dict:
     # Check for gr00t_config.json in asset (1st priority -- overrides everything)
     config_file = asset_dir / "gr00t_config.json"
     if config_file.exists():
-        try:
-            with open(config_file, "r") as f:
-                file_config = json.load(f)
-            for key, value in file_config.items():
-                if value is not None:
-                    config[key] = value
-            logger.info(f"Applied gr00t_config.json overrides: {list(file_config.keys())}")
-        except Exception as e:
-            logger.warning(f"Failed to parse gr00t_config.json: {e}")
+        file_config = load_asset_config_file(config_file)
+        for key, value in file_config.items():
+            # An empty value means the field was left unset, which is how every other source reads it:
+            # the Lambda skips a blank input-configuration field and a blank GROOT_* metadata value. A
+            # blank here replacing a real one is how "datasetPath": "" collapsed the dataset path onto
+            # the asset root.
+            if value is not None and value != "":
+                config[key] = value
+        logger.info(f"Applied gr00t_config.json overrides: {list(file_config.keys())}")
 
     # The MERGED value is the one this container loads, whichever source supplied it, so the allowlist
     # is applied here at the point of use -- AFTER the gr00t_config.json merge above and OUTSIDE both
@@ -456,9 +652,10 @@ def main():
         config = resolve_config(definition, INPUT_DIR)
         logger.info(f"Resolved config: {json.dumps(config, indent=2)}")
 
-        # Resolve dataset path
-        dataset_path = str(INPUT_DIR / config["datasetPath"])
-        if not Path(dataset_path).exists():
+        # Resolve dataset path, confined to the asset the run was given
+        dataset_dir = resolve_asset_relative_path(INPUT_DIR, config["datasetPath"], "datasetPath")
+        dataset_path = str(dataset_dir)
+        if not dataset_dir.exists():
             raise ValueError(f"Dataset directory not found at {dataset_path}. "
                            f"Expected LeRobot dataset at '{config['datasetPath']}' within asset.")
 
@@ -503,21 +700,31 @@ def main():
             logger.info("Step 4: Running fine-tuning")
             logger.info("=" * 80)
 
-            run_training(
-                config=config,
-                dataset_path=dataset_path,
-                output_dir=str(OUTPUT_DIR),
-                hf_home=hf_home,
-                hf_token=hf_token,
-            )
+            # Named before training so each checkpoint can be synced to its final destination as it is
+            # written, rather than only after the whole run returns.
             output_folder_name = (
                 f"gr00tOutput_{model_short}_trainingjob_{timestamp}_{job_id_short}")
+            log_free_space(OUTPUT_DIR)
+            with PeriodicOutputUpload(output_s3_asset_files_path, output_folder_name):
+                run_training(
+                    config=config,
+                    dataset_path=dataset_path,
+                    output_dir=str(OUTPUT_DIR),
+                    hf_home=hf_home,
+                    hf_token=hf_token,
+                )
 
         # Step 5: Upload the output
         logger.info("=" * 80)
         logger.info("Step 5: Uploading output to S3")
         logger.info("=" * 80)
         logger.info(f"Output folder name: {output_folder_name}")
+
+        # A sync of an empty directory succeeds, so without this check a run whose work produced
+        # nothing uploads nothing and is still recorded as a success.
+        if not any(path.is_file() for path in OUTPUT_DIR.rglob("*")):
+            raise RuntimeError(
+                f"The {mode} step produced no files in {OUTPUT_DIR}, so there is nothing to upload.")
 
         s3_dest = upload_output_to_s3(OUTPUT_DIR, output_s3_asset_files_path, output_folder_name)
 

@@ -61,8 +61,8 @@ interface Harness {
     securityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: lambda.LayerVersion;
     storage: storageResources;
-    /** Imported repository so the constructs skip a local Docker build of the GPU image. */
-    codeBuildRepository: ecr.IRepository;
+    /** Imported image so the constructs skip a local Docker build of the GPU image. */
+    codeBuildImage: { repository: ecr.IRepository; tag: string };
 }
 
 const makeHarness = (id: string): Harness => {
@@ -100,7 +100,10 @@ const makeHarness = (id: string): Harness => {
             `arn:aws:lambda:${REGION}:${ACCOUNT}:layer:vams-test-common:1`
         ) as lambda.LayerVersion,
         storage,
-        codeBuildRepository: ecr.Repository.fromRepositoryName(stack, "Repo", "vams-test-repo"),
+        codeBuildImage: {
+            repository: ecr.Repository.fromRepositoryName(stack, "Repo", "vams-test-repo"),
+            tag: "0123456789abcdef0123456789abcdef01234567",
+        },
     };
 };
 
@@ -172,7 +175,7 @@ describe("Splat Toolbox processing state machine", () => {
             pipelineSecurityGroups: h.securityGroups,
             lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
             importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
-            codeBuildRepository: h.codeBuildRepository,
+            codeBuildImage: h.codeBuildImage,
         });
         template = Template.fromStack(h.stack);
     });
@@ -215,7 +218,7 @@ describe("Isaac Lab training state machine", () => {
             storageResources: h.storage,
             lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
             importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
-            codeBuildRepository: h.codeBuildRepository,
+            codeBuildImage: h.codeBuildImage,
         });
         template = Template.fromStack(h.stack);
     });

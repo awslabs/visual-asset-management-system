@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import logging
 import sys
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -29,7 +30,13 @@ def _force_logging_to_stderr() -> None:
 
 # Importing .client pulls in vamscli (which may install stdout log handlers),
 # so reconfigure logging immediately afterward and before any client activity.
-from .client import VamsClient, API_ASSETS, API_DATABASE_ASSETS  # noqa: E402
+from .client import (  # noqa: E402
+    VamsClient,
+    API_ASSETS,
+    API_DATABASE_ASSETS,
+    SUBSCRIPTION_ENTITY_ASSET,
+    SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+)
 from .config import Config, ConfigError  # noqa: E402
 
 _force_logging_to_stderr()
@@ -67,6 +74,16 @@ _FIND_AND_SUMMARIZE_MAX_HITS = 25
 # Its collections. 'input' is the asset/file rows, 'inputDatabase' the database-scope rows, 'output'
 # the per-pipeline output metadata; anything else is a 400.
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ("input", "inputDatabase", "output")
+
+# The maxItems/pageSize the comment routes apply when the request names neither
+# (common.dynamodb.validate_pagination_info). Named here because those routes return no
+# continuation token, so it is the ceiling on what is reachable rather than a page size.
+COMMENT_LIST_DEFAULT_BOUND = 10000
+
+# check_subscription answers 200 either way and carries the verdict in the message string, so these
+# are the two values that decide it. Anything else is reported rather than read as "not subscribed".
+SUBSCRIBED_MESSAGE = "success"
+NOT_SUBSCRIBED_MESSAGE = "Subscription doesn't exists."
 
 
 def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -106,6 +123,35 @@ def _unwrap_message_with_warnings(page: Any) -> Any:
     if not warnings or payload is page:
         return payload
     return {**payload, "warnings": warnings}
+
+
+def _bounded_message_list(
+    page: Any, max_items: Optional[int], page_size: Optional[int], noun: str
+) -> Dict[str, Any]:
+    """Shape a route that nests a BARE array under ``message`` and returns no continuation token.
+
+    ``CLIENT.unwrap_message`` returns the whole page when ``message`` is not a dict, and
+    ``paginate()`` reads ``Items`` off it — so both hand back zero rows for this shape. The array is
+    lifted onto ``Items`` here so the tool matches every other list tool.
+
+    The bound is reported rather than assumed away. It is knowable without a token: the handler takes
+    maxItems as given, falls back to pageSize, and otherwise applies its own default — so a result
+    that reached the effective bound is flagged even when the caller narrowed nothing, which is the
+    case a max_items-only check misses.
+    """
+    items = page.get("message") if isinstance(page, dict) else page
+    if not isinstance(items, list):
+        items = []
+    bound = max_items if max_items is not None else (page_size or COMMENT_LIST_DEFAULT_BOUND)
+    result: Dict[str, Any] = {"Items": items, "count": len(items)}
+    if len(items) >= bound:
+        result["truncated"] = True
+        result["note"] = (
+            f"Result may be INCOMPLETE: returned {len(items)} {noun}(s), which is the bound in "
+            f"force ({bound}). This route returns no continuation token, so there is nothing to "
+            "resume with — raise max_items to see more, and do not report this count as a total."
+        )
+    return result
 
 
 def _paginate_with_page_metadata(
@@ -354,7 +400,12 @@ def get_asset_history(
 @mcp.tool()
 @tool_result
 def get_asset_links(database_id: str, asset_id: str, child_tree_view: bool = False) -> Dict[str, Any]:
-    """List relationship links for an asset (related/parent/child assets)."""
+    """List relationship links for an asset (related/parent/child assets).
+
+    A `child_tree_view` walk is BOUNDED (100 levels, 10,000 nodes), so `treeTruncated` true means the
+    returned tree is partial rather than the whole hierarchy — read the tree of an asset further down
+    it for the remainder. `unresolvedCounts` counts links whose asset could not be read, which is
+    separate from `unauthorizedCounts` and usually clears on a retry."""
     return CLIENT.api.get_asset_links_for_asset(database_id, asset_id, child_tree_view=child_tree_view)
 
 
@@ -435,9 +486,16 @@ def search_assets(
     - database_id: restrict to one database. "GLOBAL" is not an asset database — it is the unscoped
       keyword for the shared pipeline/workflow catalogs — so passing it searches every database
       rather than returning nothing.
-    - metadata_query: metadata field search. Metadata is indexed with an `MD_`
-      prefix plus a type prefix, e.g. 'MD_str_product:Training'. Call
-      get_search_fields() to see the indexed field names.
+    - metadata_query: metadata field search, as `key:value`. All of a record's metadata is
+      stored in one field named `MD_` with the keys carried verbatim, so metadata
+      {"product": "Training"} reads back as "MD_": {"product": "Training"} in a hit's
+      `_source`; file attributes use `AB_` the same way, on the file index only. The key may
+      be written bare ('product:Training'), with the entity prefix ('MD_product:Training',
+      or 'AB_colour:red'), or with a type prefix ('MD_str_product:Training') — all three
+      address the same field. Do NOT write 'MD_.product': the dot belongs to the internal
+      query path, not to a submitted key, and such a query matches nothing. Call
+      get_search_fields() for the mapping, which lists `MD_` itself rather than the keys
+      inside it.
     - geo_search: geospatial filter on `geo_MD_location`. Supply exactly one of
       `point` ({lat, lon, radiusMeters}), `bbox` ({topLeft, bottomRight} of
       points), or `geoJson` (GeoJSON geometry/Feature/FeatureCollection), plus
@@ -525,27 +583,65 @@ def list_workflow_executions(
     asset_id: str,
     workflow_id: Optional[str] = None,
     workflow_database_id: Optional[str] = None,
+    status: Optional[str] = None,
+    trigger_type: Optional[str] = None,
+    group_id: Optional[str] = None,
+    triggered_by_user_id: Optional[str] = None,
+    filter_start_date: Optional[str] = None,
+    filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List workflow executions for an asset (auto-paginated).
 
-    Optionally narrow to one workflow. A workflow id is unique only within its database, so pass
-    workflow_database_id as well when the same id exists in more than one; either filter also works
-    alone. Use "GLOBAL" as workflow_database_id for the shared workflow catalog.
+    Optionally narrow to one workflow. A workflow id is unique across every database including
+    "GLOBAL", so the id identifies the workflow on its own; workflow_database_id is an additional
+    narrowing filter rather than a disambiguator, and a value that is not the workflow's own database
+    silently empties the result instead of erroring.
 
-    The walk is BOUNDED, and this endpoint's page size is capped at 50 so the bound arrives sooner
-    than elsewhere. `truncated` means runs were not seen and `NextToken` continues the walk via
-    `starting_token`; do not report a run count from a truncated result.
+    The listing is lower-bounded by start date: `filterStartDate` reports the applied window (90 days
+    back by default), so an asset last processed before it lists nothing at all — that is the window,
+    not an absence of history. Widen it with filter_start_date; both dates are UTC timestamps of the
+    form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
+
+    The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED),
+    trigger_type, group_id, and triggered_by_user_id.
+
+    A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
+    executions inspected for this asset, or it spent its budget re-checking runs an earlier page
+    already listed. Each entry names which. The result is then also flagged `truncated`. Do not
+    report a run count or conclude a run does not exist from a result carrying warnings — narrow the
+    filters and list again.
+
+    The walk is also BOUNDED independently of that, and this endpoint's page size is capped at 50 so
+    the bound arrives sooner than elsewhere. `truncated` means runs were not seen, `note` says which
+    bound stopped it, and `NextToken` continues the walk via `starting_token`.
     """
-    return CLIENT.paginate(
-        lambda params: CLIENT.api.list_workflow_executions(
+    extra = {
+        key: value
+        for key, value in (
+            ("status", status),
+            ("triggerType", trigger_type),
+            ("groupId", group_id),
+            ("triggeredByUserId", triggered_by_user_id),
+            ("filterStartDate", filter_start_date),
+            ("filterEndDate", filter_end_date),
+        )
+        if value
+    }
+
+    def _call(params: Dict[str, Any]) -> Dict[str, Any]:
+        return CLIENT.api.list_workflow_executions(
             database_id,
             asset_id,
             workflow_database_id=workflow_database_id,
             workflow_id=workflow_id,
-            params=params,
-        ),
+            params={**params, **extra},
+        )
+
+    return _paginate_with_page_metadata(
+        _call,
+        passthrough_keys=("filterStartDate", "filterEndDate"),
         max_items=max_items,
         # The executions endpoint caps pageSize at 50 to avoid Step Functions throttling.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
@@ -792,14 +888,26 @@ def get_workflow(database_id: str, workflow_id: str, include_archived: bool = Fa
 
 @mcp.tool()
 @tool_result
-def list_workflow_triggers(database_id: str, workflow_id: str) -> Dict[str, Any]:
-    """List a workflow's triggers (e.g. fileUpload) and whether each is enabled.
+def list_workflow_triggers(
+    database_id: str,
+    workflow_id: str,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List a workflow's triggers (e.g. fileUpload) and whether each is enabled (auto-paginated).
 
     A workflow may carry several triggers of one type, each with its own filters and default templates.
     Each item's `triggerType` is its KEY — the bare type for the first trigger of a type, or
     'type#triggerId' for an additional one — and is what the get/set/delete tools take.
+
+    The walk is BOUNDED: `truncated` means triggers were not seen and `NextToken` continues it via
+    `starting_token`. A trigger missing from a truncated result may simply be past the bound.
     """
-    return CLIENT.unwrap_message(CLIENT.api.list_workflow_triggers(database_id, workflow_id))
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_workflow_triggers(database_id, workflow_id, params=params),
+        max_items=max_items,
+        starting_token=starting_token,
+    )
 
 
 @mcp.tool()
@@ -819,20 +927,30 @@ def list_executions(
     status: Optional[str] = None,
     workflow_id: Optional[str] = None,
     workflow_database_id: Optional[str] = None,
+    trigger_type: Optional[str] = None,
+    group_id: Optional[str] = None,
+    triggered_by_user_id: Optional[str] = None,
+    filter_start_date: Optional[str] = None,
+    filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List workflow executions across every workflow and database the user can see.
 
-    Distinct from list_workflow_executions(), which is scoped to ONE asset's history. Optional
-    filters narrow by status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED) and by workflow.
+    Distinct from list_workflow_executions(), which is scoped to ONE asset's history. The filters
+    each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED), workflow_id,
+    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. group_id is how a group's
+    members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
+    listing the group here first.
 
     An execution is listed only when the user can read its workflow, every asset the run read, and
     the asset it wrote to. A run whose output landed in an asset the user cannot read is therefore
     absent even when the user can read its inputs — an omission by permission, not by date.
 
     The listing is lower-bounded by start date: `filterStartDate` reports the applied window (90 days
-    back by default), so executions older than it are absent by design, not missing.
+    back by default), so executions older than it are absent by design, not missing. Reach them with
+    filter_start_date, and bound the window above with filter_end_date; both are UTC timestamps of
+    the form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
 
     A `warnings` entry means the walk WITHHELD rows, for either of two reasons: a page reached a cap
     on the distinct assets it resolves for permission checks and skipped the executions it could not
@@ -849,6 +967,11 @@ def list_executions(
             ("status", status),
             ("workflowId", workflow_id),
             ("workflowDatabaseId", workflow_database_id),
+            ("triggerType", trigger_type),
+            ("groupId", group_id),
+            ("triggeredByUserId", triggered_by_user_id),
+            ("filterStartDate", filter_start_date),
+            ("filterEndDate", filter_end_date),
         )
         if value
     }
@@ -1023,6 +1146,160 @@ def get_execution_logs(
 
 
 # =========================================================================
+# COMMENT / SUBSCRIPTION / API-KEY READ TOOLS
+#
+# Comments are the per-asset-version discussion thread; subscriptions are who gets notified when an
+# asset changes. Both answer with the legacy `{"message": ...}` envelope, and not uniformly: the
+# comment listings nest a BARE ARRAY under it while the subscription listing nests the usual
+# Items/NextToken page, so each is unwrapped for its own shape rather than a shared one.
+# =========================================================================
+
+
+@mcp.tool()
+@tool_result
+def list_asset_comments(
+    asset_id: str,
+    max_items: Optional[int] = None,
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List the comments on an asset, across every version of it.
+
+    Each row carries assetId, the composite `assetVersionId:commentId` key, commentBody,
+    commentOwnerID / commentOwnerUsername and dateCreated. Rows come back ordered by that composite
+    key descending, which for a uuid4 comment id is arbitrary within a version — sort on dateCreated
+    rather than reading anything into the position.
+
+    This route CANNOT be paged. It applies max_items / page_size and then discards the pagination
+    token, so there is nothing to resume with and comments past the bound are unreachable through the
+    API. `truncated` is set when the result reached the bound in force — the max_items you supplied,
+    else page_size, else the deployment's own default of 10000 — and the count is then a floor rather
+    than a total: raise max_items rather than reporting it, or narrow with
+    list_asset_version_comments().
+
+    Deleted comments are never returned: the route accepts a showDeleted flag and the service ignores
+    it, so this tool does not offer one.
+    """
+    return _bounded_message_list(
+        CLIENT.api.list_asset_comments(asset_id, max_items=max_items, page_size=page_size),
+        max_items,
+        page_size,
+        "comment",
+    )
+
+
+@mcp.tool()
+@tool_result
+def list_asset_version_comments(
+    asset_id: str,
+    asset_version_id: str,
+    max_items: Optional[int] = None,
+    page_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List the comments on ONE version of an asset.
+
+    Use list_asset_versions() to find an asset_version_id. Same row shape and the same unpageable
+    bound as list_asset_comments(): the token is discarded, so a result that reached max_items cannot
+    be continued and its count is a floor.
+    """
+    return _bounded_message_list(
+        CLIENT.api.list_asset_version_comments(
+            asset_id, asset_version_id, max_items=max_items, page_size=page_size
+        ),
+        max_items,
+        page_size,
+        "comment",
+    )
+
+
+@mcp.tool()
+@tool_result
+def get_comment(asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+    """Read one comment, addressed by asset, asset version and comment id.
+
+    The endpoint answers 200 with an empty object for a comment that does not exist rather than 404,
+    so absence surfaces here as a CommentNotFoundError in the `error` field — not as an empty
+    success. Neither id may contain a colon: the two are joined into one `assetVersionId:commentId`
+    path segment, and an extra colon shifts which value the handler validates.
+    """
+    return CLIENT.unwrap_message(CLIENT.api.get_comment(asset_id, asset_version_id, comment_id))
+
+
+@mcp.tool()
+@tool_result
+def list_subscriptions(
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List the event subscriptions on this deployment (auto-paginated).
+
+    Each row carries eventName, entityName, entityId, subscribers, entityValue and databaseId. A
+    subscription is keyed on (eventName, entityName, entityId) — that triple is what the write and
+    delete tools address, and `subscribers` is a field of the row rather than a separate record.
+
+    The walk is BOUNDED: `truncated` means subscriptions were not seen and `NextToken` continues it
+    via `starting_token`. Do not conclude a user is unsubscribed from a truncated result — use
+    check_subscription() for one asset, which answers without paging.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_subscriptions(
+            page_size=params["pageSize"],
+            starting_token=params.get("startingToken"),
+        ),
+        max_items=max_items,
+        starting_token=starting_token,
+    )
+
+
+@mcp.tool()
+@tool_result
+def check_subscription(asset_id: str, user_id: str) -> Dict[str, Any]:
+    """Check whether a user is subscribed to an asset's version changes.
+
+    Returns `subscribed` (boolean) alongside the endpoint's raw `message`. The endpoint answers HTTP
+    200 in BOTH cases and carries the verdict only in that string, so a successful call is never on
+    its own an answer. The event and entity are fixed by the route ('Asset Version Change' on
+    'Asset'); use list_subscriptions() for any other event or entity type.
+
+    `unrecognizedResponse` is set when the message is neither of the two known values, meaning the
+    verdict could not be read — treat that as unknown rather than as not subscribed.
+    """
+    response = CLIENT.api.check_subscription(asset_id, user_id)
+    message = response.get("message") if isinstance(response, dict) else response
+    result: Dict[str, Any] = {"subscribed": message == SUBSCRIBED_MESSAGE, "message": message}
+    if message not in (SUBSCRIBED_MESSAGE, NOT_SUBSCRIBED_MESSAGE):
+        result["unrecognizedResponse"] = True
+    return result
+
+
+@mcp.tool()
+@tool_result
+def get_api_key(api_key_id: str) -> Dict[str, Any]:
+    """Read one API key's record, in the administrative (any user's keys) scope.
+
+    Returns the key's metadata only — apiKeyName, the userId it acts as, expiry and enabled state.
+    The key VALUE is shown once at creation and never again, and the stored hash is stripped by the
+    handler, so nothing usable as a credential is returned here. Creating, updating and revoking API
+    keys is deliberately not exposed by this server.
+
+    There is no list tool for API keys, so `api_key_id` has to come from outside this session — run
+    `vamscli api-key list`. A key that does not exist is reported as a 400 rather than a 404.
+    """
+    return CLIENT.api.get_api_key(api_key_id)
+
+
+@mcp.tool()
+@tool_result
+def get_user_api_key(api_key_id: str) -> Dict[str, Any]:
+    """Read one of the AUTHENTICATED user's own API key records.
+
+    Same metadata-only response as get_api_key(), scoped to the caller's keys: a key owned by another
+    user is reported as not found, so this scope never reveals that it exists. `api_key_id` comes
+    from `vamscli api-key user list`.
+    """
+    return CLIENT.api.get_user_api_key(api_key_id)
+
+
+# =========================================================================
 # WRITE TOOLS (require VAMS_ENABLE_WRITES=true)
 # =========================================================================
 
@@ -1157,7 +1434,12 @@ if CONFIG.enable_writes:
         `overrides` narrows the pipeline's systemConfig for runs using this template, over the keys
         inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the
         same four-key boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes,
-        databaseMetadata.
+        databaseMetadata. The block is at most 65536 bytes serialized.
+
+        A `tagSchema` entry carries only tagKey, type, required, default, label, description and
+        enumValues. Any other key is rejected naming the offending index and key, so do not invent a
+        spelling — a misspelled 'requried' or a capitalised 'Type' fails the call rather than storing
+        a tag that is silently optional or untyped.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
@@ -1166,7 +1448,12 @@ if CONFIG.enable_writes:
     def update_pipeline_template(
         database_id: str, pipeline_id: str, template_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update a pipeline template. Only the fields present in `body` change."""
+        """Update a pipeline template. Only the fields present in `body` change.
+
+        `overrides` and `tagSchema` carry the same rules as on create_pipeline_template: the
+        overrides block is at most 65536 bytes serialized, and a tag entry's keys are limited to
+        tagKey, type, required, default, label, description and enumValues.
+        """
         return CLIENT.unwrap_message(CLIENT.api.update_pipeline_template(database_id, pipeline_id, template_id, body))
 
     @mcp.tool()
@@ -1174,7 +1461,13 @@ if CONFIG.enable_writes:
     def set_pipeline_template_tag_schema(
         database_id: str, pipeline_id: str, template_id: str, fields: list
     ) -> Dict[str, Any]:
-        """Replace a template's tag schema. This REPLACES the whole schema, not a merge."""
+        """Replace a template's tag schema. This REPLACES the whole schema, not a merge.
+
+        Each entry in `fields` carries only tagKey, type, required, default, label, description and
+        enumValues. Any other key is rejected naming the offending index and key, rather than being
+        ignored, so a misspelled 'requried' or a capitalised 'Type' fails the call instead of storing
+        a tag that is silently optional or untyped.
+        """
         return CLIENT.unwrap_message(
             CLIENT.api.set_pipeline_template_tag_schema(
                 database_id, pipeline_id, template_id, fields
@@ -1297,6 +1590,121 @@ if CONFIG.enable_writes:
         """
         return CLIENT.unwrap_message(CLIENT.api.abort_execution(execution_id, group_id=group_id))
 
+    # ---------------------------------------------------------------------
+    # Comment / subscription / metadata-schema writes
+    # ---------------------------------------------------------------------
+
+    @mcp.tool()
+    @tool_result
+    def add_comment(
+        asset_id: str,
+        asset_version_id: str,
+        comment_body: str,
+        comment_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add a comment to one version of an asset. Returns the `commentId` written.
+
+        `comment_id` is the caller's to choose and the write is UNCONDITIONAL, so passing the id of
+        an existing comment REPLACES it — its body, owner and creation date — with no error and no
+        indication that anything was overwritten. Leave it unset unless that is the intent: a uuid4
+        is generated, and returned here because the endpoint's acknowledgement does not contain it.
+
+        `comment_body` is free text up to 16384 characters. Use list_asset_versions() to find an
+        asset_version_id; neither id may contain a colon.
+        """
+        resolved_id = comment_id or str(uuid.uuid4())
+        response = CLIENT.api.add_comment(asset_id, asset_version_id, resolved_id, comment_body)
+        result: Dict[str, Any] = {"commentId": resolved_id}
+        if isinstance(response, dict):
+            result.update(response)
+        else:
+            result["response"] = response
+        return result
+
+    @mcp.tool()
+    @tool_result
+    def update_comment(
+        asset_id: str, asset_version_id: str, comment_id: str, comment_body: str
+    ) -> Dict[str, Any]:
+        """Replace the text of an existing comment. Only the body changes.
+
+        The comment's CREATOR is the only user who may edit it; anyone else gets a 403 regardless of
+        their VAMS role, so this fails for an agent acting as a different user than the one who
+        commented. A comment id that does not exist is reported as not found rather than created —
+        add_comment() is the tool that writes a new one.
+        """
+        return CLIENT.api.update_comment(asset_id, asset_version_id, comment_id, comment_body)
+
+    @mcp.tool()
+    @tool_result
+    def create_subscription(
+        entity_id: str,
+        subscribers: List[str],
+        event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+        entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
+    ) -> Dict[str, Any]:
+        """Subscribe users to an entity's events, sending them e-mail on each occurrence.
+
+        Defaults subscribe to asset version changes, where `entity_id` is the assetId. `subscribers`
+        are VAMS user IDs, each resolved to the e-mail address on the user's profile (falling back to
+        the user ID when that is itself an address) — a user with no usable address fails the call.
+
+        A user already subscribed to this entity is an ERROR, not a no-op: the whole call is rejected,
+        including the subscribers that would have been added. Call check_subscription() first, or use
+        update_subscription() to state the full list you want.
+        """
+        return CLIENT.api.create_subscription(event_name, entity_name, entity_id, subscribers)
+
+    @mcp.tool()
+    @tool_result
+    def update_subscription(
+        entity_id: str,
+        subscribers: List[str],
+        event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+        entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
+    ) -> Dict[str, Any]:
+        """REPLACE a subscription's subscriber list with the one given.
+
+        This is not an addition. Every user absent from `subscribers` is unsubscribed from the
+        underlying notification topic, so passing one user removes all the others. To add someone,
+        read the current list with list_subscriptions() and send it back with the addition included —
+        this tool deliberately does not do that read for you, because a stale list silently
+        unsubscribes whoever joined in between.
+
+        The subscription must already exist; there is no upsert. Use create_subscription() first.
+        """
+        return CLIENT.api.update_subscription(event_name, entity_name, entity_id, subscribers)
+
+    @mcp.tool()
+    @tool_result
+    def create_metadata_schema(schema_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Define a metadata schema, which constrains and describes metadata fields on an entity.
+
+        `schema_data` takes databaseId (or the literal 'GLOBAL' for every database),
+        metadataSchemaEntityType (databaseMetadata, assetMetadata, fileMetadata, fileAttribute or
+        assetLinkMetadata), schemaName, and fields — which is nested: `{"fields": [ ... ]}`, not a
+        bare list. Optional: fileKeyTypeRestriction (a comma-delimited extension list, accepted only
+        for fileMetadata and fileAttribute), and enabled (defaults true).
+
+        Call list_metadata_schemas() first and copy the shape of an existing schema. The response
+        carries the generated metadataSchemaId, which is what update_metadata_schema() takes.
+        """
+        return CLIENT.api.create_metadata_schema(schema_data)
+
+    @mcp.tool()
+    @tool_result
+    def update_metadata_schema(
+        metadata_schema_id: str, update_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update a metadata schema. Only the fields present in `update_data` change.
+
+        Changeable: schemaName, fields (the same nested `{"fields": [ ... ]}` shape as on create),
+        fileKeyTypeRestriction, and enabled. The schema's databaseId and entity type are fixed at
+        creation. `fields` REPLACES the whole field list rather than merging into it, so send the
+        complete set — read it with list_metadata_schemas() first.
+        """
+        return CLIENT.api.update_metadata_schema(metadata_schema_id, update_data)
+
 
 # =========================================================================
 # DESTRUCTIVE TOOLS (require VAMS_ENABLE_DESTRUCTIVE=true AND writes enabled)
@@ -1399,6 +1807,11 @@ if CONFIG.enable_destructive:
         """Delete a pipeline template. Not reversible.
 
         A pipeline with requireTemplate becomes unrunnable if its only template is removed.
+
+        The response carries a `warnings` array when a file-upload trigger still names the deleted
+        template as a default for this pipeline. The delete happened; triggered executions of the
+        named workflows fail until each trigger picks a different default template, so relay the
+        warnings rather than reporting a clean delete.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline_template(database_id, pipeline_id, template_id))
 
@@ -1419,6 +1832,73 @@ if CONFIG.enable_destructive:
         Removes the run's traceability; the output files it wrote to assets are left in place.
         """
         return CLIENT.unwrap_message(CLIENT.api.permanent_delete_execution(execution_id))
+
+    # ---------------------------------------------------------------------
+    # Comment / subscription / metadata-schema deletes
+    # ---------------------------------------------------------------------
+
+    @mcp.tool()
+    @tool_result
+    def delete_comment(asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+        """Delete a comment. A soft delete — the record moves to a deleted partition.
+
+        It cannot be read back through this server either way: the listing tools do not return
+        deleted comments and the route's showDeleted flag is ignored by the service, so treat this as
+        unrecoverable from an agent's position.
+
+        Only the comment's CREATOR may delete it; anyone else gets a 403 whatever their VAMS role.
+        """
+        return CLIENT.api.delete_comment(asset_id, asset_version_id, comment_id)
+
+    @mcp.tool()
+    @tool_result
+    def delete_subscription(
+        entity_id: str,
+        subscribers: List[str],
+        event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+        entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
+    ) -> Dict[str, Any]:
+        """Delete a WHOLE subscription — every subscriber, not the ones listed.
+
+        For an asset this also deletes the asset's notification topic, so every user on the record is
+        unsubscribed and the subscription no longer exists. `subscribers` is required by the endpoint,
+        which validates it as a user-ID list and then IGNORES it: passing one name does not scope the
+        delete to that name. To remove one user and leave the subscription standing, use
+        unsubscribe(); to change the membership, use update_subscription().
+        """
+        return CLIENT.api.delete_subscription(event_name, entity_name, entity_id, subscribers)
+
+    @mcp.tool()
+    @tool_result
+    def unsubscribe(
+        entity_id: str,
+        subscriber: str,
+        event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+        entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
+    ) -> Dict[str, Any]:
+        """Remove ONE subscriber from a subscription, leaving the record and the others in place.
+
+        A different route from delete_subscription(), which removes the entire record. Takes a single
+        user rather than a list because the endpoint removes only the first entry it is sent while
+        unsubscribing every entry from the notification topic — so a list would leave the two out of
+        step. A user who is not subscribed is reported as not found rather than ignored.
+        """
+        return CLIENT.api.unsubscribe(event_name, entity_name, entity_id, subscriber)
+
+    @mcp.tool()
+    @tool_result
+    def delete_metadata_schema(database_id: str, metadata_schema_id: str) -> Dict[str, Any]:
+        """PERMANENTLY delete a metadata schema. Irreversible, and there is no archived state.
+
+        The schema's constraints stop being applied to the entity type it covered; metadata already
+        stored against it is left in place, unvalidated. Read it with list_metadata_schemas() first —
+        the definition cannot be recovered afterwards, only re-authored.
+        """
+        # `confirmDelete` is a REQUIRED-TRUE field of the request contract, not an optional interlock:
+        # DeleteMetadataSchemaRequestModel declares an always=True validator that rejects any other
+        # value, so the APIClient always sends true and there is nothing to surface as a parameter.
+        # The controls on this tool are the destructive gate, its name, and this docstring.
+        return CLIENT.api.delete_metadata_schema(database_id, metadata_schema_id)
 
 
 def main() -> None:

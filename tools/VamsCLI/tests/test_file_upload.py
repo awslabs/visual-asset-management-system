@@ -161,7 +161,38 @@ class TestFileProcessor:
                 validate_file_for_upload(tmp_path, "assetPreview", "test.previewFile.txt")
         finally:
             tmp_path.unlink()
-    
+
+    def test_companion_extension_is_read_after_the_marker(self):
+        """A companion's extension is everything after `.previewFile.`, as the API reads it.
+
+        `model.gltf.previewFile.p.png` ends in `.png`, so a last-dot reading accepts it and the
+        API then rejects the whole request for its `.p.png` extension.
+        """
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+            tmp.write(b"test")
+            tmp_path = Path(tmp.name)
+
+        try:
+            with pytest.raises(PreviewFileError, match=r"unsupported extension '\.p\.png'"):
+                validate_file_for_upload(tmp_path, "assetFile",
+                                         "model.gltf.previewFile.p.png")
+        finally:
+            tmp_path.unlink()
+
+    def test_companion_with_an_allowed_extension_is_accepted(self):
+        """Positive control: a check that refused every companion would pass the case above."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+            tmp.write(b"test")
+            tmp_path = Path(tmp.name)
+
+        try:
+            # Should not raise
+            validate_file_for_upload(tmp_path, "assetFile", "model.gltf.previewFile.png")
+            validate_file_for_upload(tmp_path, "assetFile", "model.gltf.previewFile.PNG")
+        finally:
+            tmp_path.unlink()
+
+
     def test_collect_files_from_list(self):
         """Test collecting files from a list of paths."""
         with tempfile.TemporaryDirectory() as tmp_dir:

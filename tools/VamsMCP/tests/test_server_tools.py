@@ -251,8 +251,10 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_tags(starting_token="tok"),
         lambda: server.list_tag_types(starting_token="tok"),
         lambda: server.list_pipelines(starting_token="tok"),
+        lambda: server.list_workflow_triggers("db1", "w1", starting_token="tok"),
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
+        lambda: server.list_subscriptions(starting_token="tok"),
     ],
 )
 def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
@@ -966,6 +968,7 @@ _PAGINATED_READ_TOOLS = (
     "list_pipelines",
     "list_executions",
     "page_execution_detail_metadata",
+    "list_subscriptions",
 )
 
 
@@ -1048,7 +1051,6 @@ def test_generate_download_url_docstring_positive_control():
         lambda: server.get_pipeline_template("db1", "p1", "t1"),
         lambda: server.get_pipeline_template_tag_schema("db1", "p1", "t1"),
         lambda: server.get_workflow("db1", "w1"),
-        lambda: server.list_workflow_triggers("db1", "w1"),
         lambda: server.get_workflow_trigger("db1", "w1", "fileUpload"),
         lambda: server.get_execution_details("e1"),
         lambda: server.get_execution_logs("e1"),
@@ -1065,7 +1067,6 @@ def test_orchestration_reads_unwrap_the_message_envelope(mock_client, call):
         "get_pipeline_template",
         "get_pipeline_template_tag_schema",
         "get_workflow",
-        "list_workflow_triggers",
         "get_workflow_trigger",
         "get_execution_details",
         "get_execution_logs",
@@ -1232,3 +1233,240 @@ def test_abort_execution_docstring_states_the_compute_risk(fragment):
     docstring = _docstring_of("abort_execution")
     assert docstring, "no docstring was read, so this assertion would be vacuous"
     assert fragment in docstring
+
+
+# --- The per-asset execution list must not swallow its page metadata --------
+#
+# The asset-scoped listing returns `filterStartDate` (and `filterEndDate`) and a `warnings` array as
+# SIBLINGS of `Items` inside the `message` envelope, exactly as the global one does. paginate()
+# rebuilds its result from the accumulated items alone, so on that helper an asset whose last run
+# predates the default 90-day window reads as an asset that has never been processed, and a page
+# capped by the executions-inspected limit reads as the asset's complete history.
+
+_ASSET_INSPECT_WARNING = (
+    "This page reached the limit of 200 executions inspected for this asset, so older executions "
+    "are not listed. Narrow the filters or continue with NextToken to see the rest."
+)
+
+
+def test_list_workflow_executions_surfaces_page_warnings_and_flags_truncated(real_paginate_client):
+    # The last page carries no NextToken, so the warning is the only thing that can mark this
+    # result incomplete.
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [{"workflowExecutionId": "e1"}], "NextToken": "t1",
+                     "warnings": [_ASSET_INSPECT_WARNING]}},
+        {"message": {"Items": [{"workflowExecutionId": "e2"}], "warnings": [_ASSET_INSPECT_WARNING]}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1")
+
+    assert [row["workflowExecutionId"] for row in result["Items"]] == ["e1", "e2"]
+    # Reported once even though both pages carried it.
+    assert result["warnings"] == [_ASSET_INSPECT_WARNING]
+    assert result["truncated"] is True
+
+
+def test_list_workflow_executions_echoes_the_applied_date_window(real_paginate_client):
+    """The 90-day lower bound is applied whether or not the caller asked for one, so without the echo
+    an empty list is indistinguishable from an asset that has never been processed."""
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [], "filterStartDate": "2026-05-20T00:00:00Z",
+                     "filterEndDate": "2026-08-18T00:00:00Z"}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1")
+
+    assert result["filterStartDate"] == "2026-05-20T00:00:00Z"
+    assert result["filterEndDate"] == "2026-08-18T00:00:00Z"
+
+
+def test_list_workflow_executions_clean_walk_adds_no_warning_keys(real_paginate_client):
+    """Negative control: the helper must not manufacture a bound on a complete page, or `truncated`
+    stops meaning anything."""
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [{"workflowExecutionId": "e1"}]}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1")
+
+    assert result["count"] == 1, "items must still be read from the page (one unwrap, not two)"
+    assert "warnings" not in result
+    assert result.get("truncated") is None
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # The date bound went unmentioned entirely, which is the half of this an agent cannot infer: an
+    # empty result reads as "never processed" rather than "older than the window".
+    ["filterStartDate", "90 days", "warnings", "WITHHELD", "truncated", "starting_token"],
+)
+def test_list_workflow_executions_docstring_describes_the_window_and_withheld_rows(fragment):
+    assert fragment in _docstring_of("list_workflow_executions")
+
+
+# --- Both execution list tools forward every filter the endpoint applies -----
+#
+# Both endpoints accept six equality filters plus the date window. A parameter absent from the tool
+# surface pins the agent to the server default with no error, so "why did this fail in March?" and
+# "list this group's members" are unanswerable rather than unsupported. Asserted on the params that
+# reach the APIClient, since a dropped one is a silent server default no return-value check catches.
+
+_GLOBAL_LIST_FILTER_PARAMETERS = (
+    "status", "workflow_id", "workflow_database_id", "trigger_type", "group_id",
+    "triggered_by_user_id", "filter_start_date", "filter_end_date",
+)
+
+_ASSET_LIST_FILTER_PARAMETERS = (
+    "workflow_id", "workflow_database_id", "status", "trigger_type", "group_id",
+    "triggered_by_user_id", "filter_start_date", "filter_end_date",
+)
+
+
+@pytest.mark.parametrize(
+    ("tool", "parameters"),
+    [
+        ("list_executions", _GLOBAL_LIST_FILTER_PARAMETERS),
+        ("list_workflow_executions", _ASSET_LIST_FILTER_PARAMETERS),
+    ],
+)
+def test_execution_list_tools_accept_every_narrowing_parameter(tool, parameters):
+    """Read off the live signature: the agent's call is rejected by the schema for a parameter the
+    docstring describes but the function does not take."""
+    import inspect
+
+    declared = inspect.signature(getattr(server, tool)).parameters
+    missing = [name for name in parameters if name not in declared]
+    assert not missing, f"{tool} does not accept {missing}"
+
+
+_FILTER_ARGUMENTS = {
+    "status": "FAILED",
+    "workflow_id": "wf1",
+    "workflow_database_id": "wdb1",
+    "trigger_type": "Manual",
+    "group_id": "grp-1",
+    "triggered_by_user_id": "u1",
+    "filter_start_date": "2026-01-01T00:00:00Z",
+    "filter_end_date": "2026-02-01T00:00:00Z",
+}
+
+_EXPECTED_QUERY_KEYS = {
+    "status": "status",
+    "workflow_id": "workflowId",
+    "workflow_database_id": "workflowDatabaseId",
+    "trigger_type": "triggerType",
+    "group_id": "groupId",
+    "triggered_by_user_id": "triggeredByUserId",
+    "filter_start_date": "filterStartDate",
+    "filter_end_date": "filterEndDate",
+}
+
+
+def test_list_executions_forwards_every_filter_on_every_page(real_paginate_client):
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "NextToken": "t1"}},
+        {"message": {"Items": []}},
+    ]
+
+    result = server.list_executions(**_FILTER_ARGUMENTS)
+
+    assert "error_type" not in result, result
+    calls = real_paginate_client.api.list_executions.call_args_list
+    assert len(calls) == 2, "a filter-pinned walk must repeat its filters, so both pages are checked"
+    for call in calls:
+        sent = call.kwargs["params"]
+        for argument, key in _EXPECTED_QUERY_KEYS.items():
+            assert sent.get(key) == _FILTER_ARGUMENTS[argument], f"{key} did not reach the endpoint"
+
+
+def test_list_workflow_executions_forwards_every_filter_on_every_page(real_paginate_client):
+    """workflow_id / workflow_database_id keep travelling as the APIClient's own keyword arguments
+    (it folds them into the query itself); the rest ride in `params`."""
+    real_paginate_client.api.list_workflow_executions.side_effect = [
+        {"message": {"Items": [], "NextToken": "t1"}},
+        {"message": {"Items": []}},
+    ]
+
+    result = server.list_workflow_executions("db1", "a1", **_FILTER_ARGUMENTS)
+
+    assert "error_type" not in result, result
+    calls = real_paginate_client.api.list_workflow_executions.call_args_list
+    assert len(calls) == 2
+    for call in calls:
+        assert call.kwargs["workflow_id"] == "wf1"
+        assert call.kwargs["workflow_database_id"] == "wdb1"
+        sent = call.kwargs["params"]
+        for argument in ("status", "trigger_type", "group_id", "triggered_by_user_id",
+                         "filter_start_date", "filter_end_date"):
+            key = _EXPECTED_QUERY_KEYS[argument]
+            assert sent.get(key) == _FILTER_ARGUMENTS[argument], f"{key} did not reach the endpoint"
+
+
+@pytest.mark.parametrize(
+    ("call", "recorder"),
+    [
+        (lambda: server.list_executions(), "list_executions"),
+        (lambda: server.list_workflow_executions("db1", "a1"), "list_workflow_executions"),
+    ],
+)
+def test_execution_list_tools_send_no_filter_the_caller_did_not_set(real_paginate_client, call,
+                                                                   recorder):
+    """An unset filter must be absent, not empty. The handler compares these for equality after
+    stripping, and an empty date would be read as a sort-key bound."""
+    getattr(real_paginate_client.api, recorder).side_effect = [{"message": {"Items": []}}]
+
+    call()
+
+    sent = getattr(real_paginate_client.api, recorder).call_args.kwargs["params"]
+    leaked = sorted(set(_EXPECTED_QUERY_KEYS.values()) & set(sent))
+    assert not leaked, f"filters sent without being asked for: {leaked}"
+
+
+# --- Workflow ids are unique across databases, and every doc must say so -----
+#
+# create_workflow rejects an id owned by any other database including GLOBAL
+# (workflowService.find_workflow_id_owner), and create_pipeline does the same. So a database id is
+# never needed to disambiguate one; supplying a guessed one only narrows the result to nothing. The
+# agent skill states the rule correctly, and it is the authority for identifier semantics, so the
+# MCP text must not teach the opposite.
+
+_DATABASE_SCOPED_CLAIM = "unique only within its database"
+_CROSS_DATABASE_RULE = "unique across every database"
+
+
+def _agent_facing_vamsmcp_texts():
+    """server.py plus the operator-facing docs beside it.
+
+    `tests/` is deliberately excluded: this module names the wrong claim as a literal, so scanning
+    itself would make the assertion below fail on its own fixture data.
+    """
+    root = SOURCE_PATH.resolve().parents[1]
+    paths = [SOURCE_PATH.resolve(), root / "README.md", root / "CLAUDE.md"]
+    return {path.name: path.read_text(encoding="utf-8") for path in paths}
+
+
+def test_no_vamsmcp_text_claims_a_workflow_id_is_database_scoped():
+    offenders = sorted(name for name, text in _agent_facing_vamsmcp_texts().items()
+                       if _DATABASE_SCOPED_CLAIM in text)
+    assert not offenders, (
+        f"{offenders} state the id is only database-unique, which the backend rejects at create")
+
+
+def test_the_database_scoped_claim_scan_reads_real_files():
+    """Positive control for the scan above: prove it read the shipped text rather than empty strings,
+    by pinning a sentence that has to be present for the corrected rule to be stated at all."""
+    texts = _agent_facing_vamsmcp_texts()
+    assert set(texts) == {"server.py", "README.md", "CLAUDE.md"}, sorted(texts)
+    assert all(texts.values()), "one of the scanned files read as empty"
+    stating = [name for name, text in texts.items() if _CROSS_DATABASE_RULE in text]
+    assert "server.py" in stating and "README.md" in stating, (
+        f"only {stating} state the cross-database rule")
+
+
+def test_list_workflow_executions_docstring_states_the_id_identifies_the_workflow():
+    """The direction matters: told the id is ambiguous, an agent supplies a guessed database and the
+    equality filter empties the page — a successful call reporting the workflow never ran."""
+    docstring = _docstring_of("list_workflow_executions")
+    assert _CROSS_DATABASE_RULE in docstring
+    assert "narrowing filter" in docstring
+    assert _DATABASE_SCOPED_CLAIM not in docstring

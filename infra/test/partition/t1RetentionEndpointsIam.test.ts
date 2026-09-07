@@ -18,7 +18,10 @@
  *    leaves the same file failing depending on which event delivered it. This also covers FIX-063
  *    (S2-BACKEND-126), which reports the same unbounded /tmp staging from the handler side and resolves to
  *    the same ephemeral-storage property — the handler still reads a staged file whole, so memory bounds
- *    the supported file size and the storage size only has to clear it.
+ *    the supported file size and the storage size only has to clear it. The audit's pipeline half
+ *    (S4-PIPELINES-041, the 3dBasic and CAD/mesh conversion lambdas) resolves to the same property and
+ *    is asserted in a second describe; those two are `DockerImageFunction`s with no Handler, so they are
+ *    selected by logical id instead.
  *  - FIX-034 (S1-INFRA-002) — the base64 export defect must NOT be fixed with a wildcard
  *    `binaryMediaTypes` entry; this is the regression guard for the approach the owner ruled out, not for
  *    the fix itself.
@@ -195,9 +198,8 @@ describe("FIX-011: the physna sync lambdas have ephemeral storage for large CAD 
         ["physnaFileSync", fileSync],
         ["physnaAssetSync", assetSync],
     ])("%s declares more than the default 512 MB of ephemeral storage", (_name, select) => {
-        // Scoped to the cited sites. The audit the owner asked for also covers pipeline lambdas that
-        // download to /tmp, but which of those do so is not visible in the template — that half belongs
-        // in a code-level review, not a synth assertion.
+        // The audit the owner asked for also covers pipeline lambdas that download to /tmp. That set is
+        // the two conversion pipelines, and it is asserted in the describe below.
         const fn = select(synthPhysna("commercial"))[0];
         expect(fn.properties.EphemeralStorage?.Size ?? 512).toBeGreaterThan(512);
     });
@@ -206,6 +208,83 @@ describe("FIX-011: the physna sync lambdas have ephemeral storage for large CAD 
         const sizeOf = (select: (s: SynthResult) => Resource[]) =>
             select(synthPhysna("commercial"))[0].properties.EphemeralStorage?.Size ?? 512;
         expect(sizeOf(assetSync)).toBe(sizeOf(fileSync));
+    });
+});
+
+describe("FIX-011: the conversion pipeline lambdas have ephemeral storage for large models", () => {
+    // The other half of the /tmp audit. Both conversion handlers stage the downloaded asset under
+    // /tmp — 3dBasic writes its export there as well — so both need more than the 512 MB default.
+    //
+    // Selection is by logical id, not by Handler: both are `lambda.DockerImageFunction`, which emits
+    // PackageType Image and NO Handler property, so the physna describe's handler-substring match
+    // cannot see them. Each is created directly on its own nested stack, so the logical id is the
+    // construct id plus CDK's hash suffix.
+    const imageLambda =
+        (constructId: string) =>
+        (s: SynthResult): Resource[] =>
+            s.where(
+                "AWS::Lambda::Function",
+                (r) => r.logicalId.startsWith(constructId) && r.properties.PackageType === "Image"
+            );
+
+    const basicConversion = imageLambda("vamsExecute3dBasicConversion");
+    const meshCadExtraction = imageLambda("vamsExecuteMeshCadMetadataExtractionConversion");
+
+    /** meshCad hybrid — `useConversionCadMeshMetadataExtraction` is disabled in every shipped template. */
+    const synthMeshCad = (name: TemplateName): SynthResult =>
+        synthTemplate(name, {
+            mutate: (c: any) => {
+                c.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = true;
+            },
+            mutateKey: "meshcad-enabled",
+        });
+
+    it("3dBasic is emitted by the shipped commercial template", () => {
+        // Control: it ships enabled, so no hybrid is needed and an empty selector would be a bug in the
+        // logical-id match rather than a disabled pipeline.
+        expect(basicConversion(synth("commercial"))).toHaveLength(1);
+    });
+
+    it("meshCad needs the hybrid, because no shipped template enables it", () => {
+        expectAbsent(
+            "meshCad conversion lambda in the shipped commercial template",
+            meshCadExtraction(synth("commercial")),
+            {
+                description: "container-image lambdas emitted by the commercial template",
+                count: synth("commercial").where(
+                    "AWS::Lambda::Function",
+                    (r) => r.properties.PackageType === "Image"
+                ).length,
+            }
+        );
+        expect(meshCadExtraction(synthMeshCad("commercial"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["vamsExecute3dBasicConversion", basicConversion, () => synth("commercial")],
+        [
+            "vamsExecuteMeshCadMetadataExtractionConversion",
+            meshCadExtraction,
+            () => synthMeshCad("commercial"),
+        ],
+    ] as const)(
+        "%s declares more than the default 512 MB of ephemeral storage",
+        (_name, select, source) => {
+            const fn = select(source())[0];
+            expect(fn.properties.EphemeralStorage?.Size ?? 512).toBeGreaterThan(512);
+        }
+    );
+
+    it("both conversion lambdas carry the same budget", () => {
+        // One figure across the two conversion pipelines, so the docs can state one number. Their
+        // staging needs differ (3dBasic holds input plus export, meshCad only the input), so this pins a
+        // deliberate choice rather than a derivation.
+        const basicSize =
+            basicConversion(synth("commercial"))[0].properties.EphemeralStorage?.Size ?? 512;
+        const meshCadSize =
+            meshCadExtraction(synthMeshCad("commercial"))[0].properties.EphemeralStorage?.Size ??
+            512;
+        expect(meshCadSize).toBe(basicSize);
     });
 });
 

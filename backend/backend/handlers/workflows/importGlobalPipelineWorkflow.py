@@ -361,6 +361,42 @@ def _response_data(result):
     return data
 
 
+def _parse_inline_bundle_for_log(properties):
+    """Replace a JSON-string ``inlineBundle`` in place with its parsed structure, so the key walk
+    reaches the content keys inside it. A value that does not parse to a dict/list cannot be walked at
+    all; the key is kept so the record still shows a bundle was submitted."""
+    inline = properties.get("inlineBundle")
+    if not isinstance(inline, str):
+        return
+    try:
+        parsed = json.loads(inline)
+    except Exception:
+        # Any parse failure yields the marker: json.loads raises past ValueError (a value nested
+        # deeper than the interpreter's recursion limit raises RecursionError), and building the log
+        # view runs ahead of the Delete branch whose archive is best-effort so that a malformed
+        # bundle cannot block teardown.
+        parsed = None
+    properties["inlineBundle"] = parsed if isinstance(parsed, (dict, list)) else "<unparsable>"
+
+
+def _loggable_event(event):
+    """The event in a form safeLogger can still redact. Its ``inlineBundle`` carries template
+    configBody / webFormJson / inputInstructions, which are redacted by key name — so the structure
+    has to be walkable. An inlineBundle may arrive as a JSON string rather than an object — the form
+    ``assemble_bundle`` also accepts — which the key walk sees as one opaque value. Parsed for the log
+    view only, at the three places the bundle can sit; the event itself is left untouched."""
+    if not isinstance(event, dict):
+        return event
+    loggable = dict(event)
+    _parse_inline_bundle_for_log(loggable)
+    for holder in ("ResourceProperties", "OldResourceProperties"):
+        properties = loggable.get(holder)
+        if isinstance(properties, dict):
+            loggable[holder] = dict(properties)
+            _parse_inline_bundle_for_log(loggable[holder])
+    return loggable
+
+
 def lambda_handler(event, context: LambdaContext):
     """CloudFormation custom resource + direct-invoke handler. A CloudFormation event carries
     RequestType; a direct invoke (external self-registration) omits it and is treated as a register.
@@ -368,10 +404,9 @@ def lambda_handler(event, context: LambdaContext):
     As the ``onEventHandler`` of a custom-resource Provider, the CloudFormation response is written by
     the provider framework: this handler returns the ``{PhysicalResourceId, Data}`` shape on success
     and raises on failure so the framework signals FAILED and the deployment stops."""
-    # Logged as the object, not a rendered string: an inlineBundle carries template configBody /
-    # webFormJson / inputInstructions, which safeLogger redacts by key name only while it can still
-    # walk the structure.
-    logger.info(event)
+    # Logged as a walkable structure, not a rendered string: safeLogger redacts the template content
+    # keys an inlineBundle carries by key name only, which needs the structure intact.
+    logger.info(_loggable_event(event))
 
     # Direct (non-CloudFormation) invoke: register + return the result inline.
     if "RequestType" not in event:

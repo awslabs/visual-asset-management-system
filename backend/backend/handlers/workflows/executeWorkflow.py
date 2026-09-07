@@ -31,6 +31,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 import boto3
+from botocore.config import Config
 import botocore
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -38,6 +39,11 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 
 from common.validators import validate
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
+from common.apiRoutes import (
+    API_ASSET_METADATA,
+    API_DATABASE_METADATA,
+    API_FILE_METADATA,
+)
 from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -51,7 +57,11 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import outputPathExtension as ope
-from common.workflows.defaultBucket import resolve_default_bucket, DefaultBucketNotFoundError
+from common.workflows.defaultBucket import (
+    resolve_default_bucket,
+    default_bucket_key,
+    DefaultBucketNotFoundError,
+)
 from models.common import (
     APIGatewayProxyResponseV2,
     internal_error,
@@ -92,6 +102,17 @@ OUTPUT_LOCATION_TYPE_NONE = "none"
 # Upper bound on candidate input rows inspected by the concurrency guard so a launch never fans out
 # into an unbounded number of describe_execution calls (mirrors the V1 handler).
 MAX_CONCURRENCY_CANDIDATES_INSPECTED = 200
+
+# Upper bound on the index pages the candidate walk reads for one request, shared across the selected
+# assets. The candidate bound above counts rows the walk YIELDS, and a row belonging to another
+# workflow is discarded without yielding, so it does not bound the walk itself: an asset whose
+# by-asset history is mostly other workflows' runs would page its whole partition, one round trip at a
+# time, inside the request that still has to write the run's records and start the state machine. The
+# caller's API Gateway integration times out well before the Lambda does, so an unbounded walk answers
+# the caller with a gateway timeout while the launch it was checking goes on to start. A walk cut short
+# here is reported exactly as a spent candidate budget is - the restriction could not be confirmed - so
+# the bound costs a caveat on a pathologically deep asset, never a wrong answer.
+MAX_CONCURRENCY_PAGES_INSPECTED = 100
 
 # Worker bound for the per-input-file fan-out (S3 existence checks + metadata-service reads). The
 # input selection is capped at MAX_INPUT_FILES_PER_EXECUTION, so a large selection issues that many
@@ -159,10 +180,11 @@ MAX_OUTPUT_PATH_EXTENSION_LENGTH = 1024
 DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED = (
     os.environ.get("DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED", "false").strip().lower() == "true")
 
-dynamodb = boto3.resource("dynamodb")
-s3c = boto3.client("s3")
-lambda_client = boto3.client("lambda")
-sfn_client = boto3.client("stepfunctions")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+s3c = boto3.client("s3", config=retry_config)
+lambda_client = boto3.client("lambda", config=retry_config)
+sfn_client = boto3.client("stepfunctions", config=retry_config)
 
 try:
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -255,8 +277,11 @@ def _enforce(item, object_type, action):
 #######################
 
 def _default_run_bucket():
-    """The VAMS default asset bucket used for all run I/O (manifests, config files, output/aux
-    prefixes). Input files are still read from their own asset buckets."""
+    """The VAMS default asset bucket row used for all run I/O (manifests, config files, output
+    prefixes). Its baseAssetsPrefix is the area VAMS owns within the bucket, so run-I/O keys are
+    joined to it rather than written at the bucket root. Input files are still read from their own
+    asset buckets, and the auxiliary prefixes live in the VAMS-created auxiliary bucket, which has no
+    prefix of its own."""
     return resolve_default_bucket(_buckets_table())
 
 
@@ -339,7 +364,10 @@ def _load_tag_schema_fields(pipeline_database_id, pipeline_id, template_id, defa
         return []
     row = rows[0]
     if row.get("bodyStorage") == tbs.BODY_STORAGE_S3 and row.get("fieldsS3Key"):
-        text = tbs.read_body_from_s3(s3c, default_bucket_name, row["fieldsS3Key"])
+        # The stored key is relative to the area VAMS owns inside the default bucket, which the
+        # template handler writes it under.
+        text = tbs.read_body_from_s3(s3c, default_bucket_name,
+                                     default_bucket_key(_default_run_bucket(), row["fieldsS3Key"]))
         return json.loads(text) if text else []
     fields = row.get("fields") or ""
     return json.loads(fields) if fields else []
@@ -348,7 +376,9 @@ def _load_tag_schema_fields(pipeline_database_id, pipeline_id, template_id, defa
 def _rehydrate_template_row(row, default_bucket_name):
     """Return the template row with configBody/webFormJson rehydrated inline (reading S3 when
     offloaded), so template resolution sees the full stored body."""
-    bodies = tbs.rehydrate_template_bodies(s3c, default_bucket_name, row)
+    bodies = tbs.rehydrate_template_bodies(
+        s3c, default_bucket_name, row,
+        key_fn=lambda key: default_bucket_key(_default_run_bucket(), key))
     resolved = dict(row)
     resolved["configBody"] = bodies["configBody"]
     resolved["webFormJson"] = bodies["webFormJson"]
@@ -410,6 +440,19 @@ def _metadata_service_lambda(payload):
         Payload=json.dumps(payload).encode("utf-8"))
 
 
+def _metadata_route_path(route, database_id, asset_id=None):
+    """The metadata-service path for a cross-call, built from the master ApiRoute constant.
+
+    metadataService dispatches on `ApiRoute.matches()`, so a synthetic path assembled from string
+    literals stops matching the moment a route template is renamed — CDK synth, the route-registry
+    test and the unit tests all still pass, while the read answers "Route not found" and these helpers
+    downgrade that to an empty metadata envelope."""
+    path = route.path.replace("{databaseId}", database_id)
+    if asset_id is not None:
+        path = path.replace("{assetId}", asset_id)
+    return path
+
+
 def _metadata_service_payload(path, path_parameters, event):
     """A metadata-service GET invoke payload carrying the identity THIS execute request arrived with.
 
@@ -441,7 +484,7 @@ def _fetch_metadata(database_id, asset_id, query_params, event):
     from an asset that genuinely carries no metadata."""
     try:
         payload = _metadata_service_payload(
-            f"/database/{database_id}/assets/{asset_id}/metadata",
+            _metadata_route_path(API_ASSET_METADATA, database_id, asset_id),
             {"databaseId": database_id, "assetId": asset_id}, event)
         payload["queryStringParameters"] = query_params or {}
         response = _metadata_service_lambda(payload)
@@ -467,7 +510,7 @@ def _fetch_file_metadata(database_id, asset_id, file_path, meta_type, event):
     reported for the same reason _fetch_metadata reports one."""
     try:
         payload = _metadata_service_payload(
-            f"/database/{database_id}/assets/{asset_id}/metadata/file",
+            _metadata_route_path(API_FILE_METADATA, database_id, asset_id),
             {"databaseId": database_id, "assetId": asset_id}, event)
         payload["queryStringParameters"] = {"filePath": file_path, "type": meta_type}
         response = _metadata_service_lambda(payload)
@@ -499,7 +542,8 @@ def _fetch_database_metadata(database_id, event):
     many databases could lose one silently; the caller reports a failed read as an execute warning."""
     try:
         payload = _metadata_service_payload(
-            f"/database/{database_id}/metadata", {"databaseId": database_id}, event)
+            _metadata_route_path(API_DATABASE_METADATA, database_id), {"databaseId": database_id},
+            event)
         response = _metadata_service_lambda(payload)
         stream = response.get("Payload", "")
         if not stream:
@@ -1316,10 +1360,14 @@ def _verify_inputs_exist(selected_inputs, asset_records):
 #######################
 
 def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, seen,
-                             workflow_composite=""):
+                             workflow_composite="", page_budget=None, truncated=None):
     """Yield distinct, not-yet-seen workflowExecutionIds for a (databaseId:assetId) partition,
-    newest-first, filtered to the exact input file keys when restriction is perInputFile. Paginates
-    to exhaustion; the per-partition inspection bound is applied by the caller.
+    newest-first, filtered to the exact input file keys when restriction is perInputFile. The caller
+    applies the inspection bound on the ids this yields, and lends `page_budget` - a single-element list
+    holding the request's remaining index pages - to bound the paging itself. A walk that stops on the
+    page budget adds its partition to `truncated` so the caller can tell it apart from one that ran out
+    of rows, which is the difference between "the restriction could not be confirmed" and "there is no
+    conflict".
 
     Filtered to `workflow_composite` here, from the workflow ids the input row already carries, so
     the caller's inspection budget is spent only on executions of THIS workflow. The by-asset GSI is
@@ -1334,6 +1382,12 @@ def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, se
         "ScanIndexForward": False,
     }
     while True:
+        if page_budget is not None:
+            if page_budget[0] <= 0:
+                if truncated is not None:
+                    truncated.add(partition)
+                return
+            page_budget[0] -= 1
         resp = inputs_table.query(**query_kwargs)
         for input_item in resp.get("Items", []):
             if restriction == "perInputFile" and input_item.get("inputAssetFileKey") not in file_keys:
@@ -1363,8 +1417,11 @@ def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs
       - perInputFile: a running execution on any of the exact selected input file keys.
 
     Confirming one candidate costs a main-row read plus a Step Functions describe, so the number of
-    distinct executions confirmed is bounded. The budget is spent ROUND-ROBIN over the selected assets
-    rather than pre-split into equal shares: every asset contributes its newest candidate before any of
+    distinct executions confirmed is bounded, and the index pages the walk reads looking for those
+    candidates are bounded separately - a foreign workflow's row is discarded without being confirmed,
+    so it costs nothing against the candidate budget and would otherwise page the asset's whole history
+    for free. The candidate budget is spent ROUND-ROBIN over the selected assets rather than pre-split
+    into equal shares: every asset contributes its newest candidate before any of
     them contributes a second, which keeps a long-history asset from consuming everything while
     reserving nothing for an asset that has fewer candidates than a share would hand it. A floor of one
     budget unit per asset keeps the guarantee that no selected asset goes entirely unexamined however
@@ -1408,8 +1465,16 @@ def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs
     # walker is a lazy generator, so a partition costs a query only when its turn comes and only while
     # budget remains. `pending` empties only when EVERY partition's candidates are exhausted, which is
     # what separates "inspected all of them and none is running" from "ran out of budget".
+    # Index pages are budgeted for the whole request as well, because the workflow filter discards a
+    # foreign row without yielding it: without this the candidate budget below can go entirely unspent
+    # while the walk pages through every execution an asset has ever had. It carries the same
+    # one-per-asset floor, so the guarantee that no selected asset goes unexamined survives a selection
+    # wider than the page bound; the selection itself is capped, so the floor is too.
+    page_budget = [max(MAX_CONCURRENCY_PAGES_INSPECTED, len(asset_partitions))]
+    truncated = set()
     walkers = {partition: _candidate_execution_ids(
-        inputs_table, partition, file_keys, restriction, seen, workflow_composite=composite)
+        inputs_table, partition, file_keys, restriction, seen, workflow_composite=composite,
+        page_budget=page_budget, truncated=truncated)
         for partition in asset_partitions}
     # Never fewer budget units than there are partitions, so each selected asset still gets its newest
     # candidate examined however broad the selection is - the anti-starvation floor the per-share split
@@ -1429,15 +1494,17 @@ def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs
             inspected += 1
             if _execution_running(main_table, execution_id, composite):
                 return True
-    if pending:
-        # No conflict was found and the candidates were not exhausted. Reported, not rejected: an
-        # unspent-candidate count is a statement about this request's budget, not about concurrency, and
-        # a rejection here can never be cleared by the caller (or by the trigger dispatcher, which calls
-        # this as SYSTEM_USER with no one to read the error).
+    if pending or truncated:
+        # No conflict was found and the candidates were not exhausted - either the inspection budget ran
+        # out with partitions still to walk, or a walk stopped on the page budget. Reported, not
+        # rejected: an unspent-candidate count is a statement about this request's budget, not about
+        # concurrency, and a rejection here can never be cleared by the caller (or by the trigger
+        # dispatcher, which calls this as SYSTEM_USER with no one to read the error).
         logger.warning(
             f"Concurrency check confirmed {inspected} executions of this workflow across "
-            f"{len(asset_partitions)} selected asset(s) without exhausting the candidates, so the "
-            f"{restriction} restriction could not be confirmed; the launch proceeds.")
+            f"{len(asset_partitions)} selected asset(s) without exhausting the candidates "
+            f"({len(truncated)} asset(s) stopped on the page budget), so the {restriction} "
+            f"restriction could not be confirmed; the launch proceeds.")
         if notices is not None:
             notices.append(
                 "This workflow limits concurrent executions. The selected assets have more executions "
@@ -1476,11 +1543,16 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
 
 def _write_execution_input_files(execution_id, run_bucket, pipelines_count, metadata_envelope,
                                  first_manifest, pipeline_config_bodies,
-                                 step_metadata_gates=None):
+                                 step_metadata_gates=None, run_prefix=""):
     """Write the execution's input-definition files to the DEFAULT run bucket (per-execution input
-    folder keyed on execution id): the shared metadata file, one config.json per pipeline, and
-    pipeline 1's manifest. Returns {metadataFileS3Key, configKeys[], firstManifestS3Key,
-    narrowedMetadataKeys{}}.
+    folder keyed on execution id, inside the bucket's VAMS-owned area): the shared metadata file, one
+    config.json per pipeline, and pipeline 1's manifest. Returns {metadataFileS3Key, configKeys[],
+    firstManifestS3Key, narrowedMetadataKeys{}}.
+
+    The returned keys are VAMS-area-RELATIVE, which is the form the Step Functions input carries so a
+    state machine stays independent of the deployment's prefix; `run_prefix` is joined on here for the
+    S3 calls, and again by the caller for the locations it records. Every key the caller derives from
+    these therefore goes through er.run_bucket_key exactly once.
 
     'step_metadata_gates' maps a 1-based pipeline index to that step's effective metadataInputs. A
     step whose gate narrows the envelope gets its OWN metadata.json written alongside its config, and
@@ -1492,7 +1564,7 @@ def _write_execution_input_files(execution_id, run_bucket, pipelines_count, meta
         return locations
 
     metadata_key = er.execution_input_metadata_key(execution_id)
-    s3c.put_object(Bucket=run_bucket, Key=metadata_key,
+    s3c.put_object(Bucket=run_bucket, Key=er.run_bucket_key(run_prefix, metadata_key),
                    Body=json.dumps(metadata_envelope).encode("utf-8"), ContentType="application/json")
     locations["metadataFileS3Key"] = metadata_key
 
@@ -1503,7 +1575,7 @@ def _write_execution_input_files(execution_id, run_bucket, pipelines_count, meta
         # application/json and reaches the step as inputConfigurationS3Location, so a zero-byte body
         # is a location every reader has to special-case before it can parse it.
         cfg_body = pipeline_config_bodies[idx] if idx < len(pipeline_config_bodies) else ""
-        s3c.put_object(Bucket=run_bucket, Key=cfg_key,
+        s3c.put_object(Bucket=run_bucket, Key=er.run_bucket_key(run_prefix, cfg_key),
                        Body=(cfg_body or "{}").encode("utf-8"), ContentType="application/json")
         locations["configKeys"].append(cfg_key)
 
@@ -1521,13 +1593,13 @@ def _write_execution_input_files(execution_id, run_bucket, pipelines_count, meta
             narrowed = er.narrow_metadata_envelope(metadata_envelope, gate)
             if narrowed is not metadata_envelope:
                 step_key = er.pipeline_input_metadata_key(execution_id, idx + 1)
-                s3c.put_object(Bucket=run_bucket, Key=step_key,
+                s3c.put_object(Bucket=run_bucket, Key=er.run_bucket_key(run_prefix, step_key),
                                Body=json.dumps(narrowed).encode("utf-8"),
                                ContentType="application/json")
                 locations["narrowedMetadataKeys"][idx + 1] = step_key
 
     manifest_key = er.pipeline_input_manifest_key(execution_id, 1)
-    s3c.put_object(Bucket=run_bucket, Key=manifest_key,
+    s3c.put_object(Bucket=run_bucket, Key=er.run_bucket_key(run_prefix, manifest_key),
                    Body=json.dumps(first_manifest).encode("utf-8"), ContentType="application/json")
     locations["firstManifestS3Key"] = manifest_key
     return locations
@@ -1595,7 +1667,7 @@ def _step_tag_metadata_payload(step_envelope, subject_input):
 
 
 def _resolve_step_delivery(metadata_envelope, gate, execution_id, run_bucket, pipeline_index,
-                           shared_location):
+                           shared_location, run_prefix=""):
     """One step's metadata DELIVERY: (envelope, s3Location, tagPayloadFn).
 
     All three DELIVERY channels resolve through here so the step's gate cannot be applied to one and
@@ -1614,7 +1686,8 @@ def _resolve_step_delivery(metadata_envelope, gate, execution_id, run_bucket, pi
     narrowed = er.narrow_metadata_envelope(metadata_envelope, gate)
     location = shared_location
     if narrowed is not metadata_envelope:
-        location = f"s3://{run_bucket}/{er.pipeline_input_metadata_key(execution_id, pipeline_index)}"
+        location = "s3://{}/{}".format(run_bucket, er.run_bucket_key(
+            run_prefix, er.pipeline_input_metadata_key(execution_id, pipeline_index)))
 
     def tag_payload(subject_input):
         return _step_tag_metadata_payload(narrowed, subject_input)
@@ -1702,10 +1775,16 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                      trigger_type_stored, execution_group_id, executing_user, executing_request_context,
                      output_location_type=OUTPUT_LOCATION_TYPE_ASSET, output_extension="/",
                      filtered_inputs_by_composite=None, metadata_source_assets=None,
-                     metadata_source_database_id="", metadata_source_databases=None):
+                     metadata_source_database_id="", metadata_source_databases=None,
+                     run_prefix=""):
     """Build the first-pipeline manifest, start the Step Functions execution, and persist all V2
     records. Run I/O (manifest, config files, output/aux prefixes) lives in run_bucket; input files
     are read from their own asset buckets (carried per manifest entry). Returns the executionId.
+
+    run_prefix is the VAMS-owned area within run_bucket (its normalized baseAssetsPrefix, "" for a
+    bucket registered at the root). Every run-I/O key resolves through it: the manifest and the
+    recorded locations carry the full bucket key, while the Step Functions input carries the relative
+    key plus the prefix as its own field, so the state machine's own path templates never bake it in.
 
     filtered_inputs_by_composite maps pipelineDatabaseId:pipelineId -> the inputs that pipeline
     accepts (its effective inputFileFilters applied, empty for arity 'none'). Pipeline 1's manifest
@@ -1746,14 +1825,18 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # Pipeline 1's manifest: input entries (each from its own asset bucket) + run-bucket output/aux.
     input_entries = _build_input_manifest_entries(first_pipeline_inputs, asset_records)
     out_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, execution_id)
-    outputs = er.build_manifest_outputs(bucket=run_bucket, **out_prefixes)
+    # The manifest hands the pipeline locations it writes to directly, so the output prefixes are full
+    # run-bucket keys. The aux temp prefix is NOT joined: the auxiliary bucket is VAMS-created and has
+    # no baseAssetsPrefix of its own.
+    outputs = er.build_manifest_outputs(
+        bucket=run_bucket,
+        **{kind: er.run_bucket_key(run_prefix, prefix) for kind, prefix in out_prefixes.items()})
     first_aux_temp_prefix = er.aux_pipeline_prefix(first_pipeline_name, execution_id)
-    metadata_location = f"s3://{run_bucket}/{er.execution_input_metadata_key(execution_id)}"
+    metadata_location = "s3://{}/{}".format(run_bucket, er.run_bucket_key(
+        run_prefix, er.execution_input_metadata_key(execution_id)))
     first_event_prefix = er.orchestration_event_prefix(
         orchestration_event_source_prefix, execution_id, pipeline_execution_ids[0]) \
         if (orchestration_event_source_prefix and pipeline_execution_ids) else ""
-    first_aux_preview_suffix = (first_pipeline.get("systemConfig", {}) or {}).get(
-        "auxPreviewPipelineSuffix", "")
 
     # Each step's DELIVERY gate: its pipeline systemConfig with the chosen template's overrides
     # applied, keyed 1-based to match the pipeline input folders. A step whose gate narrows the shared
@@ -1762,9 +1845,12 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # The same effective config supplies each step's input filters and arity, one entry per pipeline in
     # workflow order: steps 2+ have their manifests assembled by the interim lambda, which narrows the
     # run's selection to the step's own share the way step 1's manifest is narrowed here.
+    # Each step's viewer subfolder travels in the same traversal — read straight off the record rather
+    # than the effective config, because it is not a template-overridable key.
     step_metadata_gates = {}
     step_input_filters = []
     step_input_arity = []
+    step_aux_preview_suffixes = []
     for idx, record in enumerate(pipeline_records):
         composite = er.pipeline_composite_key(
             record.get("databaseId", ""), record.get("pipelineId", ""))
@@ -1774,6 +1860,8 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         step_metadata_gates[idx + 1] = effective.get("metadataInputs") or {}
         step_input_filters.append(effective.get("inputFileFilters") or {})
         step_input_arity.append(ev._arity(effective))
+        step_aux_preview_suffixes.append(
+            (record.get("systemConfig", {}) or {}).get("auxPreviewPipelineSuffix", "") or "")
 
     # Pipeline 1's delivery: its own narrowed metadata file when its gate subtracts anything, else the
     # shared envelope. The manifest is what the pipeline honors (manifestHelper.resolve_inputs takes
@@ -1781,7 +1869,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # and the same decision supplies the payload its template tags render.
     first_narrowed, metadata_location, _first_tag_payload = _resolve_step_delivery(
         metadata_envelope, step_metadata_gates.get(1), execution_id, run_bucket, 1,
-        metadata_location)
+        metadata_location, run_prefix=run_prefix)
 
     # output_extension is the caller's output base path, normalized to a single leading + trailing
     # slash and defaulting to "/" (asset root). Its {{dynamicTag}} placeholders are substituted below,
@@ -1792,7 +1880,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         outputs=outputs,
         aux_bucket=bucket_name_assetAuxiliary,
         aux_temp_prefix=first_aux_temp_prefix,
-        aux_preview_pipeline_suffix=first_aux_preview_suffix,
+        aux_preview_pipeline_suffix=step_aux_preview_suffixes[0],
         system_config=er.build_manifest_system_config(
             orchestration_bus_arn=orchestration_bus_arn,
             orchestration_event_prefix=first_event_prefix),
@@ -1834,7 +1922,8 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         "triggerType": trigger_type_stored,
         "executingUserName": executing_user,
         "executionStartTimestamp": execution_start_ts,
-        "inputConfigurationS3Location": f"s3://{run_bucket}/{er.pipeline_input_config_key(execution_id, 1)}",
+        "inputConfigurationS3Location": "s3://{}/{}".format(run_bucket, er.run_bucket_key(
+            run_prefix, er.pipeline_input_config_key(execution_id, 1))),
     }
 
     # The output base path extension may carry {{dynamicTag}} placeholders; substitute them against
@@ -1855,15 +1944,19 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             # file key carrying one of them emits markup the pipeline's parser rejects or misreads —
             # and stage 1 escaped the same body's USER tags for the declared format, so the two halves
             # of one body would disagree. The format is resolved with the body, on the same entry.
+            # Rendered non-strictly: a {{tag}} the config body uses with no template tag declared
+            # behind it is delivered to the pipeline as its own literal text. The body is the
+            # pipeline's to interpret, so an undeclared name is not a launch error.
             pipeline_config_bodies.append(tr.render_config(
                 rendered, first_manifest, first_context, metadata_loader=_metadata_payload,
-                config_format=(resolved_config.get("configFormat", "") or tr.CONFIG_FORMAT_JSON)))
+                config_format=(resolved_config.get("configFormat", "") or tr.CONFIG_FORMAT_JSON),
+                strict=False))
         else:
             pipeline_config_bodies.append(rendered)
 
     input_locations = _write_execution_input_files(
         execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
-        pipeline_config_bodies, step_metadata_gates=step_metadata_gates)
+        pipeline_config_bodies, step_metadata_gates=step_metadata_gates, run_prefix=run_prefix)
 
     # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
     response = sfn_client.start_execution(
@@ -1876,6 +1969,20 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             "endStatePipelineExecutionId": end_state_pipeline_execution_id,
             "pipelineExecutionIds": pipeline_execution_ids,
             "workflowExecutionS3InputOutputBucket": run_bucket,
+            # The VAMS-owned area within that bucket ("" for a bucket registered at the root), sent
+            # per EXECUTION rather than baked into the ASL at workflow save time: a definition that
+            # embedded it would keep writing to the old area after the bucket's registered prefix
+            # changed, with nothing to redeploy it. The ASL's own path templates stay relative and
+            # every run-I/O key resolves against this value.
+            #
+            # Normalized again here, next to the contract it has to satisfy: the ASL interpolates this
+            # value straight into a States.Format URI and has no string operations to clean it up, so
+            # it must be "" or carry exactly one trailing slash. A raw "/" would mint
+            # s3://bucket//pipelines/... — an object under an empty first path segment — while the
+            # lambdas, which do normalize, would read the bucket root, leaving the write and the read
+            # disagreeing. The call is idempotent, so this costs nothing where the value is already
+            # normalized and closes the case where a later edit threads the bucket row's raw field.
+            "workflowExecutionS3InputOutputBasePrefix": er.normalize_base_prefix(run_prefix),
             "outputLocationType": output_location_type,
             "outputAssetId": output_asset_id,
             "outputDatabaseId": output_database_id,
@@ -1897,6 +2004,10 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             # step's manifest, which otherwise carries the run's entire selection.
             "stepInputFilters": step_input_filters,
             "stepInputArity": step_input_arity,
+            # Per-step viewer subfolder, same order. Step 1's manifest is built here from entry 0;
+            # the ASL threads a static index into this list for each later step, so a suffix edited
+            # on a pipeline record takes effect on the next run rather than on the next workflow save.
+            "stepAuxPreviewSuffixes": step_aux_preview_suffixes,
         }))
     logger.info(f"Started workflow execution {execution_id}")
 
@@ -1910,7 +2021,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
             selected_inputs=selected_inputs, asset_records=asset_records,
             pipeline_execution_ids=pipeline_execution_ids, first_job_name=first_job_name,
-            run_bucket=run_bucket, metadata_envelope=metadata_envelope,
+            run_bucket=run_bucket, run_prefix=run_prefix, metadata_envelope=metadata_envelope,
             output_database_id=output_database_id, output_asset_id=output_asset_id,
             output_extension=output_extension, trigger_type_stored=trigger_type_stored,
             executing_user=executing_user, input_locations=input_locations,
@@ -1953,9 +2064,15 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                                execution_group_id, output_location_type=OUTPUT_LOCATION_TYPE_ASSET,
                                metadata_source_assets=None, metadata_source_database_id="",
                                metadata_source_databases=None, filtered_inputs_by_composite=None,
-                               step_metadata_gates=None):
+                               step_metadata_gates=None, run_prefix=""):
     """Write the main execution row, per-input workflow-input rows, the workflow configuration row,
     one PipelineExecutions row + config-snapshot per pipeline, and the output index rows.
+
+    Every run-I/O location recorded here is the FULL run-bucket key (run_prefix joined onto the
+    relative key the builders and `input_locations` carry). These rows are a historical record of
+    where an execution's objects were written, and one of them is surfaced by the API as
+    renderedConfigLocation.{bucket,key} — a relative key paired with the bucket name would name an
+    object that does not exist on a bucket registered under a prefix.
 
     The metadata-source entities land on the configuration row only. They get no workflow-input row:
     those rows are input FILES, and a re-run rebuilds its inputFiles from them — so a source asset
@@ -1977,6 +2094,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                            or pipeline_records[0].get("pipelineId", "")) if pipeline_records else ""
     output_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, execution_id) \
         if pipeline_records else {"files": "", "previews": "", "metadata": "", "results": ""}
+    output_prefixes = {kind: er.run_bucket_key(run_prefix, prefix)
+                       for kind, prefix in output_prefixes.items()}
 
     # 1) Main V2 row (+ optional group id). The SFN execution is already started, so record RUNNING
     # (not NEW) — every read path shows the true status with no read-time SFN poll.
@@ -2020,7 +2139,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         output_location_type=output_location_type, output_asset_id=output_asset_id,
         output_database_id=output_database_id,
         output_file_base_execution_path_extension=output_extension,
-        input_metadata_file_s3_key=input_locations.get("metadataFileS3Key", ""),
+        input_metadata_file_s3_key=er.run_bucket_key(
+            run_prefix, input_locations.get("metadataFileS3Key", "")),
         input_metadata_database_id=metadata_source_database_id or "",
         metadata_source_assets=metadata_source_assets or [],
         metadata_source_databases=metadata_source_databases or [],
@@ -2033,9 +2153,10 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
     pexec_table = dynamodb.Table(pipeline_executions_table)
     pin_cfg_table = dynamodb.Table(pipeline_execution_input_configuration_table)
     pin_md_table = dynamodb.Table(pipeline_execution_input_metadata_table)
-    config_keys = input_locations.get("configKeys", [])
+    config_keys = [er.run_bucket_key(run_prefix, key)
+                   for key in input_locations.get("configKeys", [])]
     # One S3 metadata object per execution, referenced by every input-metadata row of every pipeline.
-    metadata_file_key = input_locations.get("metadataFileS3Key", "")
+    metadata_file_key = er.run_bucket_key(run_prefix, input_locations.get("metadataFileS3Key", ""))
     prev_id = ""
     # The input-metadata rows of every pipeline go out through ONE batch writer spanning the whole loop:
     # boto3's writer buffers to 25 items per BatchWriteItem — the request's hard limit — and retries
@@ -2354,9 +2475,14 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
                                 body={"message": "One or more selected input files do not exist."},
                                 event=event)
 
-    # 7) Resolve the default run bucket (all run I/O lives here).
+    # 7) Resolve the default run bucket (all run I/O lives here) and the VAMS-owned area within it.
+    #    The prefix travels alongside the bucket name for the rest of the launch: the run-I/O key
+    #    builders are relative to that area, so every S3 call, every recorded location and the ASL's
+    #    input URIs resolve through it. It is "" for a bucket registered at the root.
     try:
-        run_bucket = _default_run_bucket()["bucketName"]
+        run_bucket_row = _default_run_bucket()
+        run_bucket = run_bucket_row["bucketName"]
+        run_prefix = er.normalize_base_prefix(run_bucket_row.get("baseAssetsPrefix"))
     except DefaultBucketNotFoundError as de:
         logger.exception(f"Default run bucket not resolved: {de}")
         return internal_error(event=event)
@@ -2411,6 +2537,7 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
         selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
         output_database_id=output_database_id, output_asset_id=output_asset_id, run_bucket=run_bucket,
+        run_prefix=run_prefix,
         metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
         execution_group_id=request_model.executionGroupId, executing_user=executing_user,
         executing_request_context=event.get("requestContext"),

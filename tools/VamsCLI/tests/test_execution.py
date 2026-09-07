@@ -233,6 +233,99 @@ class TestExecutionListWarnings:
             assert 'warnings' not in json.loads(result.output)
 
 
+class TestExecutionListAppliedDateWindow:
+    """The listing is lower-bounded by start date, and every page echoes the bound applied.
+
+    The service substitutes a 90-day default when the caller sets none, so an older execution is
+    absent by design. That echo is the only statement of which window was used: dropping it, or
+    never rendering it, turns a bounded listing into what reads as the complete history.
+    """
+
+    _START = '2026-06-03T00:00:00Z'
+    _END = '2026-09-01T00:00:00Z'
+
+    def test_single_page_renders_the_applied_window(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}],
+                            'filterStartDate': self._START}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert self._START in result.output
+
+    def test_empty_page_renders_the_applied_window(self, cli_runner, generic_command_mocks):
+        """The case it matters most: "No executions found." on a defaulted 90-day window reads as
+        "no such execution" when the run is simply older than the bound."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [], 'filterStartDate': self._START}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'No executions found.' in result.output
+            assert self._START in result.output
+
+    def test_upper_bound_is_rendered_when_the_caller_set_one(self, cli_runner,
+                                                             generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}],
+                            'filterStartDate': self._START, 'filterEndDate': self._END}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert self._START in result.output
+            assert self._END in result.output
+
+    def test_a_response_without_the_echo_renders_no_window_line(self, cli_runner,
+                                                               generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'Start date filter applied' not in result.output
+
+    def test_auto_paginate_carries_the_echo_into_the_aggregate(self, cli_runner,
+                                                               generic_command_mocks):
+        """The aggregate is rebuilt from the accumulated items, so the echo has to be carried across
+        explicitly — otherwise the one mode whose purpose is a complete listing is the only one that
+        never states its own bounds."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.side_effect = [
+                {'message': {'Items': [{'workflowExecutionId': 'e1'}], 'NextToken': 't1',
+                             'filterStartDate': self._START, 'filterEndDate': self._END}},
+                {'message': {'Items': [{'workflowExecutionId': 'e2'}],
+                             'filterStartDate': self._START, 'filterEndDate': self._END}},
+            ]
+            result = cli_runner.invoke(cli, ['execution', 'list', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['totalItems'] == 2
+            assert data['filterStartDate'] == self._START
+            assert data['filterEndDate'] == self._END
+
+    def test_auto_paginate_renders_the_carried_window(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}],
+                            'filterStartDate': self._START}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--auto-paginate'])
+            assert result.exit_code == 0
+            assert self._START in result.output
+
+    def test_auto_paginate_adds_no_window_keys_when_the_service_echoed_none(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert 'filterStartDate' not in data
+            assert 'filterEndDate' not in data
+
+
 class TestExecutionDetails:
     def test_details_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:

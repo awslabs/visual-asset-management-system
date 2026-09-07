@@ -68,7 +68,11 @@ from models.metadata import (
     # Common Models
     BulkOperationResponseModel,
     MetadataValueType,
-    UpdateType
+    UpdateType,
+    # Shared limits and pagination defaults
+    MAX_METADATA_PAGE_SIZE,
+    DEFAULT_METADATA_MAX_ITEMS,
+    DEFAULT_METADATA_PAGE_SIZE,
 )
 
 # Configure AWS clients with retry configuration
@@ -91,11 +95,19 @@ claims_and_roles = {}
 # Constants
 MAX_METADATA_RECORDS_PER_ENTITY = 500
 
-# Default pagination sizes for metadata GET responses. maxItems is the per-response
-# ceiling that keeps the response payload under the Lambda (6 MB) / API Gateway
-# limits;
-DEFAULT_METADATA_MAX_ITEMS = 30000
-DEFAULT_METADATA_PAGE_SIZE = 3000
+# The pagination defaults are imported from models.metadata, where the request models declare them
+# as their field defaults: maxItems is the per-response ceiling that keeps the payload under the
+# Lambda (6 MB) / API Gateway limits, pageSize is the slice served, and the page is the smaller of
+# the two — so a caller supplying only maxItems bounds the response with it and one supplying only
+# pageSize keeps the default ceiling. Defining them here as well would let a request that reaches a
+# handler through a model disagree with one that does not.
+
+# Returned for a pagination parameter above MAX_METADATA_PAGE_SIZE, the ceiling shared with the
+# request models, which carry it as their le= bound. A parameter arriving through a model is
+# refused there; resolve_metadata_page_parameter covers a query_params dict built without one.
+METADATA_PAGE_SIZE_OUT_OF_RANGE_MESSAGE = (
+    f"pageSize and maxItems must each be between 1 and {MAX_METADATA_PAGE_SIZE}"
+)
 
 # Bound on re-driving a partially accepted batch. DynamoDB answers HTTP 200 with a
 # populated UnprocessedItems map when part of a batch was throttled or exceeded a
@@ -124,7 +136,7 @@ SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE = (
 # Logged when the additive schema-default injection fails. That step only ADDS fields whose
 # schema declares a default, and it runs after schema conformance, the controlled-list check
 # and the off-schema key prohibition have all passed -- so a failure there loses defaults and
-# cannot admit anything the checks refused. S2-BACKEND-060 asked for exactly this step to stay
+# cannot admit anything the checks refused. It is therefore the one step in the block that stays
 # fail-open, which the surrounding fail-closed arm would otherwise convert into a denied write.
 SCHEMA_DEFAULT_INJECTION_FAILED_LOG = (
     "Schema default injection failed; the validated metadata is written without "
@@ -222,6 +234,15 @@ def batch_write_with_retry(table_name: str, batch: list) -> None:
             f"{table_name} (attempt {attempt} of {BATCH_WRITE_MAX_ATTEMPTS})"
         )
         if attempt < BATCH_WRITE_MAX_ATTEMPTS:
+            # Deliberate exponential backoff between batch_write_item retries. DynamoDB answers a
+            # partially accepted batch with UnprocessedItems rather than an error, and the documented
+            # handling is to resend only those after a growing delay -- retrying immediately re-hits
+            # the same throttle. This is not a sleep left in from debugging.
+            #
+            # The suppression must be the LAST comment line before the call: semgrep applies
+            # `nosemgrep` to the line immediately following it, so an explanation placed in between
+            # silently detaches it and the finding returns.
+            # nosemgrep: arbitrary-sleep
             time.sleep(backoff)
             backoff *= 2
 
@@ -408,6 +429,37 @@ def metadata_response_models(model_cls, items, **identity_fields) -> list:
     return response_models
 
 
+def resolve_metadata_page_parameter(raw, default: int, name: str) -> int:
+    """One metadata pagination parameter, defaulted when absent and bounded when oversized.
+
+    Args:
+        raw: The submitted value, as the request model or the query string left it.
+        default: Size to use when nothing usable was submitted.
+        name: Parameter name, for the log line.
+
+    Returns:
+        A size between 1 and MAX_METADATA_PAGE_SIZE.
+
+    Raises:
+        VAMSGeneralErrorResponse: The submitted value exceeds MAX_METADATA_PAGE_SIZE.
+    """
+    if raw is None or raw == '':
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"Metadata {name} is not a number; serving {default}")
+        return default
+    if value < 1:
+        logger.warning(f"Metadata {name} is below 1; serving {default}")
+        return default
+    if value > MAX_METADATA_PAGE_SIZE:
+        logger.warning(
+            f"Metadata {name} of {value} exceeds the {MAX_METADATA_PAGE_SIZE} ceiling")
+        raise VAMSGeneralErrorResponse(METADATA_PAGE_SIZE_OUT_OF_RANGE_MESSAGE)
+    return value
+
+
 def paginate_metadata_records(records: list, query_params: dict):
     """Offset-paginate an already-enriched, fully-ordered metadata record list.
 
@@ -425,14 +477,18 @@ def paginate_metadata_records(records: list, query_params: dict):
 
     Returns:
         Tuple of (page_records, next_token). next_token is None on the last page.
+
+    Raises:
+        VAMSGeneralErrorResponse: pageSize or maxItems exceeds MAX_METADATA_PAGE_SIZE.
     """
-    # Resolve page size (per-response slice) with a safe default ceiling.
-    try:
-        page_size = int(query_params.get('pageSize') or query_params.get('maxItems') or DEFAULT_METADATA_PAGE_SIZE)
-    except (TypeError, ValueError):
-        page_size = DEFAULT_METADATA_PAGE_SIZE
-    if page_size < 1:
-        page_size = DEFAULT_METADATA_PAGE_SIZE
+    # The page is the smaller of the slice asked for and the ceiling allowed, so maxItems
+    # bounds the response even though every request model supplies a pageSize default.
+    page_size = min(
+        resolve_metadata_page_parameter(
+            query_params.get('pageSize'), DEFAULT_METADATA_PAGE_SIZE, 'pageSize'),
+        resolve_metadata_page_parameter(
+            query_params.get('maxItems'), DEFAULT_METADATA_MAX_ITEMS, 'maxItems'),
+    )
 
     # Decode the starting offset from the token (defaults to first page).
     start = 0
@@ -711,15 +767,15 @@ def get_database_config(database_id: str) -> dict:
 #######################
 
 def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_roles: dict) -> GetAssetLinkMetadataResponseModel:
-    """Get metadata for an asset link - Returns ALL records (pagination ignored)
+    """Get metadata for an asset link - Returns one page of records
     
     Args:
         asset_link_id: The asset link ID
-        query_params: Query parameters (ignored - for backward compatibility)
+        query_params: 'pageSize', 'maxItems' and 'startingToken' for the returned page
         claims_and_roles: User claims and roles
         
     Returns:
-        GetAssetLinkMetadataResponseModel with ALL metadata records
+        GetAssetLinkMetadataResponseModel with one page of metadata records and its NextToken
     """
     try:
         # Validate asset link exists and check authorization
@@ -736,7 +792,7 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
                 check_entity_authorization(to_asset, "GET", claims_and_roles)):
             raise PermissionError("Not authorized to view metadata for this asset link")
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=asset_links_metadata_table_name,
@@ -1749,16 +1805,16 @@ def handle_asset_link_metadata_delete(event):
 #######################
 
 def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, claims_and_roles: dict) -> GetAssetMetadataResponseModel:
-    """Get metadata for an asset - Returns ALL records (pagination ignored)
+    """Get metadata for an asset - Returns one page of records
 
     Args:
         database_id: The database ID
         asset_id: The asset ID
-        query_params: Query parameters (ignored - for backward compatibility)
+        query_params: 'pageSize', 'maxItems' and 'startingToken' for the returned page
         claims_and_roles: User claims and roles
 
     Returns:
-        GetAssetMetadataResponseModel with ALL metadata records
+        GetAssetMetadataResponseModel with one page of metadata records and its NextToken
     """
     # Check if querying a specific version
     asset_version_id = query_params.get('assetVersionId')
@@ -1778,7 +1834,7 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
         # Build composite key for query
         composite_key = f"{database_id}:{asset_id}:/"
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=asset_file_metadata_table_name,
@@ -2883,7 +2939,7 @@ def handle_asset_metadata_delete(event):
 #######################
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, query_params: dict, claims_and_roles: dict):
-    """Get metadata or attributes for a file - Returns ALL records (pagination ignored)"""
+    """Get metadata or attributes for a file - Returns one page of records"""
     # Check if querying a specific version
     asset_version_id = query_params.get('assetVersionId')
     if asset_version_id:
@@ -2903,7 +2959,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
         composite_key = f"{database_id}:{asset_id}:{file_path}"
         table_name = asset_file_metadata_table_name if metadata_type == 'metadata' else file_attribute_table_name
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=table_name,
@@ -4040,7 +4096,7 @@ def handle_file_metadata_delete(event):
 #######################
 
 def get_database_metadata(database_id: str, query_params: dict, claims_and_roles: dict):
-    """Get metadata for a database - Returns ALL records (pagination ignored)"""
+    """Get metadata for a database - Returns one page of records"""
     try:
         database = validate_database_exists(database_id)
         database.update({"object__type": "database"})
@@ -4048,7 +4104,7 @@ def get_database_metadata(database_id: str, query_params: dict, claims_and_roles
         if not check_entity_authorization(database, "GET", claims_and_roles):
             raise PermissionError("Not authorized to view metadata for this database")
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=database_metadata_table_name,

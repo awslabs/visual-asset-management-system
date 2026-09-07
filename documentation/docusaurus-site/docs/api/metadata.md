@@ -28,12 +28,16 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 | `wxyz`                   | Quaternion rotation                 | `"{\"w\": 1.0, \"x\": 0.0, \"y\": 0.0, \"z\": 0.0}"`      |
 | `matrix4x4`              | 4x4 transformation matrix           | `"[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]"`             |
 | `geopoint`               | GeoJSON Point                       | `"{\"type\": \"Point\", \"coordinates\": [-73.9, 40.7]}"` |
-| `geojson`                | Any valid GeoJSON                   | `"{\"type\": \"Polygon\", \"coordinates\": [...]}"`       |
+| `geojson`                | GeoJSON, nested at most 32 levels   | `"{\"type\": \"Polygon\", \"coordinates\": [...]}"`       |
 | `lla`                    | Latitude/Longitude/Altitude         | `"{\"lat\": 40.7, \"long\": -73.9, \"alt\": 100.0}"`      |
 | `json`                   | Arbitrary JSON                      | `"{\"custom\": \"data\"}"`                                |
 
 :::note[Values Are Always Strings]
 All metadata values are stored and transmitted as strings, regardless of type. The `metadataValueType` field indicates how the string should be interpreted and validated.
+:::
+
+:::note[GeoJSON Nesting Limit]
+A `geojson` or `geopoint` value may nest `GeometryCollection` members at most 32 levels deep. A deeper value is rejected with a `400` naming the limit, as is a value too deeply nested for the JSON parser to read. The same limit applies to the `geoJson` filter on [Search](search.md) and to the shapes indexed for geospatial search, so a value the metadata API accepts is a value search can match.
 :::
 
 :::note[Incomplete Records]
@@ -56,14 +60,14 @@ Retrieves metadata items for the specified asset, one page at a time. When more 
 
 **Request Parameters:**
 
-| Parameter        | Location | Type    | Required | Description                                               |
-| ---------------- | -------- | ------- | -------- | --------------------------------------------------------- |
-| `databaseId`     | path     | string  | Yes      | Database identifier.                                      |
-| `assetId`        | path     | string  | Yes      | Asset identifier.                                         |
-| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `30000`.                |
-| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `3000`.                |
-| `startingToken`  | query    | string  | No       | Continuation token from a previous response.              |
-| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot. |
+| Parameter        | Location | Type    | Required | Description                                                                                       |
+| ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `databaseId`     | path     | string  | Yes      | Database identifier.                                                                              |
+| `assetId`        | path     | string  | Yes      | Asset identifier.                                                                                 |
+| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken`  | query    | string  | No       | Continuation token from a previous response.                                                      |
+| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
 
 **Response:**
 
@@ -300,16 +304,16 @@ Retrieves metadata for a specific file within an asset.
 
 **Request Parameters:**
 
-| Parameter        | Location | Type    | Required | Description                                                                           |
-| ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------- |
-| `databaseId`     | path     | string  | Yes      | Database identifier.                                                                  |
-| `assetId`        | path     | string  | Yes      | Asset identifier.                                                                     |
-| `filePath`       | query    | string  | Yes      | Relative file path.                                                                   |
-| `type`           | query    | string  | Yes      | `"metadata"` to retrieve file metadata, or `"attribute"` to retrieve file attributes. |
-| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `30000`.                                            |
-| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `3000`.                                            |
-| `startingToken`  | query    | string  | No       | Continuation token.                                                                   |
-| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                             |
+| Parameter        | Location | Type    | Required | Description                                                                                       |
+| ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `databaseId`     | path     | string  | Yes      | Database identifier.                                                                              |
+| `assetId`        | path     | string  | Yes      | Asset identifier.                                                                                 |
+| `filePath`       | query    | string  | Yes      | Relative file path.                                                                               |
+| `type`           | query    | string  | Yes      | `"metadata"` to retrieve file metadata, or `"attribute"` to retrieve file attributes.             |
+| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken`  | query    | string  | No       | Continuation token.                                                                               |
+| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
 
 **Response:**
 
@@ -470,16 +474,16 @@ Database-level metadata is attached to a database and applies to the entire coll
 
 `GET /database/{databaseId}/metadata`
 
-Retrieves all metadata items for the specified database.
+Retrieves metadata items for the specified database, one page at a time.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                |
-| --------------- | -------- | ------- | -------- | ------------------------------------------ |
-| `databaseId`    | path     | string  | Yes      | Database identifier.                       |
-| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `30000`. |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`. |
-| `startingToken` | query    | string  | No       | Continuation token.                        |
+| Parameter       | Location | Type    | Required | Description                                                                                       |
+| --------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier.                                                                              |
+| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken` | query    | string  | No       | Continuation token.                                                                               |
 
 **Response:**
 
@@ -628,16 +632,16 @@ Metadata can be attached to asset links (relationships between assets).
 
 `GET /asset-links/{assetLinkId}/metadata`
 
-Retrieves all metadata items for the specified asset link.
+Retrieves metadata items for the specified asset link, one page at a time.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                |
-| --------------- | -------- | ------- | -------- | ------------------------------------------ |
-| `assetLinkId`   | path     | string  | Yes      | Asset link identifier (UUID).              |
-| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `30000`. |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`. |
-| `startingToken` | query    | string  | No       | Continuation token.                        |
+| Parameter       | Location | Type    | Required | Description                                                                                       |
+| --------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `assetLinkId`   | path     | string  | Yes      | Asset link identifier (UUID).                                                                     |
+| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken` | query    | string  | No       | Continuation token.                                                                               |
 
 **Response:**
 
@@ -1130,3 +1134,12 @@ Bulk operations can partially succeed. Check both `successCount` and `failureCou
 | Maximum metadata records per entity | 500            | Maximum number of metadata key-value pairs per asset, file, database, or asset link. |
 | Maximum key length                  | 256 characters | Maximum length of a `metadataKey`.                                                   |
 | Maximum items per REPLACE_ALL       | 500            | Maximum metadata items in a single `replace_all` operation.                          |
+| Maximum `pageSize` and `maxItems`   | 1,000          | Largest value either metadata pagination parameter may carry on a read.              |
+
+:::note[Paging a metadata read]
+`pageSize` and `maxItems` each size a single response, and the page served is the smaller of the two. `pageSize` defaults to 100 and `maxItems` to 1,000, so a read with no pagination parameters returns 100 records. A value above the maximum in the table above is rejected with `400` rather than reduced to it, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. When records remain beyond the page, the response carries a `NextToken`; pass it as `startingToken` to read the next page, and repeat until no `NextToken` is returned — the whole set is reachable that way whatever the page size.
+:::
+
+:::note[Reserved metadata keys]
+`REINDEX_METADATA_RECORD` is reserved for VAMS internal use; a create or update that supplies it is refused. A key carrying the `VAMS_` prefix or a leading underscore is accepted and returned by every metadata read, and is excluded from search indexing — a key with a leading underscore is also absent from asset export output.
+:::

@@ -600,11 +600,18 @@ def get_user_roles(query_params):
                         grouped_data["Items"].append({
                             "userId": deserialized_document["userId"],
                             "roleName": [deserialized_document["roleName"]],
-                            "createdOn": deserialized_document["createdOn"]
+                            # createdOn is also the pagination token below, so a row stored
+                            # without it takes a CONSTANT default. A computed one (a timestamp
+                            # of now) differs on every request, so the token a client received
+                            # for one page would match nothing on the next and the page would
+                            # come back empty.
+                            "createdOn": deserialized_document.get("createdOn") or ""
                         })
-        
-        # Sort the list results by createdOn for pagination
-        grouped_data["Items"].sort(key=lambda x: x["createdOn"])
+
+        # Sort the list results by createdOn for pagination. createdOn is not unique -- the
+        # grouping keeps the first row's value per userId -- so userId breaks the tie and makes
+        # the order total, which is what keeps the page boundaries identical between requests.
+        grouped_data["Items"].sort(key=lambda x: (x["createdOn"], x["userId"]))
         
         # Custom pagination
         if "startingToken" in query_params and query_params["startingToken"]:

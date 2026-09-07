@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import boto3
+from botocore.config import Config
 import os
 import time
 import json
@@ -68,7 +69,8 @@ casbin_user_enforcer_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.L
 logger = safeLogger()
 
 deserializer = TypeDeserializer()
-_dynamodb_client = boto3.client("dynamodb")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+_dynamodb_client = boto3.client("dynamodb", config=retry_config)
 
 # Determine if MFA is enabled from claims
 def is_mfa_enabled(claims_and_roles):
@@ -344,22 +346,22 @@ class CasbinEnforcerService:
         """Whether a session that did not present MFA may use this role record.
 
         One answer for both places that ask: the assigned-role filter below and the
-        default-role check in _resolve_default_role. Spelled separately they disagreed on a
-        stored number, because `Decimal("0") == False` is true while `Decimal("0") is False`
-        is not.
+        default-role check in _resolve_default_role. Asking it in two spellings lets them
+        disagree on a stored number, because `Decimal("0") == False` is true while
+        `Decimal("0") is False` is not.
 
-        The verdict mirrors the roles-table filter this replaced —
-        `attribute_not_exists(mfaRequired) OR mfaRequired = :false` with `:false` typed BOOL.
-        DynamoDB's `=` compares the attribute TYPE as well as the value, so only an absent
-        attribute or a stored boolean false ever satisfied it; BOOL true, NULL, a number and a
-        string all failed the comparison and kept the role out of a non-MFA session.
+        The verdict is the one DynamoDB gives the filter
+        `attribute_not_exists(mfaRequired) OR mfaRequired = :false` with `:false` typed BOOL:
+        `=` compares the attribute TYPE as well as the value, so only an absent attribute or a
+        stored boolean false satisfies it; BOOL true, NULL, a number and a string all fail the
+        comparison and keep the role out of a non-MFA session.
 
         Two details carry that verdict across deserialization:
 
         * Presence is tested on the KEY. A stored JSON null (`{"NULL": true}`) deserializes to
           Python None exactly as an absent attribute does, so reading only the value would read
           a null as "not required" and activate the role.
-        * `is False` rather than `== False`, so a stored number stays excluded as it was.
+        * `is False` rather than `== False`, so a stored number is excluded.
         """
         if "mfaRequired" not in role:
             return True
@@ -369,12 +371,12 @@ class CasbinEnforcerService:
         """Those of the named roles that a session without MFA may use.
 
         roleName is the partition key of the roles table, so each name is read by key, through
-        the same helper the default-role check uses. The previous shape scanned the whole roles
-        table with an mfaRequired filter to decide about the handful of roles one caller holds,
-        which read every role in the deployment on every non-MFA policy build.
+        the same helper the default-role check uses. Deciding about the handful of roles one
+        caller holds by scanning the roles table with an mfaRequired filter reads every role in
+        the deployment on every non-MFA policy build.
 
-        A name with no role record is omitted, as it was under the scan — that could only
-        return rows that exist. A failed read is not an omission: it propagates, so
+        A name with no role record is omitted: the caller holds an assignment to a role that
+        does not exist. A failed read is not an omission: it propagates, so
         _create_policy_text retries and ultimately denies rather than building a policy that
         quietly drops a role the caller holds.
         """
@@ -548,8 +550,8 @@ class CasbinEnforcerService:
         #
         # Only a failed read (None) is retryable. An empty string is the builder's answer for a
         # caller with no effective role assignments: retrying re-runs the same reads and cannot
-        # change it, so treating it as a failure cost an unprovisioned identity a full retry
-        # cycle - both table reads per attempt plus a sleep - on every cache miss.
+        # change it, so treating it as a failure would cost an unprovisioned identity a full
+        # retry cycle - both table reads per attempt plus a sleep - on every cache miss.
         #
         for i in range(0, CASBIN_GET_POLICY_RETRY_ATTEMPTS):
             try:

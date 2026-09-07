@@ -4,7 +4,7 @@ import re
 from typing import Optional, Literal, List, Union
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
-from common.validators import validate, object_name_pattern
+from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="RoleModels")
@@ -31,6 +31,12 @@ MAX_ROLES_PER_USER_REQUEST = 500
 # Pagination ceilings: a page must fit the 6 MB Lambda response limit.
 MAX_LIST_PAGE_SIZE = 10000
 MAX_LIST_MAX_ITEMS = 30000
+# The constraint listing serves whole constraints, each carrying its criteria and its
+# group/user permission lists, so its page is bounded well below MAX_LIST_PAGE_SIZE (which
+# suits the single-attribute role and user-role rows): the shipped permission templates
+# average 656 bytes per constraint, and 10000 of those alone is 6.3 MB. The listing serves
+# the smaller of pageSize, maxItems and this bound, and emits a NextToken for the rest.
+MAX_CONSTRAINT_LIST_PAGE_SIZE = 3000
 # Opaque base64 pagination tokens; matches the execution/history listing bound.
 MAX_LIST_TOKEN_LENGTH = 4096
 
@@ -88,8 +94,8 @@ def _reject_regex_operator_on_list_field(field, operator):
 
 class ConstraintCriteriaModel(BaseModel, extra='ignore'):
     """Model for constraint criteria (AND/OR)"""
-    field: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    operator: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    field: str = Field(min_length=1, max_length=256)
+    operator: str = Field(min_length=1, max_length=256)
     value: Union[str, List[str]] = Field(max_items=MAX_CRITERIA_VALUES)
 
     @validator('value')
@@ -162,35 +168,51 @@ class ConstraintCriteriaModel(BaseModel, extra='ignore'):
 
 class GroupPermissionModel(BaseModel, extra='ignore'):
     """Model for group permissions in constraints"""
-    groupId: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    permission: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    permissionType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    groupId: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    permission: str = Field(min_length=1, max_length=256)
+    permissionType: str = Field(min_length=1, max_length=256)
+
+    _trim_ids = validator('groupId', pre=True, allow_reuse=True)(trim_name)
 
 
 class UserPermissionModel(BaseModel, extra='ignore'):
     """Model for user permissions in constraints"""
-    userId: str = Field(min_length=3, max_length=256, strip_whitespace=True)
-    permission: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    permissionType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    userId: str = Field(min_length=3, max_length=256)
+    permission: str = Field(min_length=1, max_length=256)
+    permissionType: str = Field(min_length=1, max_length=256)
+
+    _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
+
+    @validator('userId')
+    def normalize_user_id(cls, value):
+        """The denormalized constraint row keys on this id and Casbin compares it against the
+        caller's own identity, so it is stored in the same normalized spelling as that identity."""
+        return normalize_userid(value)
 
 
 class GetConstraintsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing constraints"""
     maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_LIST_MAX_ITEMS)
-    pageSize: Optional[int] = Field(default=10000, ge=1, le=MAX_LIST_PAGE_SIZE)
+    pageSize: Optional[int] = Field(default=MAX_CONSTRAINT_LIST_PAGE_SIZE, ge=1, le=MAX_LIST_PAGE_SIZE)
     startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
 class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     """Request model for creating/updating a constraint"""
-    identifier: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    name: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    objectType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    identifier: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    name: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256)
+    objectType: str = Field(min_length=1, max_length=256)
+
     criteriaAnd: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
     criteriaOr: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
     groupPermissions: Optional[List[GroupPermissionModel]] = Field(default=[], max_items=MAX_PERMISSIONS_PER_CONSTRAINT)
     userPermissions: Optional[List[UserPermissionModel]] = Field(default=[], max_items=MAX_PERMISSIONS_PER_CONSTRAINT)
+
+    _trim_names = validator('identifier', 'name', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -359,14 +381,28 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
         return values
 
 
+class ConstraintCriteriaResponseModel(BaseModel, extra='ignore'):
+    """Model for constraint criteria as they are read back.
+
+    Carries no criteria-value rules, deliberately. A stored constraint was written before those rules
+    existed, so applying them here would reject a row that is already in the table: the read falls
+    back to the raw DynamoDB item, whose criteria are JSON strings rather than objects, and the
+    listing changes shape for the caller. Criteria values are checked where they are written --
+    ConstraintCriteriaModel, which every request path parses through.
+    """
+    field: str
+    operator: str
+    value: Union[str, List[str]]
+
+
 class ConstraintResponseModel(BaseModel, extra='ignore'):
     """Response model for constraint data"""
     constraintId: str
     name: str
     description: str
     objectType: str
-    criteriaAnd: Optional[List[ConstraintCriteriaModel]] = []
-    criteriaOr: Optional[List[ConstraintCriteriaModel]] = []
+    criteriaAnd: Optional[List[ConstraintCriteriaResponseModel]] = []
+    criteriaOr: Optional[List[ConstraintCriteriaResponseModel]] = []
     groupPermissions: Optional[List[GroupPermissionModel]] = []
     userPermissions: Optional[List[UserPermissionModel]] = []
 
@@ -423,33 +459,42 @@ class GetConstraintPermissionObjectsResponseModel(BaseModel, extra='ignore'):
 
 class TemplateVariableDefinition(BaseModel, extra='ignore'):
     """Variable definition within a permission template"""
-    name: str = Field(min_length=1, max_length=MAX_TEMPLATE_VARIABLE_NAME_LENGTH, strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=MAX_TEMPLATE_VARIABLE_NAME_LENGTH)
     required: Optional[bool] = True
     description: Optional[str] = Field(None, max_length=1024)
     default: Optional[str] = Field(None, max_length=MAX_TEMPLATE_VARIABLE_VALUE_LENGTH)
 
+    _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
+
 
 class TemplateConstraintPermission(BaseModel, extra='ignore'):
     """Permission entry within a template constraint (template format)"""
-    action: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    type: str = Field(default="allow", min_length=1, max_length=256, strip_whitespace=True)
+    action: str = Field(min_length=1, max_length=256)
+    type: str = Field(default="allow", min_length=1, max_length=256)
 
 
 class TemplateConstraintDefinition(BaseModel, extra='ignore'):
     """A single constraint definition within a permission template"""
-    name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    objectType: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=256)
+    description: str = Field(min_length=1, max_length=256)
+    objectType: str = Field(min_length=1, max_length=256)
     criteriaAnd: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
     criteriaOr: Optional[List[ConstraintCriteriaModel]] = Field(default=[], max_items=MAX_CRITERIA_PER_CONSTRAINT)
     groupPermissions: List[TemplateConstraintPermission] = Field(max_items=MAX_PERMISSIONS_PER_CONSTRAINT)
 
+    _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
+
 
 class TemplateMetadata(BaseModel, extra='ignore'):
     """Metadata about a permission template"""
-    name: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=256)
     description: Optional[str] = Field(None, max_length=1024)
     version: Optional[str] = Field(default="1.0", max_length=50)
+
+    _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
 
 
 class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
@@ -592,11 +637,16 @@ class GetRolesRequestModel(BaseModel, extra='ignore'):
 
 class CreateRoleRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a role"""
-    roleName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    source: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
-    sourceIdentifier: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
+    roleName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256)
+    source: Optional[str] = Field(None, max_length=256)
+    sourceIdentifier: Optional[str] = Field(None, max_length=256)
     mfaRequired: Optional[bool] = False
+
+    _trim_names = validator('roleName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -673,12 +723,22 @@ class CreateRoleRequestModel(BaseModel, extra='ignore'):
 
 
 class UpdateRoleRequestModel(BaseModel, extra='ignore'):
-    """Request model for updating a role"""
-    roleName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    source: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
-    sourceIdentifier: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
+    """Request model for updating a role
+
+    Every field but roleName is optional: the update applies the fields the request supplies and
+    leaves the rest of the role as stored. A body carrying nothing but roleName is refused by
+    update_role, which is the only remaining required-field check beyond roleName itself.
+    """
+    roleName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: Optional[str] = Field(None, min_length=1, max_length=256)
+    source: Optional[str] = Field(None, max_length=256)
+    sourceIdentifier: Optional[str] = Field(None, max_length=256)
     mfaRequired: Optional[bool] = False
+
+    _trim_names = validator('roleName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -697,11 +757,12 @@ class UpdateRoleRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
         
-        # Validate description
+        # Validate description if provided
         (valid, message) = validate({
             'description': {
                 'value': values.get('description'),
-                'validator': 'STRING_256'
+                'validator': 'STRING_256',
+                'optional': True
             }
         })
         if not valid:
@@ -796,12 +857,18 @@ class GetUserRolesRequestModel(BaseModel, extra='ignore'):
 
 class CreateUserRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for creating user roles"""
-    userId: str = Field(min_length=3, max_length=256, strip_whitespace=True)
+    userId: str = Field(min_length=3, max_length=256)
     roleName: list[str] = Field(min_items=1, max_items=MAX_ROLES_PER_USER_REQUEST)
+
+    _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
+    _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
         """Validate user role fields"""
+        # The user-role row keys on this id, so the normalized form is what is validated and stored
+        values['userId'] = normalize_userid(values.get('userId'))
+
         # Validate userId
         (valid, message) = validate({
             'userId': {
@@ -836,12 +903,18 @@ class CreateUserRolesRequestModel(BaseModel, extra='ignore'):
 
 class UpdateUserRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for updating user roles"""
-    userId: str = Field(min_length=3, max_length=256, strip_whitespace=True)
+    userId: str = Field(min_length=3, max_length=256)
     roleName: list[str] = Field(min_items=1, max_items=MAX_ROLES_PER_USER_REQUEST)
+
+    _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
+    _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
         """Validate user role fields"""
+        # The user-role row keys on this id, so the normalized form is what is validated and stored
+        values['userId'] = normalize_userid(values.get('userId'))
+
         # Validate userId
         (valid, message) = validate({
             'userId': {
@@ -876,11 +949,16 @@ class UpdateUserRolesRequestModel(BaseModel, extra='ignore'):
 
 class DeleteUserRolesRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting user roles"""
-    userId: str = Field(min_length=3, max_length=256, strip_whitespace=True)
+    userId: str = Field(min_length=3, max_length=256)
+
+    _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
         """Validate user role fields"""
+        # The user-role row keys on this id, so the normalized form is what is validated and stored
+        values['userId'] = normalize_userid(values.get('userId'))
+
         # Validate userId
         (valid, message) = validate({
             'userId': {

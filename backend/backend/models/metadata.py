@@ -63,12 +63,34 @@ MAX_METADATA_VALUE_LENGTH = 400000
 # Maximum length of a caller-supplied pagination token. Tokens this service issues
 # are a base64 offset of a handful of bytes.
 MAX_PAGINATION_TOKEN_LENGTH = 4096
+# Largest value either metadata pagination parameter may carry. pageSize and maxItems both
+# size a single response, so the same bound covers each, and the metadata handlers serve the
+# smaller of the two. A larger value is refused rather than quietly reduced: a caller asking
+# for more than one response can hold learns that from the answer instead of reading a
+# shortened page as the complete set. The metadata handlers import this bound, so the model
+# constraint and the handler ceiling are the same value, and it matches the maximum the shared
+# maxItems / pageSize parameters declare in documentation/VAMS_API.yaml. The whole set past one
+# page stays reachable through NextToken.
+MAX_METADATA_PAGE_SIZE = 1000
+# Defaults for the two metadata pagination parameters. maxItems is the per-response ceiling; the
+# smaller pageSize is the slice served, so a metadata panel takes a handful of small pages rather
+# than one large one and the NextToken walk is exercised by an ordinary read.
+DEFAULT_METADATA_MAX_ITEMS = 1000
+DEFAULT_METADATA_PAGE_SIZE = 100
 # Maximum length of an asset version id. Version ids are generated as decimal
 # counters ("1", "2", ...); this leaves ample room for an alias-length value.
 MAX_ASSET_VERSION_ID_LENGTH = 64
 # Maximum length of an asset-relative file path. The path is concatenated with the
 # asset's S3 prefix to form an object key, and S3 caps a key at 1024 characters.
 MAX_FILE_PATH_LENGTH = 1024
+# Deepest GeometryCollection nesting a GeoJSON value may carry. Geometry validation recurses
+# once per level, as do the indexer's finiteness walk and member strip, so an unbounded value
+# exhausts the interpreter stack instead of being refused: json.loads parses a few hundred
+# levels out of a few kilobytes, well inside the length a stored metadata value may take.
+# GeoJSON discourages nesting collections at all, so real geometries sit at one or two levels.
+# The indexer, the search models and the web mirror all consume this one bound so what the API
+# accepts and what reaches the index cannot drift apart.
+MAX_GEOJSON_NESTING_DEPTH = 32
 
 
 # GeoJSON geometry types that VAMS accepts for the GEOJSON metadata value type.
@@ -149,8 +171,19 @@ def _validate_linear_ring(ring: Any, label: str) -> None:
         raise ValueError(f"{label} must have at least 3 unique vertices")
 
 
-def _validate_geometry(geom: Any, label: str = "geometry") -> None:
-    """Recursively validate a GeoJSON Geometry object's structure and coordinates."""
+def _validate_geometry(geom: Any, label: str = "geometry", depth: int = 1) -> None:
+    """Recursively validate a GeoJSON Geometry object's structure and coordinates.
+
+    `depth` counts the geometries walked so far, one per GeometryCollection level. A value
+    nested past MAX_GEOJSON_NESTING_DEPTH is refused before the recursion reaches it, so a
+    hand-crafted geometry surfaces as a 400 rather than exhausting the interpreter stack.
+    """
+    # The label is omitted deliberately: at this point it carries one ".geometries[i]" segment
+    # per level walked, so naming the depth says everything the label would.
+    if depth > MAX_GEOJSON_NESTING_DEPTH:
+        raise ValueError(
+            f"geometries are nested more than {MAX_GEOJSON_NESTING_DEPTH} levels deep"
+        )
     if not isinstance(geom, dict):
         raise ValueError(f"{label} must be a JSON object")
     g_type = geom.get("type")
@@ -164,7 +197,7 @@ def _validate_geometry(geom: Any, label: str = "geometry") -> None:
         if not isinstance(geometries, list) or not geometries:
             raise ValueError(f"{label} GeometryCollection must contain a non-empty geometries array")
         for i, sub in enumerate(geometries):
-            _validate_geometry(sub, f"{label}.geometries[{i}]")
+            _validate_geometry(sub, f"{label}.geometries[{i}]", depth + 1)
         return
 
     coords = geom.get("coordinates")
@@ -284,7 +317,10 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
     elif value_type == MetadataValueType.JSON:
         try:
             json.loads(value)
-        except json.JSONDecodeError:
+        # A deeply nested value exhausts the parser's stack, which surfaces as RecursionError
+        # rather than as a decode error. Every parse guard below reads it the same way: a value
+        # the parser cannot get through is not a value this type accepts.
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'json'")
             
     elif value_type == MetadataValueType.XYZ:
@@ -301,7 +337,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
                 if not isinstance(xyz_data[key], (int, float)):
                     raise ValueError(f"XYZ coordinate '{key}' must be a number")
                     
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'xyz'")
             
     elif value_type == MetadataValueType.WXYZ:
@@ -318,7 +354,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
                 if not isinstance(wxyz_data[key], (int, float)):
                     raise ValueError(f"WXYZ coordinate '{key}' must be a number")
                     
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'wxyz'")
             
     elif value_type == MetadataValueType.MATRIX4X4:
@@ -341,13 +377,13 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
                     if not isinstance(element, (int, float)):
                         raise ValueError(f"MATRIX4X4 element at [{i}][{j}] must be a number")
                         
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'matrix4x4'")
             
     elif value_type == MetadataValueType.GEOPOINT:
         try:
             json_obj = json.loads(value)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, RecursionError) as e:
             raise ValueError(f"GEOPOINT validation failed: {str(e)}")
         if not isinstance(json_obj, dict):
             raise ValueError("GEOPOINT value must be a JSON object")
@@ -362,7 +398,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
     elif value_type == MetadataValueType.GEOJSON:
         try:
             parsed = json.loads(value)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, RecursionError) as e:
             raise ValueError(f"GEOJSON validation failed: {str(e)}")
         try:
             # Validate Geometry / Feature / FeatureCollection structure plus coordinate
@@ -402,7 +438,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
             if not isinstance(alt, (int, float)):
                 raise ValueError("LLA altitude must be a number")
                 
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'lla'")
     
     else:
@@ -438,6 +474,26 @@ class MetadataItemModel(BaseModel, extra='ignore'):
     metadataValue: str = Field(..., max_length=MAX_METADATA_VALUE_LENGTH, description="Metadata value as string")
     metadataValueType: MetadataValueType = Field(
         default=DEFAULT_METADATA_VALUE_TYPE, description="Type of metadata value")
+
+    @validator('metadataKey')
+    def reject_reserved_metadata_record_key(cls, v):
+        """Refuse a system-owned metadata record key.
+
+        The reindexer's marker record (common/dynamoDbMetadataKeys.py) shares its DynamoDB
+        primary key with a user record carrying the same metadataKey, so a record written under
+        that name is overwritten and then deleted by the next reindex touch. The check is on
+        write only: a record stored by an earlier release stays readable and deletable.
+
+        The VAMS_ / _ internal field prefixes are accepted -- such a key is stored and returned
+        by every metadata GET, and is excluded only from OpenSearch field extraction (and, for
+        the leading underscore, from asset export output).
+        """
+        from common.dynamoDbMetadataKeys import is_excluded_metadata_record
+
+        if is_excluded_metadata_record(v):
+            logger.info(f"metadataKey {v} rejected: reserved for VAMS internal records")
+            raise ValueError("metadataKey is reserved for VAMS internal use")
+        return v
 
     @validator('metadataValue', pre=True)
     def unsupplied_metadata_value_reads_as_empty(cls, v):
@@ -515,8 +571,8 @@ class AssetLinkMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting asset link metadata"""
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
 
@@ -641,8 +697,8 @@ class AssetMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting asset metadata"""
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
 
@@ -771,8 +827,8 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting file metadata or attributes"""
     filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
 
@@ -1013,8 +1069,8 @@ class DatabaseMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting database metadata"""
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
 

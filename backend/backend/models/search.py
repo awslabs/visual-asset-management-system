@@ -53,18 +53,27 @@ _OPENSEARCH_SHAPE_TYPES = frozenset({"envelope", "circle"})
 
 
 def _count_geojson_positions(node: Any) -> int:
-    """Count the coordinate positions reachable from a GeoJSON value."""
-    if isinstance(node, dict):
-        return sum(
-            _count_geojson_positions(value)
-            for key, value in node.items()
-            if key in ("coordinates", "geometries", "geometry", "features")
-        )
-    if isinstance(node, list):
-        if node and all(isinstance(entry, (int, float)) for entry in node):
-            return 1
-        return sum(_count_geojson_positions(entry) for entry in node)
-    return 0
+    """Count the coordinate positions reachable from a GeoJSON value.
+
+    Walks with an explicit stack rather than recursively. The value is caller-supplied and
+    nests without limit, and this walk runs before any structural validation, so a recursive
+    count exhausts the interpreter stack and surfaces as a 500 on the whole search request
+    instead of the 400 the shape earns.
+    """
+    total = 0
+    stack: List[Any] = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key in ("coordinates", "geometries", "geometry", "features"):
+                if key in current:
+                    stack.append(current[key])
+        elif isinstance(current, list):
+            if current and all(isinstance(entry, (int, float)) for entry in current):
+                total += 1
+            else:
+                stack.extend(current)
+    return total
 
 
 def _validate_opensearch_shape(shape: Dict[str, Any], shape_type: str) -> None:
@@ -91,7 +100,9 @@ def _validate_geojson_filter(value: Any) -> None:
 
     Runs the structural, coordinate-range and linear-ring checks the GEOJSON metadata
     value type uses, so a malformed shape surfaces as a 400 instead of an OpenSearch
-    'invalid_shape_exception' at query time. The two OpenSearch shape extensions
+    'invalid_shape_exception' at query time. That includes the shared
+    MAX_GEOJSON_NESTING_DEPTH bound, so a shape nested deep enough to exhaust the stack is
+    refused with a message naming the limit. The two OpenSearch shape extensions
     ('envelope', 'circle') are accepted with coordinate range checks.
     """
     if not isinstance(value, dict):
@@ -161,27 +172,27 @@ class SimpleSearchRequestModel(BaseModel, extra='ignore'):
     """Simple search request model for easy API calls without complex query construction"""
     
     # General search
-    query: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH, strip_whitespace=True, description="General keyword search across all fields")
+    query: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH, description="General keyword search across all fields")
 
     # Entity filtering
     entityTypes: Optional[List[Literal["asset", "file"]]] = Field(None, max_items=MAX_SEARCH_ENTITY_TYPES, description="Filter by entity type (default: both asset and file)")
     
     # Asset-specific search parameters
-    assetName: Optional[str] = Field(None, max_length=1000, strip_whitespace=True, description="Search by asset name")
-    assetId: Optional[str] = Field(None, max_length=1000, strip_whitespace=True, description="Search by asset ID")
-    assetType: Optional[str] = Field(None, max_length=1000, strip_whitespace=True, description="Filter by asset type")
+    assetName: Optional[str] = Field(None, max_length=1000, description="Search by asset name")
+    assetId: Optional[str] = Field(None, max_length=1000, description="Search by asset ID")
+    assetType: Optional[str] = Field(None, max_length=1000, description="Filter by asset type")
     
     # File-specific search parameters
-    fileKey: Optional[str] = Field(None, max_length=2000, strip_whitespace=True, description="Search by S3 file key")
-    fileExtension: Optional[str] = Field(None, max_length=100, strip_whitespace=True, description="Filter by file extension")
+    fileKey: Optional[str] = Field(None, max_length=2000, description="Search by S3 file key")
+    fileExtension: Optional[str] = Field(None, max_length=100, description="Filter by file extension")
     
     # Common search parameters
-    databaseId: Optional[str] = Field(None, max_length=1000, strip_whitespace=True, description="Filter by database ID")
+    databaseId: Optional[str] = Field(None, max_length=1000, description="Filter by database ID")
     tags: Optional[List[str]] = Field(None, max_items=MAX_SEARCH_TAGS, description="Search by tags")
 
     # Metadata search parameters
-    metadataKey: Optional[str] = Field(None, max_length=1000, strip_whitespace=True, description="Search metadata field names")
-    metadataValue: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH, strip_whitespace=True, description="Search metadata field values")
+    metadataKey: Optional[str] = Field(None, max_length=1000, description="Search metadata field names")
+    metadataValue: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH, description="Search metadata field values")
     
     # Options
     includeArchived: Optional[bool] = Field(False, description="Include archived items")
@@ -258,7 +269,7 @@ class SearchTokenModel(BaseModel, extra='ignore'):
     operation: Literal["AND", "OR"] = "AND"
     operator: Literal["=", ":", "!=", "!:"] = "="
     propertyKey: Optional[str] = Field(None, max_length=MAX_SEARCH_FIELD_LENGTH)  # None or "all" for multi-field search
-    value: str = Field(min_length=1, max_length=MAX_SEARCH_TEXT_LENGTH, strip_whitespace=True)
+    value: str = Field(min_length=1, max_length=MAX_SEARCH_TEXT_LENGTH)
 
 class SearchFilterModel(BaseModel, extra='ignore'):
     """Model for search filters using query_string syntax.
@@ -289,7 +300,7 @@ class SearchFilterModel(BaseModel, extra='ignore'):
 
 class SearchSortModel(BaseModel, extra='ignore'):
     """Model for search sorting configuration"""
-    field: str = Field(min_length=1, max_length=MAX_SEARCH_FIELD_LENGTH, strip_whitespace=True)
+    field: str = Field(min_length=1, max_length=MAX_SEARCH_FIELD_LENGTH)
     order: Literal["asc", "desc"] = "asc"
 
 class SearchPaginationModel(BaseModel, extra='ignore'):
@@ -317,7 +328,7 @@ class SearchPaginationModel(BaseModel, extra='ignore'):
 
 class SearchRequestModel(BaseModel, extra='ignore'):
     """Request model for search operations"""
-    query: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH, strip_whitespace=True)  # General text search
+    query: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH)  # General text search
     tokens: Optional[List[SearchTokenModel]] = Field([], max_items=MAX_SEARCH_TOKENS)  # Structured search tokens
     filters: Optional[List[SearchFilterModel]] = Field([], max_items=MAX_SEARCH_FILTERS)  # Additional filters
     sort: Optional[List[Union[SearchSortModel, str]]] = Field(["_score"], max_items=MAX_SEARCH_SORT_ENTRIES)  # Sort configuration
@@ -327,7 +338,7 @@ class SearchRequestModel(BaseModel, extra='ignore'):
     aggregations: Optional[bool] = True  # Include aggregations in response
     
     # NEW: Metadata search controls
-    metadataQuery: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH, strip_whitespace=True)  # Separate metadata search
+    metadataQuery: Optional[str] = Field(None, max_length=MAX_SEARCH_TEXT_LENGTH)  # Separate metadata search
     metadataSearchMode: Optional[Literal["key", "value", "both"]] = "both"  # Search metadata keys, values, or both
     includeMetadataInSearch: Optional[bool] = True  # Include metadata fields in general search
     
@@ -391,9 +402,11 @@ class SearchRequestModel(BaseModel, extra='ignore'):
 class SearchHitSourceModel(BaseModel, extra='allow'):
     """Documents the `_source` shape an indexed asset or file record carries.
 
-    The indexer writes many more keys than these (`MD_*` metadata, `AB_*` attributes,
-    `geo_MD_location`), so the shape stays open: a hit's `_source` reaches the client
-    verbatim.
+    The indexer writes more keys than these — the `MD_` object holding every metadata key, the
+    `AB_` object holding every file attribute, and `geo_MD_location` — so the shape stays open:
+    a hit's `_source` reaches the client verbatim. Names match
+    `FileDocumentModel`/`AssetDocumentModel` in `models/indexing.py`, which are what an indexed
+    document is written from.
     """
     # Core fields that should always be present
     str_rectype: Optional[str] = None  # 'asset' or 'file'
@@ -409,7 +422,7 @@ class SearchHitSourceModel(BaseModel, extra='allow'):
     list_tags: Optional[List[str]] = []
     bool_isdistributable: Optional[bool] = None
     date_lastmodified: Optional[str] = None
-    num_size: Optional[int] = None  # S3 file size in bytes
+    num_filesize: Optional[int] = None  # S3 file size in bytes
     str_etag: Optional[str] = None
     str_s3_version_id: Optional[str] = None  # S3 version ID (if versioning enabled)
     str_asset_version_id: Optional[str] = None  # Current asset version ID

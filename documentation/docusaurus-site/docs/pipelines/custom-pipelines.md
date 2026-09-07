@@ -123,14 +123,30 @@ def lambda_handler(event, context):
         "sfnExternalTaskToken": external_task_token,
     }
 
-    lambda_client.invoke(
+    lambda_response = lambda_client.invoke(
         FunctionName=OPEN_PIPELINE_FUNCTION_NAME,
         InvocationType="RequestResponse",
         Payload=json.dumps(message_payload).encode("utf-8"),
     )
 
+    # Check both results: the invoke status, and FunctionError for a function that raised.
+    if lambda_response.get("StatusCode") != 200:
+        raise Exception("Invoke Open Pipeline Lambda Failed.")
+    if lambda_response.get("FunctionError"):
+        raise Exception(
+            "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get("FunctionError"))
+        )
+
     return {"statusCode": 200, "body": "Success"}
 ```
+
+:::warning[A raised invoke still returns `StatusCode` 200]
+`RequestResponse` reports a function that raised in `FunctionError`, not in `StatusCode` -- the status
+describes the invocation, not the outcome. A `StatusCode`-only check therefore reads a failed launch as a
+successful one, so nothing reports against the task token and the workflow's task stays `RUNNING` until
+`taskTimeout`. Raise on either result and let the handler's `except` block send the callback -- see
+[Every failure route reports the token](#every-failure-route-reports-the-token).
+:::
 
 :::warning[Resolve inputs from the manifest, then pass every output path through]
 The payload does **not** contain `inputS3AssetFilePath` or the output paths -- resolve them from the
@@ -568,9 +584,19 @@ Lambda is the only place that can.
 Cover every path that ends the invocation without success:
 
 -   each `except` block, including a broad catch-all;
--   every early `return` that emits a `4xx` **after** the token has been parsed from the body.
+-   every early `return` that emits a `4xx` **after** the token has been parsed from the body;
+-   the result of any nested `RequestResponse` invoke, checked for `FunctionError` as well as
+    `StatusCode` -- a nested function that raised reports 200 with `FunctionError` set, and reading only
+    the status turns that failure into an unreported success.
 
 An early return that fires before the body is parsed carries no token and needs no callback.
+
+A nested function's own callback attempt should propagate rather than swallow its error. When a nested
+Lambda's `SendTaskFailure` fails -- a transient error, a stale token, a missing grant on that one role --
+letting the error escape sets `FunctionError` on the invoke, so the caller sees the failure and reports the
+token under its own role. Catching it there returns a payload-level `4xx` under a clean invoke, which the
+caller does not inspect, and the task hangs for its full timeout. A duplicate `SendTaskFailure` against a
+token that was already failed raises `TaskDoesNotExist`, which the caller's own callback helper logs.
 
 :::warning[Verify the grant on the entry-point function, not the pipeline]
 A pipeline's AWS CDK builder file usually grants `states:SendTaskSuccess` and `states:SendTaskFailure` to
@@ -653,8 +679,13 @@ group, any group reported through `registeredLogs`, and the sub-process history.
 
 :::info[Stopping is type-aware; recording is not]
 Registration accepts any `resourceType`, but only the types VAMS has a stop API for are actually stopped
-today: a Step Functions execution (`stepFunctionsExecution`) and an AWS Batch job (`batchJob`). Any other
-type is stored and, on abort, reported back to the caller as left running rather than dropped.
+today: a Step Functions execution (`stepFunctionsExecution`), an AWS Batch job (`batchJob`), and an AWS
+Deadline Cloud farm job (`deadlineCloudJob`). Any other type is stored and reported back as left running
+rather than dropped.
+
+Stopping runs on both of the routes that end a run early. An abort names what it could not stop in the API
+response; a workflow failure stops each in-flight pipeline's sub-processes before stamping its row terminal,
+and records what was left running on that pipeline's log row.
 
 That distinction is deliberate — it means registering a resource is always worth doing. A type VAMS cannot
 stop yet becomes visible in the abort result immediately, and gains automatic stop and status handling when
@@ -1104,7 +1135,7 @@ A template body whose `configFormat` is `json` is checked against those two shap
 ```
 
 :::info
-An unrecognized tag causes the execution to fail, so a typo is caught rather than silently passed through. A recognized tag whose value is not available for a given run (for example a `{{firstAssetFile...}}` tag on a run with no input files) resolves to an empty value rather than failing.
+A tag that is neither a system tag nor declared in the template's `tagSchema` is passed through unchanged: the pipeline receives the literal `{{tagName}}` text, because the configuration body is the pipeline's to interpret. A typo therefore surfaces as a placeholder in the configuration the pipeline reads rather than as a failed execution — check the configuration body a step ran with (`renderedConfigLocation` on the execution detail) when a value arrives unsubstituted. A recognized tag whose value is not available for a given run (for example a `{{firstAssetFile...}}` tag on a run with no input files) resolves to an empty value rather than failing.
 :::
 
 ### Available tags
@@ -1130,7 +1161,7 @@ Each of these resolves for the subject the pipeline task is running against: the
 The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs.
 
 :::note
-One dynamic tag family is planned but not yet available: `{{metadata_<key>}}`, for looking up an individual metadata field by name. Using it today fails the execution as an unrecognized tag, and the `metadata_` prefix is reserved so a template's own tag key cannot collide with it. User-defined tags **are** available — they are declared per template rather than on the pipeline definition, as described next.
+One dynamic tag family is planned but not yet available: `{{metadata_<key>}}`, for looking up an individual metadata field by name. Using it today is rejected with a 400 — unlike an ordinary unrecognized tag, a name under the reserved `metadata_` prefix claims a value no renderer resolves, and the prefix is reserved so a template's own tag key cannot collide with it either. User-defined tags **are** available — they are declared per template rather than on the pipeline definition, as described next.
 :::
 
 ## Configuration templates and per-run options
@@ -1164,6 +1195,12 @@ Each entry in `tagSchema` describes one field:
 | `enumValues`  | For `enum` | The allowed values. An `enum` without them is rejected.                                   |
 | `label`       | No         | The field's label on the execute form.                                                    |
 | `description` | No         | Helper text on the execute form — where units, ranges, and fallbacks belong.              |
+
+An entry may carry only those seven keys. Any other key is rejected when the template is saved rather
+than ignored, because a stored definition is read a named key at a time: a misspelled `requried` would
+leave the field optional and a differently cased `Type` would leave it a `string`. For a template
+shipped in a `vamsSchema` bundle that rejection lands at deploy, as a failed template registration in
+the import custom resource's log — check that log rather than the stack's status, which reports success.
 
 ```json
 {
@@ -1211,7 +1248,8 @@ bodies are stored verbatim and are not shape-checked, though their tags still su
 Prefer several templates on one pipeline over several near-identical pipelines. A template may also
 narrow its pipeline's own input rules through `overrides`, which accepts exactly four keys:
 `inputFileArity`, `assetScope`, `metadataInputs`, and `inputFileFilters`. Any other key is rejected when
-the template is saved rather than ignored at execute time.
+the template is saved rather than ignored at execute time, and the block is bounded at 64 KB serialized —
+the same budget as the pipeline's own `systemConfig`, whose keys it replaces a subset of.
 
 That is what lets one pipeline offer a text-to-video mode needing no input file alongside a
 video-to-video mode that requires one: set the pipeline's own `inputFileArity` to the lowest any template
@@ -1253,7 +1291,10 @@ docker run -it \
 ### Lambda testing
 
 Test Lambda handlers locally with a mock event payload that carries the same body fields the state
-machine sends — the identity fields plus the two S3 locations, and nothing else:
+machine sends — the identity fields plus the two S3 locations, and nothing else. The two locations
+arrive as fully resolved `s3://` URIs, so a pipeline never has a prefix to join: the sample below shows
+them for a default asset bucket registered at its root, and a bucket registered under a
+`baseAssetsPrefix` yields `s3://bucket/<that prefix>/pipelines/…` in the same field.
 
 ```python
 event = {
@@ -1296,6 +1337,7 @@ Use this checklist when building a new pipeline:
 -   [ ] `assetId` resolved from the manifest in `vamsExecute` and threaded from there (vamsExecute -> constructPipeline -> container), never read off the task body or derived from S3 path segments
 -   [ ] Every sub-process and log location registered (nested state machines, log groups, and any compute job the pipeline submits itself) — see [Registering sub-processes and logs](#registering-sub-processes-and-logs)
 -   [ ] `SendTaskFailure` sent on every error path, not only the expected ones — including the pre-invoke rejections that fail before the container or job starts, and every post-token early `return` that emits a `4xx`
+-   [ ] Every nested `RequestResponse` invoke checked for `FunctionError`, not only `StatusCode` — a nested function that raised returns 200 with `FunctionError` set, which a status-only check reads as a successful launch
 -   [ ] `states:SendTaskFailure` granted on the **entry-point** Lambda builder specifically, not merely present somewhere in the builder file — see [Every failure route reports the token](#every-failure-route-reports-the-token)
 -   [ ] CDK nested stack created with Lambda builders, AWS Step Functions, and compute resources
 -   [ ] All Lambda builders follow the standard security pattern (4 required security calls)

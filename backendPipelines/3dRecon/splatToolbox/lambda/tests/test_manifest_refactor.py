@@ -252,9 +252,7 @@ class TestConstructPipeline:
             "inputConfigurationS3Location": "s3://abkt/.../config.json",
             "externalSfnTaskToken": "tok",
         }
-        with patch.object(mod.s3_client, "head_object", side_effect=Exception("no lock")), \
-                patch.object(mod.s3_client, "put_object", MagicMock()):
-            out = mod.lambda_handler(event, MagicMock())
+        out = mod.lambda_handler(event, MagicMock())
         assert out["inputMetadataS3Location"] == "s3://abkt/.../metadata.json"
         assert out["inputConfigurationS3Location"] == "s3://abkt/.../config.json"
         assert "inputMetadata" not in out
@@ -287,8 +285,8 @@ class TestContainerReadsFromS3:
         spec.loader.exec_module(module)
         return module, container_root
 
-    def test_set_config_parameters_metadata_priority_and_filtering(self):
-        mod, container_root = self._container_main()
+    def test_set_config_parameters_metadata_priority_and_filtering(self, monkeypatch, tmp_path):
+        mod, _container_root = self._container_main()
         captured = {}
 
         class FakeEnv(dict):
@@ -296,18 +294,19 @@ class TestContainerReadsFromS3:
                 captured[k] = v
                 dict.__setitem__(self, k, v)
 
+        # set_config_parameters reads 'config.json' relative to cwd, which in the image is the
+        # upstream-staged copy under CODE_PATH. Supply the keys this test declares rather than
+        # depending on a repo file.
+        (tmp_path / "config.json").write_text(
+            json.dumps({"MODEL": "splatfacto", "MAX_NUM_IMAGES": "300"}), encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
         real = mod.os.environ
         mod.os.environ = FakeEnv(real)
         try:
-            # cwd must hold config.json (container root); set_config_parameters opens 'config.json'.
-            cwd = os.getcwd()
-            os.chdir(container_root)
-            try:
-                mod.set_config_parameters(
-                    {"MAX_NUM_IMAGES": 100, "NOT_A_KEY": "x"},
-                    {"MODEL": "splatfacto-big", "MAX_NUM_IMAGES": 500})
-            finally:
-                os.chdir(cwd)
+            mod.set_config_parameters(
+                {"MAX_NUM_IMAGES": 100, "NOT_A_KEY": "x"},
+                {"MODEL": "splatfacto-big", "MAX_NUM_IMAGES": 500})
         finally:
             mod.os.environ = real
         assert captured.get("MODEL") == "splatfacto-big"

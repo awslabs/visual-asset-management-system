@@ -397,3 +397,204 @@ class TestInterimOutputRowsAreBatched:
             dynamo=_dynamo_with(tables), output_files_table="t-of",
             pipeline_execution_id="P1", bucket="abkt", produced_files=[])
         assert tables == {}
+
+
+# ---------------------------------------------------------------------------
+# S2-BACKEND-130 -- the results-only terminal path shares the bound
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestResultsOnlyTerminalPathIsBounded:
+    """The results-only terminal path (outputLocationType 'none') is the SECOND place result files are
+    read, and it must read through the same bounded collector as the normal path.
+
+    The normal path's routing is already pinned by test_processOutput_write_order, which patches
+    ``_collect_result_outputs`` and asserts a ``read_results`` step ran. This path had no coverage at
+    all, so an inline whole-object read reinstated here would leave every other assertion green -- and
+    it is the path where an unbounded read costs the most, because it is the only place a results-only
+    run's outcome is recorded.
+
+    Every assertion is about the reads issued and the rows accumulated, never about a request count.
+    """
+
+    RESULTS = "pipelines/p/j/output/E1/results/"
+
+    def _event(self):
+        return {
+            "outputLocationType": "none",
+            "workflowExecutionS3InputOutputBucket": "iobkt",
+            "resultsPathKey": self.RESULTS,
+            "workflowExecutionId": "E1",
+            "endStatePipelineExecutionId": "P9",
+            "workflowDatabaseId": "wdb",
+            "workflowId": "wf",
+        }
+
+    def _run(self, sizes, payload=b"body", via_handler=False):
+        """Drive the results-only path over a results listing.
+
+        Returns (the output_results handed to the recorder, the get_object kwargs seen). Recording is
+        stubbed because the write mode is covered above; what is under test here is what this path
+        reads and accumulates before it gets there.
+        """
+        seen = []
+
+        def _get(**kwargs):
+            seen.append(kwargs)
+            return _body(payload)
+
+        event = self._event()
+        with patch.object(po.s3c, "get_object", side_effect=_get), \
+                patch.object(po, "verify_get_path_objects", return_value=_listing(sizes)), \
+                patch.object(po, "_fetch_execution_logs", return_value=("", "")), \
+                patch.object(po, "record_execution_outputs") as m_record:
+            if via_handler:
+                response = po.lambda_handler({"body": event}, MagicMock())
+            else:
+                response = po._process_results_only(event)
+        assert response["statusCode"] == 200
+        assert m_record.called, "the results-only path must record its outputs"
+        return m_record.call_args.kwargs["output_results"], seen
+
+    def test_an_ordinary_results_folder_is_recorded_whole(self):
+        """Positive control: the bounds do not narrow a normal results-only run, and the small-file
+        path does not range. Without this, an outage that read nothing would satisfy the bounds below.
+        """
+        sizes = [(f"{self.RESULTS}r{i}.txt", 4) for i in range(5)]
+        recorded, seen = self._run(sizes)
+        assert [r["relativeFilePath"] for r in recorded] == [f"/r{i}.txt" for i in range(5)]
+        assert len(seen) == 5
+        assert all("Range" not in call for call in seen)
+
+    def test_an_oversized_result_file_is_range_read_not_read_whole(self):
+        oversized = er.MAX_TEXT_FIELD_BYTES * 4
+        recorded, seen = self._run([(f"{self.RESULTS}big.txt", oversized)],
+                                   payload=b"x" * po.RESULT_CONTENT_READ_BYTES)
+        assert seen[0]["Range"] == f"bytes=0-{po.RESULT_CONTENT_READ_BYTES - 1}"
+        assert len(recorded) == 1
+        assert len(recorded[0]["resultsContent"].encode("utf-8")) <= po.RESULT_CONTENT_READ_BYTES
+
+    def test_the_row_cap_stops_this_path_reading_not_just_recording(self):
+        """The cap has to short-circuit the READ loop. A cap applied only to the recorded rows would
+        still have pulled every object into memory first, which is the defect itself.
+        """
+        sizes = [(f"{self.RESULTS}r{i}.txt", 4) for i in range(50)]
+        with patch.object(po, "MAX_RECORDED_OUTPUT_RESULT_ROWS", 3):
+            recorded, seen = self._run(sizes)
+        assert len(recorded) <= 3
+        assert len(seen) <= 3
+
+    def test_the_content_budget_stops_this_path_reading(self):
+        sizes = [(f"{self.RESULTS}r{i}.txt", 8) for i in range(50)]
+        with patch.object(po, "MAX_RECORDED_OUTPUT_RESULT_CONTENT_BYTES", 16):
+            recorded, seen = self._run(sizes, payload=b"12345678")
+        total = sum(len(r["resultsContent"].encode("utf-8")) for r in recorded)
+        # The budget is checked before each read, so at most one file may overshoot it.
+        assert total <= 16 + 8
+        assert len(seen) < 50
+
+    def test_the_handler_routes_a_results_only_event_to_the_bounded_path(self):
+        """Reachability: the bound must sit on the path lambda_handler actually dispatches an
+        outputLocationType 'none' event to, not only on the private helper.
+        """
+        oversized = er.MAX_TEXT_FIELD_BYTES * 4
+        recorded, seen = self._run([(f"{self.RESULTS}big.txt", oversized)],
+                                   payload=b"x" * po.RESULT_CONTENT_READ_BYTES,
+                                   via_handler=True)
+        assert seen and seen[0]["Range"] == f"bytes=0-{po.RESULT_CONTENT_READ_BYTES - 1}"
+        assert len(recorded) == 1
+
+
+@pytest.mark.unit
+class TestShippedCapsAreUsableBounds:
+    """Every cap assertion above patches the constant it exercises, so none of them pins the SHIPPED
+    value. A cap of ``None`` slices to the whole list and compares equal in length, so it bounds
+    nothing and reports no truncation either -- a regression no patched test can see.
+    """
+
+    def test_each_recording_cap_is_a_finite_positive_bound(self):
+        for name in ("MAX_RECORDED_OUTPUT_FILE_ROWS", "MAX_RECORDED_OUTPUT_RESULT_ROWS",
+                     "MAX_RECORDED_OUTPUT_RESULT_CONTENT_BYTES",
+                     "MAX_RECORDED_OUTPUT_METADATA_ROWS", "RESULT_CONTENT_READ_BYTES"):
+            value = getattr(po, name)
+            assert isinstance(value, int) and value > 0, name
+
+    def test_the_per_file_read_ceiling_stays_close_to_what_a_row_stores(self):
+        """The read ceiling exists because content past the row's budget is discarded. A ceiling that
+        drifted far above the budget would restore the wasted read the bound was added to remove.
+        """
+        assert po.RESULT_CONTENT_READ_BYTES > er.MAX_TEXT_FIELD_BYTES
+        assert po.RESULT_CONTENT_READ_BYTES <= er.MAX_TEXT_FIELD_BYTES * 2
+
+
+# ---------------------------------------------------------------------------
+# The bound must not change what a results file MEANS
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestDecodingDoesNotDependOnTheFileSize:
+    """Whether a results file is readable text decides the run's recorded status, so it cannot depend
+    on which read fetched the file. The ranged read tolerates exactly the one character its own
+    boundary can cut; anything else that does not decode fails the read at either size.
+    """
+
+    NOT_TEXT = bytes(range(256)) * 2000
+
+    def test_a_multibyte_character_split_at_the_boundary_is_still_read(self):
+        """Positive control for the two negatives below: the tolerated case must stay tolerated, and
+        the read must still exceed the row's budget after the partial character is dropped.
+        """
+        # "€" is 3 UTF-8 bytes, and RESULT_CONTENT_READ_BYTES happens to be an exact multiple of 3, so
+        # a payload of nothing but "€" lands the boundary BETWEEN characters and the split this test
+        # exists to cover never happens. One leading ASCII byte shifts the whole run off that
+        # alignment. Stated as a decode failure rather than as arithmetic on the ceiling: the property
+        # that matters is "these bytes end mid-character", and it stays true if the ceiling changes.
+        char = "€"
+        whole = ("a" + char * (po.RESULT_CONTENT_READ_BYTES // 3 + 50)).encode("utf-8")
+        served = whole[:po.RESULT_CONTENT_READ_BYTES]
+        with pytest.raises(UnicodeDecodeError):
+            served.decode("utf-8")
+
+        # The longest valid UTF-8 prefix of what was served -- i.e. the partial trailing character
+        # dropped. Derived by trimming rather than by a modulo, for the same reason.
+        valid_prefix = served
+        while True:
+            try:
+                expected_text = valid_prefix.decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                valid_prefix = valid_prefix[:-1]
+        assert len(served) - len(valid_prefix) in (1, 2), (
+            "exactly the bytes of one cut character should be dropped; "
+            f"dropped {len(served) - len(valid_prefix)}")
+
+        with patch.object(po.s3c, "get_object", return_value=_body(served)):
+            content = po._read_result_content("bkt", "k", listed_size=len(whole))
+        assert content == expected_text
+        row = er.build_output_result_record(
+            pipeline_execution_id="P1", relative_file_path="/r.txt",
+            results_content=content, s3_key="k")
+        assert row["resultsContentTruncated"] is True
+
+    def test_a_large_non_text_file_fails_the_read_rather_than_yielding_mojibake(self):
+        served = self.NOT_TEXT[:po.RESULT_CONTENT_READ_BYTES]
+        with patch.object(po.s3c, "get_object", return_value=_body(served)):
+            with pytest.raises(UnicodeDecodeError):
+                po._read_result_content("bkt", "k", listed_size=er.MAX_TEXT_FIELD_BYTES * 4)
+
+    def test_the_same_non_text_file_is_recorded_the_same_way_at_either_size(self):
+        """The size-independence itself: one payload, read whole at one size and ranged at the other,
+        must produce the same descriptors and the same terminal status.
+        """
+        small = self.NOT_TEXT[:1024]
+        large = self.NOT_TEXT[:po.RESULT_CONTENT_READ_BYTES]
+        outcomes = []
+        for listed_size, served in ((len(small), small),
+                                    (er.MAX_TEXT_FIELD_BYTES * 4, large)):
+            listing = _listing([("p/out/results/r.bin", listed_size)])
+            with patch.object(po.s3c, "get_object", return_value=_body(served)):
+                descriptors, failures = po._collect_result_outputs(
+                    "bkt", "p/out/results/", listing)
+            outcomes.append((descriptors, po._terminal_status(failures)[0]))
+        assert [status for _d, status in outcomes] == ["FAILED", "FAILED"]
+        assert [descriptors for descriptors, _s in outcomes] == [[], []]

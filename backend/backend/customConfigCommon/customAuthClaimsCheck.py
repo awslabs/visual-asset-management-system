@@ -1,8 +1,11 @@
 import os
 import boto3
+from botocore.config import Config
 from customLogging.logger import safeLogger
 
 logger = safeLogger()
+
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 #Possible environment variables used and passed in for various purposes
 #USER_POOL_ID is only expected when Cognito is the auth provider; its absence is
@@ -12,7 +15,7 @@ try:
     user_pool_id = os.environ.get("USER_POOL_ID")
 
     if cognito_auth_enabled == "TRUE":
-        cognitoClient = boto3.client('cognito-idp')
+        cognitoClient = boto3.client('cognito-idp', config=retry_config)
         if not user_pool_id:
             logger.warning("USER_POOL_ID not set; Cognito MFA check will default to false")
 except:

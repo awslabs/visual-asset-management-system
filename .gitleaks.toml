@@ -73,4 +73,27 @@ regexes = [
     # being working credentials.
     '''eyJraWQiOiJ\.\.\.''',
     '''vams_ak_abc123\.\.\.''',
+
+    # HuggingFace token stubs in infra/test/security/secretAssetStagingCleanup.test.ts. The value
+    # spells UNITTEST in the token body, and the test's whole subject is asserting that a supplied HF
+    # token does NOT reach the synthesized template — so the test that prevents the leak is what gets
+    # reported. Anchored on the literal `hf_UNITTEST`, which cannot match a real token.
+    '''hf_UNITTEST''',
+
+    # JWT stub stored by tools/VamsCLI/tests/test_secret_file_permissions.py as a saved auth profile,
+    # to prove the profile file is written owner-only. Its signature is the three characters `sig`, so
+    # it never verified against anything.
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxIn0\.sig''',
+
+    # jwt.io's published example token, used by tools/VamsCLI/tests/test_log_redaction.py to prove a
+    # JWT-shaped value is scrubbed from the log file. The signature segment is truncated, so the
+    # string is not a valid token even as a specimen.
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.dBjftJeZ4CVPmB92K27uhbUJU1p1r''',
+
+    # Fixtures in tools/ExternalIntegrations/isaacsim_vams_integration/tests/
+    # test_vams_cli_service_secrets.py, whose subject is that a password and an override token reach
+    # the CLI's stdin and never appear on argv (tools/VamsCLI/CLAUDE.md Rule 11). Both values say in
+    # plain words that they are placeholders.
+    '''n0t-in-argv-please''',
+    '''vams_n0t_in_argv_either''',
 ]

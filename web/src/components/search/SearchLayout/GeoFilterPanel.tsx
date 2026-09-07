@@ -17,8 +17,10 @@ import { GeoSearchFilter, SearchFilters } from "../types";
 import { appCache } from "../../../services/appCache";
 import { featuresEnabled } from "../../../common/constants/featuresEnabled";
 import {
+    MAX_GEOJSON_NESTING_DEPTH,
     MAX_GEOJSON_POSITIONS,
     countGeoJsonPositions,
+    geoJsonNestingDepth,
     parseCoordinate,
     parseLatLon,
 } from "../../../common/constants/geoSearch";
@@ -140,6 +142,12 @@ const GeoFilterPanel: React.FC<GeoFilterPanelProps> = ({
                 const parsed = JSON.parse(geoJsonText);
                 if (!parsed || typeof parsed !== "object" || !parsed.type) {
                     setError("GeoJSON must be a Geometry, Feature, or FeatureCollection.");
+                    return;
+                }
+                if (geoJsonNestingDepth(parsed) > MAX_GEOJSON_NESTING_DEPTH) {
+                    setError(
+                        `GeoJSON nests geometries more than ${MAX_GEOJSON_NESTING_DEPTH} levels deep.`
+                    );
                     return;
                 }
                 const positions = countGeoJsonPositions(parsed);

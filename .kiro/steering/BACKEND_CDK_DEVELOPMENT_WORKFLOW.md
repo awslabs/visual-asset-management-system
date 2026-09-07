@@ -25,7 +25,7 @@ backend/
 │   ├── common/                # Shared utilities
 │   │   ├── constants.py       # Constants and configuration
 │   │   ├── validators.py      # Input validation functions
-│   │   └── dynamodb.py        # DynamoDB utilities
+│   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, …)
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
 │   ├── handlers/              # Handler tests
@@ -216,8 +216,18 @@ mean "no such item". Three consequences, each of which has occurred in this code
 This is the one place the S3 exception above does not carry over: S3 applies `Prefix`
 server-side before `MaxKeys`, so `MaxKeys=1` genuinely answers "does this exist".
 
+What a `Prefix` + `MaxKeys=1` listing answers is "does anything under this prefix exist" —
+not "does this exact key exist". `Prefix` is a prefix match, so the listing also returns
+longer keys (`file.glb` matches `file.glb.previewFile.png`). Counting the returned entries
+therefore attributes a sibling's state to the requested key; match each entry's `Key` back
+to the key being asked about.
+
 When the **handler** needs every row (cascade delete, cycle check, existence test,
-descendant walk), loop on `LastEvaluatedKey`:
+descendant walk), reach for the shared helpers in `common.dynamodb` first:
+`query_all_items(table, **query_kwargs)` returns every matching item and
+`query_has_match(table, **query_kwargs)` answers an existence check, stopping at the first page
+that yields one. Hand-roll the loop only for a `scan`, or where the walk needs its own bound —
+loop on `LastEvaluatedKey`:
 
 ```python
 from boto3.dynamodb.conditions import Key
@@ -241,6 +251,18 @@ Two details decide whether that loop is correct:
 -   **Assign any "drained"/"complete" flag on every exit path.** A flag set only on the
     `LastEvaluatedKey`-absent branch reports the opposite of the truth whenever an early
     `break` (a page cap, a found-it short-circuit) leaves the loop first.
+-   **An existence check fails the OPPOSITE way under a stub, so converting one to
+    `query_has_match` inverts what an unpatched table does to its test.** `MagicMock.__len__`
+    defaults to `0` while `__bool__` defaults to `True`, so
+    `len(response.get('Items', [])) > 0` answers `False` against an under-stubbed reader
+    (failing safe), whereas `query_has_match` — which returns on the first non-empty page
+    via `if response.get('Items')` — answers `True` after one read. A test asserting
+    `assert has_children is True` then **passes having read nothing**, retiring the
+    assertion rather than failing inconclusively. Defend with both: assert a read count or
+    `Pager.assert_paged_to_exhaustion()` in-band on your own double, and patch the object
+    the function's `__globals__` actually resolves (`patch.object` is effective only when
+    `function.__globals__ is module.__dict__`; one source file loaded twice yields two
+    module objects sharing a `__file__` but owning separate globals).
 
 ### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
 
@@ -409,6 +431,7 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 # String Length Validators
 'STRING_30'             # Max 30 characters
 'STRING_256'            # Max 256 characters
+'STRING_16384'          # Max 16384 characters (free-form caller text, e.g. commentBody)
 'STRING_256_ARRAY'      # Array of strings, each max 256 chars
 
 # File and Path Validators
@@ -441,8 +464,43 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 
 1. **Use validators first** where a validation type exists
 2. **Add custom `@root_validator`** for complex business logic validation
-3. **Create new validator types** for repetitive validation patterns
+3. **Create new validator types** for repetitive validation patterns — a new name is **one entry in
+   `_VALIDATOR_DISPATCH`** in `common/validators.py`, and nothing else. That mapping is the list of
+   valid names, so there is no second set to keep in step with it. A name with no entry has no rule
+   to apply, so `validate()` raises rather than reporting the field valid unchecked. The name is
+   resolved **after** the empty/optional short-circuits, so an optional field left empty is skipped
+   before its validator is consulted — naming one is not required to say there is nothing to check.
 4. **Keep validation logic in models**, not in business logic functions
+
+#### **User IDs: Unicode, Normalized Before Validation and Storage**
+
+`USERID` keeps the Unicode-aware `\w` class, so an external IDP's non-Latin username is accepted.
+Call `normalize_userid()` / `normalize_userid_array()` from `common.validators` on a caller-supplied
+user id **before** validating it and before storing or looking it up. NFKC folds two compatibility
+spellings of one name together, and normalizing on only some paths is worse than not normalizing at
+all — the mismatch makes a lookup miss a row that exists. `request_to_claims()` normalizes the
+caller's own identity, so a handler working from `claims_and_roles["tokens"]` needs no further call.
+
+`confusable_skeleton()` / `find_confusable_userid()` compare how two ids **look** (Cyrillic `а` folds
+onto `a`) and belong at **user creation only** — `create_cognito_user` refuses an id that reads the
+same as one already in the pool, while an id already stored keeps working. The mapping covers the
+Cyrillic and Greek lookalikes and is deliberately partial.
+
+#### **`REGEX` Values Are Checked for Complexity, and Only on Save**
+
+`validate_regex` rejects three things on top of the compile check: a repeating quantifier applied to a
+group that itself repeats or alternates (`(a+)+`, `(a|a)*`), a backreference, and more quantifier
+ambiguity than one evaluation can afford — the estimated worst-case backtracking search space against a
+256-character subject must stay under `MAX_REGEX_SEARCH_SPACE`, which admits at most three unbounded
+quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three unbounded quantifiers
+separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. This matters because
+a constraint criterion value becomes a Casbin `regexMatch(...)` pattern re-evaluated for every policy line
+on every authorization decision. General regex stays accepted (literals, character classes, anchors, `.*`, `|`,
+un-quantified groups). The check runs on the **save** paths — `ConstraintCriteriaModel`, plus
+`validate_substituted_criteria_values()` in the template importer, which re-checks the value produced
+by variable substitution because that is what gets stored — and deliberately not on read, where
+`ConstraintResponseModel` uses the rule-free `ConstraintCriteriaResponseModel` so a constraint stored
+by an earlier release keeps reading back as stored.
 
 #### **Example: Secure Model with Validator Integration**
 
@@ -609,25 +667,32 @@ recognize into `FieldInfo.extra` instead of raising, so a v2 spelling like `patt
 an inert annotation that validates **nothing** — the model imports cleanly, tests pass, and
 the field is unconstrained. `regex=` is the v1 spelling. `strip_whitespace=` is likewise inert
 on `Field()` (it is a `class Config` / `constr` option, not a field constraint), so a padded
-value is stored verbatim — which matters for the ABAC-visible name fields. Set
-`anystr_strip_whitespace = True` on the model's `class Config` when stripping is wanted.
-`backend/tests/models/test_no_dead_field_kwargs.py` enforces both across every model, so
-scaffolding the v2 spelling breaks the suite rather than shipping an unconstrained field.
+value reaches the length and regex checks — and storage — exactly as submitted. A name or id
+field trims through `common.validators.trim_name` wired as a `pre=True` validator, which removes
+the surrounding whitespace run and preserves interior whitespace. A `description` or `comment` on
+a REQUEST model trims through the same validator, declared separately as `_trim_text` so the source
+keeps signalling which fields are ids and which are prose; a response or record model does not,
+because trimming there rewrites a stored row on the way out. Do not reach for
+`anystr_strip_whitespace = True` on the model's `class Config` instead: it strips every string on
+the model, including S3 keys and asset-relative paths, where a trailing space is a legitimate part
+of the key. `backend/tests/models/test_no_dead_field_kwargs.py` enforces all of this across every
+model — including the free-text partition as a rule, so a new `description` must either trim or be
+named in its `NO_TRIM_FREE_TEXT` map with a reason — so scaffolding the v2 spelling breaks the suite
+rather than shipping an unconstrained field.
 
 ```python
 # ✅ CORRECT - Follow assetsV3.py patterns
 from typing import Dict, List, Optional, Literal
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
-from common.validators import validate, id_pattern, object_name_pattern
+from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
 class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for [operation] [domain]"""
     requiredField: str = Field(min_length=1, max_length=256, regex=id_pattern)
     optionalField: Optional[str] = Field(None, min_length=1, max_length=256)
 
-    class Config:
-        anystr_strip_whitespace = True
+    _trim_names = validator('requiredField', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -863,7 +928,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 106 resources in a ~0.48 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.49 MB template and `apiBuilder2` emits 71 in ~0.29 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -2235,7 +2300,7 @@ required_table = dynamodb.Table(required_table_name)
 optional_table = dynamodb.Table(optional_table_name) if optional_table_name else None
 ```
 
-**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy environment variable overrides (e.g., `REQUIRED_STORAGE_TABLE_NAME`), then consults a 60-minute in-module cache, then fetches all resource name parameters from SSM via one paginated GetParametersByPath call. This allows pytest tests and local utilities to inject names directly as environment variables while deployed handlers use SSM.
+**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy environment variable overrides (e.g., `REQUIRED_STORAGE_TABLE_NAME`), then consults a 60-minute in-module cache, then a short-lived negative record of keys a completed sweep did not carry — so an unpublished parameter costs one sweep per window rather than one per call — then fetches all resource name parameters from SSM via one paginated GetParametersByPath call. A later sweep that does carry the key clears its negative record. This allows pytest tests and local utilities to inject names directly as environment variables while deployed handlers use SSM.
 
 **Pipeline handlers** in `backendPipelines/` continue to use legacy environment variables and do not call `get_table_name()`.
 
@@ -2522,7 +2587,29 @@ pytest --cov=backend             # Run tests with coverage
 # Run specific test files
 pytest tests/handlers/[domain]/   # Test specific domain
 pytest -v tests/handlers/[domain]/test_[handler].py  # Test specific handler
+
+# List tests that pin one past change rather than a durable rule (root CLAUDE.md Rule 13)
+pytest -m temporary --collect-only
 ```
+
+#### **Mark a Temporary Test with `@pytest.mark.temporary`**
+
+A test written to prove one specific change landed — a deleted file, a removed test seam, a dead branch —
+carries `@pytest.mark.temporary` (registered in `backend/pytest.ini`) plus a line naming what it pins.
+`backend` and `tools/VamsCLI` run `--strict-markers`, so the marker must stay registered there or every
+test using it fails; `backendPipelines` has no pytest configuration, so it only warns.
+
+The marker is required because **a temporary test and a durable guardrail are indistinguishable by reading
+them afterwards** — both scan source, both assert an absence, both explain themselves. Applying it up front
+is the only way release cleanup can separate them.
+
+Do **not** mark, and do not remove, a test whose forbidden construct is still writable: a broader IAM
+wildcard, a `cdk-nag` suppression, a mutating call from a read-only path, a validator regex hardcoding
+`arn:aws:`. Nor a positive/negative **control** whose subject is deliberately a string that does not exist.
+
+The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** — a
+forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full criterion:
+root `CLAUDE.md` Rule 13; Claude Code counterpart: `backend/tests/CLAUDE.md`.
 
 ### **CDK Development**
 

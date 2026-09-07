@@ -46,25 +46,15 @@ claims_and_roles = {}
 
 try:
     tag_db_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving tags table name")
-    tag_db_table_name = None
-
-try:
     tag_type_db_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving tag types table name")
-    tag_type_db_table_name = None
-
-try:
     database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving database table name")
-    database_table_name = None
+    logger.exception("Failed resolving resource names")
+    raise e
 
-tag_table = dynamodb.Table(tag_db_table_name) if tag_db_table_name else None
-tag_type_table = dynamodb.Table(tag_type_db_table_name) if tag_type_db_table_name else None
-database_table = dynamodb.Table(database_table_name) if database_table_name else None
+tag_table = dynamodb.Table(tag_db_table_name)
+tag_type_table = dynamodb.Table(tag_type_db_table_name)
+database_table = dynamodb.Table(database_table_name)
 
 #######################
 # Business Logic Functions

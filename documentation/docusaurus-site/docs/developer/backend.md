@@ -425,6 +425,7 @@ if not valid:
 | `USERID`                    | `^[\w\-\.\+\@]{3,256}$`       | User identifiers                                |
 | `FILE_NAME`                 | No special characters         | File names                                      |
 | `STRING_256`                | Max 256 chars                 | Medium strings                                  |
+| `STRING_16384`              | Max 16384 chars               | Free-form caller text (comment bodies)          |
 | `ID_ARRAY`                  | Array of IDs                  | Multiple IDs                                    |
 | `STRING_256_ARRAY`          | Array of max-256 strings      | Tags, lists                                     |
 | `ARN`                       | Partition-aware AWS ARN       | Any AWS resource ARN (sub-process registration) |
@@ -433,6 +434,8 @@ if not valid:
 | `LOG_STREAM_NAME`           | 1-512 chars, no `:` or `*`    | Registered log-stream names / prefixes          |
 
 All AWS-resource validators are partition-aware (commercial, GovCloud, China, ISO).
+
+The dispatcher recognizes only the names it implements, and the `_VALIDATOR_DISPATCH` mapping in `common/validators.py` is that list — a new validation type is one entry in it, with no second list to update. A name with no entry has no rule to apply, so it is rejected rather than reported valid unchecked. The name is resolved after the empty/optional short-circuits, so an optional field left empty is skipped before its validator is consulted.
 
 ### Regex Patterns for Pydantic Fields
 
@@ -467,12 +470,12 @@ from common.s3PathPatterns import (
     ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif')
     TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
     PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
-    PIPELINES_PREFIX,                 # 'pipelines/' (workflow pipeline outputs)
+    PIPELINES_PREFIX,                 # 'pipelines/' (workflow run I/O in the default bucket)
     AUXILIARY_PREVIEW_PREFIX,         # 'preview/' (auxiliary bucket, singular)
 )
 ```
 
-Pipeline staging paths follow the structure `pipelines/{pipelineName}/{jobName}/output/{executionId}/{outputType}/`. The path segments within this structure are also defined as constants:
+Pipeline staging paths follow the structure `pipelines/{pipelineName}/{jobName}/output/{executionId}/{outputType}/`, relative to the area VAMS owns in the default asset bucket. `executionRecords.run_bucket_key()` joins that bucket's `baseAssetsPrefix` onto a relative key to produce the key an Amazon S3 call uses, and returns the key unchanged for a bucket registered at the root. The workflow state machine carries the relative form and the bucket's prefix as separate values, so a definition never embeds the prefix. The path segments within this structure are also defined as constants:
 
 ```python
 from common.s3PathPatterns import (

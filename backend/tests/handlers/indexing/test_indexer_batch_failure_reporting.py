@@ -23,7 +23,7 @@ declare `FunctionResponseTypes: ["ReportBatchItemFailures"]`, and a record the
 indexer can never process is dead-lettered by the source queue's redrive policy
 rather than redelivered forever. Both are properties of the emitted
 CloudFormation template, asserted in
-`infra/test/t1IndexerBatchItemFailures.test.ts` across every partition
+`infra/test/platform/t1IndexerBatchItemFailures.test.ts` across every partition
 configuration; the construct that builds them is
 `infra/lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`.
 """

@@ -63,8 +63,23 @@ AUDIT_EVENT_OVERHEAD_BYTES = 26
 
 
 def _use_local_mocks() -> bool:
-    """True when local-mock mode is enabled (all route checks auto-approve)."""
-    return os.environ.get('USE_LOCAL_MOCKS', '').lower() == 'true'
+    """True when local-mock mode is enabled (all route checks auto-approve).
+
+    Local-mock mode belongs to the local development server (``localDev_api_server.py``),
+    which serves the frontend without a deployment. It is refused wherever
+    ``VAMS_RESOURCE_PARAM_PREFIX`` is set -- that is the SSM prefix a deployed handler
+    resolves its resource names from, so its presence marks a real deployment and route
+    checks are enforced there however the switch was set.
+    """
+    if os.environ.get('USE_LOCAL_MOCKS', '').lower() != 'true':
+        return False
+    if os.environ.get('VAMS_RESOURCE_PARAM_PREFIX'):
+        logger.error(
+            "USE_LOCAL_MOCKS is set alongside VAMS_RESOURCE_PARAM_PREFIX, which is only set on a "
+            "deployment; local-mock mode stays disabled and route checks are enforced normally"
+        )
+        return False
+    return True
 
 
 def _route_probe_path(path_template: str) -> str:

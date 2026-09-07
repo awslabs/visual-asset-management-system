@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# The upstream framework commit the image was built from, so a run's log names the inference
+# code it actually ran -- and, for the checkpoint_db patch below, the revision its
+# pattern was written against.
+if [ -f /opt/cosmos-transfer2.5/VAMS_UPSTREAM_COMMIT ]; then
+    echo "cosmos-transfer2.5 commit: $(cat /opt/cosmos-transfer2.5/VAMS_UPSTREAM_COMMIT)"
+fi
+
 # The CUDA forward-compatibility libraries in /usr/local/cuda*/compat are deliberately NOT placed on
 # LD_LIBRARY_PATH. cosmos-transfer2.5 needs CUDA 12.8, which the AL2023 NVIDIA AMI's driver satisfies
 # natively. Forward compatibility only applies when the host driver is OLDER than the container's CUDA

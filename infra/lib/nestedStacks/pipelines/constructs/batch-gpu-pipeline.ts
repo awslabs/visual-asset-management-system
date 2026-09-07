@@ -24,7 +24,11 @@ export interface BatchGpuPipelineConstructProps extends cdk.StackProps {
     executionRole: iam.Role;
     imageAssetPath: string;
     dockerfileName: string;
-    codeBuildRepository?: ecr.IRepository;
+    /**
+     * CodeBuild-produced ECR image. The tag travels with the repository in one prop because the tag
+     * the job definition names and the tag CodeBuild pushes have to be the same string.
+     */
+    codeBuildImage?: { repository: ecr.IRepository; tag: string };
     containerExecutionCommand: string[];
     batchJobDefinitionName: string;
     // Optional GPU-specific configurations
@@ -176,8 +180,11 @@ chmod 775 /mnt/workspace
         // Container image resolution. A CodeBuild-built ECR repository is used directly, which
         // avoids a slow local Docker build of the large GPU image; otherwise the image is built
         // locally from imageAssetPath.
-        const containerImage = props.codeBuildRepository
-            ? ecs.ContainerImage.fromEcrRepository(props.codeBuildRepository, "latest")
+        const containerImage = props.codeBuildImage
+            ? ecs.ContainerImage.fromEcrRepository(
+                  props.codeBuildImage.repository,
+                  props.codeBuildImage.tag
+              )
             : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
                   platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,

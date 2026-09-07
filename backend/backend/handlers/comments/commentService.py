@@ -3,6 +3,7 @@
 
 import copy
 import boto3
+from botocore.config import Config
 import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -15,14 +16,19 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import (
+    validate_pagination_info,
+    MAX_PAGINATION_MAX_ITEMS,
+    MAX_PAGINATION_PAGE_SIZE,
+)
 
 claims_and_roles = {}
 
 logger = safeLogger(service="CommentService")
 
-dynamodb = boto3.resource("dynamodb")
-dynamodb_client = boto3.client("dynamodb")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+dynamodb_client = boto3.client("dynamodb", config=retry_config)
 main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
@@ -55,9 +61,12 @@ def get_all_comments(queryParams: dict, showDeleted=False) -> dict:
     }
 
     # Handle empty string for startingToken
+    # build_full_result() accumulates pages until MaxItems is reached, so the budget is bounded at
+    # the shared ceiling here as well as by the caller's validation -- a caller reaching this
+    # function with raw query parameters must not be able to walk the table in one invocation.
     pagination_config = {
-        "MaxItems": int(queryParams["maxItems"]),
-        "PageSize": int(queryParams["pageSize"]),
+        "MaxItems": min(int(queryParams["maxItems"]), MAX_PAGINATION_MAX_ITEMS),
+        "PageSize": min(int(queryParams["pageSize"]), MAX_PAGINATION_PAGE_SIZE),
     }
     if queryParams["startingToken"] and queryParams["startingToken"] != "":
         pagination_config["StartingToken"] = queryParams["startingToken"]
@@ -96,9 +105,10 @@ def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
     paginator = dynamodb.meta.client.get_paginator('query')
 
     # Handle empty string for startingToken
+    # Bounded at the shared ceiling: build_full_result() pages until MaxItems is reached.
     pagination_config = {
-        'MaxItems': int(queryParams['maxItems']),
-        'PageSize': int(queryParams['pageSize']),
+        'MaxItems': min(int(queryParams['maxItems']), MAX_PAGINATION_MAX_ITEMS),
+        'PageSize': min(int(queryParams['pageSize']), MAX_PAGINATION_PAGE_SIZE),
     }
     if queryParams['startingToken'] and queryParams['startingToken'] != "":
         pagination_config['StartingToken'] = queryParams['startingToken']
@@ -130,9 +140,10 @@ def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, s
     paginator = dynamodb.meta.client.get_paginator('query')
 
     # Handle empty string for startingToken
+    # Bounded at the shared ceiling: build_full_result() pages until MaxItems is reached.
     pagination_config = {
-        'MaxItems': int(queryParams['maxItems']),
-        'PageSize': int(queryParams['pageSize']),
+        'MaxItems': min(int(queryParams['maxItems']), MAX_PAGINATION_MAX_ITEMS),
+        'PageSize': min(int(queryParams['pageSize']), MAX_PAGINATION_PAGE_SIZE),
     }
     if queryParams['startingToken'] and queryParams['startingToken'] != "":
         pagination_config['StartingToken'] = queryParams['startingToken']

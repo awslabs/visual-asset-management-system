@@ -117,6 +117,37 @@ Two consequences, and both are load-bearing:
     scan to a GSI query, that fixture gap turned into a hang that ran the whole backend suite past
     600 s against a 167 s baseline — a timeout, not a failure, so it named no test.
 
+#### An existence check fails the other way: an unread stub answers `True`
+
+The same truthiness that hangs a paging loop makes an **existence** helper return a false positive on its
+first read, and the two forms fail in opposite directions:
+
+```python
+m = MagicMock()
+len(m.query().get('Items', []))     # 0     -> "no match"   (fails SAFE)
+bool(m.query().get('Items'))        # True  -> "match found" (fails UNSAFE)
+```
+
+`MagicMock.__len__` defaults to `0` while `__bool__` defaults to `True`. So a check written as
+`len(response.get('Items', [])) > 0` answers `False` against an under-stubbed reader, whereas
+`common.dynamodb.query_has_match` — which stops at the first non-empty page via `if response.get('Items')`
+— answers `True` after **one** read. A test asserting `assert flags['has_children'] is True` therefore
+**passes having read nothing**, which is worse than an inconclusive failure: it retires the assertion.
+
+This matters wherever a truncating existence check is converted to the shared helper, because the
+conversion silently inverts what an unpatched table does to the test.
+
+Two defences, and use both:
+
+-   **Assert a read count or `Pager.assert_paged_to_exhaustion()` in-band on your own double.** That
+    helper carries a read floor and raises `nothing read this pager`, which is what catches the
+    unread-stub case rather than reporting success.
+-   **Patch the object the function's `__globals__` actually resolves.** `patch.object(module, 'table')`
+    is only effective when `function.__globals__ is module.__dict__`; load the same source file twice and
+    the two module objects share a `__file__` while owning separate globals, so patching the second has
+    no effect on a function defined in the first. Asserting that identity is a one-line harness check —
+    see `tests/handlers/addon/garnetFramework/test_garnetIndexer_query_paging.py::TestTheStubsInThisFileAreActuallyRead`.
+
 When a test must prove that a later page is reached, key the stub on `ExclusiveStartKey` rather than on
 call order, and cap the number of reads it will serve. Keying on the cursor keeps the assertion at "the
 cursor is threaded" instead of "exactly N reads happened", so an extra or repeated read does not break
@@ -181,6 +212,32 @@ longer asserts anything.
 The same setting is now configured for `tools/VamsCLI` (`pyproject.toml`) and the IsaacSim connector
 (`tools/ExternalIntegrations/isaacsim_vams_integration/pytest.ini`). The Jest equivalent is
 `it.failing`, which is strict by construction.
+
+### `temporary` marks a test that pins one past change, not a durable rule
+
+`@pytest.mark.temporary` (registered in `pytest.ini`) says the test exists to prove a specific change
+landed — a deleted file, a removed test seam, a dead branch — rather than to hold a requirement in
+place. Mark it when you write it and say what it pins:
+
+```python
+@pytest.mark.temporary  # pins the removal of the duplicated tag block in tagService.py
+def test_the_duplicated_block_is_gone():
+    ...
+```
+
+The marker exists because **a temporary test and a durable guardrail are indistinguishable by reading
+them later.** Both scan source, both assert an absence, and both carry a docstring explaining why. At
+release cleanup they are separated with `python -m pytest -m temporary -q --collect-only`, which only
+works if the marker was applied up front.
+
+Do **not** mark — and do not remove — a test whose forbidden construct is still writable, because that
+guard can still fire for a good reason: a broader IAM wildcard, a `cdk-nag` suppression, a mutating
+call from a read-only path, a validator regex that hardcodes a partition. Nor a positive/negative
+**control** whose subject is deliberately a string that does not exist.
+
+The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** —
+a forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full
+criterion: root `CLAUDE.md` Rule 13.
 
 ---
 

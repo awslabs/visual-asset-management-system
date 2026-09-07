@@ -207,13 +207,27 @@ export default function VersionComments(props: VersionCommentsProps) {
         showLoading(true);
 
         try {
-            await updateComment({
+            const response = await updateComment({
                 assetId,
                 assetVersionIdAndCommentId: commentToEdit["assetVersionId:commentId"],
                 body: {
                     commentBody: editedContent,
                 },
             });
+            // updateComment resolves with [false, message] for a rejected request — a body over
+            // the API's length limit, a caller who does not own the comment — so the failure never
+            // reaches the catch below and has to be read off the result.
+            if (response[0] === false) {
+                const reason = response[1] || "Unknown error";
+                showMessage({
+                    type: "error",
+                    message: `Unable to edit ${Synonyms.comment}: ${reason}`,
+                    dismissible: true,
+                });
+                setEditVisible(false);
+                setReload(true);
+                return;
+            }
             showMessage({
                 type: "success",
                 message: `${Synonyms.Comment} updated successfully`,

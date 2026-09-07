@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vams-mcp"
-version = "0.2.1"
+version = "2.6.0"
 description = "Model Context Protocol (MCP) server for the Visual Asset Management System (VAMS)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -35,3 +35,6 @@ include = ["vams_mcp*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "temporary: pins one specific past change rather than a durable rule; list with '-m temporary' and remove at release cleanup (root CLAUDE.md Rule 13)",
+]

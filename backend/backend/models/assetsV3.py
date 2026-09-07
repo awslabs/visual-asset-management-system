@@ -3,7 +3,7 @@
 
 import json
 from customLogging.logger import safeLogger
-from common.validators import validate, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern, bucket_existing_key_pattern
+from common.validators import validate, normalize_userid, trim_name, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern, bucket_existing_key_pattern
 from typing import Dict, List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
 from pydantic import Json, EmailStr, PositiveInt, Field
@@ -19,6 +19,23 @@ logger = safeLogger(service_name="AssetModelsV3")
 # pageSize is the per-DynamoDB-query batch size.
 DEFAULT_ASSET_LIST_MAX_ITEMS = 30000
 DEFAULT_ASSET_LIST_PAGE_SIZE = 3000
+
+# Ceilings for the asset-version listing. Both carry the maximum the OpenAPI
+# specification publishes for the shared maxItems/pageSize query parameters, so the
+# enforced bound and the documented one are the same value and every request the
+# endpoint accepts today keeps parsing.
+MAX_VERSION_LIST_MAX_ITEMS = 1000
+MAX_VERSION_LIST_PAGE_SIZE = 1000
+
+# Ceilings for the asset and asset-file listings. A page must fit the 6 MB Lambda response limit, and
+# a real asset holds thousands of files, so these are generous rather than tight; they match the
+# shared ceilings in common/dynamodb.py so a request one layer accepts the other accepts too.
+MAX_ASSET_LIST_MAX_ITEMS = 30000
+MAX_ASSET_LIST_PAGE_SIZE = 10000
+
+# Maximum length of a pagination token. Tokens these endpoints issue are a base64-encoded DynamoDB
+# LastEvaluatedKey or an S3 continuation token, well under this bound.
+MAX_PAGINATION_TOKEN_LENGTH = 4096
 
 # Upload request limits. S3 caps a multipart upload at 10,000 parts per object.
 MAX_PARTS_PER_FILE = 10000
@@ -111,6 +128,35 @@ def validate_asset_identifiers(values: dict) -> dict:
             raise ValueError(message)
     return values
 
+
+def validate_ascii_asset_id(value: str) -> str:
+    """Reject an asset id a caller chose that carries a non-ASCII or non-printable character.
+
+    Narrower than ASSET_ID on purpose, and applied only where a caller names a
+    NEW asset. ASSET_ID itself stays Unicode-tolerant because it is validated on
+    every read path — asset detail, file listing, download, workflow execute —
+    so an id an earlier release stored has to keep matching it to stay
+    addressable. The value is rejected rather than folded to an ASCII spelling:
+    the id is an S3 prefix component, so normalizing it would point the asset at
+    a different location than the caller asked for.
+
+    The printable check is not covered by the ASCII one. The shared
+    ``filename_pattern`` admits ``\\s``, so a tab or a newline inside an id
+    satisfies both that pattern and ``isascii()`` — ``"asset\\tname"`` is valid
+    ASCII. Such an id becomes an S3 prefix component and a DynamoDB key part,
+    where a control character is neither visible to whoever has to identify the
+    asset later nor safely quotable in a path.
+    """
+    if not value.isascii():
+        message = "Asset identifier must contain only ASCII characters"
+        logger.error(message)
+        raise ValueError(message)
+    if not value.isprintable():
+        message = "Asset identifier must contain only printable characters"
+        logger.error(message)
+        raise ValueError(message)
+    return value
+
 ########################Common Asset Models##########################
 
 class AssetLocationModel(BaseModel, extra='ignore'):
@@ -120,7 +166,7 @@ class AssetLocationModel(BaseModel, extra='ignore'):
     "bucketPrefix/assetId/"), NOT an asset-relative path, so it carries no
     leading '/'. Bounded to the S3 key limit and rejects traversal sequences.
     """
-    Key: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    Key: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
 
     @validator('Key')
     def validate_key(cls, v):
@@ -134,7 +180,7 @@ class AssetPreviewLocationModel(BaseModel, extra='ignore'):
     Key is a stored bucket-root-relative S3 object key, matching
     AssetLocationModel.Key.
     """
-    Key: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    Key: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
 
     @validator('Key')
     def validate_key(cls, v):
@@ -168,14 +214,19 @@ class AssetVersionListItemModel(BaseModel, extra='ignore'):
 ######################## Create Asset API Models ##########################
 class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new asset (metadata only)"""
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True)
-    assetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False)
-    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    databaseId: str = Field(min_length=4, max_length=256)
+    assetId: Optional[str] = Field(None, min_length=1, max_length=256)
+    assetName: str = Field(min_length=1, max_length=256)
+    description: str = Field(min_length=4, max_length=256)
     isDistributable: bool
     tags: Optional[list[str]] = []
-    # Optional existing key in the database default S3 bucket. 
-    bucketExistingKey: Optional[str] = Field(None, min_length=1, max_length=1024, strip_whitespace=True, regex=bucket_existing_key_pattern)
+    # Optional existing key in the database default S3 bucket.
+    bucketExistingKey: Optional[str] = Field(None, min_length=1, max_length=1024, regex=bucket_existing_key_pattern)
+
+    _trim_names = validator('databaseId', 'assetId', 'assetName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -220,7 +271,7 @@ class CreateAssetResponseModel(BaseModel, extra='ignore'):
 ######################## Initialize Upload API Models ##########################
 class UploadFileModel(BaseModel, extra='ignore'):
     """Model for file to be uploaded"""
-    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
     file_size: Optional[int] = Field(None, ge=0)  # Allow zero-byte files, use int instead of PositiveInt
 
     @validator('relativeKey')
@@ -262,10 +313,12 @@ class UploadFileModel(BaseModel, extra='ignore'):
 
 class InitializeUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for initializing a file upload"""
-    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False)
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    assetId: str = Field(min_length=1, max_length=256)
+    databaseId: str = Field(min_length=4, max_length=256)
     uploadType: Literal["assetFile", "assetPreview"]
     files: List[UploadFileModel] = Field(..., max_items=MAX_FILES_PER_UPLOAD_REQUEST)  # Max files per request
+
+    _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -290,10 +343,23 @@ class InitializeUploadRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
             
-        # Validate file extensions
+        # A file must be NAMED, but it does not need an extension.
+        #
+        # This previously also required a '.' somewhere in relativeKey, which read as "files must have
+        # a valid extension" and was not that rule: the dot could come from ANY path component, so
+        # `LICENSE` and `Dockerfile` were refused at the asset root while `folder.v2/LICENSE` was
+        # accepted. The effective rule was "some component of the path contains a dot", which is not a
+        # rule anyone would state and not what the message said.
+        #
+        # Extension-less files are legitimate asset content (LICENSE, Dockerfile, Makefile, a shader
+        # without a suffix), and nothing downstream depends on an extension being present: the
+        # extension blocklist in common/constants.py rejects by suffix when there is one, the metadata
+        # schema file-type restriction matches on suffix and simply does not apply without one, and
+        # bucket-sync ingestion never passed through this model at all — so such files could already
+        # enter an asset by that route, making the API the only place that refused them.
         for file in values.get('files', []):
-            if not file.relativeKey or '.' not in file.relativeKey:
-                message = f"Files must have a valid extension"
+            if not file.relativeKey:
+                message = "Each file must have a relative key"
                 logger.error(message)
                 raise ValueError(message)
         
@@ -338,12 +404,12 @@ class InitializeUploadResponseModel(BaseModel, extra='ignore'):
 class UploadPartCompletionModel(BaseModel, extra='ignore'):
     """Model for a completed part in a multipart upload"""
     PartNumber: int = Field(ge=1, le=MAX_PARTS_PER_FILE)
-    ETag: str = Field(min_length=1, max_length=MAX_FREE_TEXT_LENGTH, strip_whitespace=True)
+    ETag: str = Field(min_length=1, max_length=MAX_FREE_TEXT_LENGTH)
 
 class UploadFileCompletionModel(BaseModel, extra='ignore'):
     """Model for a completed file in a multipart upload"""
-    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
-    uploadIdS3: str = Field(min_length=1, max_length=MAX_S3_UPLOAD_ID_LENGTH, strip_whitespace=True)
+    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
+    uploadIdS3: str = Field(min_length=1, max_length=MAX_S3_UPLOAD_ID_LENGTH)
     parts: List[UploadPartCompletionModel] = Field(..., max_items=MAX_PARTS_PER_FILE)
 
     @validator('relativeKey')
@@ -352,11 +418,13 @@ class UploadFileCompletionModel(BaseModel, extra='ignore'):
 
 class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
-    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False)
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    assetId: str = Field(min_length=1, max_length=256)
+    databaseId: str = Field(min_length=4, max_length=256)
     uploadType: Literal["assetFile", "assetPreview"]
     files: List[UploadFileCompletionModel] = Field(..., max_items=MAX_FILES_PER_UPLOAD_REQUEST)
-    
+
+    _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         validate_asset_identifiers(values)
@@ -407,8 +475,8 @@ class FileCompletionResult(BaseModel, extra='ignore'):
 
 class ExternalFileModel(BaseModel, extra='ignore'):
     """Model for an external file in a completion request"""
-    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
-    tempKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)  # Full temporary key in S3
+    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
+    tempKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)  # Full temporary key in S3
 
     @validator('relativeKey', 'tempKey')
     def validate_keys(cls, v, field):
@@ -416,8 +484,8 @@ class ExternalFileModel(BaseModel, extra='ignore'):
 
 class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing an external file upload"""
-    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False)
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    assetId: str = Field(min_length=1, max_length=256)
+    databaseId: str = Field(min_length=4, max_length=256)
     uploadType: Literal["assetFile", "assetPreview"]
     files: List[ExternalFileModel] = Field(..., max_items=MAX_FILES_PER_UPLOAD_REQUEST)
     workflowId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
@@ -427,7 +495,9 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     # bucket. Workflow-execution outputs are staged in the VAMS default run bucket while the output
     # asset can live in another bucket; the copy reads from sourceBucket and writes to the asset
     # bucket. Empty/omitted => same as the asset bucket (the normal single-bucket upload path).
-    sourceBucket: Optional[str] = Field(None, max_length=MAX_S3_BUCKET_NAME_LENGTH, strip_whitespace=True)
+    sourceBucket: Optional[str] = Field(None, max_length=MAX_S3_BUCKET_NAME_LENGTH)
+
+    _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -468,6 +538,9 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
         if values.get('changeUserId') is not None:
+            # Attribution for the change, carried alongside ids taken from the caller's identity,
+            # so it is normalized to the same spelling before it is validated and stored.
+            values['changeUserId'] = normalize_userid(values.get('changeUserId'))
             (valid, message) = validate({'changeUserId': {'value': values.get('changeUserId'), 'validator': 'USERID'}})
             if not valid:
                 logger.error(message)
@@ -495,7 +568,7 @@ class CompleteUploadResponseModel(BaseModel, extra='ignore'):
 ######################## Create Folder API Models ##########################
 class CreateFolderRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a folder in S3 for an asset"""
-    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
@@ -532,9 +605,9 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
 
 class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Query parameters for listing asset files"""
-    maxItems: Optional[int] = Field(default=None, ge=1)
-    pageSize: Optional[int] = Field(default=None, ge=1)
-    startingToken: Optional[str] = None
+    maxItems: Optional[int] = Field(default=None, ge=1, le=MAX_ASSET_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=None, ge=1, le=MAX_ASSET_LIST_PAGE_SIZE)
+    startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
     prefix: Optional[str] = None
     includeArchived: Optional[bool] = Field(default=False)  # Show archived files
     basic: Optional[bool] = Field(default=False)  # Skip expensive lookups (head_object, preview files, version checks)
@@ -547,7 +620,7 @@ class ListAssetFilesResponseModel(BaseModel, extra='ignore'):
 
 class FileInfoRequestModel(BaseModel, extra='ignore'):
     """Request model for getting detailed file information"""
-    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
     includeVersions: Optional[bool] = Field(default=False)
 
     @validator('filePath')
@@ -594,8 +667,8 @@ class FileInfoResponseModel(BaseModel, extra='ignore'):
 
 class MoveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for moving/renaming files"""
-    sourcePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
-    destinationPath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    sourcePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
+    destinationPath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
@@ -603,10 +676,12 @@ class MoveFileRequestModel(BaseModel, extra='ignore'):
 
 class CopyFileRequestModel(BaseModel, extra='ignore'):
     """Request model for copying files within or across databases"""
-    sourcePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
-    destinationPath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
-    destinationAssetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False)
-    destinationDatabaseId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True)
+    sourcePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
+    destinationPath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
+    destinationAssetId: Optional[str] = Field(None, min_length=1, max_length=256)
+    destinationDatabaseId: Optional[str] = Field(None, min_length=4, max_length=256)
+
+    _trim_ids = validator('destinationAssetId', 'destinationDatabaseId', pre=True, allow_reuse=True)(trim_name)
 
     @validator('sourcePath', 'destinationPath')
     def validate_paths(cls, v, field):
@@ -620,7 +695,7 @@ class CopyFileRequestModel(BaseModel, extra='ignore'):
 
 class ArchiveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for archiving files (soft delete)"""
-    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
     isPrefix: Optional[bool] = Field(default=False)  # Archive all files under prefix
 
     @validator('filePath')
@@ -629,7 +704,7 @@ class ArchiveFileRequestModel(BaseModel, extra='ignore'):
 
 class UnarchiveFileRequestModel(BaseModel, extra='ignore'):
     """Request model for unarchiving files (restore from soft delete)"""
-    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
 
     @validator('filePath')
     def validate_file_path(cls, v):
@@ -637,7 +712,7 @@ class UnarchiveFileRequestModel(BaseModel, extra='ignore'):
 
 class DeleteFileRequestModel(BaseModel, extra='ignore'):
     """Request model for permanently deleting files"""
-    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
     isPrefix: Optional[bool] = Field(default=False)  # Delete all files under prefix
     confirmPermanentDelete: bool = Field(default=False)  # Safety confirmation
 
@@ -653,7 +728,7 @@ class FileOperationResponseModel(BaseModel, extra='ignore'):
 
 class RevertFileVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for reverting a file to a previous version"""
-    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
 
     @validator('filePath')
     def validate_file_path(cls, v):
@@ -669,9 +744,9 @@ class RevertFileVersionResponseModel(BaseModel, extra='ignore'):
 
 class SetPrimaryFileRequestModel(BaseModel, extra='ignore'):
     """Request model for setting a file's primary type metadata"""
-    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
-    primaryType: str = Field(max_length=MAX_FREE_TEXT_LENGTH, strip_whitespace=True)  # Empty string or one of the allowed values
-    primaryTypeOther: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH, strip_whitespace=True)  # Required when primaryType is 'other'
+    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
+    primaryType: str = Field(max_length=MAX_FREE_TEXT_LENGTH)  # Empty string or one of the allowed values
+    primaryTypeOther: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)  # Required when primaryType is 'other'
 
     @validator('filePath')
     def validate_file_path(cls, v):
@@ -728,7 +803,7 @@ class DeleteAssetPreviewResponseModel(BaseModel, extra='ignore'):
 
 class DeleteAuxiliaryPreviewAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting auxiliary preview asset files"""
-    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    filePath: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
 
     @validator('filePath')
     def validate_file_path(cls, v):
@@ -744,14 +819,19 @@ class DeleteAuxiliaryPreviewAssetFilesResponseModel(BaseModel, extra='ignore'):
 ######################## Ingest Asset API Models ##########################
 class IngestAssetInitializeRequestModel(BaseModel, extra='ignore'):
     """Request model for initializing an asset ingest operation"""
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True)
-    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False)
-    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    databaseId: str = Field(min_length=4, max_length=256)
+    assetId: str = Field(min_length=1, max_length=256)
+    assetName: str = Field(min_length=1, max_length=256)
+    description: str = Field(min_length=4, max_length=256)
     isDistributable: bool = True
     tags: Optional[list[str]] = []
     files: List[UploadFileModel]
-    
+
+    _trim_names = validator('databaseId', 'assetId', 'assetName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         validate_asset_identifiers(values)
@@ -800,15 +880,20 @@ class IngestAssetInitializeResponseModel(BaseModel, extra='ignore'):
 
 class IngestAssetCompleteRequestModel(BaseModel, extra='ignore'):
     """Request model for completing an asset ingest operation"""
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True)
-    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False)
-    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
+    databaseId: str = Field(min_length=4, max_length=256)
+    assetId: str = Field(min_length=1, max_length=256)
+    assetName: str = Field(min_length=1, max_length=256)
+    description: str = Field(min_length=4, max_length=256)
     isDistributable: bool = True
     tags: Optional[list[str]] = []
     uploadId: str
     files: List[UploadFileCompletionModel]
-    
+
+    _trim_names = validator('databaseId', 'assetId', 'assetName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         validate_asset_identifiers(values)
@@ -864,9 +949,9 @@ class GetAssetRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing assets"""
-    maxItems: Optional[int] = Field(default=DEFAULT_ASSET_LIST_MAX_ITEMS, ge=1)
-    pageSize: Optional[int] = Field(default=DEFAULT_ASSET_LIST_PAGE_SIZE, ge=1)
-    startingToken: Optional[str] = None
+    maxItems: Optional[int] = Field(default=DEFAULT_ASSET_LIST_MAX_ITEMS, ge=1, le=MAX_ASSET_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=DEFAULT_ASSET_LIST_PAGE_SIZE, ge=1, le=MAX_ASSET_LIST_PAGE_SIZE)
+    startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
     showArchived: Optional[bool] = False
 
 class UpdateAssetRequestModel(BaseModel, extra='ignore'):
@@ -875,6 +960,15 @@ class UpdateAssetRequestModel(BaseModel, extra='ignore'):
     description: Optional[str] = Field(None, min_length=4, max_length=256)
     isDistributable: Optional[bool] = None
     tags: Optional[List[str]] = None
+
+    # assetName trims on the same terms as the create and ingest models. Without it an asset created
+    # as `Landing Gear` could be RENAMED to `  Landing Gear  ` and stored padded — a near-duplicate
+    # that reads identically in the UI, and `assetName` is an ABAC constraint field, so a padded value
+    # also stops matching a constraint written against the unpadded one.
+    _trim_names = validator('assetName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
     
     @root_validator
     def validate_fields(cls, values):
@@ -973,7 +1067,7 @@ class AssetOperationResponseModel(BaseModel, extra='ignore'):
 ######################## Asset Versions API Models ##########################
 class AssetFileVersionItemModel(BaseModel, extra='ignore'):
     """Model for a file in an asset version"""
-    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    relativeKey: str = Field(min_length=1, max_length=MAX_S3_KEY_LENGTH)
     versionId: str = Field(min_length=1, max_length=MAX_FREE_TEXT_LENGTH)  # S3 version ID
     isArchived: bool = False
 
@@ -985,8 +1079,11 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new asset version"""
     useLatestFiles: bool = False  # If true, use latest files in S3 bucket
     files: Optional[List[AssetFileVersionItemModel]] = None  # List of files and their S3 versions
-    comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # Required comment for the version
+    comment: str = Field(min_length=1, max_length=256)  # Required comment for the version
     versionAlias: Optional[str] = Field(None, max_length=64)  # Optional alias for the version
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('comment', pre=True, allow_reuse=True)(trim_name)
     
     @root_validator
     def validate_fields(cls, values):
@@ -1014,9 +1111,12 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
 
 class RevertAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for reverting to a previous asset version"""
-    assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to revert to
-    comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # comment for the new version
+    assetVersionId: str = Field(min_length=1)  # The version ID to revert to
+    comment: str = Field(min_length=1, max_length=256)  # comment for the new version
     revertMetadata: Optional[bool] = Field(default=False)  # Whether to revert metadata/attributes as well
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('comment', pre=True, allow_reuse=True)(trim_name)
 
 class UpdateAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for updating an asset version (comment and/or alias).
@@ -1025,8 +1125,11 @@ class UpdateAssetVersionRequestModel(BaseModel, extra='ignore'):
     - versionAlias: If provided, can be empty string (to clear alias) or up to 64 chars.
     - At least one of comment or versionAlias must be present in the request.
     """
-    comment: Optional[str] = Field(None, min_length=1, max_length=1024, strip_whitespace=True)
+    comment: Optional[str] = Field(None, min_length=1, max_length=1024)
     versionAlias: Optional[str] = Field(None, max_length=64)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('comment', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -1045,13 +1148,13 @@ class UpdateAssetVersionRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a specific asset version"""
-    assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to get
+    assetVersionId: str = Field(min_length=1)  # The version ID to get
 
 class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing asset versions"""
-    maxItems: Optional[int] = Field(default=1000, ge=1)
-    pageSize: Optional[int] = Field(default=1000, ge=1)
-    startingToken: Optional[str] = None
+    maxItems: Optional[int] = Field(default=1000, ge=1, le=MAX_VERSION_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=1000, ge=1, le=MAX_VERSION_LIST_PAGE_SIZE)
+    startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
     showArchived: Optional[bool] = Field(default=False)
 
 class AssetVersionFileModel(BaseModel, extra='ignore'):
@@ -1116,7 +1219,7 @@ class DownloadAssetRequestModel(BaseModel, extra='ignore'):
     An asset-version pin and per-file versionIds are mutually exclusive.
     """
     downloadType: Literal["assetFile", "assetPreview"]
-    key: Optional[str] = Field(None, min_length=1, max_length=MAX_S3_KEY_LENGTH, strip_whitespace=True)
+    key: Optional[str] = Field(None, min_length=1, max_length=MAX_S3_KEY_LENGTH)
     # Bulk: each entry is a relative-path string (latest) or {key, versionId?}.
     # Normalized in the validator to a list of {key, versionId} dicts.
     keys: Optional[List[Any]] = None

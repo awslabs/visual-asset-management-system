@@ -402,21 +402,24 @@ def _sync_asset_metadata_to_physna(
     if is_delete:
         delete_complete = True
         for item in physna_assets:
-            if not _delete_by_item(client, tenant, item):
+            if not _delete_by_item_completed(
+                client, tenant, item, database_id, asset_id, prefix
+            ):
                 delete_complete = False
         logger.info(
-            f"Deleted {len(physna_assets)} Physna asset(s) under {prefix} for a "
-            f"VAMS asset present under neither the live nor the archived key. "
-            f"The count is what the narrowed listing returned, so a copy in a "
-            f"nested subfolder can remain."
+            f"Attempted the delete of {len(physna_assets)} Physna asset(s) under "
+            f"{prefix} for a VAMS asset present under neither the live nor the "
+            f"archived key. The count is what the narrowed listing returned, so a "
+            f"copy in a nested subfolder can remain."
         )
-        # After deleting all files, attempt to delete asset and database folders
+        # After deleting all files, attempt to delete the asset folder. The database
+        # folder is not attempted: it is shared with the database's other assets.
         delete_folder_if_empty(client, tenant, prefix.rstrip("/"))
-        delete_folder_if_empty(client, tenant, database_id)
         # No upload is attempted here, but the deletes themselves can fall short: a listing
-        # item carrying no addressable UUID leaves that copy in the tenant. The VAMS asset is
-        # gone under both keys, so no later event names it — acking would orphan the copy for
-        # good, exactly as on the metadata route, which reports the same condition.
+        # item carrying no addressable UUID, and a DELETE Physna answered with an unusable
+        # status, both leave that copy in the tenant. The VAMS asset is gone under both keys,
+        # so no later event names it — acking would orphan the copy for good, exactly as on
+        # the metadata route, which reports the same condition.
         return delete_complete
 
     # Not a delete — re-sync metadata, upload what Physna is missing, and
@@ -614,9 +617,12 @@ def _sync_asset_metadata_to_physna(
                     f"remaining files and reporting the record for redrive."
                 )
         elif _vams_file_is_permanently_gone(bucket_name, asset_base_key, relative):
-            # The VAMS object is purged, so no later event names this path: a copy that could
-            # not be addressed has to report rather than ack.
-            if not _delete_by_item(client, tenant, item):
+            # The VAMS object is purged, so no later event names this path: a copy the prune
+            # could not remove has to report rather than ack, and one such copy does not
+            # abandon the asset's remaining files.
+            if not _delete_by_item_completed(
+                client, tenant, item, database_id, asset_id, prefix
+            ):
                 sync_complete = False
         else:
             logger.info(
@@ -660,7 +666,8 @@ def _delete_by_item(client: PhysnaClient, tenant: str, item: Dict[str, Any]) -> 
     addressable UUID, so no DELETE could be issued and the copy is still there — the same
     shortfall the metadata route reports when a listing item cannot be addressed, and it has
     to travel the same way rather than being swallowed here. A failed DELETE still raises,
-    because that is a Physna error rather than an unusable listing item.
+    because that is a Physna error rather than an unusable listing item;
+    :func:`_delete_by_item_completed` is what contains that raise to the one copy.
     """
     path = item.get("path", "")
     physna_asset_uuid = item.get("id") or item.get("assetId") or item.get("uuid")
@@ -684,6 +691,56 @@ def _delete_by_item(client: PhysnaClient, tenant: str, item: Dict[str, Any]) -> 
         folder = path.rsplit("/", 1)[0]
         delete_folder_if_empty(client, tenant, folder)
     return True
+
+
+def _delete_by_item_completed(
+    client: PhysnaClient,
+    tenant: str,
+    item: Dict[str, Any],
+    database_id: str,
+    asset_id: str,
+    prefix: str,
+) -> bool:
+    """Delete one Physna copy and report whether that copy's fate is settled.
+
+    A Physna error raised by the DELETE is that one copy's outcome, not the asset's. It is
+    contained here so the asset's remaining copies are still attempted, the way
+    ``_upload_file_completed`` contains one bad upload: otherwise the first status Physna
+    will not retry — a rate limit part-way through a large asset — leaves every copy after
+    it untouched, and a redrive that fails on the same copy never reaches them either.
+    Containing it also keeps what follows the loop reachable: on the prune route that is
+    the remaining files' metadata re-sync and the repair upload after them.
+
+    The copy that survived is named in its own sync-tracking record, carrying the UUID
+    Physna's asset-scoped endpoints are keyed by, since a path is not what a leftover copy
+    is removed by. The asset-level record the caller writes says only that something fell
+    short, and on the delete route the VAMS asset is gone under both the live and the
+    archived key, so nothing else ever names the file again.
+    """
+    path = item.get("path", "")
+    relative = "/" + path[len(prefix):].lstrip("/") if path.startswith(prefix) else path
+    try:
+        if _delete_by_item(client, tenant, item):
+            return True
+        error_message = (
+            "Physna listing item carried no addressable UUID, so no delete was issued"
+        )
+    except Exception as e:
+        logger.warning(
+            f"Delete of the Physna copy of {path or relative} failed: {e}. Continuing "
+            f"with the asset's remaining copies; the record is reported for redrive."
+        )
+        error_message = str(e)
+    physnaFileSync._record_file_sync(
+        database_id,
+        asset_id,
+        relative,
+        SYNC_ACTION_DELETE,
+        SYNC_STATUS_FAILED,
+        physna_asset_uuid=item.get("id") or item.get("assetId") or item.get("uuid"),
+        error_message=error_message,
+    )
+    return False
 
 
 def _list_vams_file_paths(database_id: str, asset_id: str) -> Set[str]:
@@ -852,9 +909,9 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                     database_id, asset_id, action, SYNC_STATUS_FAILED,
                     error_message=(
                         "At least one Physna write this asset sync needed did not land "
-                        "(an upload failed, its bytes landed without their metadata, or "
-                        "a metadata write on the no-upload route failed); the record is "
-                        "reported for redrive"))
+                        "(an upload failed, its bytes landed without their metadata, a "
+                        "metadata write on the no-upload route failed, or a Physna copy "
+                        "could not be deleted); the record is reported for redrive"))
                 logger.warning(
                     f"Asset sync for {database_id}/{asset_id} did not land at least one "
                     f"Physna write; reporting the record for redrive.")

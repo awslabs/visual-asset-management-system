@@ -3,9 +3,44 @@
 
 import json
 import os
+import boto3
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ConstructPipelineVisualizer")
+
+sfn = boto3.client(
+    'stepfunctions',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
+
+PDAL_INPUT_EXTENSIONS = (".e57", ".ply")
+POTREE_INPUT_EXTENSIONS = (".las", ".laz")
+
+
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token. The state machine carries no catch on
+    this task and the following choice reads a field an error return does not have, so reporting
+    here is what ends the waiting task instead of leaving it until the full taskTimeout."""
+    if not task_token:
+        return
+    try:
+        sfn.send_task_failure(
+            taskToken=task_token,
+            error="PcPotreeViewerPipelineError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
 
 def lambda_handler(event, context):
     """
@@ -16,29 +51,37 @@ def lambda_handler(event, context):
     logger.info(f"Event: {event}")
     logger.info(f"Context: {context}")
 
-    input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(event['inputS3AssetFilePath'])
+    try:
+        input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(event['inputS3AssetFilePath'])
 
-    # construct different pipeline definitions based on file type
-    if input_s3_asset_extension == ".e57" or input_s3_asset_extension == ".ply":
-        definition = construct_pdal_definition(event)
-    elif input_s3_asset_extension == ".las" or input_s3_asset_extension == ".laz":
-        definition = construct_potree_definition(event)
-    else:
+        # extensions are matched case-insensitively, as the allowed-extension gate in openPipeline is
+        input_s3_asset_extension = input_s3_asset_extension.lower()
+
+        # construct different pipeline definitions based on file type
+        if input_s3_asset_extension in PDAL_INPUT_EXTENSIONS:
+            definition = construct_pdal_definition(event)
+        elif input_s3_asset_extension in POTREE_INPUT_EXTENSIONS:
+            definition = construct_potree_definition(event)
+        else:
+            raise ValueError(
+                "Unsupported file type for point cloud potree viewer pipeline conversion. "
+                "Currently only supports E57, PLY, LAZ, and LAS.")
+
+        logger.info(f"Definition: {definition}")
+
         return {
-            "error": "Unsupported file type for point cloud potree viewer pipeline conversion. Currently only supports E57, PLY, LAZ, and LAS."
+            "jobName": event.get("jobName"),
+            "currentStageType": definition["stages"][0]["type"],
+            "definition": [json.dumps(definition)],
+            "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+            "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
+            "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
+            "status": "STARTING"
         }
-
-    logger.info(f"Definition: {definition}")
-
-    return {
-        "jobName": event.get("jobName"),
-        "currentStageType": definition["stages"][0]["type"],
-        "definition": [json.dumps(definition)],
-        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
-        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
-        "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
-        "status": "STARTING"
-    }
+    except Exception as e:
+        logger.exception(e)
+        abort_external_workflow(e, event.get("externalSfnTaskToken", ""))
+        raise
 
 
 def construct_pdal_definition(event) -> dict:

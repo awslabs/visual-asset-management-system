@@ -27,6 +27,7 @@ import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-
 import {
     buildExecuteWorkflowV2Function,
     buildExecutionServiceFunction,
+    buildHandleExecutionErrorFunction,
     buildInterimPipelineTrackingFunction,
     buildProcessWorkflowExecutionOutputFunction,
 } from "../../lib/lambdaBuilder/workflowFunctions";
@@ -207,6 +208,20 @@ const resourcesForAction = (template: Template, lambdaId: string, action: string
         .map((s) => JSON.stringify(s.Resource))
         .join(" ");
 
+/**
+ * Every resource ENTRY granted for `action`, flattened across the statements carrying it.
+ *
+ * The joined string from `resourcesForAction` answers "is this pattern in scope" but cannot answer
+ * "is a bare `*` also in scope" — `"*"` is a substring of every wildcard pattern, so a `toContain`
+ * on the string is true either way. Entries that are unresolved references (`{"Fn::GetAtt": ...}`)
+ * are kept as their JSON so a caller can still match on them.
+ */
+const resourceEntries = (template: Template, lambdaId: string, action: string): string[] =>
+    statementsOnRole(template, lambdaId)
+        .filter((s) => ([] as string[]).concat(s.Action ?? []).includes(action))
+        .flatMap((s) => ([] as any[]).concat(s.Resource ?? []))
+        .map((r) => (typeof r === "string" ? r : JSON.stringify(r)));
+
 /** The environment map of the lambda whose Handler names `handlerSuffix`. */
 const environmentOf = (template: Template, handlerSuffix: string): Record<string, unknown> => {
     for (const fn of Object.values(template.findResources("AWS::Lambda::Function")) as any[]) {
@@ -291,6 +306,30 @@ describe("interimPipelineTracking least privilege", () => {
         expect(readRefs).toContain(logicalIdOf("workflowExecutionsStorageTableV2"));
     });
 
+    // The next step's configuration row supplies the declared configFormat its config body is
+    // rendered under. It is written at launch, so this lambda reads it and never writes it.
+    test("reads the pipeline execution input configuration table", () => {
+        const { template, logicalIdOf } = synthed();
+        const readRefs = resourcesForAction(
+            template,
+            "interimPipelineTracking",
+            "dynamodb:GetItem"
+        );
+        expect(readRefs).toContain(logicalIdOf("pipelineExecutionInputConfigurationStorageTable"));
+    });
+
+    test("holds no write action on the pipeline execution input configuration table", () => {
+        const { template, logicalIdOf } = synthed();
+        const writeRefs = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
+            .map((action) => resourcesForAction(template, "interimPipelineTracking", action))
+            .join(" ");
+        expect(writeRefs).not.toContain(
+            logicalIdOf("pipelineExecutionInputConfigurationStorageTable")
+        );
+        // Positive control: the write scan does find the tables this lambda does write.
+        expect(writeRefs).toContain(logicalIdOf("pipelineExecutionsStorageTable"));
+    });
+
     // The handler reads no log group ARN from its environment.
     test("sets no workflow log group ARN in the environment", () => {
         const env = environmentOf(synthed().template, "interimPipelineTracking.lambda_handler");
@@ -319,6 +358,70 @@ describe("executionService environment", () => {
         expect(actionsOnRole(synthed.template, "executionService")).toContain(
             "logs:FilterLogEvents"
         );
+    });
+});
+
+/**
+ * The error handler CALLS stop_execution and terminate_job on every caught workflow failure — it
+ * builds both clients and passes them into `mark_inflight_pipelines_terminal`. Its role held neither
+ * action, so both stops were attempted and denied, and the handler recorded the AccessDenied as
+ * "may still be running" text on the pipeline log row. The row is stamped terminal in the same pass,
+ * after which it is no longer a candidate for the abort API, so the sub-execution or Batch job it
+ * left running had no in-product remedy.
+ *
+ * Nothing surfaces that from the outside: a denied stop and an unstoppable resource type produce the
+ * same warning string, so a test reading the handler's own output cannot tell them apart. The grant
+ * is what has to be asserted.
+ *
+ * Neither action is gated on the DeadlineCloud flag — every deployment's failure path needs them.
+ */
+describe("handleExecutionError sub-process stop grants", () => {
+    const synthed = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildHandleExecutionErrorFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+
+    test("grants states:StopExecution and batch:TerminateJob", () => {
+        const actions = actionsOnRole(synthed().template, "handleExecutionError");
+        expect(actions).toContain("states:StopExecution");
+        expect(actions).toContain("batch:TerminateJob");
+    });
+
+    // FIX-038's rule applies here too: StopExecution acts on an execution ARN, and this file exists
+    // because an unscoped grant reaches every execution in the account driven by registration data
+    // that is validated only for ARN shape. The stack's own cdk-nag suppressions blanket-waive
+    // Resource wildcards, so an accidental `Resource: "*"` would ship with a green nag run and a
+    // green presence test above.
+    test("scopes StopExecution to the execution ARN patterns rather than every execution", () => {
+        const refs = resourcesForAction(
+            synthed().template,
+            "handleExecutionError",
+            "states:StopExecution"
+        );
+        expect(refs).toContain("execution:*vams*");
+        expect(refs).toContain("execution:vams-*");
+        // A bare "*" among the StopExecution resources defeats the patterns above while leaving
+        // them present, so the patterns alone are not the assertion.
+        expect(
+            resourceEntries(synthed().template, "handleExecutionError", "states:StopExecution")
+        ).not.toContain("*");
+    });
+
+    // Batch generates job ids with no deployment-specific prefix, so this one genuinely cannot be
+    // scoped by name. Pinned rather than left implicit: it is the one wildcard in this family, and a
+    // reviewer comparing it with StopExecution above should find the asymmetry asserted on purpose.
+    test("keeps batch:TerminateJob on the account-wide resource Batch ids force", () => {
+        expect(
+            resourceEntries(synthed().template, "handleExecutionError", "batch:TerminateJob")
+        ).toEqual(["*"]);
     });
 });
 

@@ -72,7 +72,14 @@ GET /pipelines
 
 `templates` is absent from a list item — it is returned only by [Get a pipeline](#get-a-pipeline). `templateCount` is best-effort and is `null` when the count could not be computed.
 
-`NextToken` is `null` on the last page. Pipelines the caller cannot read are dropped after the page is read, so a page may hold fewer items than requested while a token still remains — page until it is absent.
+`NextToken` is `null` on the last page.
+
+:::note[A page may hold fewer items than requested]
+Two things shorten a page, so page until `NextToken` is absent rather than until a page looks short:
+
+-   **The authorization filter.** Pipelines the caller cannot read are dropped after the page is read.
+-   **A 4 MB page budget**, measured over the serialized items. Each item carries its full `executionConfig`, which may hold a large inline job template, so a page of large configurations reaches the budget well inside the row cap. A page that reaches it stops accumulating and its `NextToken` resumes at the last item it kept, so the remaining rows are deferred rather than lost.
+:::
 
 ### Error responses
 
@@ -600,6 +607,8 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
 
 `overrides` does **not** change the config body. It changes how an execution's inputs are accepted and validated (and what metadata is provided) when this template is chosen. See [System configuration](#system-configuration) for the meaning of each key.
 
+The whole block may be at most **65,536 bytes** (64 KB) serialized — the same budget as the pipeline's own `systemConfig`, whose keys these are a subset of. As there, the ceiling bounds the filter lists as a group: it admits the full 250 patterns in each of `allow` and `exclude` at ordinary glob lengths, but the maximum pattern count and the maximum 512-character pattern length cannot be combined, since that alone would serialize past 250 KB.
+
 :::tip[Recommended: let the template decide whether an input file is needed]
 When one pipeline supports several modes that differ in what they consume, set the pipeline's
 `inputFileArity` to the LOWEST value any of its templates needs — usually `none` — and let each
@@ -789,6 +798,21 @@ DELETE /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
 }
 ```
 
+A template that a file-upload trigger still names as a default template for this pipeline is deleted
+as requested, and the response carries a non-blocking `warnings` array naming those workflows and
+triggers. The reference lives on the trigger, so the delete neither refuses nor edits it: triggered
+executions of the named workflows fail at template resolution until each trigger picks a different
+default template for this pipeline.
+
+```json
+{
+    "message": "Template deleted",
+    "warnings": [
+        "this template was chosen as a default template by the trigger(s) of auto-triggered workflow(s) 'my-database:convert-and-preview' (trigger 'fileUpload'). Triggered executions of those workflows will fail until each trigger picks a different default template for this pipeline."
+    ]
+}
+```
+
 #### Error responses
 
 | Status | Description                    |
@@ -940,6 +964,8 @@ Each entry in a template's tag schema defines one tag:
 | `enumValues`  | array   | No       | Allowed values, at most 250 entries of 256 characters each. Required when `type` is `enum`.           |
 
 A tag schema holds at most 250 entries. Exceeding any of these bounds rejects the request with a `400`. See [Service Quotas and Limits](../additional/quotas.md#pipeline-template-and-tag-schema-limits) for the full set.
+
+A definition may contain only the fields above. An unrecognized key is rejected with a `400` rather than ignored, because a stored definition is read a named key at a time: a misspelled `requried` would leave the tag optional and a differently cased `Type` would leave it a `string`, giving a schema weaker than the one authored with nothing reporting it. This rejection names the offending index and key in a plain `message` string — it is not one of the `tagSchemaErrors` entries, which report definitions that parsed but failed a schema-level rule.
 
 #### Placeholders in a json config body
 

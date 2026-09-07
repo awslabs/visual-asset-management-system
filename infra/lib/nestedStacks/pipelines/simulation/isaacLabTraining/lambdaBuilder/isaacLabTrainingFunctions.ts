@@ -75,6 +75,16 @@ export class IsaacLabTrainingFunctions extends Construct {
             record.bucket.grantRead(this.openPipelineFunction);
         });
 
+        // openPipeline rejects an input before the internal state machine starts, so it owns the
+        // external workflow token on that route -- nothing downstream exists yet to report for it.
+        this.openPipelineFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+            })
+        );
+
         // ExecuteBatchJob - internal function that submits Batch job
         this.executeBatchJobFunction = new lambda.Function(this, "ExecuteBatchJobFunction", {
             ...commonProps,

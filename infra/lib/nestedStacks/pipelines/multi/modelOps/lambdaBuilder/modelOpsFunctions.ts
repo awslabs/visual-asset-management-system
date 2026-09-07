@@ -194,6 +194,20 @@ export function buildConstructPipelineFunction(
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    // constructPipeline reports the external workflow token when it rejects an input before the
+    // container starts, so nothing downstream can report for it. Without this grant the
+    // SendTaskFailure raises AccessDeniedException, is logged, and the task waits out its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
     suppressCdkNagLambda(fun);
     return fun;
 }

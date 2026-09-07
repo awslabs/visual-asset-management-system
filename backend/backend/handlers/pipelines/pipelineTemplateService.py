@@ -24,6 +24,8 @@ import base64
 import json
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
@@ -59,13 +61,21 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import templateRender as tr
 from common.workflows import templateTagSchema as tts
-from common.workflows.defaultBucket import resolve_default_bucket, DefaultBucketNotFoundError
-from common.workflows.triggerTemplateValidation import validate_template_not_breaking_triggers
+from common.workflows.defaultBucket import (
+    resolve_default_bucket,
+    default_bucket_key,
+    DefaultBucketNotFoundError,
+)
+from common.workflows.triggerTemplateValidation import (
+    triggers_referencing_template,
+    validate_template_not_breaking_triggers,
+)
 
 logger = safeLogger(service_name="PipelineTemplateService")
 
-dynamodb = boto3.resource("dynamodb")
-s3_client = boto3.client("s3")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+s3_client = boto3.client("s3", config=retry_config)
 
 try:
     pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
@@ -88,9 +98,15 @@ GLOBAL_DATABASE = "GLOBAL"
 WRITE_METHODS = ("POST", "PUT", "DELETE")
 
 # Templates per page of the list response, and the ceiling a caller can request. A list descriptor
-# carries its inline body, which may reach the inline threshold (320KB), so the ceiling keeps a
-# worst-case page well under the 6 MB Lambda synchronous-response limit.
+# carries its inline body, which may reach templateBodyStorage.INLINE_THRESHOLD_BYTES, so the ceiling
+# keeps a worst-case page well under the 6 MB Lambda synchronous-response limit.
 TEMPLATES_PAGE_SIZE = 10
+
+# Referencing workflows named in the delete-time warning. One warning string carries the whole list
+# (triggers_referencing_template pages its GSI to exhaustion), so the cap bounds the response rather
+# than the lookup; a truncated list says how many further triggers it left unnamed. Mirrors
+# triggerTemplateValidation.MAX_TRIGGER_TEMPLATE_WARNINGS.
+MAX_REFERENCING_TRIGGER_LABELS = 25
 
 
 def _page_size(query_params):
@@ -126,8 +142,14 @@ def _workflow_table():
     return dynamodb.Table(workflow_table_name)
 
 
-def _default_bucket_name():
-    return resolve_default_bucket(dynamodb.Table(buckets_table_name))["bucketName"]
+def _default_bucket():
+    """The resolved default asset bucket row ({bucketId, bucketName, baseAssetsPrefix}).
+
+    The stored `*S3Key` fields are relative to the area VAMS owns inside that bucket, which for an
+    external bucket registered under a prefix is that prefix rather than the bucket root — so every
+    S3 call here joins the key to the row with default_bucket_key, and the row keeps the relative
+    key."""
+    return resolve_default_bucket(dynamodb.Table(buckets_table_name))
 
 
 def _casbin_object(item):
@@ -180,7 +202,9 @@ def _load_tag_schema_fields(database_id, pipeline_id, template_id):
         return None
     row = rows[0]
     if row.get("bodyStorage") == tbs.BODY_STORAGE_S3 and row.get("fieldsS3Key"):
-        text = tbs.read_body_from_s3(s3_client, _default_bucket_name(), row["fieldsS3Key"])
+        bucket = _default_bucket()
+        text = tbs.read_body_from_s3(s3_client, bucket["bucketName"],
+                                     default_bucket_key(bucket, row["fieldsS3Key"]))
         return json.loads(text) if text else []
     fields = row.get("fields") or ""
     return json.loads(fields) if fields else []
@@ -209,7 +233,8 @@ def _delete_tag_schema_object(key):
     """Best-effort delete of an offloaded tag-schema object; a failed delete is logged, not fatal
     (the object is orphaned, not incorrect)."""
     try:
-        s3_client.delete_object(Bucket=_default_bucket_name(), Key=key)
+        bucket = _default_bucket()
+        s3_client.delete_object(Bucket=bucket["bucketName"], Key=default_bucket_key(bucket, key))
     except Exception as e:  # noqa: BLE001 - cleanup is best-effort
         logger.warning(f"Failed deleting offloaded tag-schema object {key}: {e}")
 
@@ -234,7 +259,9 @@ def _store_tag_schema(database_id, pipeline_id, template_id, fields, username):
     # Reuse the body-size cap/threshold for the (independently-stored) schema.
     if tbs.should_offload(fields_json, ""):
         key = tbs.tag_schema_s3_key(database_id, pipeline_id, template_id)
-        tbs.write_body_to_s3(s3_client, _default_bucket_name(), key, fields_json)
+        bucket = _default_bucket()
+        tbs.write_body_to_s3(s3_client, bucket["bucketName"],
+                             default_bucket_key(bucket, key), fields_json)
         record = pr.build_tag_schema_record(
             database_id, pipeline_id, template_id, fields, tag_schema_id=tag_schema_id,
             body_storage=tbs.BODY_STORAGE_S3, fields_s3_key=key,
@@ -316,11 +343,13 @@ def _store_template_bodies(database_id, pipeline_id, template_id, config_body, w
             "configBodyS3Key": "", "configBodyHash": plan["configBodyHash"],
             "webFormS3Key": "", "webFormHash": plan["webFormHash"],
         }
-    bucket = _default_bucket_name()
+    bucket = _default_bucket()
     cb_key = tbs.config_body_s3_key(database_id, pipeline_id, template_id)
     wf_key = tbs.web_form_s3_key(database_id, pipeline_id, template_id)
-    tbs.write_body_to_s3(s3_client, bucket, cb_key, config_body or "")
-    tbs.write_body_to_s3(s3_client, bucket, wf_key, web_form_json or "")
+    tbs.write_body_to_s3(s3_client, bucket["bucketName"], default_bucket_key(bucket, cb_key),
+                         config_body or "")
+    tbs.write_body_to_s3(s3_client, bucket["bucketName"], default_bucket_key(bucket, wf_key),
+                         web_form_json or "")
     return {
         "bodyStorage": tbs.BODY_STORAGE_S3,
         "configBody": "", "webFormJson": "",
@@ -340,7 +369,10 @@ def _request_body(event):
 
 def _rehydrate_template(row):
     """Return the template row's configBody/webFormJson inline (reading S3 when offloaded)."""
-    return tbs.rehydrate_template_bodies(s3_client, _default_bucket_name(), row)
+    bucket = _default_bucket()
+    return tbs.rehydrate_template_bodies(
+        s3_client, bucket["bucketName"], row,
+        key_fn=lambda key: default_bucket_key(bucket, key))
 
 
 def _template_to_response_light(row):
@@ -450,7 +482,7 @@ def _decode_starting_token(starting_token):
 
 def list_templates(database_id, pipeline_id, query_params=None):
     """One page of a pipeline's template descriptors plus a NextToken when more remain. An inline
-    body can be up to the inline threshold (320KB), so the page is bounded to keep the response
+    body can be up to the inline threshold, so the page is bounded to keep the response
     under the 6MB Lambda limit; callers drain the pages via startingToken.
 
     Raises ValueError for a token that cannot be decoded: continuing without it would serve page 1
@@ -517,6 +549,7 @@ def create_template(database_id, pipeline_id, request, username, event=None):
     # never durably left with two, which the execute path would resolve by templateId sort order.
     if request.isDefault:
         _clear_other_defaults(database_id, pipeline_id, template_id)
+    tbs.assert_row_within_item_limit(record)
     _templates_table().put_item(Item=record)
     # AUDIT LOG: template created. The configuration BODY is deliberately not logged — it can carry
     # prompts and credential-shaped values; the id, format and default flag identify it.
@@ -636,6 +669,9 @@ def update_template(database_id, pipeline_id, template_id, request, username, ev
     # Enforce single-default-per-pipeline before the write, for the same reason as on create.
     if request.isDefault:
         _clear_other_defaults(database_id, pipeline_id, template_id)
+    # The update path sets each field independently, so the row can be grown one request at a time
+    # past what any single field's bound implies; measured here, where the assembled row exists.
+    tbs.assert_row_within_item_limit(row)
     _templates_table().put_item(Item=row)
     # AUDIT LOG: template updated (body omitted, as on create).
     log_actions(event or {}, "pipelineTemplateUpdate", {
@@ -663,13 +699,37 @@ def _delete_offloaded_objects(row):
     incorrect)."""
     if row.get("bodyStorage") != tbs.BODY_STORAGE_S3:
         return
-    bucket = _default_bucket_name()
+    bucket = _default_bucket()
     for key in (row.get("configBodyS3Key"), row.get("webFormS3Key")):
         if key:
             try:
-                s3_client.delete_object(Bucket=bucket, Key=key)
+                s3_client.delete_object(Bucket=bucket["bucketName"],
+                                        Key=default_bucket_key(bucket, key))
             except Exception as e:  # noqa: BLE001 - cleanup is best-effort
                 logger.warning(f"Failed deleting offloaded template object {key}: {e}")
+
+
+def _delete_reference_warnings(database_id, pipeline_id, template_id):
+    """Non-blocking warnings for a template being deleted that triggers still name as a default
+    (empty list when none).
+
+    The reference lives on the trigger row, which this handler does not own, so the delete proceeds and
+    the caller is told which triggers to repoint: a headless run that still names a deleted template is
+    rejected at template resolution, and nothing on the trigger side surfaces that to an operator."""
+    refs = triggers_referencing_template(_triggers_table(), database_id, pipeline_id, template_id)
+    if not refs:
+        return []
+    logger.info(f"Template {database_id}:{pipeline_id}:{template_id} being deleted is a trigger "
+                f"default for {len(refs)} trigger(s)")
+    labels = [f"'{db}:{wf}' (trigger '{trigger_type}')"
+              for (db, wf, trigger_type) in refs[:MAX_REFERENCING_TRIGGER_LABELS]]
+    if len(refs) > MAX_REFERENCING_TRIGGER_LABELS:
+        labels.append(f"and {len(refs) - MAX_REFERENCING_TRIGGER_LABELS} more")
+    return [
+        f"this template was chosen as a default template by the trigger(s) of auto-triggered "
+        f"workflow(s) {', '.join(labels)}. Triggered executions of those workflows will fail until "
+        f"each trigger picks a different default template for this pipeline."
+    ]
 
 
 def delete_template(database_id, pipeline_id, template_id, event=None):
@@ -677,6 +737,9 @@ def delete_template(database_id, pipeline_id, template_id, event=None):
     row = _get_template_row(database_id, pipeline_id, template_id)
     if not row:
         return validation_error(status_code=404, body={"message": "Template not found"})
+    # Read the trigger references BEFORE the row goes, so the warnings describe the state the caller
+    # acted on.
+    warnings = _delete_reference_warnings(database_id, pipeline_id, template_id)
     _templates_table().delete_item(
         Key={"pipelineDatabaseId:pipelineId": composite, "templateId": template_id}
     )
@@ -694,7 +757,11 @@ def delete_template(database_id, pipeline_id, template_id, event=None):
         "templateId": template_id,
         "operation": "delete",
     })
-    return success(body={"message": "Template deleted"})
+    body = {"message": "Template deleted"}
+    # Included only when present so a clean delete is unchanged.
+    if warnings:
+        body["warnings"] = warnings
+    return success(body=body)
 
 
 #######################
@@ -819,6 +886,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except tbs.TemplateBodyTooLargeError as te:
         return validation_error(body={"message": str(te)}, event=event)
+    except tbs.TemplateRowTooLargeError as rt:
+        logger.exception(f"Template row over the item limit: {rt}")
+        return validation_error(body={"message": str(rt)}, event=event)
+    # An item DynamoDB itself refuses for size is the caller's request being too large, not a server
+    # fault; every other ValidationException (a malformed key, a bad expression) is.
+    except ClientError as ce:
+        code = (ce.response.get("Error", {}) or {}).get("Code", "")
+        message = ((ce.response.get("Error", {}) or {}).get("Message", "") or "").lower()
+        if code == "ValidationException" and "item size" in message:
+            logger.exception(f"Template row rejected for size: {ce}")
+            return validation_error(body={
+                "message": "The template record is too large to store. Reduce the configuration "
+                           "body, the input instructions, or the overrides block."}, event=event)
+        logger.exception(f"AWS error in pipelineTemplateService: {ce}")
+        return internal_error(event=event)
     except DefaultBucketNotFoundError as de:
         logger.exception(f"Default bucket not resolved: {de}")
         return internal_error(event=event)

@@ -52,7 +52,10 @@ export class IsaacLabTrainingBuilderNestedStack extends NestedStack {
             // permissions via ecs.ContainerImage.fromEcrRepository.
             ...(codeBuildConstruct?.trainingRepo
                 ? {
-                      codeBuildRepository: codeBuildConstruct.trainingRepo.repository,
+                      codeBuildImage: {
+                          repository: codeBuildConstruct.trainingRepo.repository,
+                          tag: codeBuildConstruct.trainingRepo.imageTag,
+                      },
                   }
                 : {}),
         });

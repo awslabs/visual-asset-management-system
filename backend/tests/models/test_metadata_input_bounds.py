@@ -59,6 +59,78 @@ class TestMetadataItemValueBounds:
         assert json.loads(model.metadataValue)["type"] == "Polygon"
 
 
+def _nested_collection_json(levels):
+    """A GeometryCollection chain `levels` nodes deep, built as text.
+
+    json.dumps recurses once per level and would run out of stack building the deepest
+    fixtures here, so the string is assembled directly.
+    """
+    return (
+        '{"type":"GeometryCollection","geometries":[' * (levels - 1)
+        + '{"type":"Point","coordinates":[1.0,2.0]}'
+        + "]}" * (levels - 1)
+    )
+
+
+@pytest.mark.unit
+class TestGeoJsonNestingBound:
+    """A GeoJSON value nested past MAX_GEOJSON_NESTING_DEPTH is refused, not walked.
+
+    _validate_geometry recurses once per GeometryCollection level, so an unbounded value
+    exhausted the interpreter stack: the request 500'd instead of being rejected. The same
+    value is reachable through the metadata write API, metadata-schema defaults, asset-link
+    metadata and the search geoJson filter, which all run this one validator.
+    """
+
+    def _model(self, value):
+        from models.metadata import MetadataItemModel
+        return MetadataItemModel(
+            metadataKey="footprint", metadataValue=value, metadataValueType="geojson"
+        )
+
+    def test_accepts_nesting_at_the_bound(self):
+        from models.metadata import MAX_GEOJSON_NESTING_DEPTH
+        value = _nested_collection_json(MAX_GEOJSON_NESTING_DEPTH)
+        assert json.loads(value)["type"] == "GeometryCollection"
+        assert self._model(value).metadataValue == value
+
+    def test_rejects_nesting_one_level_past_the_bound(self):
+        from models.metadata import MAX_GEOJSON_NESTING_DEPTH
+        with pytest.raises(ValidationError) as exc:
+            self._model(_nested_collection_json(MAX_GEOJSON_NESTING_DEPTH + 1))
+        assert str(MAX_GEOJSON_NESTING_DEPTH) in str(exc.value)
+
+    def test_rejects_nesting_deep_enough_to_exhaust_the_stack(self):
+        """1200 levels parse cleanly, so the walk is what used to raise RecursionError."""
+        from models.metadata import MAX_METADATA_VALUE_LENGTH
+        value = _nested_collection_json(1200)
+        assert len(value) < MAX_METADATA_VALUE_LENGTH
+        assert json.loads(value)["type"] == "GeometryCollection"
+        with pytest.raises(ValidationError):
+            self._model(value)
+
+    def test_rejects_value_too_deep_for_the_parser(self):
+        """Past the parser's own limit json.loads raises RecursionError, not a decode error."""
+        from models.metadata import MAX_METADATA_VALUE_LENGTH
+        value = _nested_collection_json(4000)
+        assert len(value) < MAX_METADATA_VALUE_LENGTH
+        # Positive control on the fixture: the parse failure is a RecursionError, so a guard
+        # catching only json.JSONDecodeError does not see it.
+        with pytest.raises(RecursionError):
+            json.loads(value)
+        with pytest.raises(ValidationError):
+            self._model(value)
+
+    def test_geopoint_and_json_types_also_refuse_an_unparseable_value(self):
+        from models.metadata import MetadataItemModel
+        value = _nested_collection_json(4000)
+        for value_type in ("geopoint", "json", "matrix4x4", "xyz", "wxyz", "lla"):
+            with pytest.raises(ValidationError):
+                MetadataItemModel(
+                    metadataKey="k", metadataValue=value, metadataValueType=value_type
+                )
+
+
 def _items(count):
     return [
         {"metadataKey": f"key{i}", "metadataValue": f"v{i}", "metadataValueType": "string"}

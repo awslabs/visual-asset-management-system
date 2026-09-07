@@ -4,12 +4,12 @@
 """A same-format conversion does not write over its own source, and a format-changing one still
 lands exactly where it always did.
 
-**Why this pipeline can convert a file into its own format.** ``supported_formats`` in
-``convert_input_output`` is ONE list, checked for both the input and the output, and
-``vamsSchema/pipeline.json`` allows all ten of those extensions as input. Four of the built-in
-templates pin a target format that is also an accepted input format -- ``convert-to-glb``,
-``convert-to-gltf``, ``convert-to-obj``, ``convert-to-stl`` -- so choosing the template that names the
-input file's own format is a same-format run, reachable with no custom configuration at all.
+**Why this pipeline can convert a file into its own format.** Every format in
+``SUPPORTED_OUTPUT_FORMATS`` is also in ``SUPPORTED_INPUT_FORMATS``, and ``vamsSchema/pipeline.json``
+allows every input extension. Four of the built-in templates pin a target format that is also an
+accepted input format -- ``convert-to-glb``, ``convert-to-gltf``, ``convert-to-obj``,
+``convert-to-stl`` -- so choosing the template that names the input file's own format is a same-format
+run, reachable with no custom configuration at all.
 
 **Why that used to land on the operator's own file.** The output file name is the input's stem plus
 the output extension, and the output keeps the input's subdirectory within the asset, so a same-format
@@ -228,10 +228,20 @@ def _run(relative_path, output_type):
         downloaded["bucket"], downloaded["key"] = bucket, key
         return path
 
+    # The export stub writes its output file: the upload reads the export directory back from disk,
+    # so a stub that wrote nothing would upload nothing and make every assertion below vacuous.
+    trimesh_stub = MagicMock()
+
+    def _export(path, file_type=None, **kwargs):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("exported")
+
+    trimesh_stub.load.return_value.export = MagicMock(side_effect=_export)
+
     with patch.object(module, "s3_client", stub_s3), \
             patch.object(module, "download", MagicMock(side_effect=_download)), \
             patch.object(module, "uploadV2", MagicMock(side_effect=_upload)), \
-            patch.object(module, "trimesh", MagicMock()):
+            patch.object(module, "trimesh", trimesh_stub):
         response = module.lambda_handler({"body": json.dumps({
             "inputManifestS3Location": MANIFEST_LOCATION,
             "inputConfigurationS3Location": CONFIG_LOCATION,

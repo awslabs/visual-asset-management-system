@@ -17,7 +17,11 @@ from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.validators import validate
 from common.tagScope import GLOBAL_SCOPE, normalize_scope
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import (
+    validate_pagination_info,
+    MAX_PAGINATION_MAX_ITEMS,
+    MAX_PAGINATION_PAGE_SIZE,
+)
 from common.constants import STANDARD_JSON_RESPONSE
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.tag import (
@@ -44,18 +48,13 @@ paginator = dynamodb_client.get_paginator('scan')
 
 try:
     tag_db_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving tags table name")
-    tag_db_table_name = None
-
-try:
     tag_type_db_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving tag types table name")
-    tag_type_db_table_name = None
+    logger.exception("Failed resolving resource names")
+    raise e
 
-tag_table = dynamodb.Table(tag_db_table_name) if tag_db_table_name else None
-tag_type_table = dynamodb.Table(tag_type_db_table_name) if tag_type_db_table_name else None
+tag_table = dynamodb.Table(tag_db_table_name)
+tag_type_table = dynamodb.Table(tag_type_db_table_name)
 
 #######################
 # Business Logic Functions
@@ -155,11 +154,14 @@ def get_tags(query_params):
         elif scope == 'global':
             raw_tags = _query_all_in_partition(tag_table, GLOBAL_SCOPE)
         else:
+            # build_full_result() accumulates pages until MaxItems is reached, so the budget is
+            # bounded at the shared ceiling here as well as by the caller's validation -- the list
+            # handler falls back to raw query parameters when the request model rejects them.
             page_iterator_tags = paginator.paginate(
                 TableName=tag_db_table_name,
                 PaginationConfig={
-                    'MaxItems': int(query_params['maxItems']),
-                    'PageSize': int(query_params['pageSize']),
+                    'MaxItems': min(int(query_params['maxItems']), MAX_PAGINATION_MAX_ITEMS),
+                    'PageSize': min(int(query_params['pageSize']), MAX_PAGINATION_PAGE_SIZE),
                     'StartingToken': query_params.get('startingToken')
                 }
             ).build_full_result()

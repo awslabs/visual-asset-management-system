@@ -136,6 +136,107 @@ describe("Deadline Cloud job-status EventBridge rule", () => {
         });
     });
 
+    /**
+     * The error handler needs the same three Deadline actions abort does, on a path abort cannot
+     * reach.
+     *
+     * `handleExecutionError` runs on every caught workflow failure and stamps the in-flight pipeline
+     * rows terminal. A terminal row is no longer a candidate for the abort API, so a farm job left
+     * running at that point has no in-product remedy at all — and the task is
+     * `createJob.waitForTaskToken`, so Step Functions holds the token and not the job. Without the
+     * grant the cancel is attempted and denied, which the handler records as "may still be running"
+     * on the pipeline log row rather than actually stopping the job.
+     *
+     * `ListJobs` + `GetJob` are what reach a job that was never REGISTERED. Registration comes from
+     * the job-status callback, which Deadline invokes on a status CHANGE, so a job sitting queued
+     * with no worker assigned never produces one — exactly the job most worth cancelling, since it
+     * has consumed nothing yet. Both paths share one implementation, so a grant on only one of them
+     * makes the shared helper reachable from one caller and denied from the other.
+     */
+    describe("the error handler's Deadline grant", () => {
+        // CDK spills an over-long inline policy into an AWS::IAM::ManagedPolicy, so scanning only
+        // AWS::IAM::Policy reports a grant that IS present as missing.
+        const deadlineActionsOnErrorHandler = (enabled: boolean): string[] => {
+            const s = enabled
+                ? synth()
+                : synthTemplate("commercial", {
+                      // Same key as the abort-path block above: identical mutation, so this is a
+                      // cache hit rather than a second ~20 s synth.
+                      mutateKey: "deadlineCloudDisabled",
+                      mutate: (c: any) => {
+                          c.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
+                      },
+                  });
+            const found: string[] = [];
+            for (const type of ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"]) {
+                for (const pol of s.ofType(type)) {
+                    // The policy's own logical id names the role it defaults for.
+                    if (!/handleExecutionError/i.test(pol.logicalId)) continue;
+                    for (const stmt of pol.properties?.PolicyDocument?.Statement ?? []) {
+                        const actions = ([] as string[]).concat(stmt.Action ?? []);
+                        found.push(...actions.filter((a) => String(a).startsWith("deadline:")));
+                    }
+                }
+            }
+            return found;
+        };
+
+        it("is granted when the DeadlineCloud execution type is enabled", () => {
+            expect(deadlineActionsOnErrorHandler(true)).toEqual(
+                expect.arrayContaining([
+                    "deadline:UpdateJob",
+                    "deadline:ListJobs",
+                    "deadline:GetJob",
+                ])
+            );
+        });
+
+        it("is absent when the DeadlineCloud execution type is disabled", () => {
+            // Paired with the above: the disabled half alone is satisfied by a grant that was never
+            // emitted in either state, which would mean the error handler can never cancel anything.
+            expect(deadlineActionsOnErrorHandler(false)).toEqual([]);
+        });
+
+        /**
+         * Discovery reads farmId/queueId from the pipeline DEFINITION, not from any execution row —
+         * they are not on the pipeline execution and were never on it. Without this read the
+         * handler resolves ("", "") and reports the job as possibly still running while holding
+         * every Deadline action it needs, which looks like a Deadline problem and is a DynamoDB one.
+         * Gated with the actions, so the disabled half pins that it is not standing access.
+         */
+        const readsPipelineDefinitions = (enabled: boolean): boolean => {
+            const s = enabled
+                ? synth()
+                : synthTemplate("commercial", {
+                      mutateKey: "deadlineCloudDisabled",
+                      mutate: (c: any) => {
+                          c.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
+                      },
+                  });
+            for (const type of ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"]) {
+                for (const pol of s.ofType(type)) {
+                    if (!/handleExecutionError/i.test(pol.logicalId)) continue;
+                    for (const stmt of pol.properties?.PolicyDocument?.Statement ?? []) {
+                        const actions = ([] as string[]).concat(stmt.Action ?? []);
+                        if (!actions.some((a) => String(a) === "dynamodb:GetItem")) continue;
+                        const resources = JSON.stringify(stmt.Resource ?? "");
+                        if (/PipelineStorageTableV2|pipelineStorageV2/i.test(resources))
+                            return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        it("can read the pipeline definitions the farm and queue come from", () => {
+            expect(readsPipelineDefinitions(true)).toBe(true);
+        });
+
+        it("does not read the pipeline definitions when the execution type is disabled", () => {
+            expect(readsPipelineDefinitions(false)).toBe(false);
+        });
+    });
+
     it("still routes lifecycle failure states, which never reach a task-run status", () => {
         const lifecycle = synth()
             .ofType("AWS::Events::Rule")

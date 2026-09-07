@@ -14,6 +14,7 @@ import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
+import { contentImageTag } from "../../../../../helper/containerImageTag";
 
 export interface CoordinateTransformCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -24,7 +25,8 @@ export interface CoordinateTransformCodeBuildConstructProps extends cdk.StackPro
 
 export class CoordinateTransformCodeBuildConstruct extends Construct {
     public readonly repository: ecr.Repository;
-    public readonly imageUri: string;
+    /** Content-addressed tag the build pushes and the Batch job definition consumes. */
+    public readonly imageTag: string;
     public readonly codeBuildProjectName: string;
 
     constructor(
@@ -37,7 +39,38 @@ export class CoordinateTransformCodeBuildConstruct extends Construct {
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
 
+        // An EXPLICIT repositoryName, unlike the other CodeBuild pipelines, because the auto-generated
+        // one is too long for AWS Batch to accept.
+        //
+        // Batch and Amazon ECS cap a container image reference at 255 characters over the whole
+        // `<account>.dkr.ecr.<region>.amazonaws.com/<repository>:<tag>` string. CDK derives the
+        // repository name from the nested-stack path, and this pipeline's path is the deepest of the
+        // CodeBuild set — `pipelinebuilderne-coordinatetransformbuildernestedstackneste-<hash>-
+        // coordinatetransformpipelinecoordtransformcodebuildecrrepocoordtransform<hash>-<suffix>`.
+        //
+        // MEASURED on the reference deployment: that URI is 237 characters, so with the 32-character
+        // content tag the reference is 270 and every job is rejected at submit with
+        // `Container.image should be 255 characters or less` — the job never starts, no container log
+        // exists, and the workflow simply waits out its task timeout. The comparable auto-named
+        // repositories measure 194-207, which is why the existing tag truncation was calibrated against
+        // Splat Toolbox's 207 and why nothing caught this: `useCodeBuild` defaults to false here, so
+        // the path was never exercised.
+        //
+        // Truncating the tag further is not the fix — it would cost content-addressing for 15
+        // characters. A short deterministic name is: host (45) + name (~35) + tag (33) leaves well over
+        // 100 characters of headroom, and the same name is reproducible across deployments.
+        //
+        // Custom-named, therefore REDEPLOY-COLLISION relevant (infra/CLAUDE.md storage documentation
+        // rule): the name embeds `config.name` and `app.baseStackName`, so two deployments differing in
+        // either get different repositories, and only an orphan left by a failed teardown of the SAME
+        // configuration can conflict. removalPolicy DESTROY + emptyOnDelete means an ordinary teardown
+        // removes it.
+        const repositoryName = [props.config.name, props.config.app.baseStackName, "coordtransform"]
+            .join("-")
+            .toLowerCase();
+
         this.repository = new ecr.Repository(this, "EcrRepo-CoordTransform", {
+            repositoryName,
             removalPolicy: RemovalPolicy.DESTROY,
             emptyOnDelete: true,
             imageScanOnPush: true,
@@ -67,6 +100,10 @@ export class CoordinateTransformCodeBuildConstruct extends Construct {
             exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env"],
         });
 
+        // Content-addressed image tag, supplied to the build and consumed by the Batch job definition
+        // from this one literal so the two sides cannot name different images.
+        const imageTag = contentImageTag(sourceAsset.assetHash);
+
         const project = new codebuild.Project(this, "CodeBuild-CoordTransform", {
             description: "Build Coordinate Transform container image and push to ECR",
             environment: {
@@ -76,6 +113,9 @@ export class CoordinateTransformCodeBuildConstruct extends Construct {
                 environmentVariables: {
                     ECR_REPO_URI: {
                         value: this.repository.repositoryUri,
+                    },
+                    IMAGE_TAG: {
+                        value: imageTag,
                     },
                     AWS_ACCOUNT_ID: {
                         value: account,
@@ -144,15 +184,25 @@ def handler(event, context):
             onEventHandler: triggerFunction,
         });
 
+        // EcrRepositoryUri is a trigger input, not decoration. CloudFormation invokes a custom resource's
+        // Update only when one of its properties changes, and `RepositoryName` is a REPLACEMENT property —
+        // so a repository rename destroys the old repository (with its images) and creates an empty one
+        // while `ProjectName` and `SourceHash` both stay identical. No build fires, and the Batch job
+        // definition is left pointing at a tag that exists nowhere.
+        //
+        // MEASURED on the reference deployment: after the rename, the new repository held 0 images while
+        // the job definition referenced tag `f0462...`, and the build had to be started by hand. Including
+        // the URI makes the rename itself the thing that re-fires the build.
         new cdk.CustomResource(this, "BuildTriggerCR-CoordTransform", {
             serviceToken: triggerProvider.serviceToken,
             properties: {
                 ProjectName: project.projectName,
                 SourceHash: sourceAsset.assetHash,
+                EcrRepositoryUri: this.repository.repositoryUri,
             },
         });
 
-        this.imageUri = `${this.repository.repositoryUri}:latest`;
+        this.imageTag = imageTag;
         this.codeBuildProjectName = project.projectName;
 
         // CDK Nag Suppressions

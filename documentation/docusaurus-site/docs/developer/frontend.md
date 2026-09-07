@@ -507,6 +507,8 @@ const isPreview = fileName.includes(PREVIEW_FILE_PATTERN);
 const isAllowed = previewFileFormats.includes(fileExt);
 ```
 
+For a file-level preview file the extension is everything **after** the `.previewFile.` marker, not the text after the last dot: `model.gltf.previewFile.p.png` has the extension `.p.png`. `utils/fileExtensionValidation.ts` exposes `getPreviewFileExtension()` and `isPreviewExtensionAllowed()` for this, and `validateFiles()` applies them to every preview file whether or not the database restricts extensions. Use those helpers rather than `getFileExtension()`, which reads the last dot and would accept a name the API rejects.
+
 `constants/uploadLimits.ts` re-exports `previewFileFormats` as `ALLOWED_PREVIEW_EXTENSIONS` alongside the upload limit values, so upload code can import everything from one place.
 
 :::note[Backend Mirror]

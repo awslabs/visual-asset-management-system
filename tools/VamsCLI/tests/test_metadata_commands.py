@@ -75,7 +75,7 @@ class TestAssetMetadataListCommand:
             assert 'Test Asset' in result.output
             
             # Verify API call
-            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 3000, None, None)
+            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 100, None, None)
 
     def test_list_auto_paginates_all_pages(self, cli_runner, metadata_command_mocks):
         """Without a starting token, the list command follows NextToken to aggregate all pages."""
@@ -127,7 +127,7 @@ class TestAssetMetadataListCommand:
 
             assert result.exit_code == 0
             # Single call, NextToken preserved for the caller to continue manually
-            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 3000, 'token-page-2', None)
+            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 100, 'token-page-2', None)
             data = json.loads(result.output)
             assert data.get('NextToken') == 'token-page-3'
 
@@ -187,7 +187,7 @@ class TestAssetMetadataListCommand:
 
             # Verify API call includes asset_version_id
             mocks['api_client'].get_asset_metadata_v2.assert_called_once_with(
-                'test-db', 'test-asset', 3000, None, 'ver-123'
+                'test-db', 'test-asset', 100, None, 'ver-123'
             )
 
     def test_list_with_asset_version_id_json_output(self, cli_runner, metadata_command_mocks):
@@ -402,7 +402,7 @@ class TestFileMetadataListCommand:
             
             # Verify API call
             mocks['api_client'].get_file_metadata_v2.assert_called_once_with(
-                'test-db', 'test-asset', 'models/file.gltf', 'metadata', 3000, None, None
+                'test-db', 'test-asset', 'models/file.gltf', 'metadata', 100, None, None
             )
     
     def test_list_attribute_success(self, cli_runner, metadata_command_mocks):
@@ -458,7 +458,7 @@ class TestFileMetadataListCommand:
 
             # Verify API call includes asset_version_id
             mocks['api_client'].get_file_metadata_v2.assert_called_once_with(
-                'test-db', 'test-asset', 'models/file.gltf', 'metadata', 3000, None, 'ver-456'
+                'test-db', 'test-asset', 'models/file.gltf', 'metadata', 100, None, 'ver-456'
             )
 
     def test_list_attribute_with_asset_version_id(self, cli_runner, metadata_command_mocks):
@@ -489,7 +489,7 @@ class TestFileMetadataListCommand:
 
             # Verify API call includes asset_version_id
             mocks['api_client'].get_file_metadata_v2.assert_called_once_with(
-                'test-db', 'test-asset', 'models/file.gltf', 'attribute', 3000, None, 'ver-456'
+                'test-db', 'test-asset', 'models/file.gltf', 'attribute', 100, None, 'ver-456'
             )
 
 
@@ -610,7 +610,7 @@ class TestAssetLinkMetadataListCommand:
             assert 'relationship' in result.output
             
             # Verify API call
-            mocks['api_client'].get_asset_link_metadata_v2.assert_called_once_with('abc123-def456', 3000, None)
+            mocks['api_client'].get_asset_link_metadata_v2.assert_called_once_with('abc123-def456', 100, None)
 
 
 class TestAssetLinkMetadataUpdateCommand:
@@ -715,7 +715,7 @@ class TestDatabaseMetadataListCommand:
             assert 'owner' in result.output
             
             # Verify API call
-            mocks['api_client'].get_database_metadata_v2.assert_called_once_with('test-db', 3000, None)
+            mocks['api_client'].get_database_metadata_v2.assert_called_once_with('test-db', 100, None)
 
 
 class TestDatabaseMetadataUpdateCommand:

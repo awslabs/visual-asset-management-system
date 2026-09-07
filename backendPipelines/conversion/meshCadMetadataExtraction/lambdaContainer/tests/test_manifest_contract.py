@@ -106,7 +106,7 @@ class TestResolveInputsFromManifest:
     def test_shadowed_input_resolves_the_asset_relative_path(self):
         mod = _load()
         manifest = _manifest([_shadowed_entry()])
-        with patch.object(mod, "_fetch_json_from_s3", MagicMock(return_value=manifest)):
+        with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
             input_path, relative_path, output_path = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": f"s3://{_ASSET_BUCKET}/m.json"})
         assert input_path == f"s3://{_RUN_BUCKET}/{_OUTPUT_FILES_PREFIX}test/pump.stl"
@@ -116,20 +116,22 @@ class TestResolveInputsFromManifest:
     def test_original_input_resolves_the_asset_relative_path(self):
         mod = _load()
         manifest = _manifest([_original_entry()])
-        with patch.object(mod, "_fetch_json_from_s3", MagicMock(return_value=manifest)):
+        with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
             input_path, relative_path, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": f"s3://{_ASSET_BUCKET}/m.json"})
         assert input_path == f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}test/pump.stl"
         assert relative_path == "test/pump.stl"
 
     def test_legacy_body_fields_resolve_without_a_manifest(self):
+        # fetch_manifest is deliberately NOT patched: a body carrying no manifest location must
+        # short-circuit before any S3 call, which is what keeps a direct/local invocation working
+        # now that a referenced-but-unreadable manifest raises.
         mod = _load()
-        with patch.object(mod, "_fetch_json_from_s3", MagicMock(return_value={})):
-            input_path, relative_path, output_path = mod.resolve_inputs_from_manifest({
-                "inputS3AssetFilePath": f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}test/pump.stl",
-                "inputAssetLocationKey": _ASSET_ROOT,
-                "outputS3AssetMetadataPath": f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}",
-            })
+        input_path, relative_path, output_path = mod.resolve_inputs_from_manifest({
+            "inputS3AssetFilePath": f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}test/pump.stl",
+            "inputAssetLocationKey": _ASSET_ROOT,
+            "outputS3AssetMetadataPath": f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}",
+        })
         assert input_path == f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}test/pump.stl"
         assert relative_path == "test/pump.stl"
         assert output_path == f"s3://{_ASSET_BUCKET}/{_ASSET_ROOT}"
@@ -139,7 +141,7 @@ class TestResolveInputsFromManifest:
         # attributes extracted for the first file while both are reported successful.
         mod = _load()
         manifest = _manifest([_original_entry(), _original_entry("/test/housing.stl")])
-        with patch.object(mod, "_fetch_json_from_s3", MagicMock(return_value=manifest)):
+        with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
             with pytest.raises(ValueError, match="single input file"):
                 mod.resolve_inputs_from_manifest(
                     {"inputManifestS3Location": f"s3://{_ASSET_BUCKET}/m.json"})

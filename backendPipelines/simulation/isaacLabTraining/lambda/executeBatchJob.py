@@ -12,10 +12,17 @@ import os
 import boto3
 import manifestHelper
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ExecuteBatchJobIsaacLab")
-batch = boto3.client("batch")
-events_client = boto3.client("events")
+batch = boto3.client("batch", config=retry_config)
+events_client = boto3.client("events", config=retry_config)
 
 BATCH_JOB_QUEUE = os.environ["BATCH_JOB_QUEUE"]
 BATCH_JOB_DEFINITION = os.environ["BATCH_JOB_DEFINITION"]
@@ -72,6 +79,8 @@ def lambda_handler(event, context):
     definition["outputS3AssetFilesPath"] = output_s3_path
     definition["inputS3AssetFilePath"] = input_s3_path
 
+    # The job definition is a single-node container job (batch.EcsJobDefinition with one
+    # EcsEc2ContainerDefinition), so the submission carries containerOverrides only.
     submit_params = {
         "jobName": job_name,
         "jobQueue": BATCH_JOB_QUEUE,
@@ -85,20 +94,6 @@ def lambda_handler(event, context):
             ],
         },
     }
-
-    # Multi-node configuration
-    num_nodes = event.get("numNodes", 1)
-    if num_nodes > 1:
-        submit_params["nodeOverrides"] = {
-            "numNodes": num_nodes,
-            "nodePropertyOverrides": [
-                {
-                    "targetNodes": "0:",
-                    "containerOverrides": submit_params["containerOverrides"],
-                }
-            ],
-        }
-        del submit_params["containerOverrides"]
 
     logger.info(f"Submitting Batch job: {submit_params}")
     response = batch.submit_job(**submit_params)

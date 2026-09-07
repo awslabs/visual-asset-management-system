@@ -71,8 +71,14 @@ The `--filters` option accepts two formats. A query string is converted to an Op
 
 `--metadata-query` searches indexed metadata fields. The query supports `AND`/`OR` operators within the metadata group, and the group as a whole is combined with `--query` and `--filters` using `AND` logic. `--metadata-mode` controls whether the query matches metadata field names (`key`), field values (`value`), or both (`both`, the default).
 
+The key may be given bare, with the `MD_` / `AB_` entity prefix, or with a type prefix; all three address the same field. See [Search field reference](#search-field-reference).
+
 ```bash
-# Exact field:value match
+# Exact field:value match, key given bare
+vamscli search assets --metadata-query "product:Training"
+
+# The same field, addressed with the entity prefix and with a type prefix
+vamscli search assets --metadata-query "MD_product:Training"
 vamscli search assets --metadata-query "MD_str_product:Training"
 
 # Wildcard in the metadata value
@@ -260,10 +266,15 @@ Field names follow type-prefixed conventions. Use `search mapping` to enumerate 
 | `date_*`          | Date      | `date_lastmodified`                                                                                            |
 | `bool_*`          | Boolean   | `bool_isdistributable`, `bool_archived`                                                                        |
 | `list_*`          | List      | `list_tags`                                                                                                    |
-| `MD_*`            | Metadata  | `MD_str_<name>`, `MD_num_<name>`, `MD_date_<name>`, `MD_bool_<name>`                                           |
+| `MD_`             | Metadata  | One `flat_object` holding every metadata key, on both indexes                                                   |
+| `AB_`             | Attribute | One `flat_object` holding every file attribute, file index only                                                 |
 | `geo_MD_location` | geo_shape | Derived from `location` or `latitude` / `longitude` / `altitude` metadata                                      |
 
-Metadata stored as `{"product": "Training"}` is indexed as `MD_str_product`. Asset-only fields such as `str_description` and `bool_isdistributable` live in the asset index; file-only fields such as `str_key`, `str_fileext`, and `num_filesize` live in the file index.
+Metadata is the one exception to the type-prefix convention. All of a record's metadata is stored in a single field named `MD_`, with the keys carried verbatim, so metadata `{"product": "Training"}` is stored as `"MD_": {"product": "Training"}` and `search mapping` lists `MD_` rather than a field per key. File attributes work the same way in `AB_`.
+
+`--metadata-query` accepts the key in any of three spellings, all resolving to the same field: the bare key (`product:Training`), the key with its entity prefix (`MD_product:Training`, or `AB_colour:red` for a file attribute), or with a type prefix (`MD_str_product:Training`). Do not write `MD_.product` — the dot belongs to the internal query path, not to a submitted key, and a query using it matches nothing.
+
+Asset-only fields such as `str_description` and `bool_isdistributable` live in the asset index; file-only fields such as `str_key`, `str_fileext`, and `num_filesize` live in the file index.
 
 Every document carries `str_rectype`, which is `asset` or `file`. It appears as a column in the table and CSV output, and distinguishes the two record types in a `search simple` result that covers both indexes.
 

@@ -2,7 +2,7 @@
 Cosmos Reason 2 Inference Wrapper
 
 Runs the cosmos-reason2-inference CLI tool in offline mode to analyze
-video/image files and produce text output (captions, descriptions, reasoning).
+video files and produce text output (captions, descriptions, reasoning).
 
 The CLI command:
   cosmos-reason2-inference offline --model nvidia/Cosmos-Reason2-{size} \
@@ -93,7 +93,7 @@ def run_inference(
         model_name: Full model name (e.g., "nvidia/Cosmos-Reason2-2B")
         model_size: Model size ("2B" or "8B")
         prompt: Text prompt/question for analysis
-        input_file_path: Path to input video or image file
+        input_file_path: Path to input video file
         output_dir: Output directory for results
         hf_home: HuggingFace cache directory (HF_HOME)
         hf_token: HuggingFace API token (optional)
@@ -108,7 +108,7 @@ def run_inference(
     """
     # Validate inputs
     if not input_file_path:
-        raise ValueError("Cosmos Reason requires an input file (video or image)")
+        raise ValueError("Cosmos Reason requires an input video file")
 
     if not prompt or prompt.strip() == "":
         prompt = "Caption the video in detail."
@@ -135,7 +135,7 @@ def run_inference(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Determine if input is video or image
+    # Determine if the input is a supported video
     is_video = is_video_file(input_file_path)
     input_flag = "--videos" if is_video else "--images"
     input_type_label = "video" if is_video else "image"

@@ -49,18 +49,13 @@ claims_and_roles = {}
 
 try:
     tag_type_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving tag types table name")
-    tag_type_table_name = None
-
-try:
     database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving database table name")
-    database_table_name = None
+    logger.exception("Failed resolving resource names")
+    raise e
 
-tag_type_table = dynamodb.Table(tag_type_table_name) if tag_type_table_name else None
-database_table = dynamodb.Table(database_table_name) if database_table_name else None
+tag_type_table = dynamodb.Table(tag_type_table_name)
+database_table = dynamodb.Table(database_table_name)
 
 #######################
 # Business Logic Functions
@@ -156,7 +151,7 @@ def create_tag_type(request_model: CreateTagTypeRequestModel, claims_and_roles: 
         logger.exception(f"Error creating tag type: {e}")
         if hasattr(e, 'response') and e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
             raise VAMSGeneralErrorResponse("Tag type already exists", status_code=400)
-        raise VAMSGeneralErrorResponse(f"Error creating tag type: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error creating tag type")
 
 def update_tag_type(request_model: UpdateTagTypeRequestModel, claims_and_roles: dict) -> TagTypeOperationResponseModel:
     """Update an existing tag type
@@ -227,7 +222,7 @@ def update_tag_type(request_model: UpdateTagTypeRequestModel, claims_and_roles: 
         logger.exception(f"Error updating tag type: {e}")
         if hasattr(e, 'response') and e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
             raise VAMSGeneralErrorResponse("Tag type not found", status_code=404)
-        raise VAMSGeneralErrorResponse(f"Error updating tag type: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error updating tag type")
 
 #######################
 # Request Handlers

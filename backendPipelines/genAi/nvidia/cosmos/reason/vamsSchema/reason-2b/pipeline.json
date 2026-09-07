@@ -1,7 +1,7 @@
 {
     "pipelineName": "NVIDIA Cosmos Reason 2B",
     "category": "WFM",
-    "description": "NVIDIA Cosmos Reason 2B - Vision Language Model for video/image analysis and captioning",
+    "description": "NVIDIA Cosmos Reason 2B - Vision Language Model for video analysis and captioning",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",

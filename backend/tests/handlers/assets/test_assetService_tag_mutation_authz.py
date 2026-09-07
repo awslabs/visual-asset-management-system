@@ -47,6 +47,7 @@ import pytest
 from tests.handlers.assets.test_assetService_update_tag_scope import (  # noqa: E402
     _load_asset_service,
     _existing_asset,
+    _written_attributes,
 )
 
 _DB = "db-a"
@@ -201,7 +202,7 @@ class TestTagScopedCallerCannotEscapeTheirScope:
                              _recording_enforcer(_allow_only_scoped_tag, record)):
             result = _attempt_update(m, {"tags": []})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
         # This constraint permits every evaluation of the stored state (it still carries the
         # tag), so the denial can only have come from evaluating the asset as it would be
@@ -245,7 +246,7 @@ class TestTagScopedCallerCannotEscapeTheirScope:
                              _recording_enforcer(_deny_get_on_scoping_tag, record)):
             result = _attempt_update(m, {"tags": []})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
         evaluated = _tag_evaluations(record)
         assert ("GET", (_SCOPING_TAG,)) in evaluated, (
@@ -295,7 +296,7 @@ class TestTagScopedCallerCannotEscapeTheirScope:
                              _recording_enforcer(_deny_get_on_scoping_tag, record)):
             result = _attempt_update(m, {"tags": [_SCOPING_TAG]})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
         evaluated = _tag_evaluations(record)
         assert ("GET", (_SCOPING_TAG,)) in evaluated, (
@@ -329,8 +330,8 @@ class TestTagScopedCallerCannotEscapeTheirScope:
         assert getattr(result, "success", None) is True, (
             f"a tag edit unrelated to the deny was refused: {result}"
         )
-        m.asset_table.put_item.assert_called_once()
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["tags"] == ["keepme", "draft"]
+        m.asset_table.update_item.assert_called_once()
+        assert _written_attributes(m.asset_table)["tags"] == ["keepme", "draft"]
         # Both states were still evaluated for both actions; the deny simply does not name
         # either tag list. Asserted as containment so a safer implementation stays green.
         assert {
@@ -365,7 +366,7 @@ class TestTagScopedCallerCannotEscapeTheirScope:
             f"an edit that does not touch tags was refused: {result}; the tag-change "
             f"evaluations must not fire when the tag set is unchanged"
         )
-        m.asset_table.put_item.assert_called_once()
+        m.asset_table.update_item.assert_called_once()
         assert not _refusals(record, _deny_get_on_scoping_tag), (
             f"an evaluation of this asset was refused even though the edit does not touch "
             f"tags: {_refusals(record, _deny_get_on_scoping_tag)}"
@@ -381,7 +382,7 @@ class TestTagScopedCallerCannotEscapeTheirScope:
                              _recording_enforcer(_deny_secret_tag, record)):
             result = _attempt_update(m, {"tags": ["secret"]})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
 
     def test_ordinary_edit_by_the_same_scoped_caller_still_succeeds(self):
@@ -402,8 +403,8 @@ class TestTagScopedCallerCannotEscapeTheirScope:
         assert getattr(result, "success", None) is True, (
             f"an edit that does not touch tags was refused: {result}"
         )
-        m.asset_table.put_item.assert_called_once()
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["description"] == (
+        m.asset_table.update_item.assert_called_once()
+        assert _written_attributes(m.asset_table)["description"] == (
             "an ordinary edit"
         )
         # The stored state was evaluated for the write, as it always is. That the tag-change
@@ -429,7 +430,7 @@ class TestTagScopedCallerCannotEscapeTheirScope:
         assert getattr(result, "success", None) is True, (
             f"resubmitting the identical tag list was refused: {result}"
         )
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["tags"] == [_SCOPING_TAG]
+        assert _written_attributes(m.asset_table)["tags"] == [_SCOPING_TAG]
 
     def test_the_get_denied_caller_can_resubmit_the_identical_tag_list(self):
         """The same control where it bites: a resubmission must not count as a tag change.
@@ -450,7 +451,7 @@ class TestTagScopedCallerCannotEscapeTheirScope:
         assert getattr(result, "success", None) is True, (
             f"a full-object PUT resubmitting the stored tag list was refused: {result}"
         )
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["tags"] == [_SCOPING_TAG]
+        assert _written_attributes(m.asset_table)["tags"] == [_SCOPING_TAG]
 
 
 @pytest.mark.unit
@@ -632,7 +633,7 @@ class TestAdjacentBehaviourIsPinned:
         assert getattr(result, "success", None) is True, (
             f"a rename out of an assetName-scoped ALLOW is now refused: {result}"
         )
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["assetName"] == "OTHER"
+        assert _written_attributes(m.asset_table)["assetName"] == "OTHER"
         assert ("PUT", "PROJ-1") in _name_evaluations(record), (
             f"the stored record was never evaluated for the write: "
             f"{sorted(_name_evaluations(record), key=str)}"
@@ -654,7 +655,7 @@ class TestAdjacentBehaviourIsPinned:
                              _recording_enforcer(_allow_only_proj_asset_names, record)):
             result = _attempt_update(m, {"assetName": "OTHER", "tags": ["added"]})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
         # The stored-state check runs before any field is edited and sees the stored name;
         # every tag-change evaluation sees the new one. Asserted as membership of the evaluated
@@ -683,7 +684,7 @@ class TestAdjacentBehaviourIsPinned:
             result = _attempt_update(m, {"tags": ["added"]}, {"tokens": ["SYSTEM_USER"]})
 
         assert getattr(result, "success", None) is True
-        m.asset_table.put_item.assert_called_once()
+        m.asset_table.update_item.assert_called_once()
 
 
 @pytest.mark.unit
@@ -715,4 +716,4 @@ class TestDenialReachesTheCaller:
             f"a denied tag addition surfaced as {response['statusCode']} instead of 403: "
             f"{response}"
         )
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()

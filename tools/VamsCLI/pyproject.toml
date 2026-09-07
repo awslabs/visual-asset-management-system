@@ -117,4 +117,5 @@ markers = [
     "integration: marks tests as integration tests",
     "asyncio: marks tests as async tests",
     "no_mock_logging: marks tests that need real logging (disables autouse logging mock)",
+    "temporary: pins one specific past change rather than a durable rule; list with '-m temporary' and remove at release cleanup (root CLAUDE.md Rule 13)",
 ]

@@ -297,7 +297,8 @@ class TestTheExportedBundleShowsTheDegradedRow:
                 patch.object(m, "get_asset_file_versions", MagicMock(return_value=None)), \
                 patch.object(m, "dynamodb_client", _query_client(rows)), \
                 patch.object(m, "logger", log):
-            result = m.process_asset_batch(
+            # process_asset_batch returns (assets, page state); only the assets matter here.
+            result, _page_state = m.process_asset_batch(
                 identifiers, m.AssetExportRequestModel(), {"tokens": ["alice"]})
 
         entry = _by_asset_id(result)[_ASSET]

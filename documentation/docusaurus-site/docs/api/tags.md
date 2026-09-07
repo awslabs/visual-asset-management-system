@@ -6,6 +6,10 @@ The Tags and Tag Types API allows you to manage the categorization system for as
 All endpoints require a valid JWT token in the `Authorization` header. Tags use the `tag` object type for Casbin enforcement, and tag types use `tagType`.
 :::
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `description` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## Tag scope

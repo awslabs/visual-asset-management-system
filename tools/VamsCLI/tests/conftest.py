@@ -69,6 +69,30 @@ def isolate_logging_globals():
 
 
 @pytest.fixture(autouse=True)
+def isolate_aws_credentials(monkeypatch):
+    """Neutralize the ambient AWS credential chain for every test.
+
+    Nothing in this CLI needs AWS credentials, but botocore resolves the chain while a client is
+    constructed, so a machine whose default profile has a configured-but-failing
+    `credential_process` (an expired corporate SSO session is the routine case) fails the test at
+    setup with `CredentialRetrievalError` before any assertion runs. The suite's result then
+    depends on ambient machine state rather than on the code under test — red on that developer's
+    box, green on one with no AWS configuration at all, from an identical working tree.
+
+    Static dummy values take precedence over every other provider, so no shared-config profile or
+    subprocess credential helper is consulted. `AWS_PROFILE` is cleared for the same reason: a name
+    that does not resolve raises `ProfileNotFound` during config lookup even when credentials come
+    from the environment. Mirrors the guard `backend/tests/conftest.py` already applies.
+    """
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def redirect_log_dir(tmp_path_factory):
     """Point the log directory at a temp dir for every test, real logging or mocked.
 

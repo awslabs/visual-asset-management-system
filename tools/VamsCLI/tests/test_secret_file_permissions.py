@@ -292,8 +292,12 @@ class TestLogFilePermissions:
         log_dir.mkdir(parents=True)
         log_file = log_dir / LOG_FILE_NAME
         log_file.write_text("pre-existing content\n", encoding="utf-8")
-        os.chmod(log_dir, 0o777)
-        os.chmod(log_file, 0o666)
+        # nosec B103 - the permissive mode IS the subject under test: this reproduces a log directory
+        # and file left world-writable by an earlier release, so the assertions below can prove the
+        # logger NARROWS a pre-existing path rather than only creating new ones tightly. Bandit cannot
+        # tell a fixture that builds the insecure precondition from production code that ships it.
+        os.chmod(log_dir, 0o777)  # nosec B103
+        os.chmod(log_file, 0o666)  # nosec B103
         narrowing_recorder.clear()  # do not count this test's own setup as a narrowing
 
         with _real_logging_into(log_dir):

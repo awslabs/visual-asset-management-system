@@ -417,11 +417,14 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `ALLOWUNSAFEEVAL`               | Allow unsafe eval operations                                                  |
 | `LOCATIONSERVICES`              | Location-based services and mapping                                           |
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
+| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                             |
 | `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                        |
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
+| `PHYSNA_ADDON`                  | Physna add-on frontend features                                               |
+| `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type                                    |
 
 ---
 

@@ -65,12 +65,36 @@ API_ASSET_LINKS_DELETE = "/asset-links/{assetLinkId}"
 API_ASSET_LINKS_FOR_ASSET = "/database/{databaseId}/assets/{assetId}/asset-links"
 
 # Asset Links Metadata API Endpoints (New unified API)
+# One collection route carrying all four verbs; an individual key is addressed in the request body
+# (`metadata` entries to upsert, `metadataKeys` to delete), not in the path.
 API_ASSET_LINK_METADATA = "/asset-links/{assetLinkId}/metadata"
 
 # Metadata API Endpoints (New unified API)
 API_ASSET_METADATA = "/database/{databaseId}/assets/{assetId}/metadata"
 API_FILE_METADATA = "/database/{databaseId}/assets/{assetId}/metadata/file"
 API_DATABASE_METADATA = "/database/{databaseId}/metadata"
+
+# Comments API Endpoints
+# The composite sort key `assetVersionId:commentId` is two values joined by a colon inside a single
+# path segment, so the third constant is not `str.format`-able: format() reads everything after the
+# colon as a format spec and raises. `build_comment_path()` in utils/api_client.py substitutes it.
+API_COMMENTS_ASSET = "/comments/assets/{assetId}"
+API_COMMENTS_ASSET_VERSION = "/comments/assets/{assetId}/assetVersionId/{assetVersionId}"
+API_COMMENTS_ASSET_VERSION_COMMENT = (
+    "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}"
+)
+
+# Subscription API Endpoints
+# DELETE /subscriptions removes the whole subscription record (and its SNS topic); DELETE
+# /unsubscribe removes one subscriber from it. Two operations on the same record, not aliases.
+API_SUBSCRIPTIONS = "/subscriptions"
+API_CHECK_SUBSCRIPTION = "/check-subscription"
+API_UNSUBSCRIBE = "/unsubscribe"
+
+# The only eventName and entityName the subscription endpoints accept; both are validated against
+# a fixed list server-side, and /check-subscription hard-codes this pair.
+SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE = "Asset Version Change"
+SUBSCRIPTION_ENTITY_ASSET = "Asset"
 
 # Cognito User Management API Endpoints
 API_COGNITO_USERS = "/user/cognito"
@@ -103,14 +127,14 @@ API_AUTH_USER_API_KEY = "/auth/user/api-keys/{apiKeyId}"
 API_USER_ROLES = "/user-roles"
 
 # Legacy Metadata API Endpoints (deprecated)
-API_ASSET_LINKS_METADATA = "/asset-links/{assetLinkId}/metadata"
-API_ASSET_LINKS_METADATA_KEY = "/asset-links/{assetLinkId}/metadata/{metadataKey}"
 API_METADATA = "/database/{databaseId}/assets/{assetId}/metadata"
 
 # Metadata Schema API Endpoints
-API_METADATA_SCHEMA = "/metadataschema/{databaseId}"  # Legacy endpoint
-API_METADATA_SCHEMA_LIST = "/metadataschema"  # GET with filters
-API_METADATA_SCHEMA_BY_ID = "/database/{databaseId}/metadataSchema/{metadataSchemaId}"  # GET single schema
+# A database's schemas are read from the collection route with a databaseId filter; the API defines
+# no path-scoped /metadataschema/{databaseId} variant. The collection route also carries POST
+# (create) and PUT (update, keyed on a metadataSchemaId in the body), so those share this constant.
+API_METADATA_SCHEMA_LIST = "/metadataschema"  # GET with filters, POST create, PUT update
+API_METADATA_SCHEMA_BY_ID = "/database/{databaseId}/metadataSchema/{metadataSchemaId}"  # GET, DELETE
 
 # Search API Endpoints
 API_SEARCH = "/search"
@@ -181,6 +205,13 @@ DEFAULT_DOWNLOAD_RETRY_ATTEMPTS = 3
 DEFAULT_DOWNLOAD_TIMEOUT = 300  # 5 minutes per file
 MAX_DOWNLOAD_KEYS_PER_REQUEST = 1500  # Backend cap per bulk presigned-URL request
 
+# Asset Export Configuration. Both pairs mirror the backend request model
+# (backend/backend/models/assetExport.py); the file budget bounds one page, not the export.
+DEFAULT_EXPORT_MAX_ASSETS = 100
+MAX_EXPORT_MAX_ASSETS = 1000
+DEFAULT_EXPORT_MAX_FILES = 2000
+MAX_EXPORT_MAX_FILES = 10000
+
 # Sync Configuration
 DEFAULT_IGNORE_FILE_NAME = ".vamsignore"
 SYNC_MTIME_TOLERANCE_SECONDS = 2  # Filesystem timestamp granularity tolerance (FAT32 = 2s)
@@ -231,15 +262,20 @@ DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2.0
 DEFAULT_RETRY_JITTER = 0.1
 
 # Feature Switch Constants
+# One per member of VAMS_APP_FEATURES (infra/common/vamsAppFeatures.ts), which is what a deployment
+# publishes through /secure-config. A missing member is a gate the CLI cannot name.
 FEATURE_GOVCLOUD = "GOVCLOUD"
 FEATURE_ALLOWUNSAFEEVAL = "ALLOWUNSAFEEVAL"
 FEATURE_LOCATIONSERVICES = "LOCATIONSERVICES"
 FEATURE_ALBDEPLOY = "ALBDEPLOY"
+FEATURE_CLOUDFRONTDEPLOY = "CLOUDFRONTDEPLOY"
 FEATURE_NOOPENSEARCH = "NOOPENSEARCH"
 FEATURE_AUTHPROVIDER_COGNITO = "AUTHPROVIDER_COGNITO"
 FEATURE_AUTHPROVIDER_COGNITO_SAML = "AUTHPROVIDER_COGNITO_SAML"
 FEATURE_AUTHPROVIDER_COGNITO_OIDC = "AUTHPROVIDER_COGNITO_OIDC"
 FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
+FEATURE_PHYSNA_ADDON = "PHYSNA_ADDON"
+FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
 
 # Legacy constants for backward compatibility
 CONFIG_FILE = CONFIG_FILE_NAME

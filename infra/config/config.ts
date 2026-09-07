@@ -747,6 +747,19 @@ export function getConfig(app: cdk.App): Config {
             useCodeBuild: false,
             useWarmInstances: false,
             warmInstanceCount: 1,
+            // An instanceTypes entry is only a usable fallback when the deployment's pipeline
+            // subnets reach an Availability Zone that OFFERS it, and that is region- and
+            // account-specific. MEASURED in us-west-2 on a default deployment: `p5e.48xlarge` is
+            // offered ONLY in us-west-2c, while the VPC builder defaults to `azCount = 2` and its
+            // subnets resolved to us-west-2a and us-west-2b - so the three-deep list below is
+            // two-deep in practice and `superText2Image64B`'s two-deep list is effectively one-deep.
+            // `p5.48xlarge` (2a/2b/2c/2d) and `p4de.24xlarge` (2a/2b/2c) are both reachable there.
+            //
+            // The entries are NOT trimmed here, because an operator whose subnets do include the
+            // offering AZ - a wider `openSearch.useProvisioned.availabilityZoneCount`, or an
+            // `optionalExternalVpcId` - has a legitimate use for them, and AZ offerings change. Check
+            // the offering set for the target Region before relying on a fallback:
+            //   aws ec2 describe-instance-type-offerings --location-type availability-zone             //     --filters Name=instance-type,Values=p5e.48xlarge --query 'InstanceTypeOfferings[].Location'
             modelsOmni: {
                 nano16B: {
                     enabled: false,
@@ -1262,6 +1275,45 @@ export function getConfig(app: cdk.App): Config {
             `Configuration Error: deploying to the '${resolvedPartition}' partition requires ` +
                 "app.govCloud.il6Compliant to be true."
         );
+    }
+
+    //The in-account AWS CodeBuild container-build path is exercised in the commercial and GovCloud
+    //partitions. Elsewhere the build host cannot reach the public nvcr.io / Docker Hub GPU base
+    //images these Dockerfiles pull, and the build trigger custom resource does not wait for the
+    //build, so a failure surfaces later as an image-pull error rather than at deploy time. This
+    //informs rather than prevents: support varies by partition and account, so an operator
+    //evaluating it should not be blocked. Pre-build the images and point the pipelines at an
+    //existing Amazon ECR repository where the build cannot run.
+    const codeBuildSupportedPartitions = ["aws", "aws-us-gov"];
+    if (!codeBuildSupportedPartitions.includes(resolvedPartition)) {
+        const pipelines = config.app.pipelines as unknown as Record<
+            string,
+            { useCodeBuild?: boolean } | undefined
+        >;
+        const codeBuildPipelinePaths = [
+            "useConversionCoordinateTransform",
+            "useSplatToolbox",
+            "useIsaacLabTraining",
+            "useNvidiaCosmos",
+            "useNvidiaCosmos3",
+            "useNvidiaGr00t",
+        ];
+        const enabledOutsideSupport = codeBuildPipelinePaths.filter(
+            (name) => pipelines[name]?.useCodeBuild === true
+        );
+        if (enabledOutsideSupport.length > 0) {
+            console.warn(
+                `Configuration Warning: useCodeBuild is true for ${enabledOutsideSupport
+                    .map((name) => `app.pipelines.${name}`)
+                    .join(", ")} while deploying to the '${resolvedPartition}' partition. The ` +
+                    "in-account CodeBuild container build is supported in the aws and aws-us-gov " +
+                    "partitions; elsewhere the build host cannot reach the public GPU base images " +
+                    "these containers pull. The build trigger does not wait for the build, so a " +
+                    "failure appears later as a container image-pull error rather than at deploy " +
+                    "time. Build the images out of band and supply an existing Amazon ECR " +
+                    "repository instead."
+            );
+        }
     }
 
     //If we are govCloud, check for certain features that are required to be on or off.
@@ -2569,7 +2621,11 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    // Validate IP ranges configuration
+    // Validate IP ranges configuration. Each entry is an inclusive [min, max] pair of literal
+    // addresses, of either family: the authorizer compares them numerically with Python's
+    // `ipaddress` module, so an IPv6 range is expressible and matches. Both endpoints of one
+    // entry must be the same family — a mixed pair has no meaningful ordering, and the authorizer
+    // skips it rather than allowing it, so rejecting it here is what surfaces the mistake.
     if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
         for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
             const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
@@ -2581,12 +2637,18 @@ export function getConfig(app: cdk.App): Config {
                 );
             }
 
-            // Basic IP format validation
-            const ipRegex =
-                /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-            if (!ipRegex.test(range[0]) || !ipRegex.test(range[1])) {
+            const minFamily = ipAddressFamily(range[0]);
+            const maxFamily = ipAddressFamily(range[1]);
+            if (minFamily === undefined || maxFamily === undefined) {
                 throw new Error(
-                    `Configuration Error: Invalid IP address format in range at index ${i}. Expected format: ["192.168.1.1", "192.168.1.255"]. Got: ${JSON.stringify(
+                    `Configuration Error: Invalid IP address format in range at index ${i}. Expected two IPv4 or two IPv6 literals, e.g. ["192.168.1.1", "192.168.1.255"] or ["2001:db8::", "2001:db8::ffff"]. Got: ${JSON.stringify(
+                        range
+                    )}`
+                );
+            }
+            if (minFamily !== maxFamily) {
+                throw new Error(
+                    `Configuration Error: IP range at index ${i} mixes IPv${minFamily} and IPv${maxFamily} endpoints. Both ends of a range must be the same address family. Got: ${JSON.stringify(
                         range
                     )}`
                 );
@@ -2764,6 +2826,77 @@ export function getConfig(app: cdk.App): Config {
     }
 
     return config;
+}
+
+/**
+ * Classifies an IP allow-list endpoint as IPv4 (4) or IPv6 (6), returning undefined when the
+ * value is neither. The IPv6 form accepts `::` compression and an IPv4-mapped tail
+ * (`::ffff:192.0.2.1`); a zone index (`%eth0`) and a prefix length (`/64`) are not addresses
+ * and are rejected, because an allow-list entry is a literal endpoint rather than a network.
+ * Exported for unit testing.
+ */
+export function ipAddressFamily(value: unknown): 4 | 6 | undefined {
+    if (typeof value !== "string") {
+        return undefined;
+    }
+    const address = value.trim();
+    if (address === "" || address.includes("%") || address.includes("/")) {
+        return undefined;
+    }
+    if (isIpv4Literal(address)) {
+        return 4;
+    }
+    return isIpv6Literal(address) ? 6 : undefined;
+}
+
+function isIpv4Literal(address: string): boolean {
+    return /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(
+        address
+    );
+}
+
+/**
+ * Structural IPv6 check: at most one `::`, hextets of 1-4 hex digits, an optional dotted-quad
+ * tail counting as two hextets, and a total of exactly 8 hextets without `::` or fewer than 8
+ * with it. A single regex for this is unreadable and historically gets the `::` cases wrong.
+ */
+function isIpv6Literal(address: string): boolean {
+    if (!address.includes(":")) {
+        return false;
+    }
+    const compressedParts = address.split("::");
+    if (compressedParts.length > 2) {
+        return false;
+    }
+    const compressed = compressedParts.length === 2;
+    // A leading or trailing `::` leaves an empty side, which contributes no hextets.
+    const sides = compressedParts.map((side) => (side === "" ? [] : side.split(":")));
+    if (sides.some((side) => side.some((hextet) => hextet === ""))) {
+        return false;
+    }
+
+    let hextetCount = 0;
+    for (let sideIndex = 0; sideIndex < sides.length; sideIndex++) {
+        const side = sides[sideIndex];
+        for (let partIndex = 0; partIndex < side.length; partIndex++) {
+            const part = side[partIndex];
+            const isLastPartOfAddress =
+                sideIndex === sides.length - 1 && partIndex === side.length - 1;
+            if (isLastPartOfAddress && part.includes(".")) {
+                if (!isIpv4Literal(part)) {
+                    return false;
+                }
+                hextetCount += 2;
+                continue;
+            }
+            if (!/^[0-9a-fA-F]{1,4}$/.test(part)) {
+                return false;
+            }
+            hextetCount += 1;
+        }
+    }
+
+    return compressed ? hextetCount < 8 : hextetCount === 8;
 }
 
 /**

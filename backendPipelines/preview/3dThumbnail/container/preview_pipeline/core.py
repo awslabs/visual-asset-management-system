@@ -8,8 +8,10 @@ Follows the pcPotreeViewer pipeline pattern: parse input, dispatch to handler, u
 
 import os
 import json
+import posixpath
 import numpy as np
 from pathlib import Path
+from urllib.parse import unquote
 
 from .utils.pipeline.objects import (
     PipelineDefinition,
@@ -32,6 +34,11 @@ logger = get_logger()
 
 # Maximum input file size: 100 GB
 MAX_INPUT_FILE_SIZE = 100 * 1024 * 1024 * 1024
+
+# Thumbnail formats the pipeline emits. auto animates when the renderer produced several frames and
+# writes a still otherwise; a named format applies to every input.
+OUTPUT_TYPE_AUTO = "auto"
+OUTPUT_TYPES = (OUTPUT_TYPE_AUTO, "gif", "jpg", "png")
 
 
 def hello():
@@ -174,6 +181,10 @@ def _run_preview_pipeline(
             overwrite_existing = str(overwrite_existing).strip().lower() not in ("false", "0", "no")
     logger.info(f"overwriteExistingPreviewFiles: {overwrite_existing}")
 
+    # Parse outputType parameter (default: auto)
+    output_type = _resolve_output_type(inputParametersObject)
+    logger.info(f"outputType: {output_type}")
+
     # Check if a preview file already exists for this input file
     input_basename = os.path.basename(stage_input.objectKey) if stage_input.objectKey else ""
     if input_basename:
@@ -293,17 +304,23 @@ def _run_preview_pipeline(
     try:
         # Use actual file basename (from local_filepath for localTest, objectKey for S3)
         input_basename = os.path.basename(local_filepath)
-        if len(frames) > 1:
-            output_filename = f"{input_basename}.previewFile.gif"
-        else:
-            output_filename = f"{input_basename}.previewFile.jpg"
+        # auto animates whenever the renderer produced more than one frame; a named format applies
+        # whatever the frame count, taking the middle frame for a still as the size-limit fallback does.
+        animate = len(frames) > 1 if output_type == OUTPUT_TYPE_AUTO else output_type == "gif"
+        still_extension = "png" if output_type == "png" else "jpg"
+        extension = "gif" if animate else still_extension
+        output_filename = f"{input_basename}.previewFile.{extension}"
 
         output_path = os.path.join(local_output_dir, output_filename)
 
-        if len(frames) > 1:
+        if animate:
             final_path = image_utils.ensure_under_size_limit(frames, output_path)
         else:
-            image_utils.save_jpeg(frames[0], output_path)
+            still_frame = frames[len(frames) // 2]
+            if still_extension == "png":
+                image_utils.save_png(still_frame, output_path)
+            else:
+                image_utils.save_jpeg(still_frame, output_path)
             final_path = output_path
 
         logger.info(f"Preview file generated: {final_path} "
@@ -345,6 +362,28 @@ def _run_preview_pipeline(
         return _error_response(stage, f"Failed to save/upload preview: {str(e)}")
 
     return _success_response(stage)
+
+
+def _resolve_output_type(inputParametersObject: dict) -> str:
+    """The thumbnail format the run writes, from the outputType input parameter.
+
+    A value that names no format carries the auto default rather than failing the run: the
+    parameter shipped for several releases as a comma-separated list of every format, so a
+    configuration cloned from one keeps the automatic behaviour it already had.
+    """
+    if not isinstance(inputParametersObject, dict):
+        return OUTPUT_TYPE_AUTO
+    requested = inputParametersObject.get("outputType") or OUTPUT_TYPE_AUTO
+    normalized = str(requested).strip().lower().lstrip(".")
+    if normalized == "jpeg":
+        normalized = "jpg"
+    if not normalized:
+        return OUTPUT_TYPE_AUTO
+    if normalized not in OUTPUT_TYPES:
+        logger.warning(f"outputType '{requested}' names no supported format, writing the "
+                       f"automatic format. Supported: {', '.join(OUTPUT_TYPES)}")
+        return OUTPUT_TYPE_AUTO
+    return normalized
 
 
 def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId: str) -> str:
@@ -526,14 +565,43 @@ def _download_gltf_dependencies(bucket_name: str, object_key: str, local_dir: st
 
     logger.info(f"Downloading {len(uris)} GLTF dependencies from S3")
     for uri in sorted(uris):
-        s3_key = f"{s3_dir}/{uri}" if s3_dir else uri
-        local_path = os.path.join(local_dir, uri)
+        resolved = _resolve_gltf_dependency(uri, local_dir)
+        if resolved is None:
+            logger.warning(f"  Skipping GLTF resource, URI is not a path within the input file's "
+                           f"directory: {uri}")
+            continue
+        relative_path, local_path = resolved
+        s3_key = f"{s3_dir}/{relative_path}" if s3_dir else relative_path
         # Create subdirectories if the URI has path components
         parent = os.path.dirname(local_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
         logger.info(f"  Downloading: {s3_key}")
         s3.download(bucket_name, s3_key, local_path)
+
+
+def _resolve_gltf_dependency(uri: str, local_dir: str):
+    """The (relative path, local path) a GLTF resource URI resolves to, or None when it does not
+    resolve to a path inside local_dir.
+
+    A .gltf file is ordinary asset content, so its buffer and image URIs carry whatever the uploader
+    wrote. The GLTF spec percent-encodes a URI and requires it to be relative to the .gltf file, so
+    the value is decoded first — validating the encoded spelling while downloading the decoded one
+    would check a different string than it uses — and then rejected when it is absolute, names a
+    parent directory, or resolves outside the download directory. The same relative path keys the S3
+    object, so a rejected URI is also one that would read outside the input file's own S3 prefix.
+    """
+    decoded = unquote(uri or "").strip()
+    if not decoded or "://" in decoded or "\\" in decoded:
+        return None
+    relative_path = posixpath.normpath(decoded)
+    if relative_path in (".", "..") or relative_path.startswith(("/", "../")):
+        return None
+    local_base = os.path.realpath(local_dir)
+    local_path = os.path.realpath(os.path.join(local_base, relative_path))
+    if local_path != local_base and not local_path.startswith(local_base + os.sep):
+        return None
+    return relative_path, local_path
 
 
 def _check_existing_preview(stage_input: StageInput, input_basename: str, localTest: bool) -> str:

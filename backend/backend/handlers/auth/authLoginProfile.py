@@ -10,7 +10,7 @@ from customConfigCommon.customAuthLoginProfile import customAuthProfileLoginWrit
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from common.resourceNames import get_table_name, ResourceKeys
-from common.validators import validate
+from common.validators import validate, normalize_userid
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_other
 from models.common import (
@@ -75,7 +75,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             authorizerUserId = claims_and_roles["tokens"][0]
 
         pathParameters = event.get('pathParameters') or {}
-        pathUserId = pathParameters.get('userId', "")
+        # Normalized before it is compared against the caller's identity, written as the profile
+        # row's key, or used to read that row back — all three must agree on one spelling.
+        pathUserId = normalize_userid(pathParameters.get('userId', ""))
 
         method = event['requestContext']['http']['method']
 

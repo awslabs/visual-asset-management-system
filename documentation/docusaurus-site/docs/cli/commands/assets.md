@@ -239,6 +239,7 @@ vamscli assets export [OPTIONS]
 | `-a`, `--asset-id`                       | TEXT    | Yes      | Root asset ID to export                                |
 | `--auto-paginate` / `--no-auto-paginate` | Flag    | No       | Enable/disable automatic pagination (default: enabled) |
 | `--max-assets`                           | INTEGER | No       | Maximum assets per page (1-1000, default: 100)         |
+| `--max-files`                            | INTEGER | No       | Maximum files per page (1-10000, default: 2000)        |
 | `--starting-token`                       | TEXT    | No       | Pagination token from previous response                |
 | `--no-fetch-relationships`               | Flag    | No       | Skip fetching relationships (single asset only)        |
 | `--fetch-entire-subtrees`                | Flag    | No       | Fetch complete descendant tree (all levels)            |
@@ -278,6 +279,12 @@ The two organization flags require `--download-files`, are mutually exclusive, a
 -   `--organize-by-asset` — files are written flat into `LOCAL_PATH/ASSET_ID/`.
 -   `--flatten-downloads` — files from every exported asset are written flat into `LOCAL_PATH/`.
     :::
+
+:::note[Exporting an asset with more files than one page carries]
+`--max-files` bounds the files one page returns across all of its assets, so a page can end before `--max-assets` assets. An asset holding more files than the budget is returned over successive pages, each resuming its file list where the last one stopped.
+
+`--auto-paginate` (the default) follows those pages and merges each asset's files into a single entry, so the combined output holds one record per asset with its complete file list. With `--no-auto-paginate`, an entry whose file list is partial reports `files_truncated`; pass the returned token to `--starting-token` to retrieve the rest of that asset before the export moves on to its siblings.
+:::
 
 ---
 
@@ -344,13 +351,13 @@ List all versions for an asset. Archived versions are hidden by default.
 vamscli asset-version list [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                                         |
-| ------------------ | ---- | -------- | ------------------------------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                                         |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                            |
-| `--show-archived`  | Flag | No       | Include archived versions                                           |
-| Pagination options |      | No       | `--page-size`, `--max-items`, `--starting-token`, `--auto-paginate` |
-| `--json-output`    | Flag | No       | Output raw JSON response                                            |
+| Option             | Type | Required | Description                                                                        |
+| ------------------ | ---- | -------- | ---------------------------------------------------------------------------------- |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                                                        |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                                           |
+| `--show-archived`  | Flag | No       | Include archived versions                                                          |
+| Pagination options |      | No       | `--page-size` (maximum 1000), `--max-items`, `--starting-token`, `--auto-paginate` |
+| `--json-output`    | Flag | No       | Output raw JSON response                                                           |
 
 ---
 
@@ -445,6 +452,10 @@ vamscli asset-links get --asset-link-id <UUID>
 vamscli asset-links update --asset-link-id <UUID> --tags new-tag
 vamscli asset-links delete --asset-link-id <UUID>
 ```
+
+:::note[Reading a large tree]
+A `--tree-view` listing walks at most 100 levels and 10,000 assets. When it reaches either ceiling, the output says the tree is incomplete (`treeTruncated` in `--json-output`) — list the links of an asset further down the tree for the rest of it. Links whose asset could not be read are reported separately from unauthorized ones, under `Unresolved Assets` (`unresolvedCounts` in `--json-output`), and usually clear on a retry.
+:::
 
 ---
 

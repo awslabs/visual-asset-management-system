@@ -261,6 +261,86 @@ class TestWorkflowTrigger:
             assert result.exit_code == 0
             assert 'fileUpload' in result.output
 
+    def test_trigger_list_no_flags_sends_no_pagination_parameters(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_triggers.return_value = {
+                'message': {'Items': [{'triggerType': 'fileUpload', 'enabled': True}]}}
+            result = cli_runner.invoke(cli, ['workflow', 'trigger', 'list', '-d', 'my-db',
+                                             '-w', 'wf1'])
+            assert result.exit_code == 0
+            assert 'Next token' not in result.output
+            assert mocks['api_client'].list_workflow_triggers.call_args.kwargs['params'] == {}
+
+    def test_trigger_list_forwards_the_paging_parameters(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_triggers.return_value = {
+                'message': {'Items': [{'triggerType': 'fileUpload', 'enabled': True}],
+                            'NextToken': 'tok-2'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'trigger', 'list', '-d', 'my-db', '-w', 'wf1',
+                '--page-size', '1', '--starting-token', 'tok-1'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].list_workflow_triggers.call_args.kwargs['params'] == {
+                'pageSize': 1, 'startingToken': 'tok-1'}
+            # A truncated page must offer its token, or the operator is stranded on page one.
+            assert 'tok-2' in result.output
+
+    def test_trigger_list_auto_paginate_walks_the_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_triggers.side_effect = [
+                {'message': {'Items': [{'triggerType': 'fileUpload', 'enabled': True}],
+                             'NextToken': 't1'}},
+                {'message': {'Items': [{'triggerType': 'fileUpload#second', 'enabled': True}]}},
+            ]
+            result = cli_runner.invoke(cli, ['workflow', 'trigger', 'list', '-d', 'my-db',
+                                            '-w', 'wf1', '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert [t['triggerType'] for t in data['Items']] == ['fileUpload',
+                                                                 'fileUpload#second']
+            assert data['pageCount'] == 2
+            assert mocks['api_client'].list_workflow_triggers.call_args_list[1].kwargs[
+                'params']['startingToken'] == 't1'
+
+    def test_trigger_list_auto_paginate_stops_on_an_empty_page(
+            self, cli_runner, generic_command_mocks):
+        # A bounded page can be empty and still carry a token, so the walk must not spin.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_triggers.side_effect = [
+                {'message': {'Items': [{'triggerType': 'fileUpload', 'enabled': True}],
+                             'NextToken': 't1'}},
+                {'message': {'Items': [], 'NextToken': 't2'}},
+            ]
+            result = cli_runner.invoke(cli, ['workflow', 'trigger', 'list', '-d', 'my-db',
+                                            '-w', 'wf1', '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert len(data['Items']) == 1
+            assert mocks['api_client'].list_workflow_triggers.call_count == 2
+
+    def test_trigger_list_rejects_auto_paginate_with_a_starting_token(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            result = cli_runner.invoke(cli, ['workflow', 'trigger', 'list', '-d', 'my-db',
+                                            '-w', 'wf1', '--auto-paginate',
+                                            '--starting-token', 'tok'])
+            assert result.exit_code != 0
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+            mocks['api_client'].list_workflow_triggers.assert_not_called()
+
+    def test_trigger_list_empty_page_with_a_token_still_offers_it(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_triggers.return_value = {
+                'message': {'Items': [], 'NextToken': 'tok-3'}}
+            result = cli_runner.invoke(cli, ['workflow', 'trigger', 'list', '-d', 'my-db',
+                                            '-w', 'wf1', '--page-size', '1'])
+            assert result.exit_code == 0
+            assert 'more pages available' in result.output
+            assert 'tok-3' in result.output
+
     def test_trigger_get(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('workflow') as mocks:
             mocks['api_client'].get_workflow_trigger.return_value = {

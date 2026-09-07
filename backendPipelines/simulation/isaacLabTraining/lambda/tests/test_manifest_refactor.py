@@ -3,9 +3,9 @@
 
 """Tests for the Stage-3 manifest refactor of the simulation/isaacLabTraining pipeline. This
 pipeline has no constructPipeline lambda — vamsExecute IS the entry point that reads the input
-configuration from S3 (to extract trainingConfig/computeConfig), threads metadata + config S3
-LOCATIONS into the internal SFN (never inline content), and best-effort registers the sub-SFN
-execution. openPipeline threads the locations into the job-config return."""
+configuration from S3 (to extract trainingConfig), threads metadata + config S3 LOCATIONS into the
+internal SFN (never inline content), and best-effort registers the sub-SFN execution. openPipeline
+threads the locations into the job-config return."""
 
 import os
 import sys
@@ -103,9 +103,10 @@ class TestVamsExecute:
             resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
         assert resp["statusCode"] == 200
         sfn_input = json.loads(start.call_args.kwargs["input"])
-        # Config read from S3 -> trainingConfig/computeConfig extracted at the boundary.
+        # Config read from S3 -> trainingConfig extracted at the boundary. The pipeline is
+        # single-node only, so the computeConfig the config file carries is not threaded.
         assert sfn_input["trainingConfig"] == {"epochs": 10}
-        assert sfn_input["computeConfig"] == {"numNodes": 2}
+        assert "computeConfig" not in sfn_input
         # Manifest-resolved input + identity.
         assert sfn_input["inputS3AssetFilePath"] == "s3://abkt/xidM/scene.usd"
         assert sfn_input["assetId"] == "xidM"

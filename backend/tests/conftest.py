@@ -168,6 +168,62 @@ _ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
 _ddbmk_module = _s3mk_importlib_util.module_from_spec(_ddbmk_spec)
 _ddbmk_spec.loader.exec_module(_ddbmk_module)
 sys.modules['common.dynamoDbMetadataKeys'] = _ddbmk_module
+# batchItemFailures is pure dict/list arithmetic over an event (no AWS deps), so load the REAL module
+# for the same reason as the two above. It MUST be registered here: `common` is a MagicMock, which is
+# not a package, so `from common.batchItemFailures import ...` in a handler raises
+# "No module named 'common.batchItemFailures'; 'common' is not a package" at collection — a failure that
+# names the importing handler rather than this file.
+_bif_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.batchItemFailures',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'batchItemFailures.py')
+)
+_bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
+_bif_spec.loader.exec_module(_bif_module)
+sys.modules['common.batchItemFailures'] = _bif_module
+sys.modules['common'].batchItemFailures = _bif_module
+# `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
+# REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
+# a handler does `from common.dynamodb import query_all_items` at import time, so it captures
+# whatever this attribute is THEN. Left as a MagicMock attribute, every paged read in
+# assetVersions, assetLinksService, createAssetLink, assetFiles and assetExportService returns a
+# MagicMock; `MagicMock.__iter__` yields nothing, so the caller sees an empty list, the table stub is
+# never read, and a test written to prove the loop reaches page two passes its own stub zero times
+# and asserts against `[]`. That failure names the handler, not the mock, which is why it cost a full
+# wave-end run to attribute.
+#
+# Safe against an under-stubbed table: the real helper decides on `'LastEvaluatedKey' not in
+# response`, and `MagicMock.__contains__` is False, so a bare mock reader is read exactly once and
+# the loop ends rather than spinning.
+_real_ddb_spec = _s3mk_importlib_util.spec_from_file_location(
+    '_real_common_dynamodb_for_query_all_items',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'dynamodb.py')
+)
+_real_ddb_module = _s3mk_importlib_util.module_from_spec(_real_ddb_spec)
+_real_ddb_spec.loader.exec_module(_real_ddb_module)
+sys.modules['common.dynamodb'].query_all_items = _real_ddb_module.query_all_items
+# validate_pagination_info MUTATES the query-parameter dict to fill maxItems/pageSize/startingToken,
+# and its callers then subscript those keys. A MagicMock stand-in accepts the call and fills nothing,
+# so the next line raises KeyError and the handler answers 500 — a failure that reads as a paging
+# defect in the handler. The real helper is pure dict arithmetic with no AWS dependency.
+sys.modules['common.dynamodb'].validate_pagination_info = _real_ddb_module.validate_pagination_info
+# The paginator-budget ceilings are plain ints that handlers import at module level and then compare
+# against with min(). A MagicMock attribute raises `'<' not supported between instances of MagicMock
+# and int` inside the handler, which reads as a paging defect there rather than as a mock gap. Bound
+# from the real module so a test asserting a bounded PaginationConfig sees the deployed number.
+sys.modules['common.dynamodb'].MAX_PAGINATION_MAX_ITEMS = _real_ddb_module.MAX_PAGINATION_MAX_ITEMS
+sys.modules['common.dynamodb'].MAX_PAGINATION_PAGE_SIZE = _real_ddb_module.MAX_PAGINATION_PAGE_SIZE
+# query_has_match is the existence-check half of the same pair, and needs binding for the same reason
+# and with a sharper consequence: it returns a BOOL, so a MagicMock stand-in returns a truthy mock and
+# every existence check answers "yes". The Garnet indexers import it at module level
+# (`from common.dynamodb import query_all_items, query_has_match`), unlike the indexing indexers, which
+# define their own copy — so only the Garnet suite was exposed, and it read every relationship flag as
+# the same shared mock object rather than True/False.
+#
+# It was ALSO an ordering dependency, which is the part worth keeping in mind: the Garnet paging suite
+# passed in a full run and failed 7 of 19 when run alone, because the value this attribute holds at the
+# moment a module executes `from common.dynamodb import ...` depends on what has already run. A suite
+# that is the sole coverage for a finding must not depend on its neighbours being collected first.
+sys.modules['common.dynamodb'].query_has_match = _real_ddb_module.query_has_match
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path
 # rather than a MagicMock (same approach as s3MetadataKeys above).
 _apir_spec = _s3mk_importlib_util.spec_from_file_location(

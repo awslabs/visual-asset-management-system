@@ -7,13 +7,15 @@ Run from this directory:  python -m pytest tests/test_mismatch_failure_reporting
 
 This is the second half of the S33-CDK-015 fix, and it exists because the first half would have made
 things worse on its own. Setting the built-in template's `onMismatch` to `error` makes coord_xform reject
-a declared source CRS the file contradicts — but it rejects it by raising `SystemExit`
-(coord_xform/pipeline.py:152), which derives from BaseException, NOT from Exception. The container's
-`except Exception` therefore could not catch it.
+a declared source CRS the file contradicts. It originally rejected it by raising `SystemExit`, which
+derives from BaseException and NOT from Exception, so the container's `except Exception` could not catch
+it. The rejection is now a `CrsValidationError(Exception)`; core.py continues to name `SystemExit` in its
+except clause as well, so both carriers are parametrized below. The property under test is that the
+rejection REACHES `run()`'s reporting block, whichever exception carries it — not which class it is.
 
 The consequence is specific to this pipeline's two-token design. The container reports the INTERNAL token
 (`TASK_TOKEN`, consumed by the sub-state-machine's WAIT_FOR_TASK_TOKEN task); `pipelineEnd` reports the
-EXTERNAL VAMS workflow token. An uncaught SystemExit skips `run()`'s reporting block, so:
+EXTERNAL VAMS workflow token. A rejection that escapes `run()`'s reporting block means:
 
     container exits 1  ->  Batch job FAILED  ->  but WAIT_FOR_TASK_TOKEN does not observe a job exit
                        ->  the task waits its full 4-hour taskTimeout
@@ -62,14 +64,45 @@ def stub_download(monkeypatch):
     monkeypatch.setattr(core.s3, "download", lambda bucket, key, dest: dest)
 
 
-def _raise_system_exit(*_args, **_kwargs):
+_REJECTION_MESSAGE = "CRS validation failed:\n  cloud.laz: detected EPSG:32613, configured EPSG:4326"
+
+
+class _StubCrsValidationError(Exception):
+    """Stands in for coord_xform's `CrsValidationError`.
+
+    The real class cannot be imported here for the same reason `coord_xform.pipeline` is stubbed at all:
+    it requires pydantic>=2.0 while this interpreter runs the backend's 1.10.13. What core.py depends on
+    is the exception's BASE rather than its identity — an Exception subclass is caught by a plain
+    `except Exception` — and that is the property these tests pin.
+    """
+
+
+def _raise_crs_rejection(*_args, **_kwargs):
     """What coord_xform does when on_mismatch is ERROR and the file's CRS disagrees."""
-    raise SystemExit("CRS validation failed:\n  cloud.laz: detected EPSG:32613, configured EPSG:4326")
+    raise _StubCrsValidationError(_REJECTION_MESSAGE)
 
 
-def test_a_crs_mismatch_rejection_marks_the_stage_failed(monkeypatch, stub_download):
+def _raise_system_exit(*_args, **_kwargs):
+    """The ORIGINAL carrier, kept deliberately rather than deleted.
+
+    core.py still names SystemExit in its except clause. Keeping a case for it pins that narrowing the
+    rejection to an Exception did not leave that arm silently load-bearing — if someone removes it, the
+    SystemExit-parametrized cases are what fail, instead of the removal looking free.
+    """
+    raise SystemExit(_REJECTION_MESSAGE)
+
+
+# Both carriers must reach the reporting block. The ids name which is which in the failure output.
+REJECTION_CARRIERS = [
+    pytest.param(_raise_crs_rejection, id="CrsValidationError"),
+    pytest.param(_raise_system_exit, id="SystemExit"),
+]
+
+
+@pytest.mark.parametrize("carrier", REJECTION_CARRIERS)
+def test_a_crs_mismatch_rejection_marks_the_stage_failed(carrier, monkeypatch, stub_download):
     """The stage must be FAILED, and the operator-visible message must carry the reason."""
-    monkeypatch.setattr(PIPELINE_STUB, "run_pipeline", _raise_system_exit)
+    monkeypatch.setattr(PIPELINE_STUB, "run_pipeline", carrier)
 
     stage = core._run_transform_stage(_stage(), "", PARAMS, local_test=False)
 
@@ -78,20 +111,22 @@ def test_a_crs_mismatch_rejection_marks_the_stage_failed(monkeypatch, stub_downl
     assert "EPSG:32613" in stage.errorMessage, "the detected CRS is what tells the operator what to fix"
 
 
-def test_the_rejection_does_not_escape_the_handler(monkeypatch, stub_download):
+@pytest.mark.parametrize("carrier", REJECTION_CARRIERS)
+def test_the_rejection_does_not_escape_the_handler(carrier, monkeypatch, stub_download):
     """The regression guard proper.
 
     Before the fix this call raised SystemExit out of `_run_transform_stage`, past `run()`'s reporting
     block. Pinning that it RETURNS is what distinguishes an immediate failure from a 4-hour wait.
     """
-    monkeypatch.setattr(PIPELINE_STUB, "run_pipeline", _raise_system_exit)
+    monkeypatch.setattr(PIPELINE_STUB, "run_pipeline", carrier)
 
     stage = core._run_transform_stage(_stage(), "", PARAMS, local_test=False)  # must not raise
 
     assert stage is not None
 
 
-def test_send_task_failure_is_what_fires(monkeypatch):
+@pytest.mark.parametrize("carrier", REJECTION_CARRIERS)
+def test_send_task_failure_is_what_fires(carrier, monkeypatch):
     """The load-bearing assertion: run() must call SendTaskFailure, not SendTaskSuccess and not neither.
 
     A test that checked only the stage status would pass against a build where the exception escaped
@@ -99,7 +134,7 @@ def test_send_task_failure_is_what_fires(monkeypatch):
     """
     calls = []
     monkeypatch.setattr(core.s3, "download", lambda bucket, key, dest: dest)
-    monkeypatch.setattr(PIPELINE_STUB, "run_pipeline", _raise_system_exit)
+    monkeypatch.setattr(PIPELINE_STUB, "run_pipeline", carrier)
     monkeypatch.setattr(core.sfn, "send_task_failure", lambda msg="": calls.append(("failure", msg)))
     monkeypatch.setattr(core.sfn, "send_task_success", lambda out: calls.append(("success", out)))
     monkeypatch.setattr(core.sfn, "send_task_heartbeat", lambda token: None)
@@ -149,7 +184,10 @@ def test_an_output_validation_failure_also_reports_failure(monkeypatch, tmp_path
     class _Report:
         errors = []
         total_points_processed = 0
-        output_files = []
+        # Non-empty on purpose. `core.run` refuses to publish an EMPTY output list before it validates
+        # what was written, so an empty list here would trip that earlier guard and this test would
+        # assert against "produced no output files" instead of the validation error it exists to pin.
+        output_files = ["cloud_EPSG_27700.laz"]
 
     monkeypatch.setattr(PIPELINE_STUB, "run_pipeline", lambda cfg, inputs: _Report())
 
@@ -272,17 +310,18 @@ def test_pipeline_contract_is_unstubbed():
         "core.py imports run_pipeline by name; a rename breaks the container while the stub keeps "
         "these tests green"
     )
-    assert "raise SystemExit(" in source, (
-        "the SystemExit is the whole reason core.py names it in the except clause — if this raise "
-        "became a plain Exception the except clause could be narrowed again"
+    assert "raise CrsValidationError(" in source, (
+        "the rejection must be raised as a named exception the container can report; if this raise "
+        "disappears, a CRS mismatch stops reaching core.py's reporting block at all"
     )
-    assert source.count("raise SystemExit(") == 1, (
-        "a second SystemExit path would need its own consideration: SystemExit is caught broadly in "
-        "core.py, so a new one raised for an unrelated reason would be silently converted to a "
-        "FAILED stage"
+    assert "raise SystemExit(" not in source, (
+        "the rejection must derive from Exception, not BaseException. A SystemExit only reaches "
+        "core.py while its except clause explicitly names SystemExit, so the reporting path depended "
+        "on a second file continuing to catch a BaseException — a plain `except Exception` anywhere in "
+        "the chain silently restored the 4-hour taskTimeout hang instead of a reported failure"
     )
 
-    # _handle_validation runs before the per-file loop, outside any try, which is why the SystemExit
+    # _handle_validation runs before the per-file loop, outside any try, which is why the exception
     # reaches core.py at all rather than being folded into report.errors by the loop's own handler.
     validation_call = source.index("_handle_validation(config, validation_results)")
     loop_start = source.index("for input_path in inputs:")

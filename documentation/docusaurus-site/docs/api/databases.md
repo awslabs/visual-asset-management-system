@@ -6,6 +6,10 @@ The Databases API allows you to create, retrieve, update, and delete databases. 
 All endpoints require a valid JWT token in the `Authorization` header. Database endpoints enforce Casbin authorization using the `database` object type.
 :::
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `description` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## List all databases

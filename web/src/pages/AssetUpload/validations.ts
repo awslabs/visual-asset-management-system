@@ -26,11 +26,16 @@ export const validateEntityIdAsYouType = (s?: string): string | undefined => {
 };
 
 export const validateNonZeroLengthTextAsYouType = (s?: string): string | undefined => {
-    if (!s) {
+    // The API removes surrounding whitespace before applying its own length constraint, so the
+    // trimmed length is what decides whether a value is accepted. Measuring the raw length here
+    // would let a padded short value through the form and surface as a server rejection instead of
+    // an inline message.
+    const trimmed = s?.trim();
+    if (!trimmed) {
         return "Required field.";
     }
 
-    if (s.length < 4) {
+    if (trimmed.length < 4) {
         return "Must be at least 4 characters.";
     }
 };
@@ -84,3 +89,29 @@ export const validateRequiredTagTypeSelected = (
         }
     }
 };
+
+/**
+ * Wizard steps that are declared `isOptional: false` in the upload wizard, by index.
+ *
+ * Kept here rather than derived from the `steps` array because that array is built inline in the
+ * wizard's JSX, after the submit handler that has to consult it.
+ */
+export const REQUIRED_UPLOAD_STEP_INDEXES = [0, 1];
+
+/**
+ * The first non-optional step that has not reported itself valid, or `undefined` when all have.
+ *
+ * This gates SUBMIT, not navigation. The wizard sets `allowSkipTo`, and its `onNavigate` can only
+ * validate the step being LEFT — so from a valid step 0, "Skip to Select Files to upload" jumps over
+ * the metadata step even though that step is `isOptional: false`. Gating navigation cannot close that
+ * without breaking skip-to, which other flows and a Playwright spec rely on; gating submit closes it
+ * while leaving skip-to intact.
+ *
+ * `!validSteps[i]` treats a missing entry as invalid on purpose: a step that has never reported is not
+ * a step that has passed, and an under-sized `validSteps` array is exactly how index 3 read `undefined`
+ * before.
+ */
+export const firstIncompleteRequiredStep = (
+    validSteps: readonly (boolean | undefined)[],
+    requiredIndexes: readonly number[] = REQUIRED_UPLOAD_STEP_INDEXES
+): number | undefined => requiredIndexes.find((i) => !validSteps[i]);

@@ -9,7 +9,7 @@ from botocore.config import Config
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
-from common.validators import validate
+from common.validators import validate, normalize_userid
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -680,15 +680,22 @@ def _read_result_content(bucket_name, result_key, listed_size=None):
 
     Never reads more than RESULT_CONTENT_READ_BYTES: an object the listing reports as larger than the
     row's text budget is fetched with a ranged GET, since everything past the budget is discarded by
-    build_output_result_record anyway. The ranged read can split a multi-byte character at the
-    boundary, so only that path decodes tolerantly; a whole-object read still surfaces a genuinely
-    undecodable file as a failure."""
+    build_output_result_record anyway. A ranged read can split a multi-byte character at its final
+    byte, so that one partial character is dropped; anything else that does not decode is the file
+    rather than the range, so a file that is not text fails the read at any size."""
     if listed_size is not None and listed_size <= er.MAX_TEXT_FIELD_BYTES:
         return s3c.get_object(Bucket=bucket_name, Key=result_key)['Body'].read().decode("utf-8")
     body = s3c.get_object(
         Bucket=bucket_name, Key=result_key,
         Range=f"bytes=0-{RESULT_CONTENT_READ_BYTES - 1}")['Body'].read()
-    return body.decode("utf-8", errors="ignore")
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError as e:
+        # A UTF-8 sequence is at most 4 bytes, so only the last character can be cut by the range
+        # boundary; an error starting earlier than that is the object's own content.
+        if e.start < len(body) - 3:
+            raise
+        return body[:e.start].decode("utf-8")
 
 
 def _collect_result_outputs(bucket_name, results_path_key, objects_found):
@@ -928,12 +935,38 @@ def _validation_failure(event, message):
     return validation_error(body={"message": message})
 
 
+_OUTPUT_PATH_KEYS = ('filesPathKey', 'metadataPathKey', 'previewPathKey', 'resultsPathKey')
+
+
+def _resolve_output_path_keys(event):
+    """Join the run bucket's VAMS-owned area onto the four output path keys, in place.
+
+    The state machine supplies them relative to that area — anchored at 'pipelines/' — which is the
+    shape ASSET_PATH_PIPELINE validates, so this runs AFTER validation. Joining first would fail every
+    prefixed run's validation outright and ingest no outputs at all, which is why the two steps are
+    ordered rather than combined. Absent or empty keys are left alone: an unset path key must not
+    become the prefix itself.
+
+    Called exactly once per invocation on each of the two terminal paths (results-only and the asset
+    write-back), so no key is joined twice.
+    """
+    base_prefix = er.normalize_base_prefix(
+        event.get('workflowExecutionS3InputOutputBasePrefix', ''))
+    if not base_prefix:
+        return
+    for key_name in _OUTPUT_PATH_KEYS:
+        if event.get(key_name):
+            event[key_name] = er.run_bucket_key(base_prefix, event[key_name])
+
+
 def _process_results_only(event):
     """End-state processing for a results-only execution (outputLocationType 'none'): no output asset,
     no file/metadata ingestion. Reads the pipeline's results text from the run I/O bucket and records
     only results + logs + completion status against the execution transaction. Used by pipelines that
     return a textual response (e.g. LLM-style) rather than asset files."""
     logger.info("Results-only execution (outputLocationType 'none'); recording results + logs, no asset ingestion")
+    # This path runs before the path-key validation below, so it resolves its own key.
+    _resolve_output_path_keys(event)
     source_bucket = event.get('workflowExecutionS3InputOutputBucket', '')
 
     collected_output_results = []
@@ -1023,6 +1056,10 @@ def lambda_handler(event, context):
 
 
         logger.info("Validating parameters")
+        # The executing identity is attributed to every output this writes, so it carries the same
+        # normalized spelling as the identity the execution was started with
+        event['executingUserName'] = normalize_userid(event['executingUserName'])
+
         #required fields
         (valid, message) = validate({
             'databaseId': {
@@ -1055,6 +1092,10 @@ def lambda_handler(event, context):
         })
         if not valid:
             return _validation_failure(event, message)
+
+        # The path keys are validated in the VAMS-area-relative form the state machine supplies, then
+        # resolved against the run bucket's area so the listings below read where the pipelines wrote.
+        _resolve_output_path_keys(event)
 
         requestContext = event['executingRequestContext']
         event["requestContext"] = requestContext

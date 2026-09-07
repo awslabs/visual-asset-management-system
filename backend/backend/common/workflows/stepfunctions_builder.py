@@ -393,19 +393,28 @@ def update_state_machine(
 def format_s3_uri_with_states_format(
     bucket_param: str,
     path_template: str,
-    execution_name_placeholder: str = "$$.Execution.Name"
+    execution_name_placeholder: str = "$$.Execution.Name",
+    base_prefix_param: str = ""
 ) -> str:
     """
     Create a States.Format expression for dynamic S3 URIs.
-    
+
     Args:
         bucket_param: JSONPath to the bucket name (e.g., "$.workflowExecutionS3InputOutputBucket")
         path_template: Path template with {} placeholder for execution name
         execution_name_placeholder: JSONPath for execution name
-        
+        base_prefix_param: JSONPath to the bucket's VAMS-owned area, inserted between the bucket and
+            the path (e.g., "$.workflowExecutionS3InputOutputBasePrefix"). The value it resolves to is
+            expected already normalized -- "" for the bucket root, otherwise one trailing slash -- so
+            the same template serves a prefixed and an unprefixed default bucket. Omit it only for a
+            bucket that has no such area, such as the auxiliary bucket.
+
     Returns:
         States.Format expression string
     """
+    if base_prefix_param:
+        return (f"States.Format('s3://{{}}/{{}}" + path_template
+                + f"', {bucket_param}, {base_prefix_param}, {execution_name_placeholder})")
     return f"States.Format('s3://{{}}/" + path_template + f"', {bucket_param}, {execution_name_placeholder})"
 
 

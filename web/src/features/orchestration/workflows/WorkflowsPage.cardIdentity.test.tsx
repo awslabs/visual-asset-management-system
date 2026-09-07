@@ -62,8 +62,10 @@ const workflow = (id: string, name: string) => ({
 });
 
 const ALPHA = workflow("wf-alpha", "Workflow Alpha");
-// Same workflow id in a DIFFERENT database: ids are unique only within one, so a key built from the
-// id alone would collide these two onto one card.
+// Same workflow id in a DIFFERENT database. Create rejects an id another database already owns, so
+// this pair is not a shape the API mints; the composite card key is what keeps two such rows apart
+// when a dataset predating that check, or an id-uniqueness lookup that stopped at its page cap and
+// treated the id as free, produces them. A key built from the id alone collides them onto one card.
 const ALPHA_ELSEWHERE = { ...workflow("wf-alpha", "Workflow Alpha"), databaseId: "db2" };
 const BETA = workflow("wf-beta", "Workflow Beta");
 

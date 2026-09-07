@@ -10,12 +10,19 @@ import boto3
 import json
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 
 logger = safeLogger(service="VamsExecutePreviewPcPotreeViewerPipeline")
-lambda_client = boto3.client('lambda')
-s3_client = boto3.client('s3')
-sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+lambda_client = boto3.client('lambda', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
@@ -50,6 +57,14 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
     if 'StatusCode' not in lambda_response or lambda_response['StatusCode'] != 200:
         message = lambda_response.get("body", {}).get("message", "")
         raise Exception("Invoke Open Pipeline Lambda Failed. " + message)
+
+    # A handled invocation still returns StatusCode 200 when the invoked function raised: the
+    # failure is reported via FunctionError. Without this check an unhandled error in
+    # openPipeline reads as success here, so no task-token failure is ever sent and the
+    # workflow's callback task blocks until taskTimeout.
+    if lambda_response.get('FunctionError'):
+        raise Exception(
+            "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get('FunctionError')))
 
 
 def abort_external_workflow(error, task_token):
@@ -122,15 +137,18 @@ def lambda_handler(event, context):
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Potree writes its octree viewer data to the per-input-file aux preview location. The
-        # viewer subfolder comes from the manifest's auxPreviewPipelineSuffix; until that is
-        # sourced from the pipeline configuration it is empty, so fall back to the hardcoded
-        # "PotreeViewer" subfolder here to keep the viewer path intact.
+        # viewer subfolder comes from the manifest's auxPreviewPipelineSuffix; a pipeline record
+        # that declares none leaves it empty, so default to the "PotreeViewer" subfolder here to
+        # keep the viewer path intact.
         inputOutputS3AssetAuxiliaryFilesPath = resolved['auxPreviewS3Path']
         if not resolved.get('auxPreviewPipelineSuffix') and inputOutputS3AssetAuxiliaryFilesPath:
             inputOutputS3AssetAuxiliaryFilesPath = inputOutputS3AssetAuxiliaryFilesPath.rstrip('/') + "/PotreeViewer"
 
-        # Starts excution of pipeline
-        execute_pipeline(resolved['inputS3AssetFilePath'], '', '', '', inputOutputS3AssetAuxiliaryFilesPath
+        # Starts excution of pipeline. The container writes only to the aux preview location, but
+        # the asset output paths are still forwarded so a later stage of this pipeline can use them.
+        execute_pipeline(resolved['inputS3AssetFilePath'], resolved['outputS3AssetFilesPath']
+                                            , resolved['outputS3AssetPreviewPath'], resolved['outputS3AssetMetadataPath']
+                                            , inputOutputS3AssetAuxiliaryFilesPath
                                             , resolved['inputMetadataS3Location'], resolved['inputConfigurationS3Location'], external_task_token
                                             , executing_userName, executing_requestContext, resolved['orchestrationEventPrefix'])
 

@@ -260,6 +260,10 @@ Do not run lint or prettier commands from individual subdirectories. The root-le
 | `USE_LOCAL_MOCKS`      | Enable local mock mode (`true`)     |
 | `COGNITO_AUTH_ENABLED` | Enable/disable Cognito auth locally |
 
+:::note
+`USE_LOCAL_MOCKS` applies to the local mock server only. A deployed AWS Lambda function resolves its resource names from AWS Systems Manager Parameter Store and therefore carries `VAMS_RESOURCE_PARAM_PREFIX` in its environment. The auth routes handler ignores `USE_LOCAL_MOCKS` whenever that variable is set, records the combination as an error in its log, and evaluates every submitted web route against the caller's permissions.
+:::
+
 ### Infrastructure
 
 | Variable                         | Description                                  |

@@ -75,10 +75,12 @@ describe("ExecutionDetailPage", () => {
                 workflowDatabaseId: "db-1",
                 executionStatus: "SUCCEEDED",
                 workflowSystemConfig: { inputFileArity: "one", concurrencyRestriction: "perAsset" },
+                // `name` is the key the backend emits for a pipeline entry
+                // (executionService._scrub_pipeline_detail); there is no pipelineName.
                 pipelines: [
                     {
                         pipelineId: "p1",
-                        pipelineName: "Cosmos 3 Nano",
+                        name: "Cosmos 3 Nano",
                         executionStatus: "SUCCEEDED",
                         templateId: "cosmos3-nano-text2video",
                         effectiveSystemConfig: { inputFileArity: "one", requireTemplate: true },
@@ -105,8 +107,10 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getByText(/Workflow settings \(current\)/i)).toBeInTheDocument();
         expect(screen.getByText(/can differ if/i)).toBeInTheDocument();
 
-        // Per-step card names the step and its template.
+        // Per-step card names the step and its template. Reading the wrong name key leaves the
+        // fallback to win, labelling the snapshot with an id while the Pipelines tab shows a name.
         expect(screen.getByText(/Step 1: Cosmos 3 Nano/)).toBeInTheDocument();
+        expect(screen.queryByText("Step 1: p1")).not.toBeInTheDocument();
         expect(screen.getByText("cosmos3-nano-text2video")).toBeInTheDocument();
 
         // Settings are rendered with readable labels, not raw camelCase keys.

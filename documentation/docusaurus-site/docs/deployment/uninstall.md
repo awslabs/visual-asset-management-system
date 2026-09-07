@@ -5,7 +5,7 @@ This page describes how to completely remove VAMS from your AWS account, includi
 :::danger[Permanent data loss]
 Uninstalling VAMS removes the AWS Lambda functions, Amazon API Gateway endpoints, and other managed resources for the deployment. The Amazon DynamoDB tables and the asset, auxiliary, artefacts, and access logs Amazon Simple Storage Service (Amazon S3) buckets are retained by design and are deleted only by the manual cleanup steps below, which permanently destroy their contents. This action cannot be undone. Ensure you have backed up all data you intend to keep before proceeding.
 
-When the deployment uses AWS Key Management Service (AWS KMS) customer-managed key encryption (`app.useKmsCmkEncryption.enabled: true`), the VAMS-generated key is retained with the same design, which is what keeps the retained tables and buckets readable after the stack is gone. Scheduling that key for deletion makes their contents permanently undecryptable, so delete the key last — see [Step 7](#step-7-delete-the-aws-kms-key).
+When the deployment uses AWS Key Management Service (AWS KMS) customer-managed key encryption (`app.useKmsCmkEncryption.enabled: true`), the VAMS-generated key is retained with the same design, which is what keeps the retained tables and buckets readable after the stack is gone. Scheduling that key for deletion makes their contents permanently undecryptable, so delete the key last — see [Step 8](#step-8-delete-the-aws-kms-key).
 :::
 
 ## Pre-uninstall backup
@@ -73,7 +73,7 @@ External S3 buckets configured via `externalAssetBuckets` in `config.json` are n
 
 ### Record stack resource identifiers
 
-Save the CloudFormation stack outputs and resource identifiers for reference during manual cleanup. Most VAMS resources live in nested stacks, so record those as well — this is where the physical identifier of the retained AWS KMS key is captured for [Step 7](#step-7-delete-the-aws-kms-key):
+Save the CloudFormation stack outputs and resource identifiers for reference during manual cleanup. Most VAMS resources live in nested stacks, so record those as well — this is where the physical identifier of the retained AWS KMS key is captured for [Step 8](#step-8-delete-the-aws-kms-key):
 
 ```bash
 aws cloudformation describe-stacks \
@@ -131,10 +131,10 @@ aws cloudformation delete-stack \
     --retain-resources <RESOURCE_LOGICAL_ID_1> <RESOURCE_LOGICAL_ID_2>
 ```
 
-Then manually delete the retained resources using the steps in Step 2 through Step 10.
+Then manually delete the retained resources using the steps in Step 2 through Step 11.
 
 :::note[Amazon SQS queues are deleted with the stack]
-Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes the file and asset indexer queues, the two Physna sync queues when Physna sync is enabled, and the dead-letter queue each of them redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
+Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
 
 Check the indexer dead-letter queues before deleting them. They hold the asset and file records the indexer could not add to the search index, and a redeploy does not replay them — run a reindex to rebuild the index for the affected assets and files.
 
@@ -305,7 +305,34 @@ done
 VAMS log group names are deterministic (a hash of the stack name plus account ID). If you intend to redeploy VAMS with the same configuration name into the same account, you **must** delete any orphaned `/aws/vendedlogs/...` groups first. A pre-existing log group with the same name causes the deployment's log group creation to fail. This most commonly affects the conditional `VAMSCloudTrailLogs` (when `addStackCloudTrailLogs` is enabled) and `VAMSCloudWatchVPCLogs` (when `useGlobalVpc` is enabled) groups.
 :::
 
-## Step 5: Delete AWS Systems Manager parameters
+## Step 5: Delete orphaned Amazon ECR repositories
+
+A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
+
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform repository is the exception — it carries the explicit name `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform` — so if a teardown fails and leaves it behind, delete it before redeploying with the same configuration name and account:
+
+```bash
+# Check for the explicitly named repository
+aws ecr describe-repositories \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --query 'repositories[].repositoryName' --output text 2>/dev/null
+
+# Delete it, including any images it still holds
+aws ecr delete-repository \
+    --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --force
+```
+
+Auto-named VAMS repositories carry the stack name in their own name, so list and remove any left behind by a failed teardown as well. They hold only built container images, so removing them destroys no asset data — the next deployment rebuilds each image from source.
+
+```bash
+# List any remaining VAMS pipeline repositories for the deployment
+aws ecr describe-repositories \
+    --query "repositories[?contains(repositoryName, '<BASE_STACK_NAME>')].repositoryName" \
+    --output text
+```
+
+## Step 6: Delete AWS Systems Manager parameters
 
 VAMS creates explicitly named SSM parameters under the deployment prefix `/<name>-<baseStackName>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
 
@@ -342,7 +369,7 @@ A key created with no expiry deletes immediately. `--force-delete` is available 
 expiry in the past and is therefore subject to the deprecation waiting period.
 :::
 
-## Step 6: Delete the API Gateway account CloudWatch role
+## Step 7: Delete the API Gateway account CloudWatch role
 
 VAMS provisions the account-level API Gateway CloudWatch role that stage execution and access logging
 requires. Both the `AWS::ApiGateway::Account` resource and the IAM role it points at use a `RETAIN`
@@ -380,11 +407,43 @@ API in that account and Region relies on log delivery. If the setting still name
 re-point it by redeploying VAMS or by setting `cloudwatchRoleArn` to a valid role.
 :::
 
-## Step 7: Delete the AWS KMS key
+### How a missed orphan surfaces on the next deployment
+
+CloudFormation runs pre-deployment validation before it provisions anything, and an explicitly named
+resource that already exists is reported as a name conflict. A redeploy that skipped this step therefore
+fails while the change set is still being created — no resource is created and nothing is rolled back:
+
+```
+Failed to create change set cdk-deploy-change-set:
+  ...RestApiNestedStackRestApiNestedStackResource... was not successfully created: Currently in FAILED.
+```
+
+Inspecting that change set reports the validation rather than the resource:
+
+```
+The following hook(s)/validation failed: [AWS::EarlyValidation::ResourceExistenceCheck].
+```
+
+The message names no resource, and the `DescribeEvents` API it suggests is not available in older AWS
+CLI versions. Identify the conflict from the template instead — list the explicit names the deployment
+declares and check which already exist:
+
+```bash
+# Every explicitly named IAM role in the synthesized assembly
+npx cdk synth --all -o /tmp/vams-synth
+grep -rho '"RoleName": "[^"]*"' /tmp/vams-synth/*.template.json | sort -u
+
+# Which of them already exist in the account
+aws iam list-roles --query "Roles[?contains(RoleName, '<deployment>')].RoleName" --output text
+```
+
+The same check applies to any resource this page lists as explicitly named, not only to this role.
+
+## Step 8: Delete the AWS KMS key
 
 When VAMS is deployed with KMS CMK encryption (`app.useKmsCmkEncryption.enabled: true`) and the key is created by VAMS rather than imported, the key uses a `RETAIN` removal policy and survives stack teardown. The retained DynamoDB tables and S3 buckets are encrypted under it, so the key must outlive them: a key in the pending-deletion state is disabled, and every read of a table or object encrypted under it fails, including point-in-time recovery restores.
 
-Delete the key only after the other cleanup steps have removed the data encrypted under it: the retained buckets and tables in [Step 2](#step-2-delete-s3-buckets) and [Step 3](#step-3-delete-dynamodb-tables), and any Amazon OpenSearch Service collection or domain left behind by a failed teardown ([Step 9](#step-9-delete-amazon-opensearch-service-resources)), which is encrypted under the same key. Deleting the key is a deliberate final action, not part of the teardown.
+Delete the key only after the other cleanup steps have removed the data encrypted under it: the retained buckets and tables in [Step 2](#step-2-delete-s3-buckets) and [Step 3](#step-3-delete-dynamodb-tables), and any Amazon OpenSearch Service collection or domain left behind by a failed teardown ([Step 10](#step-10-delete-amazon-opensearch-service-resources)), which is encrypted under the same key. Deleting the key is a deliberate final action, not part of the teardown.
 
 ### Identify the key
 
@@ -450,7 +509,7 @@ The VAMS-generated key has no KMS alias and is addressed only by its generated k
 If you provided an external KMS key via `app.useKmsCmkEncryption.optionalExternalCmkArn`, do **not** delete that key. It may be in use by other applications. Only remove the VAMS-specific key policy statements.
 :::
 
-## Step 8: Delete the Amazon Cognito user pool
+## Step 9: Delete the Amazon Cognito user pool
 
 If VAMS was deployed with Amazon Cognito authentication, the user pool may be retained after stack deletion.
 
@@ -469,7 +528,7 @@ aws cognito-idp delete-user-pool \
     --user-pool-id <USER_POOL_ID>
 ```
 
-## Step 9: Delete Amazon OpenSearch Service resources
+## Step 10: Delete Amazon OpenSearch Service resources
 
 If Amazon OpenSearch Service was enabled, delete the collection (Serverless) or domain (Provisioned).
 
@@ -518,7 +577,7 @@ aws opensearch delete-domain \
     --domain-name <DOMAIN_NAME>
 ```
 
-## Step 10: Clean up VPC resources
+## Step 11: Clean up VPC resources
 
 If VAMS was deployed with a VPC (`app.useGlobalVpc.enabled: true`) and the VPC was created by VAMS (not imported), verify VPC endpoints and the VPC itself are deleted.
 

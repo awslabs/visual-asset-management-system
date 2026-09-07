@@ -4,6 +4,10 @@ This page documents the asset management endpoints in the VAMS API. Assets are t
 
 For general API information, see the [API Overview](overview.md). For file-level operations within assets, see [Files](files.md). For asset metadata, see [Metadata](metadata.md).
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `description` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## Concepts
@@ -144,7 +148,7 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 | `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                           |
 | `description`       | string        | Yes      | Asset description (4-256 characters).                                                                    |
 | `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                     |
-| `assetId`           | string        | No       | Explicit asset identifier (1-256 characters). Cannot contain forward slashes. Auto-generated if omitted. |
+| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted. |
 | `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
 | `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                   |
 
@@ -186,7 +190,7 @@ Both stages require `PUT` permission on the asset (`objectType: "asset"`) in add
 | Field             | Type          | Required | Description                                                                                                              |
 | ----------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `databaseId`      | string        | Yes      | Target database identifier (4-256 characters).                                                                           |
-| `assetId`         | string        | Yes      | Asset identifier (1-256 characters). Every file's `relativeKey` must begin with `{assetId}/`.                             |
+| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`.                             |
 | `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                           |
 | `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                    |
 | `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                                    |
@@ -697,6 +701,7 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
     "includeArchivedFiles": false,
     "fileExtensions": [".pdf", ".jpg"],
     "maxAssets": 100,
+    "maxFiles": 2000,
     "startingToken": null
 }
 ```
@@ -714,7 +719,8 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 | `includeParentRelationships`  | boolean       | `false` | Include parent relationships in the relationship data.                |
 | `includeArchivedFiles`        | boolean       | `false` | Include archived files in export.                                     |
 | `fileExtensions`              | array[string] | --      | Filter files to specified extensions only.                            |
-| `maxAssets`                   | integer       | `100`   | Maximum assets per page (minimum `1`).                                |
+| `maxAssets`                   | integer       | `100`   | Maximum assets per page (minimum `1`, maximum `1000`).                |
+| `maxFiles`                    | integer       | `2000`  | Maximum files per page across all of the page's assets (`1`-`10000`). |
 | `startingToken`               | string        | --      | Pagination token from a previous response.                            |
 
 **Response:**
@@ -733,7 +739,8 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
             "tags": ["architecture"],
             "archived": false,
             "metadata": { ... },
-            "files": [ ... ]
+            "files": [ ... ],
+            "files_truncated": false
         }
     ],
     "relationships": [ ... ],
@@ -742,6 +749,12 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
     "NextToken": null
 }
 ```
+
+:::note[A Large Asset Is Returned Over Several Pages]
+`maxFiles` bounds the files one page returns across all of its assets, so a page can end before `maxAssets` assets when the budget runs out. An asset holding more files than the budget is returned over successive pages: its entry sets `files_truncated` to `true`, and `NextToken` resumes that asset's file list where the page stopped rather than moving on to the next asset.
+
+The same asset therefore appears on more than one page, each entry carrying a different part of its `files`. A client that accumulates pages merges an asset's `files` on its `databaseid` and `assetid` instead of appending a second entry for it; `vamscli assets export --auto-paginate` does this. The budget bounds one request and never limits what an export can retrieve.
+:::
 
 :::info[Large Export Payloads Are Delivered by Presigned URL]
 A serialized payload of 100KB or less is returned inline with status `200`, as shown above. A larger payload is staged as a JSON object in the VAMS auxiliary Amazon S3 bucket, and the endpoint responds with status `303` redirecting to a presigned URL for it:

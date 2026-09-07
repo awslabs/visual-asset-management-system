@@ -14,6 +14,13 @@ import uuid
 import boto3
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 # Orchestration bus + log group for optional sub-process registration (empty = skipped)
@@ -23,9 +30,9 @@ STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 logger = safeLogger(service="VamsExecuteIsaacLabPipeline")
-sfn_client = boto3.client("stepfunctions")
-s3_client = boto3.client("s3")
-events_client = boto3.client("events")
+sfn_client = boto3.client("stepfunctions", config=retry_config)
+s3_client = boto3.client("s3", config=retry_config)
+events_client = boto3.client("events", config=retry_config)
 
 
 def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
@@ -156,7 +163,6 @@ def lambda_handler(event, context):
             "outputS3AssetMetadataPath": resolved["outputS3AssetMetadataPath"],
             "inputOutputS3AssetAuxiliaryFilesPath": resolved["inputOutputS3AssetAuxiliaryFilesPath"],
             "trainingConfig": input_params.get("trainingConfig", {}) if isinstance(input_params, dict) else {},
-            "computeConfig": input_params.get("computeConfig", {}) if isinstance(input_params, dict) else {},
             # Metadata + config S3 locations only; container reads from S3 if needed
             "inputMetadataS3Location": resolved["inputMetadataS3Location"],
             "inputConfigurationS3Location": resolved["inputConfigurationS3Location"],

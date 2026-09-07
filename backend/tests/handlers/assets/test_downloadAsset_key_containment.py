@@ -212,8 +212,10 @@ class TestDownloadAssetRequestModelKeyValidation:
 
     `keys` runs DOWNLOAD_KEY_ARRAY; `key` now runs `validate_asset_file_path`, so the
     single-file path is no longer the looser of the two. Note that the length bound below
-    was live before this fix and the path checks were not — `Field(strip_whitespace=)` is
-    inert in Pydantic v1, so a whitespace-only key was reaching the handler.
+    was live before this fix and the path checks were not: the field's only whitespace
+    handling was a `strip_whitespace=` declaration, which is inert in Pydantic v1, so a
+    whitespace-only key was reaching the handler. The rejection below comes from
+    `validate_asset_file_path`, not from trimming — the key is still passed through verbatim.
     """
 
     def test_key_rejects_traversal_segments(self):

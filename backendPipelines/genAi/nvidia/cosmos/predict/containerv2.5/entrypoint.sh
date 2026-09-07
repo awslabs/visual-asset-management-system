@@ -3,6 +3,12 @@ set -e
 
 cd /opt/cosmos-predict2.5
 
+# The upstream framework commit the image was built from, so a run's log names the inference code it
+# actually ran -- and, for the checkpoint_db patch below, the revision its pattern was written against.
+if [ -f /opt/cosmos-predict2.5/VAMS_UPSTREAM_COMMIT ]; then
+    echo "cosmos-predict2.5 commit: $(cat /opt/cosmos-predict2.5/VAMS_UPSTREAM_COMMIT)"
+fi
+
 # Ensure deps are synced (fast if already done during build)
 uv sync --locked --extra=${CUDA_NAME:-cu128} 2>/dev/null || true
 

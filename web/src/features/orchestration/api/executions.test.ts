@@ -186,6 +186,32 @@ describe("executions service", () => {
                 queryStringParameters: { groupId: "g1" },
             });
         });
+
+        // The abort handler puts `warnings` BESIDE `message`. `unwrapMessage` returns `resp.message`
+        // whenever a response carries one, so the plain `toTuple` reader returned the string
+        // "Execution aborted" and dropped the array — the one signal that a Batch or Deadline Cloud
+        // job is still running after the execution reads ABORTED.
+        const SUBPROCESS_WARNING =
+            "Batch job 1234 could not be terminated and may still be running.";
+
+        it("keeps the sub-process warnings returned alongside the message", async () => {
+            (apiClient.del as jest.Mock).mockResolvedValue({
+                message: "Execution aborted",
+                warnings: [SUBPROCESS_WARNING],
+            });
+            const [ok, result] = await abortExecution("e1");
+            expect(ok).toBe(true);
+            expect(typeof result).not.toBe("string");
+            expect((result as any).warnings).toEqual([SUBPROCESS_WARNING]);
+            expect((result as any).message).toBe("Execution aborted");
+        });
+
+        it("reports no warnings for a clean abort rather than undefined", async () => {
+            (apiClient.del as jest.Mock).mockResolvedValue({ message: "Execution aborted" });
+            const [ok, result] = await abortExecution("e1");
+            expect(ok).toBe(true);
+            expect((result as any).warnings).toEqual([]);
+        });
     });
 
     describe("rerunExecution", () => {

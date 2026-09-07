@@ -1,7 +1,7 @@
 openapi: "3.0.1"
 info:
     title: "Amazon Visual Asset Management System API"
-    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization."
+    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match."
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
@@ -165,87 +165,80 @@ paths:
                                 $ref: '#/components/schemas/error'
             security: []
     /assets:
-            put:
-                summary: "Create or update an asset."
-                requestBody:
-                    required: true
+        post:
+            summary: "Create an asset."
+            description: "Create the asset record in the given database. File uploads are handled separately through the upload endpoints."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/createAssetRequest'
+            responses:
+                "200":
+                    description: Asset created successfully.
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/asset'
-                responses:
-                    "200":
-                        description: OK
-                    "400":
-                        description: Invalid parameters.
-                        content:
-                            application/json:
-                                schema:
-                                    $ref: '#/components/schemas/error'
-                    "404":
-                        description: Database not found.
-                        content:
-                            application/json:
-                                schema:
-                                    $ref: '#/components/schemas/error'
-                    "500":
-                        description: Error processing request.
-                        content:
-                            application/json:
-                                schema:
-                                    $ref: '#/components/schemas/error'
-            get:
-                summary: "List all assets."
-                responses:
-                    "200":
-                        description: OK
-                        content:
-                            application/json:
-                                schema:
-                                    type: object
-                                    properties:
-                                        assets:
-                                            type: array
-                                            items:
-                                                $ref: "#/components/schemas/asset"
-                    "500":
-                        description: Error processing request.
-                        content:
-                            application/json:
-                                schema:
-                                    $ref: '#/components/schemas/error'
-    /assets/all:
-            put:
-                summary: "Create or update one or multiple assets."
-                requestBody:
-                    required: true
+                                $ref: "#/components/schemas/createAssetResponse"
+                "400":
+                    description: Invalid parameters or validation error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create assets in this database.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+        get:
+            summary: "List all assets."
+            description: "Paginated list of every asset the caller can read, across all databases."
+            responses:
+                "200":
+                    description: OK
                     content:
                         application/json:
                             schema:
                                 type: object
-                                items:
-                                    $ref: "#/components/schemas/asset"
-                responses:
-                    "200":
-                        description: OK
-                    "400":
-                        description: Invalid parameters.
-                        content:
-                            application/json:
-                                schema:
-                                    $ref: '#/components/schemas/error'
-                    "404":
-                        description: Database not found.
-                        content:
-                            application/json:
-                                schema:
-                                    $ref: '#/components/schemas/error'
-                    "500":
-                        description: Error processing request.
-                        content:
-                            application/json:
-                                schema:
-                                    $ref: '#/components/schemas/error'
+                                properties:
+                                    Items:
+                                        type: array
+                                        items:
+                                            $ref: "#/components/schemas/asset"
+                                    NextToken:
+                                        type: string
+                                        description: "Token for pagination"
+                                required:
+                                    - Items
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
     /asset-links:
         post:
             summary: "Create a new asset link."
@@ -297,7 +290,7 @@ paths:
                                   - $ref: "#/components/schemas/getAssetLinksResponse"
                                   - $ref: "#/components/schemas/getAssetLinksTreeViewResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, or the child tree walk failed and no partial tree is returned in its place.
                     content:
                         application/json:
                             schema:
@@ -696,12 +689,12 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-                - $ref: '#/components/parameters/maxItemsParam'
-                - $ref: '#/components/parameters/pageSizeParam'
+                - $ref: '#/components/parameters/constraintMaxItemsParam'
+                - $ref: '#/components/parameters/constraintPageSizeParam'
                 - $ref: '#/components/parameters/startingTokenParam'
             security:
-            - DefaultCognitoAuthorizer: []    
-    /auth/constraints/{constraintId}/:
+            - DefaultCognitoAuthorizer: []
+    /auth/constraints/{constraintId}:
         get:
             summary: "Get a specific constraint."
             description: "Retrieve details of a specific authorization constraint by its ID."
@@ -874,7 +867,7 @@ paths:
                     $ref: '#/components/schemas/object_name_pattern_regex'
             security:
             -   DefaultCognitoAuthorizer: []
-    /auth/loginProfile/{userId}/:
+    /auth/loginProfile/{userId}:
         get:
             summary: "Get loginProfile for the specified user"
             description: "Returns the requesting user's stored login profile. A user who has authenticated but has no stored profile yet (for example, not assigned any roles) receives an identity-only profile so login can still proceed."
@@ -1208,7 +1201,7 @@ paths:
     /user/cognito/{userId}:
         put:
             summary: "Update a Cognito user's email and/or phone."
-            description: "Update an existing Cognito user's email and/or phone number. Updated attributes are automatically marked as verified. At least one field must be provided. Only available when Cognito is enabled."
+            description: "Update an existing Cognito user's email and/or phone number. The update is partial: an attribute the request does not mention keeps its stored value, and removing the stored phone number takes clearPhone. Updated attributes are automatically marked as verified. At least one of email, phone, or clearPhone must be provided. Only available when Cognito is enabled."
             requestBody:
                 required: true
                 content:
@@ -1315,7 +1308,7 @@ paths:
             summary: "Reset a Cognito user's password."
             description: "Reset a user's password using Cognito's built-in password reset. Cognito auto-generates a new temporary password and sends it to the user's email. The user must change the password on next login. Only available when Cognito is enabled."
             requestBody:
-                required: false
+                required: true
                 content:
                     application/json:
                         schema:
@@ -1628,10 +1621,15 @@ paths:
                             schema:
                                 type: object
                                 properties:
-                                    databases:
+                                    Items:
                                         type: array
                                         items:
                                             $ref: "#/components/schemas/database"
+                                    NextToken:
+                                        type: string
+                                        description: "Token for pagination"
+                                required:
+                                    - Items
                 "500":
                     description: Error processing request.
                     content:
@@ -1910,23 +1908,6 @@ paths:
                     $ref: "#/components/schemas/id_regex"
             security:
                 - DefaultCognitoAuthorizer: []
-        delete:
-            summary: "Delete an asset."
-            responses:
-                "200":
-                    description: Asset deleted.
-                "404":
-                    description: Asset not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
         parameters:
             - name: "databaseId"
               in: "path"
@@ -2140,6 +2121,12 @@ paths:
                                     minimum: 1
                                     maximum: 1000
                                     description: "Maximum number of assets to return per page"
+                                maxFiles:
+                                    type: integer
+                                    default: 2000
+                                    minimum: 1
+                                    maximum: 10000
+                                    description: "Maximum number of files to return per page, counted across all of the page's assets. An asset holding more files than the budget is returned over successive pages: its entry reports files_truncated and NextToken resumes that asset's remaining files. The budget bounds one request, not what an export can retrieve."
                                 startingToken:
                                     type: string
                                     description: "Pagination token from previous response for retrieving next page"
@@ -2208,6 +2195,9 @@ paths:
                                                     type: array
                                                     items:
                                                         type: object
+                                                files_truncated:
+                                                    type: boolean
+                                                    description: "The file list is partial because the page's maxFiles budget was reached. NextToken resumes this asset's remaining files, so the same asset appears on the next page carrying the rest of them."
                                     relationships:
                                         type: array
                                         description: "Array of parent-child relationships (only in first page)"
@@ -2232,7 +2222,7 @@ paths:
                                                     type: object
                                     NextToken:
                                         type: string
-                                        description: "Pagination token for retrieving next page of assets"
+                                        description: "Pagination token for retrieving the next page. The next page continues with the following asset, or with the remaining files of the last asset returned when that asset's file list is partial."
                                     totalAssetsInTree:
                                         type: integer
                                         description: "Total number of assets in the complete tree"
@@ -3636,6 +3626,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/assetVersionsListResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to view versions for this asset.
                     content:
@@ -4125,53 +4121,6 @@ paths:
                     $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
-    /database/{databaseId}/assets/{assetId}/revert:
-        post:
-            summary: "Revert an asset to a previous version."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            type: object
-                            properties:
-                                version:
-                                    type: integer
-            responses:
-                "200":
-                    description: Asset reverted.
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "403":
-                    description: Database OR Asset OR Version not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-        parameters:
-          - name: "databaseId"
-            in: "path"
-            description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-            required: true
-            schema:
-                $ref: '#/components/schemas/id_regex'
-          - name: "assetId"
-            in: "path"
-            description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-            required: true
-            schema:
-                $ref: '#/components/schemas/id_regex'
-                
     /database/{databaseId}/assets/{assetId}/createFolder:
         post:
             summary: "Create a folder in S3 for the specified asset"
@@ -4382,7 +4331,8 @@ paths:
                                                 description: >
                                                     Caller-supplied tag values for the chosen template (at most 250).
                                                     Each entry is a key/value pair; the key is at most 128
-                                                    characters and the value at most 65,536 characters serialized.
+                                                    characters and the value at most 65,536 characters serialized,
+                                                    and the entries together at most 131,072 characters serialized.
                                                 items:
                                                     type: object
                                                     properties:
@@ -4574,7 +4524,7 @@ paths:
               - in: query
                 name: workflowId
                 required: false
-                description: "List only executions of this workflow. Pair with workflowDatabaseId to name a single workflow: a workflow ID is unique only within its database. An ID that does not match the ID pattern is rejected with 400 rather than returning an empty list."
+                description: "List only executions of this workflow. A workflow ID is unique across every database including GLOBAL, so this parameter identifies the workflow on its own; workflowDatabaseId is matched independently as an additional narrowing filter, and a value that is not the workflow's own database returns an empty list rather than an error. An ID that does not match the ID pattern is rejected with 400 rather than returning an empty list."
                 schema:
                     $ref: '#/components/schemas/id_regex'
               - in: query
@@ -5123,6 +5073,7 @@ paths:
     /database/{databaseId}/workflows/{workflowId}/triggers:
         get:
             summary: "List a workflow's triggers."
+            description: "One bounded page of the workflow's triggers. A workflow may carry several triggers of one base type, so when more remain the response carries NextToken; pass it back as startingToken to continue."
             responses:
                 "200":
                     description: OK
@@ -5138,6 +5089,10 @@ paths:
                                                 type: array
                                                 items:
                                                     $ref: "#/components/schemas/workflowTrigger"
+                                            NextToken:
+                                                type: string
+                                                nullable: true
+                                                description: "Continuation token, present only when more triggers remain."
                 "403":
                     description: Not authorized.
                     content:
@@ -5169,6 +5124,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+              - $ref: "#/components/parameters/triggerMaxItemsParam"
+              - $ref: "#/components/parameters/triggerPageSizeParam"
+              - $ref: "#/components/parameters/triggerStartingTokenParam"
     /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}:
         get:
             summary: "Get a workflow trigger."
@@ -5374,134 +5332,6 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-    /metadata/{databaseId}/{assetId}/:
-        get:
-            summary: "Get metadata for a given asset."
-            responses:
-                "200":
-                    description: OK
-                "404":
-                    description: Missing asset or database ID path parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - name: "databaseId"
-                in: "path"
-                description: "Database Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetId"
-                in: "path"
-                description: "Asset Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetPath"
-                in: "query"
-                description: "Asset Path"
-                required: false
-                schema:
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
-        post:
-            summary: "Update metadata for a given asset."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/metadata"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Missing asset or database ID path parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - name: "databaseId"
-                in: "path"
-                description: "Database Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetId"
-                in: "path"
-                description: "Asset Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-            security:
-                - DefaultCognitoAuthorizer: []
-        put:
-            summary: "Update metadata for a given asset."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/metadata"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Missing asset or database ID path parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - name: "databaseId"
-                in: "path"
-                description: "Database Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetId"
-                in: "path"
-                description: "Asset Id"
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-            security:
-                - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/metadata:
         get:
             summary: "Get metadata for an asset."
@@ -6391,6 +6221,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /pipelines:
         get:
             summary: "List all pipelines."
+            description: "Two things shorten a page, so page until NextToken is absent rather than until a page looks short: pipelines the caller cannot read are dropped after the page is read, and a page carries at most 4,194,304 bytes (4 MB) of serialized items. Each item carries its full executionConfig, which may hold a large inline job template, so a page of large configurations reaches the byte budget well inside the row cap. Nothing is dropped by either bound - a page ends at the first item it could not carry and its NextToken resumes there."
             responses:
                 "200":
                     description: OK
@@ -6441,6 +6272,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /database/{databaseId}/pipelines:
         get:
             summary: "List all pipelines in a database."
+            description: "Paged under the same rules as GET /pipelines: the authorization filter and a 4,194,304-byte (4 MB) page budget can each return fewer items than requested alongside a NextToken, so page until the token is absent."
             responses:
                 "200":
                     description: OK
@@ -6823,6 +6655,18 @@ Several triggers of one type are supported: address each with its own key ('<typ
             responses:
                 "200":
                     description: Template deleted.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                    warnings:
+                                        type: array
+                                        description: "Non-fatal reference warnings, returned alongside message and present only when a trigger still names the deleted template as a default for this pipeline. The delete succeeds; triggered executions of the named workflows fail until each trigger picks a different default template."
+                                        items:
+                                            type: string
                 "400":
                     description: Invalid parameters.
                     content:
@@ -7056,7 +6900,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Update an existing role."
-            description: "Update a role's description, source, sourceIdentifier, and mfaRequired fields. The role name cannot be changed."
+            description: "Update a role's description, source, sourceIdentifier, and mfaRequired fields. The role name cannot be changed. Only the fields present in the request body are written; a field the body omits keeps its stored value, so clearing one requires sending it explicitly (for example mfaRequired false or source null)."
             requestBody:
                 required: true
                 content:
@@ -7788,37 +7632,6 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
             security:
               - DefaultCognitoAuthorizer: []
-    /visualizerAssets/{proxy+}/:
-        get:
-            summary: "Get a visualizer asset."
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "403":
-                    description: Action not allowed or not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - name: proxy+
-                in: path
-                description: Visualizer asset path.
-                required: true
-                schema:
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
     /uploads:
         post:
             summary: "Initialize a multipart upload for asset files or preview."
@@ -8420,6 +8233,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 route can raise reaches the caller here with the execute route's own status code and
                 message — including an input file that no longer exists, a workflow since archived or
                 disabled, and a template whose tags no longer resolve.
+
+
+                Reconstruction runs before the re-launch and can refuse on its own. A configuration
+                value that was too large to record in full on the original run — a pipeline step's
+                template tag values, or the custom configuration body of a template-less step — cannot
+                be reproduced exactly, so the re-run is answered 400 instead of launching a run that
+                differs from the original. Start a new execution supplying those values.
             parameters:
               - in: path
                 name: executionId
@@ -8449,7 +8269,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/executeWorkflowResponse'
                 "400":
-                    description: An invalid executionGroupId or request body, the reconstructed execution failing the execute route's validation, or a deployment in which re-run is not available.
+                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, or a deployment in which re-run is not available.
                     content:
                         application/json:
                             schema:
@@ -8650,7 +8470,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /auth/api-keys:
         get:
             summary: "List all API keys (administrative)."
-            description: "Retrieve a list of every user's API keys. Administrative route, reserved for administrator roles; regular users list their own keys through /auth/user/api-keys. Returns metadata only; key hashes are never exposed."
+            description: "Retrieve a list of every user's API keys. Administrative route, reserved for administrator roles; regular users list their own keys through /auth/user/api-keys. Returns metadata only; key hashes are never exposed. The response is bounded: when more keys remain it carries NextToken and truncated, and the caller pages by passing NextToken back as startingToken."
+            parameters:
+                - $ref: "#/components/parameters/apiKeyMaxItemsParam"
+                - $ref: "#/components/parameters/apiKeyPageSizeParam"
+                - $ref: "#/components/parameters/apiKeyStartingTokenParam"
             responses:
                 "200":
                     description: API keys retrieved successfully.
@@ -8663,6 +8487,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         type: array
                                         items:
                                             $ref: "#/components/schemas/apiKeyMetadata"
+                                    NextToken:
+                                        type: string
+                                        nullable: true
+                                        description: "Continuation token, present only when more keys remain."
+                                    truncated:
+                                        type: boolean
+                                        description: "Present and true only when more keys remain."
+                "400":
+                    description: Invalid pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to list API keys.
                     content:
@@ -8875,7 +8712,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /auth/user/api-keys:
         get:
             summary: "List the current user's own API keys."
-            description: "Retrieve the API keys owned by the requesting user. Self-service variant of /auth/api-keys; other users' keys are never returned."
+            description: "Retrieve the API keys owned by the requesting user. Self-service variant of /auth/api-keys; other users' keys are never returned. The response is bounded: when more keys remain it carries NextToken and truncated, and the caller pages by passing NextToken back as startingToken."
+            parameters:
+                - $ref: "#/components/parameters/apiKeyMaxItemsParam"
+                - $ref: "#/components/parameters/apiKeyPageSizeParam"
+                - $ref: "#/components/parameters/apiKeyStartingTokenParam"
             responses:
                 "200":
                     description: API keys retrieved successfully.
@@ -8888,6 +8729,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         type: array
                                         items:
                                             $ref: "#/components/schemas/apiKeyMetadata"
+                                    NextToken:
+                                        type: string
+                                        nullable: true
+                                        description: "Continuation token, present only when more keys remain."
+                                    truncated:
+                                        type: boolean
+                                        description: "Present and true only when more keys remain."
+                "400":
+                    description: Invalid pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to list API keys.
                     content:
@@ -9247,7 +9101,7 @@ components:
             type: object
             properties:
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                     #example: blade-12345
                 databaseId:
                     $ref: '#/components/schemas/id_regex'
@@ -9270,6 +9124,48 @@ components:
                 - description
                 - assetName
                 - assetPathKey
+        createAssetRequest:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                assetName:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                isDistributable:
+                    type: boolean
+                    description: "Whether the asset can be downloaded."
+                assetId:
+                    $ref: '#/components/schemas/asset_id_regex'
+                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation."
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Tags for categorization. Each name must resolve in the asset's database or GLOBAL, and every required tag type that has tags must be represented."
+                    default: []
+                bucketExistingKey:
+                    type: string
+                    maxLength: 1024
+                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset."
+            required:
+                - databaseId
+                - assetName
+                - description
+                - isDistributable
+        createAssetResponse:
+            type: object
+            properties:
+                assetId:
+                    type: string
+                    description: "Identifier of the created asset."
+                message:
+                    type: string
+                    example: "Asset created successfully"
+            required:
+                - assetId
+                - message
         asset_links:
             type: object
             properties:
@@ -9366,7 +9262,7 @@ components:
                 userId:
                     $ref: "#/components/schemas/email_pattern_regex"
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             required:
                 - userId
                 - assetId
@@ -9375,9 +9271,8 @@ components:
             properties:
                 commentBody:
                     type: string
+                    maxLength: 16384
             required:
-                - assetId
-                - commentId
                 - commentBody
         # Constraint API Request/Response Schemas
         constraintCriteria:
@@ -9571,7 +9466,7 @@ components:
                             description: "List of constraints"
                         NextToken:
                             type: string
-                            description: "Pagination token for retrieving next page"
+                            description: "Opaque pagination token for retrieving the next page. Present only when more constraints remain; page until it is absent and pass the value back on startingToken unmodified"
                     required:
                         - Items
             required:
@@ -9894,9 +9789,9 @@ components:
                     maxLength: 256
                 assetId:
                     type: string
-                    description: "Asset identifier. Every file relativeKey must begin with '{assetId}/'."
-                    minLength: 1
-                    maxLength: 256
+                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly."
+                    minLength: 2
+                    maxLength: 255
                 assetName:
                     type: string
                     description: "Display name for the asset"
@@ -9904,7 +9799,7 @@ components:
                     maxLength: 256
                 description:
                     type: string
-                    description: "Asset description"
+                    description: "Asset description. Surrounding whitespace is removed before the length check, so a padded value whose trimmed length is under 4 characters is rejected."
                     minLength: 4
                     maxLength: 256
                 isDistributable:
@@ -9938,14 +9833,16 @@ components:
                     maxLength: 256
                 assetId:
                     type: string
-                    minLength: 1
-                    maxLength: 256
+                    description: "Asset identifier, ASCII characters only. Must match the identifier sent to the initialize stage."
+                    minLength: 2
+                    maxLength: 255
                 assetName:
                     type: string
                     minLength: 1
                     maxLength: 256
                 description:
                     type: string
+                    description: "Asset description. Surrounding whitespace is removed before the length check, so a padded value whose trimmed length is under 4 characters is rejected."
                     minLength: 4
                     maxLength: 256
                 isDistributable:
@@ -10642,7 +10539,11 @@ components:
             default: json
         pipelineTemplateTagField:
             type: object
-            description: "A single tag definition in a template's tag schema."
+            description: >
+                A single tag definition in a template's tag schema. May contain only the keys below;
+                an unrecognized key is rejected at save rather than ignored, so a misspelled
+                'requried' or a differently cased 'Type' cannot leave the tag weaker than the one
+                authored.
             properties:
                 tagKey:
                     type: string
@@ -10717,9 +10618,11 @@ components:
             description: >
                 Per-template overrides of the owning pipeline's systemConfig. May contain only the
                 four keys below (any other key is rejected at save); each is optional and, when
-                omitted, inherits the pipeline's value. Validated at save time. This does not edit the
-                config body — it changes how an execution's inputs are accepted/validated and what
-                metadata is provided when this template is chosen.
+                omitted, inherits the pipeline's value. Validated at save time, and at most 65,536
+                bytes (64 KB) serialized — the same budget as the pipeline's own systemConfig, whose
+                keys these are a subset of. This does not edit the config body — it changes how an
+                execution's inputs are accepted/validated and what metadata is provided when this
+                template is chosen.
             properties:
                 inputFileArity:
                     type: string
@@ -10878,7 +10781,7 @@ components:
                     description: "Database that owns the referenced pipeline. Defaults to the workflow's database when omitted."
                 jobName:
                     type: string
-                    description: "Optional label for this pipeline step. Names the step in the workflow's state machine and becomes the {jobName} segment of the step's output paths (pipelines/{pipelineName}/{jobName}/output/{executionId}/files/). Empty or omitted falls back to the pipelineId, keeping each step's outputs in a distinct folder. 3-63 characters of letters, numbers, hyphens and underscores: a FIXED label, not a template - {{tag}} placeholders are NOT substituted here and are rejected, because the name is baked into the state machine at deploy time rather than resolved per run. Use the workflow's defaultOutputFileBaseExecutionPathExtension (or an execution's outputFileBaseExecutionPathExtension) to vary the output path per run."
+                    description: "Optional label for this pipeline step. Names the step in the workflow's state machine and becomes the {jobName} segment of the step's output paths ({baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/files/, where baseAssetsPrefix is the prefix the deployment's default asset bucket is registered under and is empty for the bucket VAMS creates). Empty or omitted falls back to the pipelineId, keeping each step's outputs in a distinct folder. 3-63 characters of letters, numbers, hyphens and underscores: a FIXED label, not a template - {{tag}} placeholders are NOT substituted here and are rejected, because the name is baked into the state machine at deploy time rather than resolved per run. Use the workflow's defaultOutputFileBaseExecutionPathExtension (or an execution's outputFileBaseExecutionPathExtension) to vary the output path per run."
             required:
                 - pipelineId
         workflowOutputTarget:
@@ -11233,21 +11136,23 @@ components:
                     description: "Role name to update (cannot be changed)"
                 description:
                     $ref: "#/components/schemas/string256Param"
-                    description: "Updated role description"
+                    description: "Updated role description. Omit to leave the stored value alone; null is rejected, because the description is always present on a role"
                 source:
-                    $ref: "#/components/schemas/string256Param"
-                    description: "Updated source identifier (must be 'INTERNAL_SYSTEM' if provided)"
+                    type: string
+                    maxLength: 256
+                    nullable: true
+                    description: "Updated source identifier (must be 'INTERNAL_SYSTEM' if provided). Omit to leave the stored value alone; send null to remove it"
                 sourceIdentifier:
-                    $ref: "#/components/schemas/string256Param"
-                    description: "Updated source identifier value"
+                    type: string
+                    maxLength: 256
+                    nullable: true
+                    description: "Updated source identifier value. Omit to leave the stored value alone; send null to remove it"
                 mfaRequired:
                     type: boolean
-                    description: "Updated MFA requirement flag"
-                    default: false
+                    description: "Updated MFA requirement flag. Omit to leave the stored value alone; send false to clear the requirement"
             required:
                 - roleName
-                - description
-        
+
         roleResponse:
             type: object
             properties:
@@ -11364,7 +11269,7 @@ components:
                 databaseId:
                     $ref: '#/components/schemas/id_regex'
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
         sagemaker_notebook_name_regex:
             type: string
             pattern: ^[a-zA-Z0-9](-*[a-zA-Z0-9])*
@@ -11875,7 +11780,7 @@ components:
             type: object
             properties:
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                 databaseId:
                     $ref: '#/components/schemas/id_regex'
                 uploadType:
@@ -11995,7 +11900,7 @@ components:
             type: object
             properties:
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                 databaseId:
                     $ref: '#/components/schemas/id_regex'
                 uploadType:
@@ -12039,7 +11944,7 @@ components:
                 uploadId:
                     type: string
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                 assetType:
                     type: string
                 version:
@@ -12440,7 +12345,7 @@ components:
             type: object
             properties:
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                 assetVersionId:
                     type: string
                     description: "Asset version ID"
@@ -12486,7 +12391,7 @@ components:
                     type: string
                     description: "Asset version ID"
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                     description: "Asset ID this version belongs to"
                 databaseId:
                     $ref: '#/components/schemas/id_regex'
@@ -12602,7 +12507,7 @@ components:
                     type: string
                     description: "Message describing the result"
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                 assetVersionId:
                     type: string
                     description: "Asset version ID"
@@ -12759,7 +12664,7 @@ components:
                     description: "Base prefix path within the bucket for assets"
                 isDefault:
                     type: boolean
-                    description: "Whether this is the VAMS default asset bucket, which houses pipeline template data and execution-time run I/O under the pipelines/ prefix. Exactly one bucket in a deployment is the default."
+                    description: "Whether this is the VAMS default asset bucket, which houses pipeline template data and execution-time run I/O under the {baseAssetsPrefix}pipelines/ prefix. Exactly one bucket in a deployment is the default."
                     default: false
             required:
                 - bucketId
@@ -12914,7 +12819,7 @@ components:
             type: object
             properties:
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                     description: "Asset ID"
                 assetName:
                     type: string
@@ -12938,7 +12843,7 @@ components:
             type: object
             properties:
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                     description: "Asset ID"
                 assetName:
                     type: string
@@ -12980,7 +12885,23 @@ components:
                     type: integer
                     description: "Count of unauthorized child assets"
                     default: 0
-        
+
+        unresolvedCountsModel:
+            type: object
+            properties:
+                related:
+                    type: integer
+                    description: "Count of related assets that could not be retrieved"
+                    default: 0
+                parents:
+                    type: integer
+                    description: "Count of parent assets that could not be retrieved"
+                    default: 0
+                children:
+                    type: integer
+                    description: "Count of child assets that could not be retrieved"
+                    default: 0
+
         getAssetLinksResponse:
             type: object
             properties:
@@ -13005,6 +12926,9 @@ components:
                 unauthorizedCounts:
                     $ref: "#/components/schemas/unauthorizedCountsModel"
                     description: "Counts of unauthorized assets"
+                unresolvedCounts:
+                    $ref: "#/components/schemas/unresolvedCountsModel"
+                    description: "Counts of linked assets that could not be retrieved"
                 message:
                     type: string
                     description: "Response message"
@@ -13014,6 +12938,7 @@ components:
                 - parents
                 - children
                 - unauthorizedCounts
+                - unresolvedCounts
         
         getAssetLinksTreeViewResponse:
             type: object
@@ -13039,6 +12964,13 @@ components:
                 unauthorizedCounts:
                     $ref: "#/components/schemas/unauthorizedCountsModel"
                     description: "Counts of unauthorized assets"
+                unresolvedCounts:
+                    $ref: "#/components/schemas/unresolvedCountsModel"
+                    description: "Counts of linked assets that could not be retrieved"
+                treeTruncated:
+                    type: boolean
+                    description: "Whether the child tree stopped at the depth or node ceiling"
+                    default: false
                 message:
                     type: string
                     description: "Response message"
@@ -13048,12 +12980,14 @@ components:
                 - parents
                 - children
                 - unauthorizedCounts
+                - unresolvedCounts
+                - treeTruncated
         
         # Centralized Metadata Schemas (All Entity Types)
         metadataValueType:
             type: string
             enum: [string, multiline_string, inline_controlled_list, number, boolean, date, xyz, wxyz, matrix4x4, geopoint, geojson, lla, json]
-            description: "Type of metadata value"
+            description: "Type of metadata value. A geojson or geopoint value nests GeometryCollection members at most 32 levels deep; a deeper value, or one too deeply nested for the JSON parser, is a 400"
             default: "string"
         
         metadataItem:
@@ -13347,7 +13281,7 @@ components:
                     $ref: '#/components/schemas/id_regex'
                     description: "Database ID"
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                     description: "Asset ID"
                 metadataKey:
                     type: string
@@ -13516,7 +13450,7 @@ components:
                     $ref: '#/components/schemas/id_regex'
                     description: "Database ID"
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                     description: "Asset ID"
                 filePath:
                     type: string
@@ -13771,7 +13705,7 @@ components:
                     type: string
                     description: "Message describing the result"
                 assetId:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
                     description: "Asset ID whose preview was deleted"
             required:
                 - success
@@ -13855,7 +13789,11 @@ components:
                 metadataKey:
                     type: string
                     maxLength: 256
-                    description: "Search metadata field names"
+                    description: >-
+                        Search metadata field names. Accepts the bare metadata key (`product`), the
+                        key with its entity prefix (`MD_product`, or `AB_colour` for a file
+                        attribute), or with a type prefix (`MD_str_product`) — all three resolve to
+                        the same field. `MD_.product` is not an accepted spelling and matches nothing.
                 metadataValue:
                     type: string
                     maxLength: 1000
@@ -13926,7 +13864,14 @@ components:
                 metadataQuery:
                     type: string
                     maxLength: 1000
-                    description: "Separate metadata search query"
+                    description: >-
+                        Separate metadata search query. A `key:value` pair addresses one metadata
+                        field; a bare term is matched according to `metadataSearchMode`. The key may
+                        be given as the bare metadata key (`product`), with the entity prefix
+                        (`MD_product`, or `AB_colour` for a file attribute), or with a type prefix
+                        (`MD_str_product`) — all three resolve to the same field. Do not include the
+                        dot of the internal query path: `MD_.product` is not one of the accepted
+                        spellings and matches nothing.
                 metadataSearchMode:
                     type: string
                     enum: [key, value, both]
@@ -14010,7 +13955,7 @@ components:
                     required: [topLeft, bottomRight]
                 geoJson:
                     type: object
-                    description: "GeoJSON Geometry, Feature, or FeatureCollection"
+                    description: "GeoJSON Geometry, Feature, or FeatureCollection. Carries at most 100000 coordinate positions and nests GeometryCollection members at most 32 levels deep; exceeding either limit is a 400"
 
         searchToken:
             type: object
@@ -14115,9 +14060,6 @@ components:
                     type: string
                     format: date-time
                     description: "Last modified date"
-                num_size:
-                    type: integer
-                    description: "File size in bytes"
                 str_etag:
                     type: string
                     description: "S3 ETag"
@@ -14157,7 +14099,22 @@ components:
                 bool_has_assets_related:
                     type: boolean
                     description: "Whether asset has related asset links (asset index only)"
+                geo_MD_location:
+                    type: object
+                    additionalProperties: true
+                    description: >-
+                        GeoJSON shape derived from metadata: either a `location` key holding GeoJSON,
+                        or latitude/longitude/altitude metadata fields. Present only when the record
+                        carries one.
             additionalProperties: true
+            description: >-
+                A hit's `_source` is the indexed document, passed through as written. Beyond the
+                properties listed here it carries the record's metadata as a single object under the
+                key `MD_`, and — on file hits only — its file attributes under `AB_`. Metadata keys
+                appear inside those objects verbatim, with no type prefix, so metadata
+                `{"product": "Training"}` reads back as `"MD_": {"product": "Training"}`. Those two
+                keys are dynamic by nature and reach the caller through `additionalProperties` rather
+                than being enumerated above.
             required:
                 - str_rectype
         
@@ -14342,6 +14299,9 @@ components:
                     type: string
                     pattern: ^\+[0-9]{10,15}$
                     description: "Updated phone number in E.164 format (optional)"
+                clearPhone:
+                    type: boolean
+                    description: "Set to true to remove the stored phone number. Cannot be sent together with phone. May be sent on its own, in which case email and phone are both absent"
             required: []
             example:
                 email: "newemail@example.com"
@@ -14551,7 +14511,75 @@ components:
       startingTokenParam:
         name: startingToken
         in: query
-        description: "Number of items to be returned per page. Default is 100"
+        description: "Opaque continuation token from a previous response's NextToken"
         schema:
             type: string
         allowEmptyValue: true
+      triggerMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Max number of triggers that can be returned in one page. Default is 100, clamped to 500; follow NextToken for the rest"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      triggerPageSizeParam:
+        name: pageSize
+        in: query
+        description: "Number of triggers to be returned per page. Default is 100, clamped to maxItems and to 500"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      triggerStartingTokenParam:
+        name: startingToken
+        in: query
+        description: "Opaque continuation token from a previous response's NextToken"
+        schema:
+            type: string
+        allowEmptyValue: true
+      apiKeyMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Max number of API keys that can be returned in one response. Default is 3000, which is also the ceiling; follow NextToken for the rest"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 3000
+            default: 3000
+      apiKeyPageSizeParam:
+        name: pageSize
+        in: query
+        description: "Number of API keys read per page. Default is 1000, clamped to maxItems"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 3000
+            default: 1000
+      apiKeyStartingTokenParam:
+        name: startingToken
+        in: query
+        description: "Opaque continuation token from a previous response's NextToken"
+        schema:
+            type: string
+        allowEmptyValue: true
+      constraintMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Max number of constraints that can be returned. Default is 30000. The page served is the smallest of maxItems, pageSize and 3000"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 30000
+            default: 30000
+      constraintPageSizeParam:
+        name: pageSize
+        in: query
+        description: "Number of constraints to be returned per page. Default is 3000. A larger value is served in 3000-constraint pages, which keeps a page of whole constraints within the AWS Lambda response limit"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 3000

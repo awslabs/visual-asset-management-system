@@ -19,6 +19,18 @@ VAMS supports the **Cosmos 3** omnimodal Mixture-of-Transformers architecture wi
 | **Output (Super)**          | Image (Super-Text2Image): PNG (1024x1024), Video (Super/Super-Image2Video): MP4 (1280x720, 24fps, ~8 seconds / 189 frames) |
 | **Timeout**                 | 8 hours (Batch job), 8 hours (VAMS workflow task token)                                                                    |
 
+:::note[A run may write more than one output object]
+A run writes back every artifact it produced, so more than one object can appear under the execution's
+output file path. The **primary** artifact -- the most recently written, then the largest, then the
+first by path -- carries the asset-facing name (`cosmos3-{variant}-{timestamp}` for the text modes,
+`{input file stem}_Cosmos3_{variant}_{timestamp}` for the input-file modes) and is the only one the
+`.previewFile.gif` thumbnail is generated from and keyed to. Additional artifacts are written flat
+beside the primary, with their path inside the container's output directory folded into the file name
+rather than reproduced as a folder, because the workflow's own output path extension is what separates
+one run's files from another's. Control-signal transfer is where this is most visible: when the
+framework leaves the control signal it computed beside the generated video, both videos reach the asset.
+:::
+
 ### Approximate Run Times
 
 | Phase                             | Duration (Nano: g6e.12xlarge / Super: p5.48xlarge) | Notes                                                 |
@@ -137,11 +149,11 @@ graph LR
 
 1. **Model Download and Caching (First Run Only)** -- On the first pipeline execution, the container downloads the Cosmos 3 model and its dependencies from HuggingFace to Amazon EFS. Subsequent runs reuse the cached models from Amazon EFS with Amazon S3 backup.
 
-2. **Media Generation (AWS Batch on GPU Instances)** -- The container loads the model from Amazon EFS, processes the text prompt and, in the input-file modes, the input image or video, and generates an image or video using NVIDIA's Cosmos 3 omnimodal model. The generated media is written to the auxiliary Amazon S3 bucket.
+2. **Media Generation (AWS Batch on GPU Instances)** -- The container loads the model from Amazon EFS, processes the text prompt and, in the input-file modes, the input image or video, and generates an image or video using NVIDIA's Cosmos 3 omnimodal model. Every artifact the run leaves in the container's output directory is written to the auxiliary Amazon S3 bucket, the primary one under the asset-facing name and the rest flat beside it.
 
-3. **Thumbnail Generation** -- For video outputs, the container extracts frames from the generated video and creates a `.previewFile.gif` thumbnail for web preview.
+3. **Thumbnail Generation** -- For video outputs, the container extracts frames from the primary artifact and creates a `.previewFile.gif` thumbnail for web preview, keyed to that artifact's own file name.
 
-4. **Output Processing** -- The VAMS workflow process-output step moves the generated media and thumbnail to the asset bucket at the correct file path.
+4. **Output Processing** -- The VAMS workflow process-output step moves every generated artifact and the thumbnail to the asset bucket at the correct file path.
 
 ## Prerequisites
 
@@ -272,6 +284,18 @@ The models are cached on Amazon EFS with backup to Amazon S3 (under `cosmos3/hf_
 The Amazon EFS file system stores model weights and incurs standard Amazon EFS storage costs. The pipeline uses General Purpose performance mode with elastic throughput. Monitor Amazon EFS costs and consider setting lifecycle policies for long-term cost optimization.
 :::
 
+:::warning[The Amazon S3 model cache bucket is RETAINED]
+Enabling this pipeline creates an Amazon S3 model cache bucket in addition to the Amazon EFS file system.
+It uses a `RETAIN` removal policy, so it and its contents **survive `cdk destroy`** and require a manual
+delete — unlike the EFS file system, which is removed with the stack. Cached weights make it one of the
+largest buckets in a deployment, and it occupies one of the account's Amazon S3 bucket slots (100 by
+default) until deleted.
+
+The bucket is auto-named, so a retained copy does **not** block a redeploy. See
+[AWS resources](../architecture/aws-resources.md#amazon-s3-buckets) for the full inventory and
+[Uninstall the solution](../deployment/uninstall.md#step-2-delete-s3-buckets) for the cleanup steps.
+:::
+
 ## Warm vs Cold Instances
 
 The `useWarmInstances` configuration option controls whether AWS Batch compute instances remain running when idle:
@@ -311,7 +335,7 @@ The Cosmos 3 pipeline uses metadata keys to configure generation parameters. The
 | `COSMOS3_CONTROL_WEIGHT`   | File then asset                             | transfer mode        | `1.0` (comma-aligned to control types)                                |
 | `COSMOS3_CONTROL_GUIDANCE` | File then asset                             | transfer mode        | `1.5`                                                                 |
 
-A value typed into the corresponding field on the execute form wins over metadata, so a metadata value acts as a standing default that each run can override. `COSMOS3_SEED`, `COSMOS3_GUIDANCE`, `COSMOS3_NUM_FRAMES`, and `COSMOS3_CONTROL_PATH` have no field on the shipped templates and are supplied by metadata alone.
+A value typed into the corresponding field on the execute form wins over metadata, so a metadata value acts as a standing default that each run can override. `COSMOS3_SEED`, `COSMOS3_GUIDANCE`, and `COSMOS3_CONTROL_PATH` have no field on the shipped templates and are supplied by metadata alone. `COSMOS3_NUM_FRAMES` has a field on the four **Nano** templates, which declare it as an integer tag, and none on the Super templates — so on a Super run it too is supplied by metadata alone.
 
 :::warning[Asset vs File metadata]
 **Text-input modes** (text2image, text2video) read metadata from **asset-level metadata** only, because they do not operate on a specific file -- they generate media from text only, so a value set on a file is not found. **Input-file modes** (image2video, video2video, transfer) read **file-level metadata first and fall back to asset-level metadata**, so a per-file value overrides a standing value on the asset.
@@ -329,7 +353,7 @@ To run transfer, select the **Control-Signal Transfer** template for the pipelin
 -   **`COSMOS3_CONTROL_GUIDANCE`** -- optional control-guidance scale (default `1.5`).
 -   **`COSMOS3_PROMPT`** -- a caption describing the desired output (recommended).
 
-The input file is the source video; the output is a transformed MP4 written back to the asset. Transfer runs on the framework's `video2video` model mode.
+The input file is the source video; the output is a transformed MP4 written back to the asset. When the framework also leaves the control signal it computed in the output directory, that video is written back alongside the transformed one -- see [A run may write more than one output object](#overview). Transfer runs on the framework's `video2video` model mode.
 
 :::note[Transfer is Nano/Super only]
 Transfer is honored only on the `nano` and `super` pipelines. If `COSMOS3_TASK_MODE=transfer` is set for the `super-text2image` or `super-image2video` pipelines, it is ignored and the pipeline runs its normal mode.

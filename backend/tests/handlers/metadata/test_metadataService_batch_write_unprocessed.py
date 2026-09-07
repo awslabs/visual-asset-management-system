@@ -25,6 +25,8 @@ the always-unprocessed stub below must return a real dict and the loop must end;
 count would additionally fail if the bound were raised, which is not a defect.
 """
 
+import contextlib
+import sys
 import time
 import pytest
 from unittest.mock import MagicMock, patch
@@ -358,3 +360,110 @@ class TestReplaceAllRollbackIsReachable:
                 )
 
         assert "may be inconsistent" in str(raised.value)
+
+
+class _DeleteHarness:
+    """Module globals a metadata delete touches before its batch delete.
+
+    The schema query answers with no schemas, so deletion validation passes and the run
+    reaches the batch delete -- which is the arm under test here.
+    """
+
+    _EXISTING_ROW = {
+        "metadataKey": {"S": "governedKey"},
+        "metadataValue": {"S": "v"},
+        "metadataValueType": {"S": "string"},
+    }
+
+    def __init__(self, batch_write):
+        self.client = MagicMock()
+        page_iterator = MagicMock()
+        page_iterator.build_full_result.return_value = {"Items": [self._EXISTING_ROW]}
+        paginator = MagicMock()
+        paginator.paginate.return_value = page_iterator
+        self.client.get_paginator.return_value = paginator
+        self.client.query.return_value = {"Items": []}
+        self.client.batch_write_item.side_effect = batch_write
+
+        self.asset_table = MagicMock()
+        self.asset_table.get_item.return_value = {
+            "Item": {"databaseId": "db1", "assetId": "asset1", "assetName": "A", "tags": []}
+        }
+        self.metadata_table = MagicMock()
+        self.metadata_table.get_item.return_value = {"Item": {"metadataKey": "governedKey"}}
+
+        enforcer = MagicMock()
+        enforcer.enforce.return_value = True
+        self.enforcer_cls = MagicMock(return_value=enforcer)
+
+        self._stack = contextlib.ExitStack()
+
+    def __enter__(self):
+        for target, replacement in (
+            ("dynamodb_client", self.client),
+            ("asset_storage_table", self.asset_table),
+            ("asset_file_metadata_table", self.metadata_table),
+            ("CasbinEnforcer", self.enforcer_cls),
+        ):
+            self._stack.enter_context(patch.object(metadataService, target, replacement))
+        self._stack.enter_context(patch.object(time, "sleep"))
+        return self
+
+    def __exit__(self, *exc):
+        self._stack.close()
+        return False
+
+
+@pytest.fixture
+def _clear_schema_cache():
+    """The aggregate cache is a module global, and this directory's conftest loads
+    `common.metadataSchemaValidation` as a separate module object from
+    `backend.backend.common.metadataSchemaValidation`, so both are cleared."""
+    modules = [
+        sys.modules.get("common.metadataSchemaValidation"),
+        sys.modules.get("backend.backend.common.metadataSchemaValidation"),
+    ]
+    for module in modules:
+        if module is not None:
+            module._schema_cache.clear()
+    yield
+    for module in modules:
+        if module is not None:
+            module._schema_cache.clear()
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("_clear_schema_cache")
+class TestDeleteReportsUnprocessedKeys:
+    """The delete arm of the same class: a key is appended to `successfulItems` BEFORE its
+    batch is issued and is only moved out inside `except Exception`, so a 200 carrying
+    UnprocessedItems reported a key that is still readable as deleted."""
+
+    @staticmethod
+    def _delete():
+        from backend.backend.models.metadata import DeleteAssetMetadataRequestModel
+        return metadataService.delete_asset_metadata(
+            "db1", "asset1",
+            DeleteAssetMetadataRequestModel(metadataKeys=["governedKey"]),
+            {"tokens": ["user1"]},
+        )
+
+    def test_a_never_deleted_key_is_reported_as_a_failure(self):
+        table = metadataService.asset_file_metadata_table_name
+        with _DeleteHarness(lambda **kwargs: {"UnprocessedItems": {table: kwargs["RequestItems"][table]}}):
+            response = self._delete()
+
+        assert response.failureCount == 1, "an undeleted key was reported as a clean delete"
+        assert response.success is False
+        assert "governedKey" not in response.successfulItems
+        assert "governedKey" in [failure["key"] for failure in response.failedItems]
+
+    def test_a_delete_that_clears_is_still_reported_successful(self):
+        """Positive control: the same harness reports success when DynamoDB accepts the batch."""
+        with _DeleteHarness(lambda **kwargs: {"UnprocessedItems": {}}) as harness:
+            response = self._delete()
+
+        assert response.success is True
+        assert response.failureCount == 0
+        assert "governedKey" in response.successfulItems
+        assert harness.client.batch_write_item.call_count == 1

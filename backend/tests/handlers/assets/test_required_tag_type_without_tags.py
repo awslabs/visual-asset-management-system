@@ -25,6 +25,7 @@ from tests.handlers.assets.test_assetService_update_tag_scope import (
     _wire_create_for_scope,
     _wire_update,
     _existing_asset,
+    _written_attributes,
 )
 
 
@@ -125,7 +126,7 @@ class TestUpdateWithEmptyRequiredTagType:
             )
 
             assert result.success is True
-            m.asset_table.put_item.assert_called_once()
+            m.asset_table.update_item.assert_called_once()
         finally:
             if saved is not None:
                 sys.modules["handlers.assets.createAsset"] = saved
@@ -154,7 +155,7 @@ class TestUpdateWithEmptyRequiredTagType:
                     {"tokens": ["u1"]},
                 )
             assert type(rejected.value).__name__ == "VAMSGeneralErrorResponse"
-            m.asset_table.put_item.assert_not_called()
+            m.asset_table.update_item.assert_not_called()
         finally:
             if saved is not None:
                 sys.modules["handlers.assets.createAsset"] = saved

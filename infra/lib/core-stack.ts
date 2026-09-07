@@ -410,9 +410,22 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             //Write final output configurations (pulling forward from nested stacks)
+            // The stage-INCLUSIVE invoke URL, because this output is read by a human and handed to a
+            // client (`vamscli setup <url>`), not used as an origin.
+            //
+            // `apiEndpoint` is a bare hostname with no scheme and no stage. Amazon API Gateway reads the
+            // first path segment as the deployment stage, so a client configured with the bare host asks
+            // for a stage that does not exist and every request is answered 403 {"message":"Forbidden"}
+            // before any authorizer runs — indistinguishable from a permission denial. Publishing the
+            // bare form here is how that misconfiguration is created.
+            //
+            // `apiEndpoint` is still correct for the OTHER consumer: StaticWeb passes it to
+            // `cloudfrontOrigins.HttpOrigin(...)` and to the ALB listener rules' `host:`, both of which
+            // take a domain name, and `security.ts` prefixes the scheme itself. This is a per-consumer
+            // distinction rather than one wrong member.
             const gatewayURLParamsOutput = new cdk.CfnOutput(this, "APIGatewayEndpointOutput", {
-                value: `${apiNestedStack.apiEndpoint}`,
-                description: "API Gateway endpoint",
+                value: `${apiNestedStack.invokeUrlWithStage}`,
+                description: "API Gateway endpoint (stage-inclusive invoke URL)",
             });
 
             const importGlobalPipelineWorkflowFunctionNameOutput = new cdk.CfnOutput(

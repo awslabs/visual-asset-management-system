@@ -9,6 +9,12 @@ suitable for OpenSearch geo_shape, or None if no usable location data
 is present. The 'location' metadata key (case-insensitive) takes priority
 over individual latitude / longitude / altitude fields.
 
+The 'location' path accepts a GeoJSON Geometry (including GeometryCollection),
+Feature, or FeatureCollection and runs the same structural, coordinate-range
+and linear-ring validation as the GEOJSON metadata value type, so a shape
+OpenSearch would reject is left out of geo_MD_location rather than sent and
+stripped on a retry.
+
 The secondary latitude / longitude / altitude path accepts both numeric
 and STRING values (VAMS stores most metadata as strings in DynamoDB),
 trims whitespace, rejects null / empty / non-numeric / boolean / NaN /
@@ -21,6 +27,7 @@ import math
 from typing import Any, Dict, Optional, Tuple
 
 from customLogging.logger import safeLogger
+from models.metadata import MAX_GEOJSON_NESTING_DEPTH, _validate_geometry
 
 logger = safeLogger(service_name="GeoLocation")
 
@@ -96,6 +103,87 @@ def _is_valid_lon_lat(lon: float, lat: float) -> bool:
     return -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0
 
 
+def _positions_are_finite(node: Any) -> bool:
+    """Check that every coordinate leaf under a geometry is a finite, non-bool number.
+
+    _validate_geometry range-checks lon/lat, which lets two unusable positions
+    through: NaN, because every comparison against it is False, and a boolean,
+    because bool subclasses int and reads as 1 / 0. json.loads parses the bare
+    NaN literal, so a stored metadata value can carry one, and OpenSearch
+    rejects both with a mapper_parsing_exception.
+    """
+    if isinstance(node, dict):
+        return all(
+            _positions_are_finite(node[member])
+            for member in ("coordinates", "geometries")
+            if node.get(member) is not None
+        )
+    if isinstance(node, (list, tuple)):
+        return all(_positions_are_finite(entry) for entry in node)
+    if isinstance(node, bool) or not isinstance(node, (int, float)):
+        return False
+    return math.isfinite(node)
+
+
+def _geometry_nesting_depth(geometry: Dict[str, Any], limit: int) -> int:
+    """Count a geometry's GeometryCollection levels, stopping once limit is passed.
+
+    Walks one level at a time rather than recursively so the measurement itself is
+    never what runs out of stack, and reports limit + 1 for anything deeper.
+    """
+    depth = 0
+    level = [geometry]
+    while level and depth <= limit:
+        depth += 1
+        next_level = []
+        for node in level:
+            if isinstance(node, dict):
+                members = node.get("geometries")
+                if isinstance(members, list):
+                    next_level.extend(members)
+        level = next_level
+    return depth
+
+
+def _is_indexable_geometry(geometry: Dict[str, Any]) -> bool:
+    """Check a GeoJSON geometry against the rules OpenSearch's geo_shape enforces.
+
+    Runs the structural, coordinate-range and linear-ring validation the GEOJSON
+    metadata value type uses, so what gets indexed and what the metadata API
+    accepts agree. An unusable geometry is dropped here instead of reaching
+    OpenSearch, which answers with a mapper_parsing_exception and forces the
+    document to be re-indexed without geo_MD_location.
+    """
+    if _geometry_nesting_depth(geometry, MAX_GEOJSON_NESTING_DEPTH) > MAX_GEOJSON_NESTING_DEPTH:
+        logger.info(
+            "geo_MD_location: skipping document — geometries nested more than %s levels deep",
+            MAX_GEOJSON_NESTING_DEPTH,
+        )
+        return False
+    try:
+        _validate_geometry(geometry, label="geo_MD_location")
+    except ValueError as e:
+        logger.info("geo_MD_location: skipping document — %s", e)
+        return False
+    if not _positions_are_finite(geometry):
+        logger.info(
+            "geo_MD_location: skipping document — coordinates contain a non-finite "
+            "or non-numeric position"
+        )
+        return False
+    return True
+
+
+def _strip_geometry(geometry: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a validated geometry to the members OpenSearch's geo_shape reads."""
+    if geometry["type"] == "GeometryCollection":
+        return {
+            "type": "GeometryCollection",
+            "geometries": [_strip_geometry(sub) for sub in geometry["geometries"]],
+        }
+    return {"type": geometry["type"], "coordinates": geometry["coordinates"]}
+
+
 def _normalize_geojson_geometry(value: Any) -> Optional[Dict[str, Any]]:
     """
     Accept a GeoJSON Geometry, Feature, or FeatureCollection and return the
@@ -105,7 +193,9 @@ def _normalize_geojson_geometry(value: Any) -> Optional[Dict[str, Any]]:
     if isinstance(value, str):
         try:
             value = json.loads(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
+            # Deeply nested input exhausts the parser's stack, which surfaces as
+            # RecursionError rather than as a decode error.
             return None
 
     if not isinstance(value, dict):
@@ -124,8 +214,8 @@ def _normalize_geojson_geometry(value: Any) -> Optional[Dict[str, Any]]:
             return None
         return _normalize_geojson_geometry(features[0])
 
-    if geo_type in _VALID_GEOJSON_TYPES and value.get("coordinates") is not None:
-        return {"type": geo_type, "coordinates": value["coordinates"]}
+    if geo_type in _VALID_GEOJSON_TYPES and _is_indexable_geometry(value):
+        return _strip_geometry(value)
 
     return None
 
@@ -181,7 +271,7 @@ def _point_from_location_string(value: str) -> Optional[Dict[str, Any]]:
     if text.startswith("{"):
         try:
             parsed = json.loads(text)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             parsed = None
         if isinstance(parsed, dict):
             geom = _normalize_geojson_geometry(parsed)

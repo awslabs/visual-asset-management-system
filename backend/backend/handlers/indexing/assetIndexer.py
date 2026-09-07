@@ -175,6 +175,9 @@ def opensearch_operation_with_retry(operation_func: Callable, max_retries: int =
                     f"Rate limited (429) during {operation_name}, "
                     f"retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})"
                 )
+                # Backoff after an OpenSearch 429. Must be the last comment line before the
+                # call -- semgrep attaches `nosemgrep` to the next line only.
+                # nosemgrep: arbitrary-sleep
                 time.sleep(wait_time)
             else:
                 # Re-raise if not 429 or max retries reached

@@ -129,7 +129,10 @@ beforeAll(() => {
         ) as lambda.LayerVersion,
         importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflowV2",
         // Sources the container image from ECR so synth does not run a local Docker build.
-        codeBuildRepository: ecr.Repository.fromRepositoryName(stack, "Repo", "isaaclab"),
+        codeBuildImage: {
+            repository: ecr.Repository.fromRepositoryName(stack, "Repo", "isaaclab"),
+            tag: "0123456789abcdef0123456789abcdef01234567",
+        },
     });
 
     // The control: the same construct the pipeline stacks use, invoked the way a trigger-shipping

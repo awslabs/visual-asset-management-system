@@ -424,6 +424,7 @@ export function buildInterimPipelineTrackingFunction(
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
     // Reads original input files + output-files folder, and writes the next pipeline's
     // resolved input manifest into the asset bucket execution input folder.
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -484,6 +485,82 @@ export function buildHandleExecutionErrorFunction(
             ],
         })
     );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Stop the Step Functions sub-execution an in-flight pipeline registered, before its row
+            // is stamped terminal — a terminal row is no longer a candidate for the abort API, so a
+            // sub-execution left running here has no in-product remedy. Scoped exactly as the abort
+            // path's grant is: the two act on the same registered sub-executions.
+            actions: ["states:StopExecution"],
+            resources: [
+                IAMArn("*" + config.name + "*").statemachine,
+                IAMArn("*" + config.name + "*").statemachineExecution,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachineExecution,
+                // Registered pipeline sub-executions (CDK-generated names — see the constant above).
+                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachine,
+                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachineExecution,
+            ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Terminate a Batch job a pipeline submitted ITSELF and registered: a job submitted
+            // through the Step Functions `.sync` Batch integration is stopped by StopExecution on
+            // its state machine (granted above). AWS Batch generates job ids with no
+            // deployment-specific prefix to scope on, so the resource is a wildcard; the handler
+            // only ever passes an id read from a registration row on the failing execution.
+            actions: ["batch:TerminateJob"],
+            resources: ["*"],
+        })
+    );
+    // Gated the same way the abort path's grant is: with the execution type disabled no pipeline can
+    // be registered as DeadlineCloud, so no failing execution can hold a job to cancel.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        // Resolves a DeadlineCloud pipeline's farmId/queueId, which live on the pipeline DEFINITION
+        // rather than on any execution row, so a job that was never registered can still be found.
+        storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                // Cancel a Deadline Cloud farm job held by a pipeline this failure is about to stamp
+                // terminal. The task is `createJob.waitForTaskToken`, so Step Functions holds the
+                // token and NOT the job, and a terminal row is no longer a candidate for the abort
+                // API — so a job left running here has no in-product remedy.
+                //
+                // ListJobs + GetJob are what make a QUEUED job cancellable. The job is otherwise
+                // identified from a registration written by the job-status callback, and that
+                // callback only runs on a status CHANGE — a job sitting queued with no worker never
+                // produces one. Discovery walks the pipeline's queue and matches the reserved
+                // VamsPipelineExecutionId job parameter instead, so it needs no event to have
+                // occurred. Same three actions as the abort path, which shares the implementation.
+                actions: ["deadline:UpdateJob", "deadline:ListJobs", "deadline:GetJob"],
+                // Farm and queue ids come from the pipeline record, not from configuration, so they
+                // are not known at deploy time. Scoped to the account/Region's Deadline resources.
+                resources: [
+                    `arn:${Partition()}:deadline:${config.env.region}:${config.env.account}:farm/*`,
+                ],
+            })
+        );
+        NagSuppressions.addResourceSuppressions(
+            fun,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
+                        "known at deploy time, so deadline:UpdateJob/ListJobs/GetJob are scoped to this account " +
+                        "and Region's farm hierarchy. The handler only ever passes a farm/queue read from the " +
+                        "failing execution's own pipeline definition, and a job id either read from a registration " +
+                        "row on that execution or matched to it by the reserved VamsPipelineExecutionId parameter.",
+                    appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+                },
+            ],
+            true
+        );
+    }
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

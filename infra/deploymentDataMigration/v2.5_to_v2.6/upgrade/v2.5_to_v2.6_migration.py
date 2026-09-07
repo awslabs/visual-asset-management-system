@@ -2026,11 +2026,16 @@ def _v2_trigger_item(row: Dict, now: str) -> Optional[Dict]:
     }
 
 
-def _offload_template_body(s3_client, bucket: str, key: str, body: str,
+def _offload_template_body(s3_client, default_bucket: Optional[Dict], key: str, body: str,
                            database_id: str, pipeline_id: str, dry_run: bool) -> bool:
     """Write an over-threshold migrated template body to the default asset bucket. False when it could
     not be stored, so the caller drops the template row rather than writing one whose configBody
-    neither lives inline nor resolves in S3."""
+    neither lives inline nor resolves in S3.
+
+    `key` is the row's stored key, relative to the area VAMS owns inside the bucket, so it is joined to
+    the bucket's baseAssetsPrefix here — the same join the pipeline template service and the run path
+    apply when they read the object back."""
+    bucket = (default_bucket or {}).get('bucketName') or ''
     if not bucket or s3_client is None:
         logger.error(
             f"Pipeline '{database_id}:{pipeline_id}' has inputParameters larger than the "
@@ -2038,23 +2043,34 @@ def _offload_template_body(s3_client, bucket: str, key: str, body: str,
             "be resolved, so its migrated template is skipped. Re-run the step with the bucket "
             "resolvable to migrate the template.")
         return False
+    full_key = default_bucket_key(default_bucket, key)
     if dry_run:
         logger.info(f"  [DRY RUN] Would offload the '{database_id}:{pipeline_id}' template body to "
-                    f"s3://{bucket}/{key}")
+                    f"s3://{bucket}/{full_key}")
         return True
     try:
-        tbs.write_body_to_s3(s3_client, bucket, key, body)
+        tbs.write_body_to_s3(s3_client, bucket, full_key, body)
         return True
     except (ClientError, BotoCoreError) as e:
         logger.error(f"Failed offloading the '{database_id}:{pipeline_id}' template body to "
-                     f"s3://{bucket}/{key}: {e}. Its migrated template is skipped.")
+                     f"s3://{bucket}/{full_key}: {e}. Its migrated template is skipped.")
         return False
 
 
-def resolve_default_bucket_name(dynamodb_client, buckets_table_name: str) -> str:
-    """The bucket name of the VAMS default asset bucket (the row flagged isDefault), or '' when none
-    is flagged. Mirrors common.workflows.defaultBucket: a bucket registered under several prefixes has
-    a row per prefix, and the bucket-root row is preferred so the canonical base wins."""
+def default_bucket_key(default_bucket: Optional[Dict], key: str) -> str:
+    """The full bucket key for a VAMS-managed pipeline key inside the default bucket. Mirrors
+    common.workflows.defaultBucket.default_bucket_key: the stored keys are relative to the area VAMS
+    owns, which for a bucket registered under a prefix is that prefix rather than the bucket root."""
+    prefix = ((default_bucket or {}).get('baseAssetsPrefix') or '').strip('/')
+    body = (key or '').lstrip('/')
+    return f"{prefix}/{body}" if prefix else body
+
+
+def resolve_default_bucket(dynamodb_client, buckets_table_name: str) -> Dict[str, str]:
+    """The VAMS default asset bucket row (the one flagged isDefault) as
+    {bucketName, baseAssetsPrefix}, or {} when none is flagged. Mirrors
+    common.workflows.defaultBucket: a bucket registered under several prefixes has a row per prefix,
+    and the bucket-root row is preferred so the canonical base wins."""
     rows = []
     for item in iter_all_items(dynamodb_client, buckets_table_name,
                                projection='bucketName,baseAssetsPrefix,isDefault'):
@@ -2063,13 +2079,13 @@ def resolve_default_bucket_name(dynamodb_client, buckets_table_name: str) -> str
         rows.append((item.get('baseAssetsPrefix', {}).get('S', '') or '',
                      item.get('bucketName', {}).get('S', '') or ''))
     if not rows:
-        return ''
+        return {}
     rows.sort(key=lambda entry: (0 if entry[0].strip('/') == '' else 1, entry[0], entry[1]))
     distinct = {name for _prefix, name in rows}
     if len(distinct) > 1:
         logger.error(f"More than one bucket is flagged as the VAMS default ({sorted(distinct)}); using "
                      f"{rows[0][1]}. Clear the stale isDefault row(s) in the S3 asset buckets table.")
-    return rows[0][1]
+    return {'bucketName': rows[0][1], 'baseAssetsPrefix': rows[0][0]}
 
 
 def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, limit: int,
@@ -2082,9 +2098,10 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
     v1_workflow_table = cfg['workflow_storage_table_name']
     v2_workflow_table = cfg['workflow_storage_table_name_v2']
     triggers_table = cfg.get('workflow_triggers_storage_table_name')
-    # Default asset bucket for an offloaded template body. Optional: a body over the inline threshold
-    # is skipped rather than written onto the row, where it would exceed the 400 KB item limit.
-    template_body_bucket = cfg.get('pipeline_template_body_bucket_name')
+    # Default asset bucket row for an offloaded template body. Optional: a body over the inline
+    # threshold is skipped rather than written onto the row, where it would exceed the 400 KB item
+    # limit.
+    template_body_bucket = cfg.get('pipeline_template_body_bucket')
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     counts = {'pipelines': 0, 'templates': 0, 'workflows': 0, 'triggers': 0, 'skipped_global': 0,
@@ -2444,11 +2461,11 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
 
     # The default asset bucket houses an offloaded template body. Optional: only a pipeline whose V1
     # inputParameters exceed the inline threshold needs it, and that case reports itself.
-    cfg['pipeline_template_body_bucket_name'] = None
+    cfg['pipeline_template_body_bucket'] = None
     try:
         buckets_table = resolve('s3_asset_buckets_storage_table_name',
                                 ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-        cfg['pipeline_template_body_bucket_name'] = resolve_default_bucket_name(
+        cfg['pipeline_template_body_bucket'] = resolve_default_bucket(
             dynamodb_client, buckets_table)
     except Exception as e:
         logger.warning(f"Could not resolve the VAMS default asset bucket: {e}")

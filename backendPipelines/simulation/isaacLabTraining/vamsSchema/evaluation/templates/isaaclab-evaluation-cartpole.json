@@ -3,7 +3,65 @@
     "templateName": "Evaluate (Cartpole)",
     "description": "Evaluate a trained RL policy with Isaac Lab (Isaac-Cartpole-Direct-v0, 100 envs, 50 episodes).",
     "configFormat": "json",
-    "configBody": "{\"trainingConfig\":{\"mode\":\"evaluate\",\"task\":\"Isaac-Cartpole-Direct-v0\",\"numEnvs\":100,\"numEpisodes\":50,\"recordVideo\":false}}",
+    "configBody": "{\"trainingConfig\":{\"mode\":\"evaluate\",\"task\":\"{{TASK}}\",\"numEnvs\":{{NUM_ENVS}},\"numEpisodes\":{{NUM_EPISODES}},\"stepsPerEpisode\":{{STEPS_PER_EPISODE}},\"recordVideo\":{{RECORD_VIDEO}},\"rlLibrary\":\"{{RL_LIBRARY}}\",\"checkpointPath\":\"{{CHECKPOINT_PATH}}\"}}",
     "allowCustomEdit": true,
-    "inputInstructions": "Point the pipeline at a trained policy (.pt). Set trainingConfig.task to match the trained task, tune numEnvs / numEpisodes, and recordVideo to capture rollout video."
+    "inputInstructions": "Run this against an asset holding a trained policy (.pt). The \"Isaac Lab task\" field must match the task the policy was trained on, and \"RL library\" must match the library that trained it. \"Parallel environments\", \"Episodes\" and \"Steps per episode\" size the rollout. Set \"Record rollout video\" to write a video of the rollout to the asset. Leave \"Checkpoint path\" blank to use the .pt file found on the asset, or set it to a path within the asset to select one.",
+    "tagSchema": [
+        {
+            "tagKey": "TASK",
+            "type": "string",
+            "required": false,
+            "default": "Isaac-Cartpole-Direct-v0",
+            "label": "Isaac Lab task",
+            "description": "The Isaac Lab task id to evaluate, for example Isaac-Cartpole-Direct-v0. It must match the task the policy was trained on."
+        },
+        {
+            "tagKey": "NUM_ENVS",
+            "type": "integer",
+            "required": false,
+            "default": 100,
+            "label": "Parallel environments",
+            "description": "How many environments are simulated in parallel during the rollout."
+        },
+        {
+            "tagKey": "NUM_EPISODES",
+            "type": "integer",
+            "required": false,
+            "default": 50,
+            "label": "Episodes",
+            "description": "How many episodes to roll out. The reported statistics are averaged over them."
+        },
+        {
+            "tagKey": "STEPS_PER_EPISODE",
+            "type": "integer",
+            "required": false,
+            "default": 1000,
+            "label": "Steps per episode",
+            "description": "The maximum number of simulation steps in one episode, which bounds how long a rollout can run."
+        },
+        {
+            "tagKey": "RECORD_VIDEO",
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "label": "Record rollout video",
+            "description": "Write a video of the rollout to the asset alongside the evaluation results."
+        },
+        {
+            "tagKey": "RL_LIBRARY",
+            "type": "enum",
+            "required": false,
+            "default": "rsl_rl",
+            "enumValues": ["rsl_rl", "rl_games", "skrl"],
+            "label": "RL library",
+            "description": "The reinforcement-learning library whose Isaac Lab evaluation script runs. It must match the library that trained the policy, because a checkpoint is loadable only by the library that wrote it."
+        },
+        {
+            "tagKey": "CHECKPOINT_PATH",
+            "type": "string",
+            "required": false,
+            "label": "Checkpoint path",
+            "description": "A path to the policy file within the asset, for example checkpoints/model_300.pt. Leave it blank to evaluate the .pt file found on the asset."
+        }
+    ]
 }

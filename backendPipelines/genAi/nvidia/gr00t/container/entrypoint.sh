@@ -3,6 +3,12 @@ set -e
 
 cd /workspace
 
+# The upstream framework commit the image was built from, so a run's log names the inference
+# code it actually ran.
+if [ -f /workspace/VAMS_UPSTREAM_COMMIT ]; then
+    echo "Isaac-GR00T commit: $(cat /workspace/VAMS_UPSTREAM_COMMIT)"
+fi
+
 # Ensure PYTHONPATH includes workspace for gr00t imports
 export PYTHONPATH=/workspace:${PYTHONPATH}
 

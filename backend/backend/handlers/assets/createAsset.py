@@ -25,7 +25,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.tagScope import GLOBAL_SCOPE
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
-from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel
+from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
 # Configure AWS clients
 retry_config = Config(
@@ -711,6 +711,12 @@ def validate_tags_exist(tags, database_id):
 
 def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3ExternalGenerated = False):
     """Create a new asset (metadata only)"""
+    # An asset id the caller chose is ASCII-only. An id derived from an existing
+    # S3 prefix (s3ExternalGenerated) is whatever S3 already holds, so it keeps
+    # the shared rule.
+    if request_model.assetId and not s3ExternalGenerated:
+        validate_ascii_asset_id(request_model.assetId)
+
     # Generate asset ID if not provided
     assetId = request_model.assetId if request_model.assetId else f"x{str(uuid.uuid4())}"
     databaseId = request_model.databaseId

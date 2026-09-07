@@ -20,13 +20,20 @@ logger = safeLogger(service_name="ExecutionModels")
 TRIGGER_TYPES = ("Manual", "File-Upload")
 
 
-class WorkflowExecutionRecord(BaseModel, extra='ignore'):
-    """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed)."""
+class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed).
+
+    The composite sort key carries a ':' and so cannot be a field name; it is declared under an
+    alias, and serializing with dict(by_alias=True) emits the stored attribute name."""
     workflowExecutionId: str
+    workflowDatabaseIdWorkflowId: Optional[str] = Field("", alias="workflowDatabaseId:workflowId")
     workflowId: str
     workflowDatabaseId: str
     workflow_arn: Optional[str] = ""
     workflow_execution_arn: Optional[str] = ""
+    # Constant partition of the by-date GSI backing the global newest-first execution list; always
+    # set at launch. A row without it is absent from that listing.
+    allListPartition: Optional[str] = ""
     executionStartDate: Optional[str] = ""
     executionStopDate: Optional[str] = ""
     executionStatus: Optional[str] = "NEW"
@@ -43,6 +50,9 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore'):
     #   captured on every terminal completion (success or failure) for limited roles.
     executionError: Optional[str] = ""
     executionLog: Optional[str] = ""
+    # Partition of the sparse by-group GSI, grouping executions launched together (bulk / re-run).
+    # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
+    executionGroupId: Optional[str] = ""
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):
@@ -51,12 +61,18 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore'):
         return v
 
 
-class PipelineExecutionRecord(BaseModel, extra='ignore'):
-    """PipelineExecutionsStorageTable row (one per pipeline in the workflow)."""
+class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """PipelineExecutionsStorageTable row (one per pipeline in the workflow).
+
+    The by-pipeline GSI sort key carries a ':' and so cannot be a field name; it is declared
+    under an alias, and serializing with dict(by_alias=True) emits the stored attribute name."""
     pipelineExecutionId: str
     workflowExecutionId: str
     pipelineId: str
     pipelineDatabaseId: str
+    # Sort key of the by-pipeline GSI, resolving a pipeline's executions across databases.
+    pipelineDatabaseIdPipelineId: Optional[str] = Field(
+        "", alias="pipelineDatabaseId:pipelineId")
     endStatePipeline: str = "false"
     S3AssetPipelineBucket: Optional[str] = ""
     S3AssetPipelineBucketInputMetadataFilePrefix: Optional[str] = ""
@@ -88,16 +104,26 @@ class PipelineExecutionRecord(BaseModel, extra='ignore'):
     registeredLogs: Optional[List[Dict[str, Any]]] = []
 
 
-class PipelineExecutionInputFileRecord(BaseModel, extra='ignore'):
-    """PipelineExecutionInputFilesStorageTable row."""
+class PipelineExecutionInputFileRecord(
+        BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """PipelineExecutionInputFilesStorageTable row.
+
+    The sort key and the by-asset GSI partition carry a ':' and so cannot be field names; they are
+    declared under aliases, and dict(by_alias=True) emits the stored attribute names."""
     pipelineExecutionId: str
     workflowExecutionId: str
+    # Sort key, and the by-asset GSI partition an asset's input-file rows are read by. A row
+    # without the partition is absent from that listing.
+    databaseIdAssetIdInputAssetFileKey: Optional[str] = Field(
+        "", alias="databaseId:assetId:inputAssetFileKey")
+    databaseIdAssetId: Optional[str] = Field("", alias="databaseId:assetId")
     assetId: str
     databaseId: str
     inputAssetFileKey: str
 
 
-class PipelineExecutionInputMetadataRecord(BaseModel, extra='ignore'):
+class PipelineExecutionInputMetadataRecord(
+        BaseModel, extra='ignore', allow_population_by_field_name=True):
     """PipelineExecutionInputMetadataStorageTable row.
 
     scope discriminates what the row's metadata describes: 'asset' for an asset/file row, 'database'
@@ -108,12 +134,18 @@ class PipelineExecutionInputMetadataRecord(BaseModel, extra='ignore'):
     gates fileMetadata and fileAttributes independently — merging them would lose which gate delivered
     a value. Empty for asset-level and database-scope rows, and for a row whose file has none."""
     pipelineExecutionId: str
+    # Sort key; carries a ':' and so is declared under an alias.
+    databaseIdAssetIdFilePath: Optional[str] = Field("", alias="databaseId:assetId:filePath")
     assetId: str
     databaseId: str
     filePath: str
     scope: Optional[str] = "asset"
+    # metadata and attributes share one byte budget, so each carries its own flag saying whether
+    # that budget dropped entries from it.
     metadata: Optional[Dict[str, Any]] = {}
+    metadataTruncated: Optional[bool] = False
     attributes: Optional[Dict[str, Any]] = {}
+    attributesTruncated: Optional[bool] = False
     sourceInputMetadataFileS3Key: Optional[str] = ""
 
 
@@ -130,12 +162,30 @@ class PipelineExecutionInputConfigurationRecord(BaseModel, extra='ignore'):
     templateSchemaVersion: Optional[str] = ""
     tagSchemaVersion: Optional[str] = ""
     templateTags: Optional[List[Dict[str, Any]]] = []
+    templateTagsTruncated: Optional[bool] = False
     customTemplateOverrideUsed: Optional[bool] = False
+    # The RAW override body (pre-render) when one was supplied, so a re-run can reconstruct a
+    # template-less override execution.
+    customTemplateOverride: Optional[str] = ""
+    customTemplateOverrideTruncated: Optional[bool] = False
+    # Format of the rendered config body.
+    configFormat: Optional[str] = ""
+    # The systemConfig this step actually ran under (the pipeline's own merged with the chosen
+    # template's overrides), and just the keys the template overrode.
+    effectiveSystemConfig: Optional[Dict[str, Any]] = {}
+    effectiveSystemConfigTruncated: Optional[bool] = False
+    templateOverrides: Optional[Dict[str, Any]] = {}
+    templateOverridesTruncated: Optional[bool] = False
 
 
-class PipelineExecutionOutputFileRecord(BaseModel, extra='ignore'):
-    """PipelineExecutionOutputFilesStorageTable row."""
+class PipelineExecutionOutputFileRecord(
+        BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """PipelineExecutionOutputFilesStorageTable row.
+
+    The sort key carries a ':' and so cannot be a field name; it is declared under an alias, and
+    dict(by_alias=True) emits the stored attribute name."""
     pipelineExecutionId: str
+    fileTypeRelativeFilePath: Optional[str] = Field("", alias="fileType:relativeFilePath")
     fileType: str
     relativeFilePath: str
     s3Bucket: Optional[str] = ""
@@ -145,9 +195,14 @@ class PipelineExecutionOutputFileRecord(BaseModel, extra='ignore'):
     s3VersionId: Optional[str] = ""
 
 
-class PipelineExecutionOutputMetadataRecord(BaseModel, extra='ignore'):
-    """PipelineExecutionOutputMetadataStorageTable row."""
+class PipelineExecutionOutputMetadataRecord(
+        BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """PipelineExecutionOutputMetadataStorageTable row.
+
+    The sort key carries a ':' and so cannot be a field name; it is declared under an alias, and
+    dict(by_alias=True) emits the stored attribute name."""
     pipelineExecutionId: str
+    targetFilePathMetadataKey: Optional[str] = Field("", alias="targetFilePath:metadataKey")
     targetFilePath: str
     metadataKey: str
     metadataValue: Optional[str] = ""
@@ -175,12 +230,25 @@ class PipelineExecutionLogRecord(BaseModel, extra='ignore'):
     logStreamName: Optional[str] = ""
 
 
-class WorkflowExecutionInputRecord(BaseModel, extra='ignore'):
-    """WorkflowExecutionInputsStorageTable row (asset-scoped GET source)."""
+class WorkflowExecutionInputRecord(
+        BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """WorkflowExecutionInputsStorageTable row (asset-scoped GET source).
+
+    The sort key and the by-asset GSI partition carry a ':' and so cannot be field names; they are
+    declared under aliases, and dict(by_alias=True) emits the stored attribute names."""
     workflowExecutionId: str
+    # Sort key, and the by-asset GSI partition backing an asset's execution-input history. A row
+    # without the partition is absent from that listing.
+    databaseIdAssetIdInputAssetFileKey: Optional[str] = Field(
+        "", alias="databaseId:assetId:inputAssetFileKey")
+    databaseIdAssetId: Optional[str] = Field("", alias="databaseId:assetId")
     assetId: str
     databaseId: str
     inputAssetFileKey: str
+    # This input file's own asset root: the bucket name plus the bucket-relative asset-root prefix.
+    # Stored per file because each input file may belong to a different asset.
+    s3Bucket: Optional[str] = ""
+    assetRootS3Key: Optional[str] = ""
     # Concrete S3 VersionId read for this file (resolved at launch); empty for folder/whole-asset.
     versionId: Optional[str] = ""
     executionStartDate: Optional[str] = ""
@@ -188,19 +256,31 @@ class WorkflowExecutionInputRecord(BaseModel, extra='ignore'):
     workflowDatabaseId: Optional[str] = ""
 
 
-class WorkflowExecutionConfigurationRecord(BaseModel, extra='ignore'):
-    """WorkflowExecutionConfigurationStorageTable row."""
+class WorkflowExecutionConfigurationRecord(
+        BaseModel, extra='ignore', allow_population_by_field_name=True):
+    """WorkflowExecutionConfigurationStorageTable row.
+
+    Each variable-size collection carries its own truncation flag, set when the row's shared byte
+    budget trimmed it. The by-output-asset GSI partition carries a ':' and so cannot be a field name;
+    it is declared under an alias, and dict(by_alias=True) emits the stored attribute name."""
     workflowExecutionId: str
     recordType: str = "configuration"
     inputMetadata: Optional[str] = ""
     inputMetadataTruncated: Optional[bool] = False
     specifiedPipelinesSnapshot: Optional[List[Dict[str, Any]]] = []
+    specifiedPipelinesSnapshotTruncated: Optional[bool] = False
     # Output target (where outputs are written).
     outputLocationType: Optional[str] = "asset"
     outputAssetId: Optional[str] = ""
     outputDatabaseId: Optional[str] = ""
     # Output base path extension (dynamic-tag-templated sub-path under the output asset); "/" = root.
     outputFileBaseExecutionPathExtension: Optional[str] = "/"
+    # Partition + sort key of the by-output-asset GSI backing an asset's execution history. The
+    # partition is written only for an asset-targeted run with a resolved destination, so a
+    # results-only execution is absent from that index.
+    outputDatabaseIdOutputAssetId: Optional[str] = Field(
+        "", alias="outputDatabaseId:outputAssetId")
+    executionStartDate: Optional[str] = ""
     # Input-metadata source (recording only). inputMetadataDatabaseId is the databaseMetadata source
     # database the caller NAMED; metadataSourceAssets are the [{databaseId, assetId}] entities named
     # purely as metadata sources (never input files), so a re-run reconstructs the same selection.
@@ -209,7 +289,9 @@ class WorkflowExecutionConfigurationRecord(BaseModel, extra='ignore'):
     inputMetadataDatabaseId: Optional[str] = ""
     inputMetadataFileS3Key: Optional[str] = ""
     metadataSourceAssets: Optional[List[Dict[str, Any]]] = []
+    metadataSourceAssetsTruncated: Optional[bool] = False
     metadataSourceDatabases: Optional[List[str]] = []
+    metadataSourceDatabasesTruncated: Optional[bool] = False
 
 
 #######################
@@ -362,6 +444,22 @@ class PipelineExecutionParameters(BaseModel, extra='ignore'):
     customTemplateOverride: Optional[str] = Field(
         None, max_length=MAX_CUSTOM_TEMPLATE_OVERRIDE_LENGTH)
 
+    @validator("templateTags", pre=True)
+    def validate_tags_total_size(cls, v):
+        # Measured pre-parse, on the entries as supplied: the caller's block is persisted verbatim on
+        # the config-snapshot record, so an entry's non-contract keys count against the item the
+        # record builder has to fit even though the model itself drops them.
+        if not isinstance(v, list):
+            return v
+        total = 0
+        for entry in v:
+            total += len(json.dumps(entry, default=str))
+            if total > MAX_TEMPLATE_TAGS_TOTAL_LENGTH:
+                raise ValueError(
+                    f"templateTags may be at most {MAX_TEMPLATE_TAGS_TOTAL_LENGTH} characters "
+                    "in total when serialized")
+        return v
+
     @root_validator
     def validate_template_id(cls, values):
         # templateId is used directly as a DynamoDB sort key at resolution.
@@ -462,7 +560,8 @@ class ExecuteWorkflowRequestV2Model(BaseModel, extra='ignore'):
             if "\\" in ext:
                 raise ValueError("outputFileBaseExecutionPathExtension must not contain backslashes")
         # The per-pipeline parameter blocks are validated through PipelineExecutionParameters (the
-        # templateId id rule, tag key/value bounds, and override body cap) plus the pipelineId keys.
+        # templateId id rule, the tag key/value and aggregate-tag-list bounds, and the override body
+        # cap) plus the pipelineId keys.
         _validate_pipeline_execution_parameters(values.get("pipelineExecutionParameters"))
         return values
 

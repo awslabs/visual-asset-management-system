@@ -137,12 +137,13 @@ class TestBatchJobRegistration:
         mod.lambda_handler(_event(orchestrationEventPrefix="garbage"), MagicMock())
         mod.events_client.put_events.assert_not_called()
 
-    def test_a_multi_node_job_still_registers(self):
-        # numNodes > 1 rewrites submit_params into nodeOverrides; registration must be unaffected.
+    def test_a_stale_node_count_in_the_payload_still_registers(self):
+        # A numNodes the payload still carries is inert (see test_single_node_only.py); the
+        # submission and its registration must be unaffected by it either way.
         mod = _load_execute_batch_job()
         mod.lambda_handler(_event(orchestrationEventPrefix=PREFIX, numNodes=3), MagicMock())
         submitted = mod.batch.submit_job.call_args.kwargs
-        assert "nodeOverrides" in submitted and "containerOverrides" not in submitted
+        assert "containerOverrides" in submitted and "nodeOverrides" not in submitted
         mod.events_client.put_events.assert_called_once()
 
 

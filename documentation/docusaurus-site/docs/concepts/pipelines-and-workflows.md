@@ -111,10 +111,10 @@ A step's `jobName` labels the step within the workflow. It does two things: it n
 An execution writes to one shared set of output prefixes, derived from the first step:
 
 ```
-pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
+{baseAssetsPrefix}pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
 ```
 
-`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name with a short generated prefix, assigned when the workflow's state machine is built. Every step of the run writes beneath these prefixes; the steps do not each get a folder of their own.
+`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name with a short generated prefix, assigned when the workflow's state machine is built. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under — empty for the bucket VAMS creates, so the run area sits at that bucket's root. Every step of the run writes beneath these prefixes; the steps do not each get a folder of their own.
 
 The value is 3–63 characters of letters, numbers, hyphens, and underscores, and each step in a workflow is expected to carry its own: a job name repeated across two steps names both of them identically in the state machine and in the run's logs, leaving no way to tell the two apart. The web workflow editor refuses a repeat, comparing case-insensitively.
 

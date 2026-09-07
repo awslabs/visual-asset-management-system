@@ -171,9 +171,62 @@ def _simple_post(module, body, asset_count, file_count):
     return response, json.loads(response["body"])
 
 
+def _complex_post(module, body, asset_count, file_count):
+    """The same drive-through for ``POST /search``, which shares the cross-index merge.
+
+    ``search_dual_index`` and ``DualIndexResponseProcessor`` are the same objects on both
+    endpoints, so the merge reaches the complex path too -- and its page came off the same
+    asset-then-file concatenation. Only the query builder and the OpenSearch client are
+    stubbed, for the same reason as above.
+    """
+    manager = module.DualIndexSearchManager()
+    manager.client = MagicMock()
+    manager.asset_index = "vams-asset"
+    manager.file_index = "vams-file"
+
+    def _search(body=None, index=None):
+        if index == "vams-asset":
+            return _index_page("asset", asset_count, 0.0)
+        return _index_page("file", file_count, 0.5)
+
+    manager.client.search.side_effect = _search
+
+    query_builder = MagicMock()
+    query_builder.build_dual_index_queries.return_value = (
+        {"sort": ["_score"]},
+        {"sort": ["_score"]},
+    )
+
+    processor = module.DualIndexResponseProcessor(module.DatabaseAccessManager())
+
+    event = {
+        "requestContext": {"http": {"method": "POST", "path": "/search"}},
+        "body": json.dumps(body),
+        "headers": {"authorization": "Bearer test-token"},
+    }
+    response = module.handle_post_request(
+        event, manager, query_builder, processor, {"tokens": ["user1"]}
+    )
+    return response, json.loads(response["body"])
+
+
 def _returned_index_types(body):
     """Which index each returned hit came from, read off the _source discriminator."""
     return {hit["_source"]["str_rectype"] for hit in body["hits"]["hits"]}
+
+
+def _expected_merged_ids(asset_count, file_count):
+    """The one global order the two indexes' answers must merge into: _score, descending.
+
+    Derived from the scores ``_index_page`` hands out rather than from the sort the handler
+    runs, so it states the contract instead of restating the implementation. The half-point
+    offset makes every score distinct, so the expected order does not depend on the sort
+    being stable.
+    """
+    scored = [(f"asset-{o}", asset_count - o + 0.0) for o in range(asset_count)]
+    scored += [(f"file-{o}", file_count - o + 0.5) for o in range(file_count)]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return [hit_id for hit_id, _ in scored]
 
 
 @pytest.mark.unit
@@ -249,6 +302,121 @@ class TestSimpleSearchOffsetIsApplied:
 
         assert SearchRequestModel(**{"from": 100}).from_ == 100
         assert SearchRequestModel(from_=100).from_ is None
+
+
+@pytest.mark.unit
+class TestADeepPageOfADualIndexAnswer:
+    """All three mechanisms at once, which neither class above reaches.
+
+    The offset tests run with ``file_count=0`` and the reachability tests run at offset 0, so
+    each isolates one mechanism. A deep page of a DUAL-index answer is the only shape that
+    needs all three to hold together: the offset has to be read off the alias, applied
+    exactly once, and applied to the MERGED sequence rather than to either index's own answer.
+    """
+
+    def test_a_deep_page_is_the_slice_of_the_merged_sequence(self, search_module):
+        _, body = _simple_post(
+            search_module,
+            {"query": "x", "from": 100, "size": 5},
+            asset_count=200,
+            file_count=200,
+        )
+        ids = [hit["_id"] for hit in body["hits"]["hits"]]
+        assert ids == _expected_merged_ids(200, 200)[100:105], (
+            "the deep page is not the merged sequence's slice; the offset was dropped, "
+            f"applied twice, or applied to one index's own answer: {ids}"
+        )
+
+    def test_a_deep_page_carries_hits_from_both_indexes(self, search_module):
+        _, body = _simple_post(
+            search_module,
+            {"query": "x", "from": 100, "size": 5},
+            asset_count=200,
+            file_count=200,
+        )
+        assert _returned_index_types(body) == {"asset", "file"}
+
+    def test_a_deep_page_is_full(self, search_module):
+        """Positive control: the offset selects a page, it does not empty one.
+
+        Without this an offset assertion would be satisfied by an empty response, which is
+        the outage a paging change is most likely to cause.
+        """
+        _, body = _simple_post(
+            search_module,
+            {"query": "x", "from": 100, "size": 5},
+            asset_count=200,
+            file_count=200,
+        )
+        assert len(body["hits"]["hits"]) == 5
+
+    def test_a_deep_page_the_shorter_index_cannot_reach(self, search_module):
+        """Variation: one index shorter than the offset.
+
+        Every asset hit outranks nothing here -- 60 asset hits all score below the first 240
+        file hits -- so the requested page falls entirely inside the file index. That page is
+        one neither index's own offset could produce and the concatenation could never reach.
+        """
+        _, body = _simple_post(
+            search_module,
+            {"query": "x", "from": 100, "size": 10},
+            asset_count=60,
+            file_count=300,
+        )
+        ids = [hit["_id"] for hit in body["hits"]["hits"]]
+        assert ids == _expected_merged_ids(60, 300)[100:110]
+        assert _returned_index_types(body) == {"file"}
+
+    def test_a_deep_page_of_a_single_index_answer(self, search_module):
+        """Variation: entityTypes narrowing the answer to one index.
+
+        The merge is skipped when only one index contributes, so this arm isolates the
+        pagination step -- the half that had the offset applied server-side as well.
+        """
+        _, body = _simple_post(
+            search_module,
+            {"query": "x", "from": 100, "size": 5, "entityTypes": ["file"]},
+            asset_count=200,
+            file_count=200,
+        )
+        ids = [hit["_id"] for hit in body["hits"]["hits"]]
+        assert ids == [f"file-{i}" for i in range(100, 105)]
+
+
+@pytest.mark.unit
+class TestTheComplexEndpointSharesTheMerge:
+    """``POST /search`` collects its hits through the same two calls.
+
+    The merge lives in ``search_dual_index`` and the page is cut in
+    ``DualIndexResponseProcessor``, both shared, so the complex endpoint's page was the head
+    of the same asset-then-file concatenation. Its offset was always read off a model parsed
+    from the request body, so the alias half never applied to it -- which is why the merge is
+    the only half asserted here.
+    """
+
+    def test_the_page_is_ordered_across_both_indexes(self, search_module):
+        response, body = _complex_post(
+            search_module,
+            {"query": "x", "from": 100, "size": 5},
+            asset_count=200,
+            file_count=200,
+        )
+        assert response["statusCode"] == 200
+        ids = [hit["_id"] for hit in body["hits"]["hits"]]
+        assert ids == _expected_merged_ids(200, 200)[100:105], (
+            f"the complex endpoint's page is not the merged sequence's slice: {ids}"
+        )
+        assert _returned_index_types(body) == {"asset", "file"}
+
+    def test_the_page_is_full(self, search_module):
+        """Positive control: the merge selects a page, it does not empty one."""
+        _, body = _complex_post(
+            search_module,
+            {"query": "x", "from": 100, "size": 5},
+            asset_count=200,
+            file_count=200,
+        )
+        assert len(body["hits"]["hits"]) == 5
 
 
 @pytest.mark.unit

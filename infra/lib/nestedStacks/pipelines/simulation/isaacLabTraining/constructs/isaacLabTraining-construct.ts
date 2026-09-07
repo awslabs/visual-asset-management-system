@@ -42,7 +42,7 @@ export interface IsaacLabTrainingConstructProps {
     // Optional: CodeBuild-built image in ECR (bypasses local Docker build). Passing the
     // repository (rather than a URI string) lets the Batch container definition auto-grant the
     // execution role ECR pull + ecr:GetAuthorizationToken permissions.
-    codeBuildRepository?: ecr.IRepository;
+    codeBuildImage?: { repository: ecr.IRepository; tag: string };
 }
 
 export class IsaacLabTrainingConstruct extends Construct {
@@ -68,12 +68,12 @@ export class IsaacLabTrainingConstruct extends Construct {
         // ACCEPT_EULA must be set to true in config.json to accept the NVIDIA Software License Agreement
         // See: https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license
         let containerImageRef: ecs.ContainerImage;
-        if (props.codeBuildRepository) {
+        if (props.codeBuildImage) {
             // Use CodeBuild-built image from ECR. fromEcrRepository grants the Batch execution
             // role ECR pull + ecr:GetAuthorizationToken permissions (fromRegistry does not).
             containerImageRef = ecs.ContainerImage.fromEcrRepository(
-                props.codeBuildRepository,
-                "latest"
+                props.codeBuildImage.repository,
+                props.codeBuildImage.tag
             );
         } else {
             const containerImage = new DockerImageAsset(this, "IsaacLabTrainingImage", {
@@ -325,7 +325,6 @@ export class IsaacLabTrainingConstruct extends Construct {
             parameters: {
                 "jobName.$": "$.openResult.Payload.jobName",
                 "definition.$": "$.openResult.Payload.definition",
-                "numNodes.$": "$.openResult.Payload.numNodes",
                 "inputMetadataS3Location.$": "$.openResult.Payload.inputMetadataS3Location",
                 "inputConfigurationS3Location.$":
                     "$.openResult.Payload.inputConfigurationS3Location",
@@ -349,7 +348,6 @@ export class IsaacLabTrainingConstruct extends Construct {
                 taskToken: sfn.JsonPath.taskToken,
                 "jobName.$": "$.jobName",
                 "definition.$": "$.definition",
-                "numNodes.$": "$.numNodes",
                 "inputMetadataS3Location.$": "$.inputMetadataS3Location",
                 "inputConfigurationS3Location.$": "$.inputConfigurationS3Location",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",

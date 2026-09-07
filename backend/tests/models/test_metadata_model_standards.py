@@ -83,16 +83,10 @@ class TestBaseModelComesFromPowertools:
             "backend Rule 2: BaseModel must come from aws_lambda_powertools.utilities.parser"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "S2-BACKEND-176 second site: models/metadataSchema.py imports BaseModel from "
-            "pydantic. That file is outside this shard's boundary; the marker turns this "
-            "test red the moment it is fixed, which is when it must be deleted."
-        ),
-    )
     def test_no_model_file_imports_basemodel_from_pydantic(self):
-        assert _pydantic_basemodel_importers(_model_files()) == []
+        assert _pydantic_basemodel_importers(_model_files()) == [], (
+            "backend Rule 2: BaseModel must come from aws_lambda_powertools.utilities.parser"
+        )
 
     def test_the_sweep_actually_reads_the_model_files(self):
         """Positive control: the negative assertion above is not scanning an empty set."""

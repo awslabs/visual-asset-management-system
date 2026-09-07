@@ -157,6 +157,7 @@ const sidebars: SidebarsConfig = {
                                 "cli/commands/sync",
                                 "cli/commands/tags",
                                 "cli/commands/metadata",
+                                "cli/commands/comments-and-subscriptions",
                                 "cli/commands/search",
                                 "cli/commands/pipelines",
                                 "cli/commands/workflows",

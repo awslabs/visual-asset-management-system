@@ -49,7 +49,8 @@ s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'},
                    max_pool_connections=50,
                    retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3 = boto3.client('s3', region_name=region, config=s3_config)
-dynamodb = boto3.resource('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="DownloadAsset")
 
 # Worker pool size for per-file S3 checks and URL generation in bulk requests and

@@ -10,14 +10,29 @@ for. That entry is load-bearing: a workflow row that specifies nothing can have 
 and every PUT below that names one would be refused. Scope-rejection behaviour itself is covered by
 test_workflowTriggerService_template_scope.py."""
 
+import importlib.util
 import json
+import os
+import pathlib
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.backend.handlers.workflows import workflowTriggerService as _wts
 from backend.backend.handlers.workflows.workflowTriggerService import lambda_handler
 
 MOD = "backend.backend.handlers.workflows.workflowTriggerService"
+
+# The root conftest replaces `common.dynamodb` with a MagicMock whose `validate_pagination_info`
+# fills nothing, so the listing's PaginationConfig would read absent keys. Load the real helper by
+# path for the listing test; the paging contract itself lives in
+# test_workflowTriggerService_paging.py.
+_real_ddb_spec = importlib.util.spec_from_file_location(
+    "_real_common_dynamodb_for_trigger_handler",
+    os.fspath(pathlib.Path(_wts.__file__).parents[2] / "common" / "dynamodb.py"))
+_real_ddb = importlib.util.module_from_spec(_real_ddb_spec)
+_real_ddb_spec.loader.exec_module(_real_ddb)
+REAL_VALIDATE_PAGINATION_INFO = _real_ddb.validate_pagination_info
 
 
 def _event(method, path, path_params, body=None):
@@ -217,23 +232,27 @@ class TestWorkflowTriggerService:
         resp = lambda_handler(_event("GET", BASE + "/fileUpload", TPARAMS), MagicMock())
         assert resp["statusCode"] == 404
 
-    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}.validate_pagination_info", REAL_VALIDATE_PAGINATION_INFO)
+    @patch(f"{MOD}.dynamodb")
     @patch(f"{MOD}._enforce_parent_workflow")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
-    def test_list_triggers(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+    def test_list_triggers(self, mock_enforcer, mock_claims, mock_parent, mock_dynamodb):
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, WF_ITEM)
-        table = MagicMock()
-        table.query.return_value = {"Items": [
+        # The listing is served through the botocore paginator, so the read is stubbed there
+        # rather than on the table resource.
+        paginator = MagicMock()
+        paginator.paginate.return_value.build_full_result.return_value = {"Items": [
             {"workflowDatabaseId": "db1", "workflowId": "wflow1", "triggerType": "fileUpload",
              "triggerConfig": {}, "enabled": True}]}
-        mock_table.return_value = table
+        mock_dynamodb.meta.client.get_paginator.return_value = paginator
         resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
         assert resp["statusCode"] == 200
         data = json.loads(resp["body"])["message"]
         assert data["Items"][0]["triggerType"] == "fileUpload"
+        assert data["NextToken"] is None
 
     @patch(f"{MOD}._triggers_table")
     @patch(f"{MOD}._enforce_parent_workflow")

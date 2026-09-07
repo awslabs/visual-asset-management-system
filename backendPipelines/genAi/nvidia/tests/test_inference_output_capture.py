@@ -26,8 +26,15 @@ one is what justified capturing nothing across five containers.
 
 The helper is duplicated per container because each is a separate Docker build context whose Dockerfile
 COPYs an explicit file list, so no shared module is importable at container runtime.
-``test_all_five_helpers_are_identical`` compares them structurally: two copies of the same routine
+``test_all_four_helpers_are_identical`` compares them structurally: two copies of the same routine
 drifting silently is the cost of that duplication.
+
+Four of those five entry points are covered here — the ones a deployment can reach. The fifth,
+``cosmos/predict/containerv1/``, is retained as a reference implementation with no configuration key
+that deploys it (``NOTICE.md`` and ``docs/additional/notices.md`` record it that way), and carries an
+unfixed first-hit output-artifact selection. It is excluded from ``CONTAINERS`` deliberately, and
+``test_the_reference_container_is_excluded_and_stays_undeployable`` is what keeps that pair of facts —
+excluded from coverage, unreachable from CDK — from drifting apart.
 
 Every behavioural check runs the helper in a CHILD PYTHON PROCESS under a timeout. A deadlock is the
 failure being guarded against, and asserting on it in-process would hang the suite instead of failing it.
@@ -45,14 +52,16 @@ import pytest
 
 REPO_NVIDIA = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-# The five container entry points whose inference/training child was uncaptured.
+# The four deployable container entry points whose inference/training child was uncaptured.
 CONTAINERS = {
     "cosmos3": "cosmos/3/container/inference.py",
-    "predict-v1": "cosmos/predict/containerv1/inference.py",
     "predict-v2.5": "cosmos/predict/containerv2.5/inference.py",
     "transfer": "cosmos/transfer/container/inference.py",
     "gr00t": "gr00t/container/inference.py",
 }
+
+# Retained as a reference implementation, deliberately outside CONTAINERS.
+REFERENCE_CONTAINER = "cosmos/predict/containerv1"
 
 # Comfortably past a 64 KB pipe buffer, and past the 1.2 MB already measured by hand.
 CHILD_LINES = 6000
@@ -107,11 +116,56 @@ def _helper_constants(rel):
 # ------------------------------------------------------------------------------------------------
 
 
-def test_all_five_container_files_exist_and_were_read():
+def test_the_covered_set_is_exactly_the_four_deployable_entry_points():
+    """Asserted by name, because every other check in this file loops over `CONTAINERS`.
+
+    Each parametrized test takes its ids from this dict and each loop-based control iterates it, so a
+    dict that had been emptied or narrowed would leave the whole file reporting green while asserting
+    nothing. The set is what fails loudly instead — including if an entry is silently re-added.
+    """
+    assert set(CONTAINERS) == {"cosmos3", "predict-v2.5", "transfer", "gr00t"}
+
+
+def test_all_four_container_files_exist_and_were_read():
     for name, rel in CONTAINERS.items():
         path = os.path.join(REPO_NVIDIA, rel)
         assert os.path.isfile(path), "%s: %s not found" % (name, path)
         assert len(_read(rel)) > 1000, "%s: read suspiciously little" % name
+
+
+def test_the_reference_container_is_excluded_and_stays_undeployable():
+    """The reference container is kept, uncovered and unreachable — all three at once.
+
+    It still carries the first-hit output-artifact selection its deployable sibling had fixed
+    (`find_output_video`, `glob("*.mp4")`, "Path to first .mp4 file found"), which is safe only while
+    nothing deploys it. Its one CDK reference is commented out; uncommenting that line would ship a
+    container that publishes an arbitrary artifact under the real output's name and exits 0.
+    """
+    reference_dir = os.path.join(REPO_NVIDIA, REFERENCE_CONTAINER)
+    assert os.path.isdir(reference_dir), "%s was removed" % reference_dir
+    covering = [n for n, rel in CONTAINERS.items() if rel.startswith(REFERENCE_CONTAINER + "/")]
+    assert covering == [], "%s covers the reference container" % covering
+
+    infra_lib = os.path.join(
+        os.path.abspath(os.path.join(REPO_NVIDIA, "..", "..", "..")), "infra", "lib")
+    scanned = 0
+    live_references = []
+    for root, _dirs, files in os.walk(infra_lib):
+        for fname in files:
+            if not fname.endswith(".ts"):
+                continue
+            scanned += 1
+            path = os.path.join(root, fname)
+            with io.open(path, encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, start=1):
+                    if "containerv1" in line and not line.strip().startswith("//"):
+                        live_references.append("%s:%d" % (path, lineno))
+    # Positive control on the walk: a mistyped path would otherwise scan nothing and pass.
+    assert scanned > 50, "scanned only %d .ts files under %s" % (scanned, infra_lib)
+    assert live_references == [], (
+        "the reference container is reachable from CDK at %s — port the output-artifact fix before "
+        "enabling it" % live_references
+    )
 
 
 def test_every_container_defines_the_helper_at_module_level():
@@ -328,11 +382,11 @@ def test_popen_without_a_reader_is_what_deadlocks():
 
 
 # ------------------------------------------------------------------------------------------------
-# No drift between the five copies.
+# No drift between the four covered copies.
 # ------------------------------------------------------------------------------------------------
 
 
-def test_all_five_helpers_are_identical():
+def test_all_four_helpers_are_identical():
     """Compared structurally, so formatting and docstrings do not mask a behavioural difference.
 
     Docstrings are excluded deliberately: the transfer container's carries an extra paragraph about

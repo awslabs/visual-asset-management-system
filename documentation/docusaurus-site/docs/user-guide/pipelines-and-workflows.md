@@ -43,6 +43,11 @@ execution settings and the admin settings that govern how it may be run are show
 configuration templates as a separate list; **Archive** withdraws it from use. Only the actions your
 permissions allow appear in the menu, so a read-only user sees **Templates** alone.
 
+Deleting a template from that list is permanent and is never blocked. When an auto-triggered workflow's
+trigger had chosen the template as this pipeline's default, the delete succeeds and reports a warning naming
+those workflows, which stays on the template list after the notification clears. Triggered executions of the
+named workflows fail until each trigger picks a different default template for the pipeline.
+
 ## Creating a custom pipeline
 
 Navigate to **Pipelines** and choose **Create Pipeline**. The form is a three-step wizard — **Basic**, **Execution**, then **Settings** — and the pipeline is created when you finish the last step.
@@ -361,6 +366,12 @@ Execution progress can be monitored from the **Executions** page or from the ass
 The **Executions** page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow, every asset it read — each selected file's asset plus each asset named as a metadata source — and the asset it wrote to. A run that wrote its output into an asset you cannot open is therefore not listed, even when you can open every asset it read; ask an administrator for read access to the destination asset if you expect to see such a run. A run that produced results only, writing no files, has no destination asset, so being able to view its workflow is enough. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
+
+Aborting a run from an execution's **⋮** actions menu signals it to stop and records it as **Aborted**. Some
+steps submit work that VAMS stops separately from the workflow itself — a container job, or a Deadline Cloud
+farm job. When one of those could not be stopped, the abort still succeeds and reports a warning naming the
+job, which stays on the page after the notification clears; that work may still be running and billing until
+it is stopped where it runs.
 
 :::note
 Workflow execution is asynchronous. Results (output files, previews, metadata) appear on the asset after all pipeline steps complete. Changes may take a few minutes to propagate through the system, including search results.

@@ -579,16 +579,25 @@ All pipelines are orchestrated by `infra/lib/nestedStacks/pipelines/pipelineBuil
 
 :::warning[Availability outside the commercial partition]
 The NVIDIA Cosmos Predict, Cosmos Reason, Cosmos Transfer, Cosmos 3, and Gr00t pipelines run on GPU instance families and download model weights from HuggingFace. Configuration validation checks only that an enabled model variant names a non-empty `instanceTypes` array -- it does not check that those instance families are offered in the deployment Region, or that the model download path is reachable from the partition. For AWS GovCloud and the AWS European Sovereign Cloud, compare the configured instance types against the GPU instances the target Region offers, adjust them where they differ, and evaluate the pipeline in a non-production deployment before enabling it.
+
+Region availability is not sufficient on its own: an instance type is only a usable fallback when the pipeline's subnets reach an Availability Zone that offers it. VAMS creates two AZs by default (more only when `app.openSearch.useProvisioned.availabilityZoneCount` raises it), so a type offered in just one AZ of the Region may be unreachable. Measured in `us-west-2`: `p5e.48xlarge` is offered only in `us-west-2c`, while a default deployment's subnets resolved to `us-west-2a` and `us-west-2b` — so a list naming it has one fewer real fallback than it appears to, and a job waits for capacity that cannot be placed. Check the offering set for the target Region before relying on a fallback:
+
+```bash
+aws ec2 describe-instance-type-offerings --location-type availability-zone \
+  --filters Name=instance-type,Values=p5e.48xlarge \
+  --query 'InstanceTypeOfferings[].Location'
+```
+
 :::
 
 The **Default** column in the pipeline tables is the value the shipped `config.template.*.json` files carry. When a pipeline block is present but omits a field, `getConfig()` fills in a fallback that may be more conservative than the template: `enabled` falls back to `false` (`useConversion3dBasic.enabled` falls back to `true`), `autoRegisterWithVAMS` falls back to `true`, and `autoRegisterAutoTriggerOnFileUpload` falls back to `false` so an omitted key never arms an upload trigger. A pipeline block that is absent entirely is disabled, so its remaining fields have no effect.
 
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
 
-Converts between STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, and XYZ formats. Does not require a VPC.
+Reads STL, OBJ, PLY, GLTF, GLB and XYZ files and converts them to STL, OBJ, PLY, GLTF or GLB. XYZ is an input-only format. Does not require a VPC.
 
 :::note[Implemented by]
-Nested stack: `infra/lib/nestedStacks/pipelines/conversion/3dBasic/conversion3dBasicBuilder-nestedStack.ts` (`Conversion3dBasicNestedStack`) — AWS Batch on Fargate.
+Nested stack: `infra/lib/nestedStacks/pipelines/conversion/3dBasic/conversion3dBasicBuilder-nestedStack.ts` (`Conversion3dBasicNestedStack`) — a containerized AWS Lambda function.
 :::
 
 | Field                                                     | Type    | Default | Description                                                                               |
@@ -612,7 +621,7 @@ Nested stack: `infra/lib/nestedStacks/pipelines/conversion/meshCadMetadataExtrac
 
 ### Point cloud coordinate transform (`app.pipelines.useConversionCoordinateTransform`)
 
-Reprojects E57, LAS, LAZ, and PLY point cloud files between coordinate reference systems using PDAL and pyproj. Runs on AWS Batch with AWS Fargate compute. **Requires VPC.** See the [Coordinate Transform pipeline](../pipelines/coordinate-transform.md) page for input parameters and per-asset metadata overrides.
+Reprojects E57, LAS, and LAZ point cloud files between coordinate reference systems using PDAL and pyproj. Runs on AWS Batch with AWS Fargate compute. **Requires VPC.** See the [Coordinate Transform pipeline](../pipelines/coordinate-transform.md) page for input parameters and per-asset metadata overrides.
 
 | Field                                                                                | Type    | Default | Description                                                                                                                                                                            |
 | ------------------------------------------------------------------------------------ | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -737,7 +746,7 @@ Nested stack: `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/rapidPipe
 Third-party 3D model optimization by VNTANA. **Requires VPC and an [AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4).**
 
 :::note[Implemented by]
-Nested stack: `infra/lib/nestedStacks/pipelines/multi/modelOps/modelOps-nestedStack.ts` (`ModelOpsNestedStack`) — AWS Batch.
+Nested stack: `infra/lib/nestedStacks/pipelines/multi/modelOps/modelOps-nestedStack.ts` (`ModelOpsNestedStack`) — Amazon ECS on Fargate.
 :::
 
 | Field                                            | Type    | Default                   | Description                                                |
@@ -752,6 +761,10 @@ NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Re
 
 :::note[Implemented by]
 Nested stack: `infra/lib/nestedStacks/pipelines/simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack.ts` (`IsaacLabTrainingBuilderNestedStack`) — AWS Batch on GPU instances.
+:::
+
+:::warning[Air-gapped deployments]
+Isaac Lab features that reach the NVIDIA Omniverse content server need outbound internet access and therefore do not operate in an air-gapped deployment. The pipeline's compute runs in `PRIVATE_WITH_EGRESS` subnets with a NAT gateway; Amazon VPC endpoints cover the AWS services the pipeline calls but not the NVIDIA content server. Configuration validation does not check for egress, so evaluate the tasks you intend to run before enabling this pipeline on an isolated network.
 :::
 
 | Field                                                    | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -892,6 +905,8 @@ Nested stack: `infra/lib/nestedStacks/pipelines/genAi/nvidia/gr00t/gr00tBuilder-
 
 Support for the `DeadlineCloud` pipeline execution type: workflow task states submit OpenJD jobs to an operator-owned AWS Deadline Cloud farm/queue via `createJob`, and a job-callback Lambda resolves the workflow's task token from Deadline Cloud job status events on the account's default Amazon EventBridge bus. Deadline Cloud pipelines are asynchronous only (callback required). Available only in the commercial AWS partition — configuration validation rejects it in AWS GovCloud, the AWS European Sovereign Cloud, and the AWS China and ISO partitions.
 
+Enabling the type grants the VAMS workflow Lambdas the Deadline Cloud actions they call against the operator's farm, each scoped to the deployment's own account and Region: `deadline:CreateJob` to submit the job, `deadline:GetJob` for the job-callback Lambda to read its status, and `deadline:UpdateJob` to cancel a farm job that an aborted or failed execution would otherwise leave rendering. Both paths that cancel a job — the abort API and the failure reconciliation that stamps an execution's pipeline rows terminal — additionally hold `deadline:ListJobs` and `deadline:GetJob`, together with read access to the pipeline definitions the farm and queue are recorded on. That combination is how they reach a job still sitting queued with no worker: no status event has been delivered for such a job, so it is found by walking the queue for its reserved `VamsPipelineExecutionId` job parameter instead. With the setting `false`, none of these actions are granted.
+
 VAMS does not create the farm, fleet, or queue. The operator supplies them, and they must satisfy the following:
 
 -   The farm resides in the same account and Region as the VAMS deployment.
@@ -910,9 +925,9 @@ If Deadline Cloud pipeline executions hang and the fleet keeps replacing workers
 Lambda builder: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildDeadlineCloudJobCallbackFunction`) — deployed in the API builder stack with an EventBridge rule on the default bus.
 :::
 
-| Setting                                           | Type    | Default | Description                                                                                                          |
-| ------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
-| `app.pipelines.deadlineCloudExecutionTypeEnabled` | boolean | `false` | Deploys the Deadline Cloud job-callback Lambda + default-bus rule and grants the workflow role `deadline:CreateJob`. |
+| Setting                                           | Type    | Default | Description                                                                                                           |
+| ------------------------------------------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.deadlineCloudExecutionTypeEnabled` | boolean | `false` | Deploys the Deadline Cloud job-callback Lambda + default-bus rule and grants the Deadline Cloud actions listed above. |
 
 ## Addons (`app.addons`)
 

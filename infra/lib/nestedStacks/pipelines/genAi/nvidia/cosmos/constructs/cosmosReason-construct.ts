@@ -66,7 +66,7 @@ const defaultProps: Partial<CosmosReasonConstructProps> = {};
  * CosmosReasonConstruct
  *
  * Creates resources for the NVIDIA Cosmos Reason 2 VLM pipeline.
- * Cosmos Reason analyzes video/image files and generates text output
+ * Cosmos Reason analyzes video files and generates text output
  * (captions, descriptions, reasoning, JSON structured data).
  *
  * Shares EFS and S3 model cache from CosmosCommonConstruct.
@@ -716,9 +716,18 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             // vendored cosmos_reason2_utils crashes when writing an image input back out
             // (offline_inference calls save_tensor on a PIL Image, whose _tensor_to_pil_images reads
             // tensor.ndim), so an image run loads the model, completes inference, and then dies — a
-            // paid GPU run to discover an unsupported input. Restore the image extensions here, in the
-            // reason vamsSchema bundles' inputFileFilters, and in the docs together, once upstream
-            // handles an image input.
+            // paid GPU run to discover an unsupported input. Restore the image extensions in all five
+            // places together, once upstream handles an image input:
+            //   1. here;
+            //   2. the reason vamsSchema bundles' inputFileFilters;
+            //   3. their `description` field — a different key in the same two files, and the one an
+            //      operator actually reads: vamsSchemaImport registers it into the pipeline record, so
+            //      it is the text the web pipeline list and `vamscli pipeline` display, alongside the
+            //      pipelineDescription literals below;
+            //   4. the docs;
+            //   5. openPipeline.py's own module default for ALLOWED_INPUT_FILEEXTENSIONS — what a
+            //      direct or local invoke carrying no Lambda environment falls back to, so leaving it
+            //      broad accepts an image the deployment rejects.
             const allowedInputFileExtensions = ".mp4,.mov";
             const openPipelineFunction = buildOpenReasonPipelineFunction(
                 this,
@@ -801,7 +810,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 "reason2B",
                 "2B",
                 "nvidia-cosmos-reason2-2b",
-                "NVIDIA Cosmos Reason 2B - Vision Language Model for video/image analysis and captioning",
+                "NVIDIA Cosmos Reason 2B - Vision Language Model for video analysis and captioning",
                 cosmosConfig.modelsReason.reason2B.autoRegisterWithVAMS === true,
                 cosmosConfig.modelsReason.reason2B.autoTriggerOnFileExtensionsUpload || "",
                 4,
@@ -826,7 +835,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 "reason8B",
                 "8B",
                 "nvidia-cosmos-reason2-8b",
-                "NVIDIA Cosmos Reason 8B - Vision Language Model for video/image analysis and reasoning",
+                "NVIDIA Cosmos Reason 8B - Vision Language Model for video analysis and reasoning",
                 cosmosConfig.modelsReason.reason8B.autoRegisterWithVAMS === true,
                 cosmosConfig.modelsReason.reason8B.autoTriggerOnFileExtensionsUpload || "",
                 4,

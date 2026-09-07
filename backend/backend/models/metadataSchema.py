@@ -4,7 +4,8 @@
 """Metadata Schema models for VAMS - V2 implementation with support for multiple entity types."""
 
 from typing import List, Optional, Literal
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import Field
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from enum import Enum
 import json
 from customLogging.logger import safeLogger
@@ -34,6 +35,11 @@ MAX_CONTROLLED_LIST_KEYS = 1000
 
 # Upper bound for the comma-delimited file-extension restriction string.
 MAX_FILE_KEY_TYPE_RESTRICTION_LENGTH = 1024
+
+# Pagination ceilings for the schema listing. A page must fit the 6 MB Lambda response limit; these
+# match the shared ceilings in common/dynamodb.py so a request one layer accepts the other accepts.
+MAX_SCHEMA_LIST_MAX_ITEMS = 30000
+MAX_SCHEMA_LIST_PAGE_SIZE = 10000
 
 #######################
 # Metadata Schema Entity Types
@@ -148,8 +154,8 @@ class GetMetadataSchemasRequestModel(BaseModel, extra='ignore'):
     """Request model for listing metadata schemas with filters"""
     databaseId: Optional[str] = Field(None, min_length=1, max_length=256, description="Filter by database ID")
     metadataEntityType: Optional[MetadataSchemaEntityType] = Field(None, description="Filter by entity type")
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
+    maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_SCHEMA_LIST_MAX_ITEMS, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=3000, ge=1, le=MAX_SCHEMA_LIST_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
     @validator('metadataEntityType', pre=True)

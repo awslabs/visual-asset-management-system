@@ -28,6 +28,7 @@ import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cr from "aws-cdk-lib/custom-resources";
+import * as iam from "aws-cdk-lib/aws-iam";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Duration } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -47,7 +48,18 @@ def handler(event, context):
     request_type = event.get("RequestType")
     props = event.get("ResourceProperties", {})
     secret_arn = props.get("SecretArn")
-    physical_id = "HuggingFaceTokenSecretPopulate:" + (secret_arn or "unknown")
+
+    # ECHO the id CloudFormation already holds; only mint one on Create.
+    #
+    # When a CREATE fails before the handler returns an id, CloudFormation assigns its own default
+    # (a stack-name-derived value). A later DELETE that returns a RECOMPUTED id is refused by the
+    # CDK provider framework with "cannot change the physical resource ID", which leaves this
+    # resource DELETE_FAILED and every stack above it undeletable. MEASURED: one failed create
+    # cascaded into the whole core stack needing manual intervention to remove. Echoing turns a
+    # recoverable failure back into a recoverable one.
+    existing_id = event.get("PhysicalResourceId")
+    physical_id = existing_id or (
+        "HuggingFaceTokenSecretPopulate:" + (secret_arn or "unknown"))
 
     # Nothing to clean up on delete — the secret itself is owned by CloudFormation.
     if request_type == "Delete":
@@ -107,6 +119,39 @@ export function populateHuggingFaceTokenSecret(
 
     // Grant only PutSecretValue on the single target secret.
     secret.grantWrite(populateLambda);
+
+    // The KMS grant that `grantWrite` does NOT add for a secret whose key was imported by ARN.
+    //
+    // MEASURED, on a fresh deployment with `app.useKmsCmkEncryption.enabled`: the populate lambda's
+    // synthesized policy carried `secretsmanager:PutSecretValue`, `UpdateSecret` and
+    // `UpdateSecretVersionStage` and no `kms:` action at all, so the custom resource failed with
+    //   AccessDeniedException ... calling the PutSecretValue operation: Access to KMS is not allowed
+    // and rolled the whole core stack back. Secrets Manager encrypts the value with the secret's key, so
+    // writing needs `kms:GenerateDataKey*` on it regardless of the Secrets Manager permissions.
+    //
+    // The grant has to be written here rather than relied upon: `Secret.grantWrite` delegates to
+    // `Key.grantEncryptDecrypt`, and for a key created with `Key.fromKeyArn` CDK cannot see the key's
+    // policy and does not add the principal-side statement.
+    //
+    // This is a PRINCIPAL-side grant on the imported ARN, deliberately. Granting through the key object
+    // would write this pipeline stack's role into the key's resource policy, and the key lives in the
+    // storage nested stack — a circular dependency between the two stacks (infra/CLAUDE.md, KMS trap 2).
+    // A principal-side grant is sufficient because the VAMS key policy delegates `kms:*` to the account
+    // root, which is what makes IAM the deciding authority.
+    if (secret.encryptionKey) {
+        populateLambda.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: [
+                    "kms:Decrypt",
+                    "kms:Encrypt",
+                    "kms:ReEncrypt*",
+                    "kms:GenerateDataKey*",
+                    "kms:DescribeKey",
+                ],
+                resources: [secret.encryptionKey.keyArn],
+            })
+        );
+    }
 
     suppressCdkNagLambda(populateLambda);
 

@@ -190,6 +190,30 @@ export function buildConstructPipelineFunction(
         })
     );
 
+    // constructPipeline reports the workflow's waitForCallback token when definition construction
+    // raises. This state is a `tasks.LambdaInvoke` with no `.addCatch`, so a raise ends the pipeline's
+    // state machine before `pipelineEnd` runs and nothing else can report on the token — the run would
+    // display RUNNING for its full taskTimeout.
+    //
+    // The grant must land in the SAME change as the handler's call. Without it the call raises
+    // AccessDeniedException, the handler logs it, and the task hangs exactly as before — the only
+    // difference being one log line. `taskTokenFailureGrants.test.ts` pairs the calling handler with its
+    // builder, so it passes while the handler makes no call and turns red the moment it starts.
+    // Scoped to this deployment's account and region, matching every other pipeline's task-token grant.
+    // A task token names no state machine the builder can resolve, so the resource part stays a
+    // wildcard; the partition/region/account prefix is what keeps it from being an unbounded `*`.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskFailure"],
+            effect: iam.Effect.ALLOW,
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
     grantReadPermissionsToAllAssetBuckets(fun);
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);

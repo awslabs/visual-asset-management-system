@@ -36,6 +36,7 @@ from backend.backend.handlers.roles import roleService
 # is what lets a filter written as a boto3 condition object read the same as the string form, and a
 # second copy of that logic would drift from the form the cascade actually uses.
 from backend.tests.handlers.roles.test_roleService_paging import _read_filter
+from backend.tests.pagingStub import Pager
 
 
 _ROLE = "test-role"
@@ -82,12 +83,17 @@ def _delete_event():
     }
 
 
-def _wire(scan_pages, tokens=("tester",), denied_actions=(), batch_error=None):
+def _wire(scan_pages, tokens=("tester",), denied_actions=(), batch_error=None,
+          batch_flush_error=None):
     """Patch the module's tables and enforcer; returns (spy, roles_table, user_roles_table, batch)."""
     spy = _EnforcerSpy(denied_actions=denied_actions)
 
     user_roles_table = MagicMock()
     if isinstance(scan_pages, Exception):
+        user_roles_table.scan.side_effect = scan_pages
+    elif callable(scan_pages):
+        # A cursor-keyed reader (tests/pagingStub.Pager), which serves pages by ExclusiveStartKey
+        # rather than by call order.
         user_roles_table.scan.side_effect = scan_pages
     else:
         user_roles_table.scan.side_effect = list(scan_pages)
@@ -95,7 +101,14 @@ def _wire(scan_pages, tokens=("tester",), denied_actions=(), batch_error=None):
     batch = MagicMock()
     if batch_error is not None:
         batch.delete_item.side_effect = batch_error
-    user_roles_table.batch_writer.return_value.__enter__.return_value = batch
+    writer = user_roles_table.batch_writer.return_value
+    writer.__enter__.return_value = batch
+    if batch_flush_error is not None:
+        # boto3's BatchWriter.delete_item only BUFFERS: it flushes when the buffer reaches 25
+        # requests, and otherwise not until context exit. A cascade below that size therefore
+        # issues every write from __exit__, so a throttled flush is raised by the `with` statement
+        # itself rather than by delete_item -- a different site, and the common one.
+        writer.__exit__.side_effect = batch_flush_error
 
     roles_table = MagicMock()
 
@@ -304,6 +317,58 @@ class TestCascadePagesToExhaustion:
 
 
 @pytest.mark.unit
+class TestFilteredEmptyPagesStillPageOn:
+    """A page the filter emptied is not the end of the walk.
+
+    The cascade scans with a `roleName` FilterExpression, and DynamoDB applies a filter AFTER it has
+    read the page -- so a page that matches nothing still comes back carrying a LastEvaluatedKey.
+    That is the ordinary shape of a filtered scan over a table holding more than one role's
+    assignments, not an edge case, and it is precisely what separates paging on the key's ABSENCE
+    from paging on the items: a loop that stopped at the first empty page would drop every
+    assignment behind it *and still report success*, which is the same silent orphaning as reading
+    only one page. The sibling paging tests script pages that all carry Items, so neither of them
+    distinguishes the two forms.
+
+    Pages are served BY CURSOR here, so the assignment on the final page can only be reached by
+    resuming from both empty pages rather than treating either as exhaustion.
+    """
+
+    def test_an_empty_filtered_page_does_not_end_the_cascade(self):
+        pager = Pager(
+            {"Items": [], "LastEvaluatedKey": {"userId": "other-1", "roleName": "other-role"}},
+            {"Items": [], "LastEvaluatedKey": {"userId": "other-2", "roleName": "other-role"}},
+            {"Items": [{"userId": "u1"}]},
+            name="roleService delete cascade (filter-emptied pages)",
+        )
+        spy, roles_table, user_roles_table, batch, undo = _wire(pager)
+        try:
+            response = roleService.handle_delete_request(_delete_event())
+        finally:
+            undo()
+
+        assert response["statusCode"] == 200, response
+        pager.assert_paged_to_exhaustion()
+        # The assignment sitting behind the two emptied pages was removed. Stated over the SET of
+        # removals: order and repetition are immaterial, an absent key is the regression.
+        deleted = {
+            frozenset(call.kwargs["Key"].items())
+            for call in batch.delete_item.call_args_list
+        }
+        assert deleted == {frozenset({"userId": "u1", "roleName": _ROLE}.items())}, (
+            f"the assignment behind two filter-emptied pages was not removed; "
+            f"deleted: {[dict(key) for key in deleted]}"
+        )
+        # The walk finished rather than aborting, so the role row went too -- the positive arm that
+        # keeps "no orphan survived" from being satisfied by a cascade that simply failed.
+        removals = {
+            (call.kwargs.get("Key", {}).get("roleName"),
+             bool(call.kwargs.get("ConditionExpression")))
+            for call in roles_table.delete_item.call_args_list
+        }
+        assert (_ROLE, True) in removals, f"role-row removals: {removals}"
+
+
+@pytest.mark.unit
 class TestCascadeFailureAbortsTheDelete:
     """A cascade that cannot complete must not report success."""
 
@@ -316,6 +381,17 @@ class TestCascadeFailureAbortsTheDelete:
                 {
                     "scan_pages": [{"Items": [{"userId": "u1"}]}],
                     "batch_error": RuntimeError("delete throttled"),
+                },
+            ),
+            # The flush, not the buffering call. Under 25 assignments nothing is written until the
+            # writer's context exits, so this is where a throttled cascade of ordinary size actually
+            # fails -- and the exception is raised by the `with` statement, which only aborts the
+            # delete while that statement stays inside the guarded block.
+            (
+                "batch flush on context exit",
+                {
+                    "scan_pages": [{"Items": [{"userId": "u1"}]}],
+                    "batch_flush_error": RuntimeError("flush throttled"),
                 },
             ),
         ],
@@ -332,11 +408,27 @@ class TestCascadeFailureAbortsTheDelete:
         )
         roles_table.delete_item.assert_not_called()
 
-    def test_the_failure_message_names_no_request_input(self):
+    @pytest.mark.parametrize(
+        "detail,kwargs",
+        [
+            ("scan unavailable", {"scan_pages": RuntimeError("scan unavailable")}),
+            # Covered alongside the scan arm because the two reach the message by different routes:
+            # a flush failure is raised by the `with` statement, so it only becomes this deliberate
+            # message while that statement sits inside the guarded block. Moved out of it, the
+            # failure would surface as the handler's generic catch-all instead and the caller would
+            # never learn the role survived.
+            (
+                "flush throttled",
+                {
+                    "scan_pages": [{"Items": [{"userId": "u1"}]}],
+                    "batch_flush_error": RuntimeError("flush throttled"),
+                },
+            ),
+        ],
+    )
+    def test_the_failure_message_names_no_request_input(self, detail, kwargs):
         """Rule 11: the caller learns the delete did not happen, not what was submitted."""
-        spy, roles_table, user_roles_table, batch, undo = _wire(
-            RuntimeError("scan unavailable")
-        )
+        spy, roles_table, user_roles_table, batch, undo = _wire(**kwargs)
         try:
             response = roleService.handle_delete_request(_delete_event())
         finally:
@@ -344,7 +436,7 @@ class TestCascadeFailureAbortsTheDelete:
 
         message = json.loads(response["body"])["message"]
         assert _ROLE not in message, f"the error message echoes the role name: {message}"
-        assert "scan unavailable" not in message, (
+        assert detail not in message, (
             f"the error message leaks the underlying failure: {message}"
         )
         assert "not deleted" in message.lower(), (

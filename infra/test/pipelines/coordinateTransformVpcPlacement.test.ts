@@ -128,8 +128,27 @@ describe("a private-subnet pipeline still gets public subnets and NAT", () => {
 
     beforeAll(() => {
         synth = synthTemplate("commercial", {
-            mutate: onlyPipeline("useSplatToolbox"),
-            mutateKey: "vpc-only-splat-toolbox",
+            mutate: (c: any) => {
+                onlyPipeline("useSplatToolbox")(c);
+                // `useCodeBuild` is what keeps this synth off a local Docker asset, and it is required
+                // rather than an optimization: `backendPipelines/3dRecon/splatToolbox/container/
+                // .gitignore` ignores `Dockerfile` ("Pipeline Source Download Ignore"), so the file
+                // exists only after an upstream sync and is absent from a fresh checkout. Splat is the
+                // one pipeline of the fifteen whose Dockerfile is untracked.
+                //
+                // With the flag set, `batch-gpu-pipeline.ts:179` resolves the image from the CodeBuild
+                // ECR repository; without it, `AssetImage.fromAsset(..., {file: dockerfileName})`
+                // resolves the path at construct time — before any bundling-skip logic runs — and
+                // throws `CannotFindFile`. That is a CI-only failure: it passes locally, where a
+                // previous sync left the file behind.
+                //
+                // The flag does not affect anything this block asserts. The public/private subnet
+                // condition and `needsEcsPrivate` both key on `useSplatToolbox.enabled` alone
+                // (`vpcBuilder-nestedStack.ts:348` and `:750`), and the Batch compute environment is
+                // created either way — only the image source changes.
+                c.app.pipelines.useSplatToolbox.useCodeBuild = true;
+            },
+            mutateKey: "vpc-only-splat-toolbox-codebuild",
         });
     });
 

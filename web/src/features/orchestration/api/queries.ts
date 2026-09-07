@@ -586,8 +586,11 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
                 if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
                 return data as ExecutionListResponse;
             } else if (scope.kind === "workflow") {
-                // The global-list endpoint filters a workflow by its composite key: workflowId plus
-                // workflowDatabaseId (workflow ids are unique only within a database).
+                // The global-list endpoint matches workflowId and workflowDatabaseId independently.
+                // A workflow id is unique across every database including GLOBAL, so the id alone
+                // identifies the workflow; the scope's own databaseId goes along as an additional
+                // narrowing filter. A database that is not the workflow's own would silently empty
+                // the page rather than erroring, so it is taken from the scope, never guessed.
                 const workflowParams = {
                     ...params,
                     workflowId: scope.workflowId,

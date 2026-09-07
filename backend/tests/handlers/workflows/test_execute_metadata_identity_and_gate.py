@@ -43,7 +43,18 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
     _stub.get_task_builder = lambda *a, **k: None
     sys.modules["common.workflows.stepfunctions_builder"] = _stub
 
+from backend.backend.common.apiRoutes import (  # noqa: E402
+    API_ASSET_METADATA,
+    API_FILE_METADATA,
+)
 from backend.backend.handlers.workflows import executeWorkflow as ew  # noqa: E402
+
+
+def _route_path(route):
+    """The route template with this module's ids substituted. Derived from the constant rather than
+    transcribed, so a rename of an apiRoutes template fails here instead of leaving the assertion
+    green against a path the metadata service no longer dispatches."""
+    return route.path.replace("{databaseId}", "db1").replace("{assetId}", "a1")
 
 MOD = "backend.backend.handlers.workflows.executeWorkflow"
 
@@ -133,7 +144,7 @@ class TestMetadataReadIdentity:
             _cross_call_event())
         assert asset_payloads[0]["queryStringParameters"] == {"versionId": "v7"}
         assert asset_payloads[0]["requestContext"]["http"] == {
-            "path": "/database/db1/assets/a1/metadata", "method": "GET"}
+            "path": _route_path(API_ASSET_METADATA), "method": "GET"}
         assert asset_payloads[0]["pathParameters"] == {"databaseId": "db1", "assetId": "a1"}
 
         _result, file_payloads = _captured_payloads(
@@ -141,7 +152,7 @@ class TestMetadataReadIdentity:
             _cross_call_event())
         assert file_payloads[0]["queryStringParameters"] == {"filePath": "/f.glb", "type": "attribute"}
         assert file_payloads[0]["requestContext"]["http"] == {
-            "path": "/database/db1/assets/a1/metadata/file", "method": "GET"}
+            "path": _route_path(API_FILE_METADATA), "method": "GET"}
 
     def test_a_failed_asset_read_is_logged_rather_than_silently_empty(self):
         # A metadata-service error answers a payload with no statusCode, which is otherwise
@@ -474,3 +485,47 @@ class TestPerStepInputNarrowingInTheSfnInput:
             "db1:p2": {"inputFileFilters": overridden, "inputFileArity": "multi"}})
         assert sent["stepInputFilters"] == [self._FILTERS_P1, overridden]
         assert sent["stepInputArity"] == ["multi", "multi"]
+
+    # -- auxPreviewPipelineSuffix (S3-CONTRACTS-005) ------------------------------------------------
+    # The viewer subfolder travels the same way, for the same reason: the ASL indexes a static
+    # position into this list, so the value each step's manifest carries is the one its pipeline
+    # record declared at LAUNCH rather than the one baked when the workflow was last saved.
+
+    def _three_step(self, suffixes):
+        """A three-pipeline workflow declaring one viewer subfolder per step, so an off-by-one in
+        either direction lands on a value that belongs to another step."""
+        tew, workflow, pipelines = self._two_step()
+        workflow["jobNames"] = ["job-p1", "job-p2", "job-p3"]
+        workflow["specifiedPipelines"] = [
+            {"pipelineDatabaseId": "db1", "pipelineId": pid, "jobName": pid}
+            for pid in ("p1", "p2", "p3")]
+        pipelines["p3"] = dict(pipelines["p2"])
+        pipelines["p3"]["pipelineId"] = "p3"
+        pipelines["p3"]["systemConfig"] = dict(pipelines["p2"]["systemConfig"])
+        for pid, suffix in zip(("p1", "p2", "p3"), suffixes):
+            pipelines[pid]["systemConfig"] = {
+                **pipelines[pid]["systemConfig"], "auxPreviewPipelineSuffix": suffix}
+        return tew, workflow, pipelines
+
+    def test_each_step_contributes_its_own_viewer_subfolder_in_workflow_order(self):
+        tew, workflow, pipelines = self._three_step(["/One", "/Two", "/Three"])
+        sent = self._launch(tew, workflow, pipelines)
+        assert sent["stepAuxPreviewSuffixes"] == ["/One", "/Two", "/Three"]
+        # Aligned index-for-index with the keys the ASL already indexes, so a static
+        # $.stepAuxPreviewSuffixes[i] cannot run off the end of the list.
+        assert len(sent["stepAuxPreviewSuffixes"]) == len(sent["stepMetadataS3Keys"])
+
+    def test_a_step_declaring_no_viewer_subfolder_contributes_an_empty_string_not_a_neighbours(self):
+        """Negative control on the empty case: it must be threaded per step rather than inherited, so
+        a step that declares none does not pick up the step before or after it."""
+        tew, workflow, pipelines = self._three_step(["/One", "", "/Three"])
+        sent = self._launch(tew, workflow, pipelines)
+        assert sent["stepAuxPreviewSuffixes"] == ["/One", "", "/Three"]
+
+    def test_a_template_override_cannot_change_the_viewer_subfolder(self):
+        """Unlike filters and arity, the suffix is not template-overridable, so it is read off the
+        pipeline record rather than the effective config. A submitted override is inert."""
+        tew, workflow, pipelines = self._three_step(["/One", "/Two", "/Three"])
+        sent = self._launch(tew, workflow, pipelines, template_overrides={
+            "db1:p2": {"auxPreviewPipelineSuffix": "/Overridden"}})
+        assert sent["stepAuxPreviewSuffixes"] == ["/One", "/Two", "/Three"]

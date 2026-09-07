@@ -495,22 +495,87 @@ def get_asset_details_any_state(database_id: str, asset_id: str) -> Tuple[Option
         return archived_details, True
     return None, False
 
+def asset_record_belongs_to_event_bucket(
+    item: Dict[str, Any],
+    asset_id: str,
+    bucket_name: str,
+    bucket_prefix: Optional[str]
+) -> bool:
+    """Whether an ``assetIdGSI`` record points at the bucket and prefix an event came from.
+
+    ``assetId`` is unique within a database, not across databases, so a record identifies
+    the database a deleted object belonged to only once its registered bucket name and
+    ``baseAssetsPrefix`` agree with the event's. Both sides are canonicalized through
+    ``normalize_bucket_prefix``, so the stored spelling (``prefix-a/``, ``''`` at the root)
+    and the event spelling (``/prefix-a/``, ``/``) compare equal.
+
+    A record carrying no ``bucketId``, a ``bucketId`` that resolves to no registration, or
+    an event whose prefix could not be resolved is unverifiable rather than matching: an
+    unknown prefix on one side would otherwise compare equal to an unknown one on the other.
+    """
+    normalized_event_prefix = normalize_bucket_prefix(bucket_prefix)
+    if normalized_event_prefix is None:
+        logger.warning(
+            f"Cannot verify asset {asset_id} against bucket {bucket_name}: the event "
+            "carries no bucket prefix"
+        )
+        return False
+
+    bucket_id = item.get('bucketId')
+    if not bucket_id:
+        logger.warning(
+            f"Asset record for {asset_id} in database {item.get('databaseId')} carries no "
+            f"bucketId; cannot verify it against bucket {bucket_name} prefix "
+            f"{normalized_event_prefix!r}"
+        )
+        return False
+
+    bucket_details = get_bucket_details(bucket_id)
+    if not bucket_details:
+        logger.warning(
+            f"Asset record for {asset_id} in database {item.get('databaseId')} points at "
+            f"unresolvable bucketId {bucket_id}; cannot verify it against bucket "
+            f"{bucket_name} prefix {normalized_event_prefix!r}"
+        )
+        return False
+
+    item_bucket_name = bucket_details.get('bucketName')
+    item_bucket_prefix = normalize_bucket_prefix(bucket_details.get('baseAssetsPrefix') or '/')
+    if item_bucket_name == bucket_name and item_bucket_prefix == normalized_event_prefix:
+        logger.info(
+            f"Bucket match found: database_id={item.get('databaseId')}, "
+            f"bucket={item_bucket_name}, prefix={item_bucket_prefix!r}"
+        )
+        return True
+
+    logger.warning(
+        f"Asset record for {asset_id} in database {item.get('databaseId')} belongs to "
+        f"bucket {item_bucket_name} prefix {item_bucket_prefix!r}, not to the event's "
+        f"bucket {bucket_name} prefix {normalized_event_prefix!r}"
+    )
+    return False
+
+
 def lookup_database_id_for_permanent_delete(
-    asset_id: str, 
-    bucket_name: str, 
-    bucket_prefix: str
+    asset_id: str,
+    bucket_name: str,
+    bucket_prefix: Optional[str]
 ) -> Tuple[Optional[str], bool]:
     """
     Lookup database_id for permanently deleted file using 3-step process:
     1. Query assetIdGSI with just asset_id
-    2. If multiple results, filter by bucket match
-    3. If still ambiguous, return error
-    
+    2. Keep only the results whose registered bucket and prefix match the event's
+    3. If zero or more than one remains, return error
+
+    A single result is verified against the event's bucket the same way multiple results
+    are: ``assetId`` is not unique across databases, so an unverified single match
+    resolves the document of a live asset in another database.
+
     Args:
         asset_id: The asset ID to lookup
         bucket_name: The S3 bucket name from the event
         bucket_prefix: The S3 bucket prefix from the event
-    
+
     Returns:
         Tuple of (database_id, success) where success indicates if lookup succeeded
     """
@@ -529,50 +594,31 @@ def lookup_database_id_for_permanent_delete(
             return None, False
 
         if len(items) == 1:
-            # Single match - use this database_id. The record may live in the
-            # archived partition ({databaseId}#deleted); document IDs always use
-            # the live database_id, so strip the suffix.
+            # Single match - usable only once it is confirmed to belong to the bucket and
+            # prefix the event came from, otherwise the exact-_id delete the caller runs
+            # next removes another database's live document. The record may live in the
+            # archived partition ({databaseId}#deleted); document IDs always use the live
+            # database_id, so strip the suffix.
+            if not asset_record_belongs_to_event_bucket(items[0], asset_id, bucket_name, bucket_prefix):
+                logger.error(
+                    f"Single asset match for {asset_id} does not belong to bucket "
+                    f"{bucket_name} with prefix {bucket_prefix}, cannot determine database_id"
+                )
+                return None, False
             database_id = items[0].get('databaseId')
             if database_id and database_id.endswith('#deleted'):
                 database_id = database_id[:-len('#deleted')]
             logger.info(f"Found single asset match for {asset_id}, database_id: {database_id}")
             return database_id, True
-        
+
         # Step 2: Multiple matches - filter by bucket
         logger.info(f"Found {len(items)} assets with asset_id {asset_id}, filtering by bucket")
-        
-        matching_assets = []
-        for item in items:
-            bucket_id = item.get('bucketId')
-            if not bucket_id:
-                continue
-            
-            # Get bucket details
-            bucket_details = get_bucket_details(bucket_id)
-            if not bucket_details:
-                continue
-            
-            # Normalize bucket prefix for comparison
-            item_bucket_name = bucket_details.get('bucketName')
-            item_bucket_prefix = bucket_details.get('baseAssetsPrefix', '/')
-            
-            # Ensure both prefixes are normalized the same way
-            if not item_bucket_prefix.endswith('/'):
-                item_bucket_prefix += '/'
-            if not item_bucket_prefix.startswith('/') and item_bucket_prefix != '/':
-                item_bucket_prefix = '/' + item_bucket_prefix
-            
-            event_bucket_prefix = bucket_prefix
-            if not event_bucket_prefix.endswith('/'):
-                event_bucket_prefix += '/'
-            if not event_bucket_prefix.startswith('/') and event_bucket_prefix != '/':
-                event_bucket_prefix = '/' + event_bucket_prefix
-            
-            # Compare bucket name and prefix
-            if item_bucket_name == bucket_name and item_bucket_prefix == event_bucket_prefix:
-                matching_assets.append(item)
-                logger.info(f"Bucket match found: database_id={item.get('databaseId')}, bucket={item_bucket_name}, prefix={item_bucket_prefix}")
-        
+
+        matching_assets = [
+            item for item in items
+            if asset_record_belongs_to_event_bucket(item, asset_id, bucket_name, bucket_prefix)
+        ]
+
         if len(matching_assets) == 1:
             # Single match after bucket filtering (strip archived-partition suffix)
             database_id = matching_assets[0].get('databaseId')
@@ -791,10 +837,17 @@ def find_preview_file_key(bucket_name: str, s3_key: str) -> str:
 
 
 def extract_file_extension(file_path: str) -> Optional[str]:
-    """Extract file extension from file path"""
-    if '.' in file_path and not file_path.endswith('/'):
-        return file_path.split('.')[-1].lower()
-    return None
+    """Extract file extension from file path.
+
+    Read from the basename, so a dot in a parent folder name (`/folder.v2/LICENSE`)
+    is not mistaken for an extension. A file with no extension has none.
+    """
+    if file_path.endswith('/'):
+        return None
+    basename = os.path.basename(file_path)
+    if '.' not in basename:
+        return None
+    return basename.split('.')[-1].lower()
 
 def is_folder_path(file_path: str) -> bool:
     """Check if path represents a folder.

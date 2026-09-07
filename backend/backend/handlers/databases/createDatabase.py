@@ -5,6 +5,7 @@ import boto3
 import json
 import datetime
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
@@ -16,7 +17,8 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.databases import CreateDatabaseRequestModel, CreateDatabaseResponseModel
 
 # Configure AWS clients
-dynamodb = boto3.resource('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="CreateDatabase")
 
 # Load environment variables

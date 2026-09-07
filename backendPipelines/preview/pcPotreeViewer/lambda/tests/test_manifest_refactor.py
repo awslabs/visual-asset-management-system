@@ -68,10 +68,11 @@ class TestVamsExecute:
             "inputFiles": [{"bucket": "abkt", "key": "xidM/scan.e57", "assetId": "xidM",
                             "databaseId": "dbM", "assetRootS3Key": "xidM/",
                             "auxPreviewPrefix": "dbM/xidM/scan.e57/preview"}],
-            "outputs": {"bucket": "abkt"},
+            "outputs": {"bucket": "abkt", "files": "dbM/xidM/", "previews": "dbM/xidM/preview/",
+                        "metadata": "dbM/xidM/metadata/"},
             "auxBucket": "aux-bkt",
-            # Empty until sourced from pipeline configuration; a value like "/PotreeViewer" would
-            # append a viewer subfolder to the per-file aux preview prefix.
+            # A pipeline that declares no viewer subfolder; a value like "/PotreeViewer" would
+            # append one to the per-file aux preview prefix.
             "auxPreviewPipelineSuffix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
@@ -90,7 +91,7 @@ class TestVamsExecute:
         assert payload["inputS3AssetFilePath"] == "s3://abkt/xidM/scan.e57"
         # Potree writes to the per-input-file aux preview location: auxBucket + the file's own
         # aux preview prefix + the per-pipeline viewer subfolder. auxPreviewPipelineSuffix is empty
-        # here, so the pipeline falls back to the hardcoded "PotreeViewer" subfolder to stay intact.
+        # here, so the pipeline applies its own "PotreeViewer" default to stay intact.
         assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux-bkt/dbM/xidM/scan.e57/preview/PotreeViewer"
 
     def test_uses_manifest_pipeline_prefix_when_present(self):
@@ -107,8 +108,11 @@ class TestVamsExecute:
         assert resp["statusCode"] == 200
         payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
         assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux-bkt/dbM/xidM/scan.e57/preview/CustomViewer"
-        # Output paths stay empty (aux-only pipeline, not a process-output target).
-        assert payload["outputS3AssetFilesPath"] == ""
+        # The container writes only to the aux preview location, but the resolved asset output
+        # paths are still forwarded rather than blanked.
+        assert payload["outputS3AssetFilesPath"] == "s3://abkt/dbM/xidM/"
+        assert payload["outputS3AssetPreviewPath"] == "s3://abkt/dbM/xidM/preview/"
+        assert payload["outputS3AssetMetadataPath"] == "s3://abkt/dbM/xidM/metadata/"
         assert payload["inputMetadataS3Location"] == "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json"
         assert payload["inputConfigurationS3Location"] == "s3://abkt/pipelines/workflowExecutionInputs/E1/pipeline1/config.json"
         assert payload["orchestrationEventPrefix"] == "vams.prod.execution.E1.pipeline.P1"

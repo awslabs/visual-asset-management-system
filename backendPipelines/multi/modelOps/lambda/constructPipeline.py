@@ -7,9 +7,40 @@ import shlex
 import boto3
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ConstructPipelineModelOps")
-s3 = boto3.client('s3')
+s3 = boto3.client('s3', config=retry_config)
+sfn = boto3.client(
+    'stepfunctions',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
+
+
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token. The state machine carries no catch on
+    this task, and the container command the ECS task runs is resolved from this lambda's own
+    output - so reporting here is what ends the waiting task rather than leaving it for the full
+    four-hour taskTimeout. A direct invoke carries no token and reports nothing."""
+    if not task_token:
+        return
+    try:
+        sfn.send_task_failure(
+            taskToken=task_token,
+            error="ModelOpsError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
 
 def lambda_handler(event, context):
     """
@@ -25,19 +56,24 @@ def lambda_handler(event, context):
     logger.info(f"Event: {event}")
     logger.info(f"Context: {context}")
 
-    # construct different pipeline definition
-    definition = construct_modelops_definition(event)
+    try:
+        # construct different pipeline definition
+        definition = construct_modelops_definition(event)
 
-    logger.info(f"Definition: {definition}")
+        logger.info(f"Definition: {definition}")
 
-    return {
-        "jobName": event.get("jobName"),
-        "commands": definition,
-        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
-        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
-        "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
-        "status": "STARTING"
-    }
+        return {
+            "jobName": event.get("jobName"),
+            "commands": definition,
+            "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+            "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
+            "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
+            "status": "STARTING"
+        }
+    except Exception as e:
+        logger.exception(e)
+        abort_external_workflow(e, event.get("externalSfnTaskToken", ""))
+        raise
 
 
 def input_object_prefix(input_s3_asset_file_key):
@@ -191,8 +227,12 @@ def construct_modelops_definition(event) -> dict:
         command = "printf '%s' " + shlex.quote(command_string) + " | /home/app/apps/handler/dist/index.js -i yaml --debug"
 
     else:
-        # if no input configuration is found, execute standard command
-        return "Error: No configuration file detected."
+        # No configuration means no target format and no command to build. Raising is what reaches
+        # the task-token callback: the ECS task resolves its container command from this lambda's
+        # output, so a value returned in that field is carried forward as the command instead of
+        # ending the run.
+        raise manifestHelper.InputConfigurationError(
+            "No input configuration file detected for the ModelOps pipeline.")
 
     commands = [
         "/bin/bash",

@@ -75,8 +75,12 @@ def _load_get_asset_object_from_id():
         "logger": FakeLogger(),
         "dynamodb_client": None,
         "dynamodb": None,
+        # The module builds the asset table handle once at import and _asset_table_resource()
+        # memoizes into this global, so each test resets it (see _use_query_pages) to be handed the
+        # stub it installed rather than the previous test's.
+        "_asset_table": None,
     }
-    for function_name in ("query_all_items", "get_asset_object_from_id"):
+    for function_name in ("_asset_table_resource", "query_all_items", "get_asset_object_from_id"):
         exec(
             compile(_extract_function_source(source, function_name), _MODULE_PATH, "exec"),
             namespace,
@@ -147,6 +151,8 @@ def _use_query_pages(pages):
     """Point the loaded function at a table stub serving `pages`, and return that stub."""
     table = FakeTable(pages)
     _NAMESPACE["dynamodb"] = FakeDynamoDBResource(table)
+    # Drop the memoized handle so this stub is the one the lookup gets.
+    _NAMESPACE["_asset_table"] = None
     # A client that raises on use proves the lookup goes through the index query, not a scan.
     _NAMESPACE["dynamodb_client"] = NoScanClient()
     return table

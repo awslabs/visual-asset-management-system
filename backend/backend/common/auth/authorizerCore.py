@@ -38,6 +38,7 @@ import base64
 
 from common.auth.clientIp import resolve_client_ip, is_ip_authorized
 from common.resourceNames import ResourceKeys, get_table_name
+from common.validators import normalize_userid
 
 # Configure AWS Lambda Powertools logger
 logger = Logger()
@@ -228,10 +229,15 @@ def _lookup_user_roles(user_id: str) -> List[str]:
     informational in the authorizer context (Casbin re-reads a user's roles from DynamoDB
     when building policy), so a lookup failure degrades the context rather than denying a
     request that authorization would otherwise allow.
+
+    The user id is normalized before it is used, because a user-role row is written with the
+    normalized id and the id reaching here is whatever the IDP issued. Normalizing at this
+    one point covers both callers and keys the cache on one spelling per identity.
     """
     if not user_id:
         return []
 
+    user_id = normalize_userid(user_id)
     current_time = time.time()
     cached = _user_roles_cache.get(user_id)
 

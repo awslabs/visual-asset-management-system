@@ -104,7 +104,7 @@ VAMS is built from the ground up for deployment across AWS partitions and region
 
 -   Deploy to any AWS commercial region with Amazon CloudFront distribution
 -   Deploy to AWS GovCloud (US) regions with Application Load Balancer distribution and FIPS endpoint support
--   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services
+-   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
 
 -   Import existing VPCs and subnets for integration with organizational network architectures
 -   Multiple VAMS deployments in the same account using unique stack names and regions

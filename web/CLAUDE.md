@@ -1021,6 +1021,25 @@ describe("MyComponent", () => {
 -   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
 -   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms
 
+### 11.4.1 Label a Temporary Test with a `TEMPORARY-TEST` Comment
+
+Jest has no marker system, so a test written to prove one specific change landed — a removed prop, a
+deleted branch, a reworded string — carries a `TEMPORARY-TEST` token in a comment directly above its
+`it(...)`, naming what it pins:
+
+```ts
+// TEMPORARY-TEST: pins the removal of the duplicate upload summary branch; drop once released.
+it("no longer renders the second summary", () => {
+```
+
+Release cleanup finds them with `grep -rn "TEMPORARY-TEST" web/src web/e2e`. The token is needed because
+a temporary test and a durable guardrail read identically afterwards — both may assert an absence and
+both explain themselves.
+
+Do **not** label a test whose forbidden construct is still writable: a CSP that must not gain
+`'unsafe-inline'`, a component that must not import `apiClient` directly, a div that must not be named
+after a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13.
+
 ### 11.5 End-to-End Tests (Playwright)
 
 `web/e2e/` holds Playwright specs that drive the **deployed** application — the only layer that proves

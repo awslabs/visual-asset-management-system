@@ -138,6 +138,7 @@ so an authoring mistake is reported immediately rather than surfacing at run tim
 | AWS Deadline Cloud job template length | 256 KB                           |
 | Pipeline task timeout                  | 604,800 seconds (7 days)         |
 | `systemConfig` serialized size         | 64 KB                            |
+| Template `overrides` serialized size   | 64 KB                            |
 | `executionConfig` serialized size      | 320 KB                           |
 | `configBody` + `webFormJson` combined  | 5 MB                             |
 
@@ -149,10 +150,12 @@ without a client ever addressing Amazon S3 directly.
 :::
 
 :::info
-The two configuration blocks are bounded by their serialized size so an oversized request is rejected
+The configuration blocks are bounded by their serialized size so an oversized request is rejected
 with a `400` at validation time rather than failing when the record is written. `executionConfig` has
 the larger allowance because an AWS Deadline Cloud block carries a job template up to its own 256 KB
-limit, alongside the settings for the other execution types.
+limit, alongside the settings for the other execution types. A template's `overrides` shares
+`systemConfig`'s budget, since it replaces a subset of the same keys and is stored on the template row
+beside the configuration body.
 :::
 
 ### Workflow Execution Limits

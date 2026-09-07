@@ -57,6 +57,11 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
 
     const base = `/databases/${databaseId}/pipelines/${pipelineId}/templates`;
 
+    // Notices from a delete response, kept on the board after the toast expires. A trigger that
+    // still names a deleted template leaves its workflow permanently failing at template
+    // resolution, and a 5-second toast is not a record of that.
+    const [deleteWarnings, setDeleteWarnings] = React.useState<string[]>([]);
+
     // Deleting a template is permanent — the backend also removes its offloaded config bodies and
     // tag schema, so there is no archived copy to restore.
     const handleDelete = async (templateId: string) => {
@@ -68,8 +73,22 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
         )
             return;
         try {
-            await deleteTemplate.mutateAsync({ databaseId, pipelineId, templateId });
-            toast.success("Template deleted", { description: templateId });
+            const result: any = await deleteTemplate.mutateAsync({
+                databaseId,
+                pipelineId,
+                templateId,
+            });
+            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+            setDeleteWarnings(warnings);
+            if (warnings.length) {
+                // The delete succeeded — the warnings name the triggers left pointing at a template
+                // that is gone, which is the operator's next task rather than a failure of this one.
+                toast.warning("Template deleted with warnings", {
+                    description: `${templateId}: ${warnings.join(" ")}`,
+                });
+            } else {
+                toast.success("Template deleted", { description: templateId });
+            }
         } catch (err) {
             toast.error("Delete failed", {
                 description: `${templateId}: ${toastErrorMessage(err)}`,
@@ -116,6 +135,19 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                 <SearchInput value={searchText} onChange={(e) => setSearchText(e.target.value)} />
                 <RefreshButton onClick={() => refetch()} busy={isFetching} />
             </div>
+
+            {/* Notices carried by a delete response, above the rows they qualify. Rendered only when
+                the response supplied them, so the board is unchanged for a clean delete. */}
+            {deleteWarnings.length > 0 && (
+                <div
+                    role="status"
+                    className="p-3 rounded bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300"
+                >
+                    {deleteWarnings.map((warning) => (
+                        <div key={warning}>{warning}</div>
+                    ))}
+                </div>
+            )}
 
             {isLoading ? (
                 <div className="text-text-primary">Loading templates...</div>

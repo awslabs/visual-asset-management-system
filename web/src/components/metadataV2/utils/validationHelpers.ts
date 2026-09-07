@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import {
+    MAX_GEOJSON_NESTING_DEPTH,
+    geoJsonNestingDepth,
+} from "../../../common/constants/geoSearch";
 import { MetadataRowState, MetadataValueType, ValidationResult } from "../types/metadata.types";
 
 /**
@@ -181,6 +185,11 @@ export const validateMetadataValue = (
                 }
                 if (!parsed.type) {
                     errors.push("GeoJSON must have a type property");
+                }
+                if (geoJsonNestingDepth(parsed) > MAX_GEOJSON_NESTING_DEPTH) {
+                    errors.push(
+                        `GeoJSON nests geometries more than ${MAX_GEOJSON_NESTING_DEPTH} levels deep`
+                    );
                 }
                 break;
             }

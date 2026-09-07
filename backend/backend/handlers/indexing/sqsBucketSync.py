@@ -36,7 +36,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_DIRECT,
     normalize_history_file_path,
 )
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment
 from common.s3 import is_object_version_archived
 from common.assetHistory import (
     CHANGE_SOURCE_UNARCHIVE_DIRECT,
@@ -45,18 +45,19 @@ from common.assetHistory import (
 )
 
 # Initialize AWS clients
-dynamodb = boto3.resource('dynamodb')
-sns_client = boto3.client('sns')
-s3_client = boto3.client('s3')
-s3_resource = boto3.resource('s3')
-lambda_client = boto3.client('lambda')
+retry_config = BotoConfig(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+sns_client = boto3.client('sns', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+s3_resource = boto3.resource('s3', config=retry_config)
+lambda_client = boto3.client('lambda', config=retry_config)
 # Bounded timeouts on the EventBridge client so an unreachable endpoint (e.g. an isolated-subnet
 # deployment missing the events VPC endpoint) fails fast rather than blocking the ingestion hot
 # path for the full default connect timeout on every batch. The publish is best-effort.
 events_client = boto3.client(
     'events',
     config=BotoConfig(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
-dynamodb_client = boto3.client('dynamodb')
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 logger = safeLogger(service_name="sqsBucketSync")
 
 # Environment variables
@@ -81,6 +82,12 @@ except Exception as e:
 
 if not database_id:
     raise Exception('databaseId not configured')
+
+# This function's own name, used to recognize the ObjectCreated:Copy event that THIS handler's
+# metadata stamp produces (see is_vams_metadata_stamp_echo). The Lambda runtime always sets it;
+# an empty value simply disables the recognition, which degrades to the pre-existing behaviour of
+# treating the echo as a content change rather than to anything unsafe.
+self_function_name = os.environ.get('AWS_LAMBDA_FUNCTION_NAME', '')
 
 # Initialize metadata tables
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
@@ -945,6 +952,62 @@ def decode_s3_event_key(raw_key: str) -> str:
     return decoded if decoded != raw_key else raw_key
 
 
+def is_vams_metadata_stamp_echo(record: Dict) -> bool:
+    """Return True when this record is the echo of THIS handler's own metadata stamp.
+
+    ``update_s3_metadata`` stamps ``databaseid`` / ``assetid`` / ``vams-changesource`` onto an object
+    by copying it onto itself. That copy is an object write, so Amazon S3 raises a *second*
+    ``s3:ObjectCreated:Copy`` notification for a file that only ever changed once — and every
+    consumer downstream of this handler treated it as a new file. Measured consequences:
+
+    *   the file indexers re-indexed the file a second time;
+    *   ``asset.file.uploaded`` was published a second time, so a ``fileUpload`` workflow trigger
+        fired TWICE for one written file;
+    *   ``update_asset_type`` re-listed the asset's prefix and ``write_file_version_history``
+        re-wrote its row, on identical content.
+
+    The history row itself does not duplicate — the second pass reads the same ``VersionId`` (no
+    further copy is made), so the ``put_item`` overwrites the same PK+SK. The cost there is a
+    redundant ``head_object`` plus write, not a phantom version. Measured on the deployment; do not
+    upgrade this to "a duplicate version row" without re-measuring.
+
+    Note this only arises for an object that arrives WITHOUT the stamp — a direct S3 write, a folder
+    marker, or a pipeline output landing on an asset path. A VAMS upload is already stamped by
+    ``uploadFile``, so ``update_s3_metadata`` takes its "metadata already matches" branch, makes no
+    copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
+    direct ``s3 cp`` of the same content produced two.
+
+    The doubling on that path is what pushes a burst into AWS Lambda's
+    recursive-loop detector: at 16 hops the invocation is DROPPED before the handler runs, so its
+    SQS messages are never deleted and cycle until the queue's retention expires, with ``Errors``
+    and ``Throttles`` both zero and no log line written.
+
+    Two conditions, and both are required:
+
+    *   ``eventName`` is an ``ObjectCreated:Copy``. A copy is the only way this handler writes.
+    *   the copy was performed by **this function**. ``userIdentity.principalId`` on an S3 event is
+        ``AWS:<roleId>:<roleSessionName>``, and for a Lambda the session name is the function name.
+
+    Requiring both is what keeps this from swallowing real work. A file COPY or MOVE performed by
+    the VAMS file-operations handlers, or by any other principal, is a genuine content change at the
+    destination key and still forwards — it fails the second condition. A plain ``ObjectCreated:Put``
+    always forwards, whatever its metadata already says, which matters because ``uploadFile`` stamps
+    the same three keys at upload time: recognizing the echo by "the metadata already matches" would
+    have discarded every VAMS upload.
+    """
+    if not self_function_name:
+        return False
+    event_name = str(record.get('eventName') or '')
+    # S3 delivers this without the "s3:" prefix on the notification record, but an event routed
+    # through EventBridge or hand-built by a test may carry it; accept either spelling.
+    if 'ObjectCreated:Copy' not in event_name:
+        return False
+    principal_id = str((record.get('userIdentity') or {}).get('principalId') or '')
+    # Exact component match on the session name, not a substring of the whole id: a substring test
+    # would also match a different function whose name merely contains this one's.
+    return self_function_name in principal_id.split(':')
+
+
 def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asset_id: str) -> bool:
     """
     Update S3 object metadata
@@ -1584,16 +1647,41 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             logger.info(f"Could not extract asset ID from {object_key}, skipping processing but forwarding to indexers")
             return False, True, f"Could not extract asset ID from {object_key}"
 
-        # 1.c Check if asset ID is a special folder to skip
-        if asset_id in RESERVED_S3_PREFIX_FOLDERS:
-            logger.info(f"Asset ID {asset_id} is a special folder, skipping")
-            return False, False, f"Asset ID {asset_id} is a special folder"
+        # 1.c Check if the key is VAMS system data and must be skipped.
+        #
+        # Tested over EVERY path segment of the whole key, matching fileIndexer and
+        # workflowTriggerDispatch. The previous form tested only the extracted asset id -- the first
+        # segment after the configured prefix -- which missed a reserved folder nested below an asset
+        # id, and could not run at all for a key that does not start with the configured prefix
+        # (extraction returns None above). Treating pipeline output as an asset file is not merely
+        # wasted work: update_s3_metadata below re-stamps it by copying the object onto itself, and
+        # that copy re-enters the same s3:ObjectCreated notification that triggered this handler.
+        if key_has_reserved_segment(object_key, prefix, RESERVED_S3_PREFIX_FOLDERS):
+            logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
+            return False, False, f"Key {object_key} contains a reserved VAMS folder segment"
 
         # 1.d Validate asset ID
         if not validate_asset_id(asset_id):
             logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
             return False, True, f"Asset ID {asset_id} is not valid"
-        
+
+        # 1.e Determine WHAT HAPPENED before doing anything: an ObjectCreated event this handler
+        # caused itself, by stamping metadata in step 4 below, describes no change a consumer needs
+        # to see. Everything after this point — asset lookup/creation, the metadata stamp, the asset
+        # type recomputation, the version-history row — has already run for the write that preceded
+        # the stamp, and every one of them would run a second time on identical content.
+        #
+        # Returns processed-successfully so the SQS message is deleted, and should_index False so
+        # neither the indexers nor the fileUpload trigger see it. This is the ONE case where a
+        # withheld record is not "out of scope": it is the same file the previous record already
+        # carried, which is why withholding it loses nothing.
+        if is_vams_metadata_stamp_echo(record):
+            logger.info(
+                f"Key {object_key} event is this handler's own metadata stamp "
+                f"({record.get('eventName')}); no change to process or forward"
+            )
+            return True, False, f"Skipped own metadata stamp echo for {object_key}"
+
         # 2.a. Lookup asset in assets dynamoDB table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
         asset_data = lookup_asset(bucket_id, asset_id)
@@ -2051,9 +2139,10 @@ def lambda_handler_deleted(event, context):
                         indexable_records.append(record)
                         continue
 
-                    # Skip special folders (never indexed)
-                    if asset_id in RESERVED_S3_PREFIX_FOLDERS:
-                        logger.info(f"Asset ID {asset_id} is a special folder, skipping")
+                    # Skip VAMS system data (never indexed). Segment-wise over the whole key for the
+                    # same reasons as the created path above.
+                    if key_has_reserved_segment(object_key, prefix, RESERVED_S3_PREFIX_FOLDERS):
+                        logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
                         continue
 
                     # Validate asset ID

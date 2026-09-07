@@ -38,6 +38,8 @@ export function buildConstructPipelineFunction(
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
+    const region = cdk.Stack.of(scope).region;
+    const account = cdk.Stack.of(scope).account;
     const name = "constructPipeline";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
@@ -69,6 +71,16 @@ export function buildConstructPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     suppressCdkNagLambda(fun);
+
+    // constructPipeline reports the external VAMS workflow token when it fails before the Batch job
+    // starts. Without this the SendTaskFailure raises AccessDeniedException, the handler logs it, and the
+    // workflow task waits out its full taskTimeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+        })
+    );
 
     return fun;
 }

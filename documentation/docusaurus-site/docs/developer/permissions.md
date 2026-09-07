@@ -285,7 +285,7 @@ Tag and tag type management scoped to a single database, combined with unconstra
 
 **Key constraints (6 constraints):**
 
--   `web` -- Allow GET on `/tags` and `/tag-types`
+-   `web` -- Allow GET on paths starting with `/auth/tags`, the web route for the Tags Management page
 -   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/secure-config`, `/amplify-config`, `/auth/routes`, `/auth/loginProfile`, `/tags`, or `/tag-types` (one `criteriaOr` constraint)
 -   `tag` -- Allow GET where `tagName contains .*`
 -   `tagType` -- Allow GET where `tagTypeName contains .*`

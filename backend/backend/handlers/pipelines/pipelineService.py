@@ -24,6 +24,8 @@ import string
 
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
+from botocore.paginate import TokenEncoder
+from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 
@@ -58,8 +60,9 @@ from common.workflows.executionValidation import arity_none_metadata_warnings
 
 logger = safeLogger(service_name="PipelineService")
 
-dynamodb = boto3.resource("dynamodb")
-lambda_client = boto3.client("lambda")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+lambda_client = boto3.client("lambda", config=retry_config)
 
 try:
     pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
@@ -106,6 +109,15 @@ MAX_ID_LOOKUP_PAGES = 50
 # bounds both the response size (6MB Lambda limit) and the per-request query fan-out; callers read
 # the rest of the set through NextToken. Mirrors workflowService.MAX_LIST_PAGE_ITEMS.
 MAX_LIST_PAGE_ITEMS = 500
+
+# Byte budget for one list page, measured over the serialized response items. The row cap alone does
+# not bound the response: each row carries its executionConfig and systemConfig verbatim, and an
+# executionConfig is accepted up to MAX_EXECUTION_CONFIG_BYTES (a DeadlineCloud block may hold a
+# 256 KB inline OpenJD template), so a page at the row cap ranges from tens of KB to past the 6 MB
+# Lambda synchronous-response limit — which fails the whole request with a 502 carrying no body and no
+# NextToken, leaving the caller unable to page past it. The page stops accumulating at this budget and
+# continues from the last row it kept. Mirrors workflowService.MAX_LIST_PAGE_BYTES.
+MAX_LIST_PAGE_BYTES = 4 * 1024 * 1024
 
 # Templates returned inline on a pipeline DETAILS response, and the ceiling for that inline set. A
 # pipeline may accumulate far more; the full set is paged through the template list endpoint
@@ -429,18 +441,76 @@ def _pagination_config(query_params):
     }
 
 
-def _filtered_page(page_iterator, include_archived, claims_and_roles):
-    """Casbin-filter + archived-filter a paginator full-result page into response models + NextToken."""
-    items = []
+def _response_item_bytes(response_item):
+    """Serialized UTF-8 size of one list item, measured on the shape the response returns so the
+    budget reflects what the caller actually receives. An unserializable item measures as 0 rather
+    than raising — the response serializer is where that failure belongs."""
+    try:
+        return len(json.dumps(response_item.dict(), default=str).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+def _list_resume_key(item, on_by_date_gsi):
+    """The ExclusiveStartKey that resumes the pipeline listing after this row.
+
+    A GSI continuation names both the index's own keys and the base table's, so a token for the
+    by-date listing carries all four. Returns None when the row is missing any of them, so a
+    malformed row yields no token rather than one that resumes from the wrong place."""
+    key = {"databaseId": item.get("databaseId"), "pipelineId": item.get("pipelineId")}
+    if on_by_date_gsi:
+        key["allListPartition"] = item.get("allListPartition")
+        key["dateModified"] = item.get("dateModified")
+    return key if all(key.values()) else None
+
+
+def _resume_token(item, on_by_date_gsi):
+    """A paginator-compatible NextToken resuming after `item`, or None. Encoded exactly as the boto3
+    paginator encodes its own, so the caller passes it straight back as startingToken."""
+    key = _list_resume_key(item, on_by_date_gsi)
+    if not key:
+        return None
+    return TokenEncoder().encode({"ExclusiveStartKey": key})
+
+
+def _filtered_page(page_iterator, include_archived, claims_and_roles, on_by_date_gsi=False):
+    """Casbin-filter + archived-filter a paginator full-result page into response models + NextToken,
+    stopping at MAX_LIST_PAGE_BYTES so a page of large executionConfigs stays returnable."""
+    authorized = []
     for item in page_iterator.get("Items", []):
         if not include_archived and item.get("archived"):
             continue
         if _enforce(claims_and_roles, item, "GET"):
-            # Template count is a bounded COUNT query per authorized pipeline on this page
-            # (MAX_LIST_PAGE_ITEMS caps the fan-out). Best-effort — None on failure.
-            count = _template_count(item.get("databaseId", ""), item.get("pipelineId", ""))
-            items.append(_item_to_response(item, template_count=count))
+            authorized.append(item)
+
+    items = []
+    used_bytes = 0
+    budget_stopped_after = None
+    for item in authorized:
+        # Template count is a bounded COUNT query per authorized pipeline on this page
+        # (MAX_LIST_PAGE_ITEMS caps the fan-out). Best-effort — None on failure.
+        count = _template_count(item.get("databaseId", ""), item.get("pipelineId", ""))
+        response_item = _item_to_response(item, template_count=count)
+        item_bytes = _response_item_bytes(response_item)
+        # The first item is always kept, whatever it measures: a page that came back empty would read
+        # as "no pipelines" rather than as a bound, and the caller could not page past it either.
+        if items and used_bytes + item_bytes > MAX_LIST_PAGE_BYTES:
+            logger.info(f"Pipeline list page trimmed to {len(items)} of {len(authorized)} authorized "
+                        f"pipelines to stay within {MAX_LIST_PAGE_BYTES} bytes.")
+            break
+        items.append(response_item)
+        used_bytes += item_bytes
+        budget_stopped_after = item
     result = GetPipelinesResponseModel(Items=items)
+    if len(items) < len(authorized) and budget_stopped_after is not None:
+        # The page stopped short of what it read, so the continuation resumes from the last row it
+        # kept rather than from the query's own end — otherwise the untrimmed rows would be
+        # unreachable instead of deferred. A row that cannot produce a key yields no token, and the
+        # paginator's own token (if any) still applies.
+        token = _resume_token(budget_stopped_after, on_by_date_gsi)
+        if token:
+            result.NextToken = token
+            return result
     if "NextToken" in page_iterator:
         result.NextToken = page_iterator["NextToken"]
     return result
@@ -456,7 +526,7 @@ def get_all_pipelines(query_params, include_archived, claims_and_roles):
         ScanIndexForward=False,
         PaginationConfig=_pagination_config(query_params),
     ).build_full_result()
-    return _filtered_page(page_iterator, include_archived, claims_and_roles)
+    return _filtered_page(page_iterator, include_archived, claims_and_roles, on_by_date_gsi=True)
 
 
 def get_database_pipelines(database_id, query_params, include_archived, claims_and_roles):

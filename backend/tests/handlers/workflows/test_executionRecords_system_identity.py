@@ -13,11 +13,63 @@ The fallback is unreachable through the API today (Tier-1 auth denies an empty t
 exactly why a unit assertion is the right instrument: there is no request that can demonstrate it.
 """
 
+import ast
+import inspect
+import re
+
 import pytest
 
 from backend.backend.common.workflows import executionRecords as er
 
 SYSTEM_USER = "SYSTEM_USER"
+
+# A record key carrying a user identity, e.g. triggeredByUserId / changeUserId.
+_USER_ID_KEY = re.compile(r"UserId$", re.IGNORECASE)
+
+
+def _user_id_entries():
+    """Every ``"...UserId": <value>`` entry the module's record builders declare, as (key, value node)
+    pairs. Read from the AST rather than the text so a comment that mentions a variant is not mistaken
+    for one, and so a builder added later is covered without listing it here."""
+    entries = []
+    for node in ast.walk(ast.parse(inspect.getsource(er))):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            if _USER_ID_KEY.search(key.value):
+                entries.append((key.value, value))
+    return entries
+
+
+def _as_identity(node):
+    """The identity a fallback expression resolves to, or None when it is not a fixed string -- a
+    helper call cannot be read off the source, and is left to the behavioural assertions."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        resolved = getattr(er, node.id, None)
+        return resolved if isinstance(resolved, str) else None
+    return None
+
+
+def _user_id_fallbacks():
+    """The identity each user-id entry falls back to for an empty value, as (key, identity) pairs.
+    Covers the ``x or FALLBACK`` and ``x if x else FALLBACK`` spellings and resolves a module-level
+    constant, so restating a fallback a different way is still checked rather than skipped."""
+    fallbacks = []
+    for key, value in _user_id_entries():
+        if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or):
+            node = value.values[-1]
+        elif isinstance(value, ast.IfExp):
+            node = value.orelse
+        else:
+            continue
+        identity = _as_identity(node)
+        if identity is not None:
+            fallbacks.append((key, identity))
+    return fallbacks
 
 
 def _record(triggered_by_user_id):
@@ -50,3 +102,28 @@ class TestTriggeredByUserIdFallback:
         from backend.backend.models.executions import WorkflowExecutionRecord
         declared = WorkflowExecutionRecord.__fields__["triggeredByUserId"].default
         assert declared == SYSTEM_USER == _record("")["triggeredByUserId"]
+
+
+@pytest.mark.unit
+class TestNoRecordBuilderFallsBackToAVariant:
+    """Stated over the module rather than over one call, so a user-identity fallback added to another
+    record builder is held to the same identity without this file being revisited."""
+
+    def test_the_module_declares_a_user_id_entry(self):
+        """Positive control: the walk finds the entries it is meant to police, so a green result below
+        means the identities are right rather than that nothing was inspected. Keyed on the entry
+        rather than on the fallback's shape, so writing a correct fallback a different way does not
+        read as a violation."""
+        assert _user_id_entries(), "found no user-identity record entry to check"
+
+    def test_every_user_id_fallback_is_the_reserved_identity(self):
+        wrong = [(k, v) for k, v in _user_id_fallbacks() if v != SYSTEM_USER]
+        assert not wrong, f"user-identity fallbacks must be {SYSTEM_USER!r}: {wrong}"
+
+    def test_the_declared_fallback_is_the_one_the_builder_writes(self):
+        """Ties the reading to behaviour: the identity read off the source is the identity the built
+        record carries, so the assertion above cannot pass on a declaration the code does not use."""
+        declared = dict(_user_id_fallbacks())
+        if "triggeredByUserId" not in declared:
+            pytest.skip("the fallback is not a fixed string; the behavioural assertions cover it")
+        assert declared["triggeredByUserId"] == _record("")["triggeredByUserId"]

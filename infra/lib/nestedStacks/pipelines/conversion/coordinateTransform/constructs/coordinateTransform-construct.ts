@@ -208,8 +208,18 @@ export class CoordinateTransformConstruct extends Construct {
                     props.config.name +
                     "_" +
                     props.config.app.baseStackName,
-                ephemeralStorageGiB: 60,
-                ecrRepository: codeBuildConstruct?.repository,
+                // The transform spills every transformed point to this volume before writing an output,
+                // so the volume holds the downloaded input, one spill copy, and every requested output
+                // format at once. At ~32 bytes per spilled point an 800M-point cloud spills ~26 GB, on
+                // top of an ~8 GB LAZ input and, with all four output formats requested, ~80 GB of
+                // output -- which 60 GiB does not cover. Fargate permits 21-200 GiB.
+                ephemeralStorageGiB: 120,
+                ecrImage: codeBuildConstruct
+                    ? {
+                          repository: codeBuildConstruct.repository,
+                          tag: codeBuildConstruct.imageTag,
+                      }
+                    : undefined,
             }
         );
 
@@ -272,6 +282,22 @@ export class CoordinateTransformConstruct extends Construct {
         const handleBatchError = new sfn.Pass(this, "HandleBatchError", {
             resultPath: "$",
         }).next(pipelineEndTask);
+
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full 14400s taskTimeout. The handler
+        // reports the token for the errors it raises itself; this covers the failures where it never
+        // runs at all: the function timeout, an out-of-memory kill, an import failure, or an invoke
+        // fault that exhausts the task's service-exception retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipelineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
 
         // No heartbeatTimeout: the container reports only terminal success/failure on the
         // internal token (it sends no periodic heartbeats), so a heartbeat window would fail

@@ -192,7 +192,59 @@ function buildConfig(name: TemplateName, mutate?: (c: any) => void): Config.Conf
     internal.webUrlDeploymentSSMParam = `/${stackName}/web/deployedUrl`;
 
     mutate?.(internal);
+    assertNoUntrackedDockerAsset(config);
     return config;
+}
+
+/**
+ * Pipelines whose container image is built from a Dockerfile that is NOT in the repository, mapped to
+ * the config flag that routes around the local build.
+ *
+ * `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under the heading
+ * "Pipeline Source Download Ignore": the file arrives from an upstream sync and is absent from a fresh
+ * checkout. Splat is the only one of the fifteen pipeline Dockerfiles that is untracked.
+ *
+ * That makes the failure CI-only, which is the worst shape it could have. `AssetImage.fromAsset` resolves
+ * the path when the construct is built — before any bundling-skip logic runs, so stubbing Docker does not
+ * help — and locally a previous sync has left the file behind, so the synth succeeds. The same test then
+ * fails on a runner with `CannotFindFile`, pointing at `addContainer` rather than at the config that
+ * asked for a local build.
+ */
+const UNTRACKED_DOCKER_ASSET_PIPELINES: Array<{
+    flag: string;
+    codeBuildFlag: string;
+    dockerfile: string;
+}> = [
+    {
+        flag: "useSplatToolbox",
+        codeBuildFlag: "useCodeBuild",
+        dockerfile: "backendPipelines/3dRecon/splatToolbox/container/Dockerfile",
+    },
+];
+
+/**
+ * Fail here, locally, rather than with `CannotFindFile` on a CI runner only.
+ *
+ * The check is on the CONFIG, not on whether the file happens to be present: a test that passes because
+ * the developer synthesized this pipeline last week is exactly the trap being closed.
+ */
+function assertNoUntrackedDockerAsset(config: Config.Config): void {
+    const pipelines = (config.app as any)?.pipelines ?? {};
+    for (const { flag, codeBuildFlag, dockerfile } of UNTRACKED_DOCKER_ASSET_PIPELINES) {
+        const entry = pipelines[flag];
+        if (!entry?.enabled || entry[codeBuildFlag]) {
+            continue;
+        }
+        throw new Error(
+            `synthTemplate(): this config enables app.pipelines.${flag} with ${codeBuildFlag} false, ` +
+                `which builds its image from ${dockerfile}. That file is gitignored and absent from a ` +
+                `fresh checkout, so the synth succeeds locally and fails on CI with CannotFindFile. ` +
+                `Set app.pipelines.${flag}.${codeBuildFlag} = true in the mutate — the image then ` +
+                `resolves from the CodeBuild ECR repository and no local Dockerfile is read. Nothing ` +
+                `about subnet, endpoint or Batch assertions changes: those key on ` +
+                `${flag}.enabled alone.`
+        );
+    }
 }
 
 let dockerStubbed = false;

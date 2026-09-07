@@ -54,7 +54,12 @@ class TransformConfig(BaseModel):
         description="Override: apply a single combined scale factor directly",
     )
     chunk_size: int = Field(
-        default=1_000_000, description="Points per processing chunk"
+        default=1_000_000,
+        description=(
+            "Points transformed and written at a time. Bounds the transform's peak memory for LAS/LAZ "
+            "input; an E57 or PLY input is read a whole scan at a time by its own library, so a scan "
+            "stays resident whatever this is set to."
+        ),
     )
     parallel_scans: bool = Field(
         default=True,
@@ -76,7 +81,13 @@ class ValidationConfig(BaseModel):
 
 
 class OutputConfig(BaseModel):
-    """Output configuration."""
+    """Output configuration.
+
+    ``compress_laz`` and a ``LAZ`` entry in ``formats`` control the same property: LAZ is the
+    compressed LAS format. The two must agree — ``compress_laz=False`` with ``LAZ`` in ``formats`` is
+    refused by ``coord_xform.pipeline.run_pipeline``, which is the single entry both routes into the
+    container pass through. Uncompressed output is requested as ``LAS``.
+    """
 
     formats: list[OutputFormat] = Field(
         default=[OutputFormat.E57, OutputFormat.LAZ, OutputFormat.PLY]

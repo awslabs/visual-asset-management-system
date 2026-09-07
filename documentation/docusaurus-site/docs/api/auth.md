@@ -11,6 +11,10 @@ VAMS enforces authorization at two levels:
 Both tiers must allow access for a request to succeed.
 :::
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `description` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## Constraints
@@ -25,7 +29,19 @@ Retrieves all permission constraints.
 GET /auth/constraints
 ```
 
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                         |
+| --------------- | ------ | -------- | ------- | ----------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `30000` | Ceiling on the constraints returned in one response (1-30000).                      |
+| `pageSize`      | number | No       | `3000`  | Constraints per page (1-10000). A value above 3000 is served in 3000-item pages.    |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                             |
+
+The page served is the smallest of `pageSize`, `maxItems`, and 3,000 — the bound that keeps a page of whole constraints, each carrying its criteria and permission lists, within the AWS Lambda response limit.
+
 #### Response
+
+`NextToken` is present only when more constraints remain; page until it is absent. It is an opaque string: pass it back on `startingToken` unmodified.
 
 ```json
 {
@@ -43,17 +59,19 @@ GET /auth/constraints
                 ],
                 "userPermissions": []
             }
-        ]
+        ],
+        "NextToken": "eyJ..."
     }
 }
 ```
 
 #### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                                        |
+| ------ | -------------------------------------------------- |
+| `400`  | `startingToken` is not a token this listing emitted |
+| `403`  | Not authorized                                     |
+| `500`  | Internal server error                              |
 
 ---
 
@@ -428,7 +446,11 @@ PUT /roles
 
 #### Request body
 
-Same structure as [Create a role](#create-a-role).
+Same fields as [Create a role](#create-a-role), with `roleName` the only required one. It identifies the role and cannot be changed.
+
+Only the fields present in the body are written. A field the body omits keeps its stored value, so clearing one requires sending it explicitly — `"mfaRequired": false` to remove an MFA requirement, or `"source": null` to remove the source linkage. `description` is the exception: it is always present on a role, so `null` is rejected and omitting the field is how it is left alone.
+
+A body naming only `roleName` is rejected with `400`, since it asks for no change.
 
 ---
 
@@ -668,12 +690,15 @@ PUT /user/cognito/{userId}
 
 #### Request body
 
-| Field   | Type   | Required | Description                                        |
-| ------- | ------ | -------- | -------------------------------------------------- |
-| `email` | string | No       | Updated email address                              |
-| `phone` | string | No       | Phone number in E.164 format (e.g. `+12345678900`) |
+| Field        | Type    | Required | Description                                        |
+| ------------ | ------- | -------- | -------------------------------------------------- |
+| `email`      | string  | No       | Updated email address                              |
+| `phone`      | string  | No       | Phone number in E.164 format (e.g. `+12345678900`) |
+| `clearPhone` | boolean | No       | Set to `true` to remove the stored phone number    |
 
-At least one of `email` or `phone` must be provided.
+At least one of `email`, `phone`, or `clearPhone` must be provided.
+
+The update is partial: an attribute the request does not mention keeps its stored value, so an email-only request leaves the phone number as it is. Removing the number takes `clearPhone` set to `true`, which is accepted on its own or alongside an email change. A request that sends both `phone` and `clearPhone` is rejected with `400`.
 
 ---
 
@@ -707,11 +732,11 @@ POST /user/cognito/{userId}/resetPassword
 
 #### Request body
 
-The request body is optional. When a body is supplied, it must set `confirmReset` to `true`.
+The request body is required and must set `confirmReset` to `true`. A request that omits the body, sends an empty one, or sends the field as `false` or `null` is rejected with `400` and does not reach Amazon Cognito.
 
-| Field          | Type    | Required | Description                                   |
-| -------------- | ------- | -------- | --------------------------------------------- |
-| `confirmReset` | boolean | No       | Must be `true` when a request body is present |
+| Field          | Type    | Required | Description    |
+| -------------- | ------- | -------- | -------------- |
+| `confirmReset` | boolean | Yes      | Must be `true` |
 
 #### Response
 
@@ -743,7 +768,17 @@ Because `POST /auth/api-keys` accepts any `userId`, including an administrator's
 GET /auth/api-keys
 ```
 
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                       |
+| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `3000`  | Maximum number of keys in one response (1-3000). Values above 3000 are clamped.    |
+| `pageSize`      | number | No       | `1000`  | Number of keys read per page. Clamped to `maxItems`.                              |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                           |
+
 #### Response
+
+`NextToken` and `truncated` are present only when more keys remain; page until they are absent. A malformed or foreign `startingToken` returns `400` with `Invalid pagination token`.
 
 ```json
 {
@@ -759,12 +794,18 @@ GET /auth/api-keys
             "expiresAt": "2027-03-15T10:30:00Z",
             "isActive": "true"
         }
-    ]
+    ],
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
 
 :::note
 The API key secret value is only returned once during creation and cannot be retrieved afterwards.
+:::
+
+:::note[A bounded page can be empty]
+DynamoDB reports a continuation key whenever a read stops at its limit, so a listing whose size is an exact multiple of the page bound ends with a `NextToken` and an empty `Items` array. Treat an absent `NextToken`, not an empty page, as the end of the listing.
 :::
 
 ---
@@ -898,6 +939,16 @@ GET /auth/user/api-keys
 ```
 
 Returns the same response shape as the admin list, filtered to the requesting user's keys.
+
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                    |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
+| `maxItems`      | number | No       | `3000`  | Maximum number of keys in one response (1-3000). Values above 3000 are clamped. |
+| `pageSize`      | number | No       | `1000`  | Number of keys read per page. Clamped to `maxItems`.                            |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                        |
+
+`NextToken` and `truncated` behave exactly as they do on [`GET /auth/api-keys`](#list-api-keys), including the empty-final-page case.
 
 ---
 

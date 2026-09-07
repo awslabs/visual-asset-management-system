@@ -41,6 +41,7 @@ from models.roleConstraints import (
     GetConstraintsRequestModel, CreateConstraintRequestModel,
     ConstraintResponseModel, ConstraintOperationResponseModel,
     GetConstraintPermissionObjectsResponseModel,
+    MAX_CONSTRAINT_LIST_PAGE_SIZE, MAX_LIST_MAX_ITEMS,
 )
 
 # Configure AWS clients with retry configuration
@@ -259,58 +260,108 @@ def get_constraint_details(constraint_id):
         raise VAMSGeneralErrorResponse("Error retrieving constraint")
 
 
+def _decode_constraint_offset(starting_token):
+    """Decode a listing startingToken into the row offset the page starts at
+
+    Args:
+        starting_token: The opaque base64 NextToken handed back by a previous page
+
+    Returns:
+        The zero-based offset into the deduplicated constraint list
+
+    Raises:
+        VAMSGeneralErrorResponse: The token is not one this listing emitted
+    """
+    if not starting_token:
+        return 0
+
+    # base64.b64decode discards characters outside the alphabet, so a value like
+    # "[object Object]" decodes without raising and only fails at int()
+    try:
+        offset = int(base64.b64decode(starting_token).decode('utf-8'))
+    except (ValueError, base64.binascii.Error, UnicodeDecodeError, TypeError) as e:
+        logger.exception(f"Invalid startingToken format: {e}")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+    if offset < 0:
+        logger.warning("Rejected a startingToken that decoded to a negative offset")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+    return offset
+
+
 def get_all_constraints(query_params):
     """Get all constraints with pagination from denormalized table
     Deduplicates by base constraintId to return unique constraints
-    
+
+    A constraint's `#group#`/`#user#` items each carry their own partition key, so they are
+    spread through scan order rather than sitting together: the deduplication has to see the
+    whole table before it can say how many distinct constraints there are, and the page is an
+    offset slice of that deduplicated, ordered list. pageSize therefore counts constraints.
+    The ordering is what makes the offset stable, since scan order is not contractual and every
+    page re-reads the table.
+
+    A layout that pages at the cursor instead would store one base item per constraint and keep
+    the `#group#`/`#user#` items as GSI projections only, so the base items could be paged
+    directly; moving to it requires migrating the stored items.
+
     Args:
         query_params: Query parameters for pagination
-        
+
     Returns:
         Dictionary with Items and optional NextToken
     """
     try:
-        # Use resource-level scan for automatic deserialization
-        scan_kwargs = {
-            'Limit': int(query_params['pageSize'])
-        }
-        
-        # startingToken is the opaque base64 NextToken handed back by a previous page
-        if query_params.get('startingToken'):
-            try:
-                decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
-                scan_kwargs['ExclusiveStartKey'] = json.loads(decoded_token)
-            except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError, TypeError) as e:
-                logger.exception(f"Invalid startingToken format: {e}")
-                raise VAMSGeneralErrorResponse("Invalid pagination token")
+        # The page served is the smallest of the slice asked for, the ceiling allowed, and the
+        # payload bound for whole-constraint items
+        page_size = min(
+            int(query_params.get('pageSize') or MAX_CONSTRAINT_LIST_PAGE_SIZE),
+            int(query_params.get('maxItems') or MAX_LIST_MAX_ITEMS),
+            MAX_CONSTRAINT_LIST_PAGE_SIZE,
+        )
+        start = _decode_constraint_offset(query_params.get('startingToken'))
 
-        # Perform scan and collect items
-        response = constraints_table.scan(**scan_kwargs)
-        items = response.get('Items', [])
-        
-        # Deduplicate by base constraintId (remove #group# or #user# suffixes)
+        # Deduplicate by base constraintId (remove #group# or #user# suffixes) across the whole
+        # table, so a constraint whose items straddle a scan page is counted once
         unique_constraints = {}
-        for item in items:
-            full_constraint_id = item.get('constraintId', '')
-            base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
-            
-            # Only keep the first occurrence of each base constraintId
-            if base_constraint_id not in unique_constraints:
-                unique_constraints[base_constraint_id] = item
-        
+        row_count = 0
+        scan_kwargs = {}
+        while True:
+            response = constraints_table.scan(**scan_kwargs)
+            items = response.get('Items', [])
+            row_count += len(items)
+            for item in items:
+                full_constraint_id = item.get('constraintId', '')
+                base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
+
+                # Only keep the first occurrence of each base constraintId
+                if base_constraint_id not in unique_constraints:
+                    unique_constraints[base_constraint_id] = item
+
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+        ordered_ids = sorted(unique_constraints)
+        page = [unique_constraints[base_id] for base_id in ordered_ids[start:start + page_size]]
+
         # Transform items from new format to API format
-        formatted_items = [_transform_from_new_format(item) for item in unique_constraints.values()]
-        
+        formatted_items = [_transform_from_new_format(item) for item in page]
+
         result = {'Items': formatted_items}
-        
-        # Handle pagination token - base64 of the LastEvaluatedKey so it survives
-        # query-string round tripping as an opaque string
-        if 'LastEvaluatedKey' in response:
+
+        # Handle pagination token - base64 of the next offset so it survives query-string
+        # round tripping as an opaque string
+        next_offset = start + page_size
+        if next_offset < len(ordered_ids):
             result['NextToken'] = base64.b64encode(
-                json.dumps(response['LastEvaluatedKey']).encode('utf-8')
+                str(next_offset).encode('utf-8')
             ).decode('utf-8')
 
-        logger.debug(f"Retrieved {len(formatted_items)} unique constraints from {len(items)} denormalized items")
+        logger.debug(
+            f"Retrieved {len(formatted_items)} of {len(ordered_ids)} unique constraints "
+            f"from {row_count} denormalized items"
+        )
         return result
     except Exception as e:
         logger.exception(f"Error getting all constraints: {e}")

@@ -1176,7 +1176,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                 <Card
                                     key={`settings-${idx}`}
                                     title={`Step ${idx + 1}: ${
-                                        pipeline.pipelineName || pipeline.pipelineId
+                                        pipeline.name || pipeline.pipelineId
                                     }`}
                                 >
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 mb-3">

@@ -6,58 +6,84 @@ import boto3
 import json
 
 from botocore.exceptions import ClientError
+from botocore.config import Config
+from boto3.dynamodb.conditions import Key
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
+from common.validators import validate, normalize_userid_array
 from handlers.authz import CasbinEnforcer
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, query_all_items
 from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 logger = safeLogger(service="UnsubscriptionService")
-main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
-sns_client = boto3.client('sns')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
+sns_client = boto3.client('sns', config=retry_config)
 
+# A required table name that cannot be resolved fails the module load, so the deployment reports it
+# at cold start. Degrading to None instead let the module import and turned the failure into a boto3
+# error on a None table name for every request afterwards -- a generic 500 naming nothing.
 try:
     subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving subscriptions table name")
-    subscription_table_name = None
-
-try:
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving asset table name")
-    asset_table_name = None
-
-if not (subscription_table_name and asset_table_name):
-    main_rest_response['body'] = json.dumps({"message": "Failed resolving required table names"})
+    logger.exception("Failed loading resource names")
+    raise e
 
 
 def get_asset(asset_id):
-    resp = dynamodb_client.scan(
-        TableName=asset_table_name,
-        ProjectionExpression='snsTopic, databaseId',
-        FilterExpression='assetId = :asset_id',
-        ExpressionAttributeValues={':asset_id': {'S': asset_id}},
+    """Resolve the databaseId and SNS topic of the asset carrying an assetId.
+
+    assetIdGSI is partitioned on assetId, so this is a keyed read of that index paged to
+    exhaustion. A single scan with a FilterExpression applies its filter only to the page
+    it already read, so it answers None for an asset that exists once the table outgrows
+    one page.
+
+    Returns None when the assetId resolves to no live asset, and when it resolves to more
+    than one: assetIds are unique within a database only, so an ambiguous match cannot be
+    attributed to a single database's record.
+    """
+    asset_table = dynamodb.Table(asset_table_name)
+    items = query_all_items(
+        asset_table,
+        IndexName='assetIdGSI',
+        KeyConditionExpression=Key('assetId').eq(asset_id)
     )
 
-    items = resp.get('Items')
-    if items:
-        asset_obj = {"databaseId": items[0].get('databaseId').get("S")}
-        if items[0].get('snsTopic'):
-            asset_obj["snsTopic"] = items[0].get('snsTopic').get("S")
-        return asset_obj
-    return None
+    # Archiving rewrites a record under a "{databaseId}#deleted" partition, so an archived
+    # row is not the live asset and must not stand in for it
+    live_items = [
+        item for item in items
+        if not str(item.get('databaseId', '')).endswith('#deleted')
+        and item.get('status') != 'archived'
+    ]
+
+    if len(live_items) != 1:
+        logger.error(
+            f"assetId {asset_id} matches {len(live_items)} live assets; "
+            f"archived or duplicate matches: {len(items)}")
+        return None
+
+    item = live_items[0]
+    asset_obj = {"databaseId": item.get('databaseId')}
+    if item.get('snsTopic'):
+        asset_obj["snsTopic"] = item.get('snsTopic')
+    return asset_obj
 
 
 def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
     asset_table = dynamodb.Table(asset_table_name)
     asset_obj = get_asset(asset_id)
+
+    # The subscription row has already been updated; the topic cleanup is best effort and
+    # is skipped when the asset can no longer be resolved to one live record
+    if asset_obj is None:
+        logger.error(f"No live asset found for asset {asset_id}")
+        return
 
     if not asset_obj.get("snsTopic"):
         logger.error(f"No topic found for asset {asset_id}")
@@ -152,6 +178,9 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
+
+        # The stored subscriber ids are normalized, so the ids to remove are normalized too
+        event['body']['subscribers'] = normalize_userid_array(event['body']['subscribers'])
 
         (valid, message) = validate({
             'eventName': {

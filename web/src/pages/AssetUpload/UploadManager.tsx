@@ -121,6 +121,7 @@ export default function UploadManager({
         sequenceUploadIds,
         sequenceInitStatuses,
         sequenceCompleteStatuses,
+        serverRejectedFiles,
         initializeSequence,
         completeSequence,
         createFilePartsFromSequences,
@@ -297,8 +298,33 @@ export default function UploadManager({
                 let assetId = assetDetail.assetId || "";
                 if (!isExistingAsset && assetDetail.databaseId) {
                     setUploadState((prev) => ({ ...prev, assetCreationStatus: "in-progress" }));
-                    const assetResponse = await createAsset(assetDetail);
-                    assetId = assetResponse.assetId;
+                    try {
+                        const assetResponse = await createAsset(assetDetail);
+                        // A response without an id is a failed create too: the sequence below skips
+                        // every remaining step when assetId is empty, so it would otherwise sit on
+                        // the in-progress spinner exactly as a rejection did.
+                        if (!assetResponse?.assetId) {
+                            throw new Error(
+                                assetResponse?.message ||
+                                    `Failed to create ${Synonyms.asset}: no ${Synonyms.asset} ID was returned`
+                            );
+                        }
+                        assetId = assetResponse.assetId;
+                    } catch (error: any) {
+                        setUploadState((prev) => ({
+                            ...prev,
+                            assetCreationStatus: "failed",
+                            errors: [
+                                ...prev.errors,
+                                {
+                                    step: `${Synonyms.Asset} Creation`,
+                                    message: error.message || `Failed to create ${Synonyms.asset}`,
+                                },
+                            ],
+                        }));
+                        // Stop here - don't continue to next steps
+                        return;
+                    }
                     setUploadState((prev) => ({
                         ...prev,
                         assetCreationStatus: "completed",
@@ -635,7 +661,7 @@ export default function UploadManager({
 
             const hasSkipped = skippedCompleteSequences > 0;
             // Build fileResults for any files that were skipped/failed so the summary UI can list them
-            const failedFileResults = fileUploadItems
+            const clientFailedFileResults = fileUploadItems
                 .filter((item) => item.status === "Failed" || (item.status as any) === "Cancelled")
                 .map((item) => ({
                     relativeKey: item.relativePath,
@@ -646,6 +672,17 @@ export default function UploadManager({
                             ? "Upload cancelled"
                             : item.error || "Upload failed",
                 }));
+            // A file the SERVER refused at completion has a client status of "Completed" — its parts
+            // uploaded fine — so it is absent from the list above, and the summary reported success for
+            // an upload that stored nothing for it. Fold those in, skipping any file already listed as
+            // a client-side failure so one file cannot appear twice.
+            const clientFailedKeys = new Set(clientFailedFileResults.map((r) => r.relativeKey));
+            const failedFileResults = [
+                ...clientFailedFileResults,
+                ...Array.from(serverRejectedFiles.values()).filter(
+                    (r) => !clientFailedKeys.has(r.relativeKey)
+                ),
+            ];
 
             setUploadState((prev) => ({
                 ...prev,
@@ -678,6 +715,7 @@ export default function UploadManager({
         sequenceUploadIds,
         cancelledFiles.size,
         fileUploadItems,
+        serverRejectedFiles,
         onUploadComplete,
     ]);
 
@@ -1647,6 +1685,14 @@ export default function UploadManager({
                         </SpaceBetween>
                     </Box>
                 </SpaceBetween>
+
+                {uploadState.assetCreationStatus === "failed" && onCancel && (
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Button onClick={onCancel} variant="primary">
+                            Back to Review
+                        </Button>
+                    </SpaceBetween>
+                )}
 
                 {uploadState.uploadStatus === "failed" && (
                     <SpaceBetween direction="horizontal" size="xs">

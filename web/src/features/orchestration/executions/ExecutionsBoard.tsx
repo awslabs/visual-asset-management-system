@@ -53,6 +53,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     // confirmation dialog that triggered it (the dialog stays open so the action can be retried or
     // cancelled), and in a page-level banner for rerun, which has no dialog.
     const [actionError, setActionError] = useState<string | null>(null);
+    // Notices from a successful action's own response. An abort that could not stop a registered
+    // sub-process leaves a Batch or Deadline Cloud job running after the execution reads ABORTED, so
+    // the record has to outlive the toast that announced it.
+    const [actionWarnings, setActionWarnings] = useState<string[]>([]);
     const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
@@ -61,10 +65,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     // there rather than offering a choice that would be overridden.
     const [workflowDatabaseFilter, setWorkflowDatabaseFilter] = useState("");
     const [workflowFilter, setWorkflowFilter] = useState("");
-    // The asset tab's workflow filter, held as the composite "databaseId:workflowId" because a
-    // workflowId is unique only within its database. Kept separate from the two global controls so
-    // one dropdown picks both halves at once — the asset tab has no workflow-database dropdown to
-    // pair with, and sending half a composite would filter against ":wf1" and match nothing.
+    // The asset tab's workflow filter, held as the composite "databaseId:workflowId" so ONE
+    // dropdown carries both halves and the value splits back into the two request filters below.
+    // Kept separate from the two global controls because the asset tab has no workflow-database
+    // dropdown to pair with. A workflow id is unique across every database, so the database half
+    // narrows rather than disambiguates; it is read off the row so it is the workflow's own, since
+    // any other value silently empties the result.
     const [assetWorkflowFilter, setAssetWorkflowFilter] = useState("");
     // Time-window filter (executions started within the window). A preset ("90"/"120"/"180" days)
     // resolves to a filterStartDate N days before now; "custom" reveals an explicit from/to date
@@ -297,13 +303,26 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const handleAbort = async (executionId: string, groupId?: string) => {
         setActionError(null);
         try {
-            await abortExecution.mutateAsync({ executionId, groupId });
+            const result: any = await abortExecution.mutateAsync({ executionId, groupId });
             setAbortConfirm(null);
-            toast.success(groupId ? "Aborting execution group" : "Aborting execution", {
-                description: groupId
-                    ? `Every active execution in group ${groupId} was signalled to stop.`
-                    : `Execution ${executionId.slice(0, 12)}… was signalled to stop.`,
-            });
+            // The abort response carries `warnings` when a registered sub-process could not be
+            // stopped. The execution still reads ABORTED, so without surfacing these the compute left
+            // running is invisible — which is the opposite of what the operator asked for.
+            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+            setActionWarnings(warnings);
+            const what = groupId
+                ? `Every active execution in group ${groupId} was signalled to stop.`
+                : `Execution ${executionId.slice(0, 12)}… was signalled to stop.`;
+            if (warnings.length) {
+                toast.warning(
+                    groupId ? "Aborting execution group with warnings" : "Aborting with warnings",
+                    { description: `${what} ${warnings.join(" ")}` }
+                );
+            } else {
+                toast.success(groupId ? "Aborting execution group" : "Aborting execution", {
+                    description: what,
+                });
+            }
         } catch (err) {
             const message = toastErrorMessage(err, "Failed to abort execution");
             setActionError(message);
@@ -768,14 +787,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 </div>
             )}
 
-            {/* Notices from the list response itself, above the rows they qualify — the count on
-                screen is not the whole answer when one of these is present. */}
-            {listWarnings.length > 0 && (
+            {/* Notices from the list response itself and from the last action that succeeded with
+                caveats, above the rows they qualify — the count on screen is not the whole answer
+                when one of these is present, and an abort that left compute running is not visible
+                anywhere else on the board. */}
+            {[...listWarnings, ...actionWarnings].length > 0 && (
                 <div
                     role="status"
                     className="p-3 rounded bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300"
                 >
-                    {listWarnings.map((warning) => (
+                    {[...listWarnings, ...actionWarnings].map((warning) => (
                         <div key={warning}>{warning}</div>
                     ))}
                 </div>

@@ -1,7 +1,7 @@
 {
     "pipelineName": "NVIDIA Cosmos Reason 8B",
     "category": "WFM",
-    "description": "NVIDIA Cosmos Reason 8B - Vision Language Model for video/image analysis and reasoning",
+    "description": "NVIDIA Cosmos Reason 8B - Vision Language Model for video analysis and reasoning",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",

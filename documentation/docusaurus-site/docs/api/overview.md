@@ -112,7 +112,17 @@ Many list endpoints support pagination using a token-based pattern. The followin
 | `pageSize`      | integer | Number of items per page (equivalent to `maxItems` for most endpoints). |
 | `startingToken` | string  | Base64-encoded continuation token from a previous response.             |
 
-Default and maximum values for `maxItems` and `pageSize` vary by domain. Asset, file, and metadata listings default to a page size of 100. Authorization-domain listings use larger defaults -- constraints default to `maxItems` 30000 and `pageSize` 10000; roles, tags, and user-role listings default to `maxItems` 30000 and `pageSize` 3000. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size.
+Default and maximum values for `maxItems` and `pageSize` vary by listing:
+
+| Listing                                      | `maxItems` default | `pageSize` default            | Maximum                              |
+| -------------------------------------------- | ------------------ | ----------------------------- | ------------------------------------ |
+| Assets                                       | 30,000             | 3,000                         | None                                 |
+| Asset files                                  | 10,000             | 100 (1,500 with `basic=true`) | None                                 |
+| Metadata (asset, file, database, asset link) | 1,000              | 100                           | 1,000 for each                       |
+| Constraints                                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000 |
+| Roles, tags, and user roles                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000 |
+
+A listing with a maximum rejects a larger value with `400` rather than reducing it to the maximum, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. A listing with no maximum accepts the value as given. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size — the whole set is reachable by following it whatever the page size.
 
 ### Paginated Response
 

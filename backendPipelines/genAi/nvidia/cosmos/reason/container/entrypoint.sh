@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# The upstream framework commit the image was built from, so a run's log names the inference
+# code it actually ran.
+if [ -f /opt/cosmos-reason2/VAMS_UPSTREAM_COMMIT ]; then
+    echo "cosmos-reason2 commit: $(cat /opt/cosmos-reason2/VAMS_UPSTREAM_COMMIT)"
+fi
+
 # The CUDA forward-compatibility libraries in /usr/local/cuda*/compat are deliberately NOT placed on
 # LD_LIBRARY_PATH. Forward compatibility only applies when the host driver is OLDER than the
 # container's CUDA version; the AL2023 NVIDIA AMI ships a newer driver, so a compat libcuda.so.1 that

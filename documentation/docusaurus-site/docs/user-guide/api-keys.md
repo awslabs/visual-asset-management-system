@@ -116,6 +116,8 @@ The **API Key Management** page displays all API keys in a table with the follow
 
 Use the text filter at the top of the table to search by name, user ID, or description.
 
+The table requests up to 1000 keys at a time. A deployment holding more than that pages through them with the pagination control below the table, and the header then notes that the text filter and column sorting apply to the page shown rather than to every key. To search or export across all keys, use `vamscli api-key list --auto-paginate --json-output`.
+
 <!-- The API Key Management screenshot is shown above in the Creating an API key section -->
 
 ### Updating an API key

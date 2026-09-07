@@ -189,6 +189,7 @@ uploaded. The `fileUpload` trigger type is currently supported.
 ```bash
 # List / get
 vamscli workflow trigger list -d my-db -w my-workflow
+vamscli workflow trigger list -d my-db -w my-workflow --auto-paginate
 vamscli workflow trigger get -d my-db -w my-workflow -t fileUpload
 
 # Set (create or replace): fire on *.glb uploads
@@ -209,6 +210,17 @@ vamscli workflow trigger delete -d my-db -w my-workflow -t fileUpload
 | `--input-file-filters[-file]`   | `{allow: [...], exclude: [...]}` glob/ext/path filters |
 | `--default-template-ids[-file]` | Map of `pipelineDatabaseId:pipelineId → templateId`    |
 | `--enable / --disable`          | Whether the trigger auto-fires (default enabled)       |
+
+| Option (list)      | Description                                                                    |
+| ------------------ | ------------------------------------------------------------------------------ |
+| `--page-size`      | Triggers per page (default 100, clamped to 500)                                 |
+| `--max-items`      | Maximum total triggers to fetch; applies only with `--auto-paginate`             |
+| `--starting-token` | Continuation token from a previous response's `NextToken` (manual pagination)    |
+| `--auto-paginate`  | Follow `NextToken` until every trigger has been fetched                          |
+
+A workflow may carry several triggers of one base type, so the listing serves one bounded page and
+reports a `NextToken` while more remain. Without `--auto-paginate` the human output prints that token
+so it can be followed with `--starting-token`; the two flags cannot be combined.
 
 ---
 
@@ -293,8 +305,10 @@ The listing covers executions in both directions: those that read the asset as a
 that wrote to it as their output target, merged newest-first.
 
 The two workflow filters are matched independently and AND-ed, so either narrows the list on its own.
-A workflow ID is unique only within its database, so pass both when the same ID exists in more than
-one. An ID that does not match the ID pattern returns a validation error rather than an empty list,
+A workflow ID is unique across every database, so the workflow ID alone names the workflow; the
+workflow-database filter narrows the list further. A value that is not the workflow's own database
+returns an empty list rather than an error. An ID that does not match the ID pattern returns a
+validation error rather than an empty list,
 so a typo is distinguishable from an asset that never ran that workflow.
 
 A run is listed only when you can read every asset it read and the asset it wrote to, so a run that

@@ -4,7 +4,8 @@
  */
 
 import { apiClient } from "../../../services/apiClient";
-import { toTuple, pageAll, unwrapMessage } from "./client";
+import { toTuple, toTupleWithWarnings, pageAll, unwrapMessage } from "./client";
+import type { ResultWithWarnings } from "./client";
 import type { Pipeline, PipelineCreateRequest, Template, TagSchemaField } from "../types";
 
 /**
@@ -149,12 +150,19 @@ export async function updateTemplate(
  * removes the template row, its offloaded S3 config bodies, and its tag schema — there is no archived
  * state to restore from.
  */
+/**
+ * Delete a template. The delete is never blocked, but the response carries a `warnings` array when
+ * an auto-triggered workflow's trigger still names the template as a default for this pipeline —
+ * those triggered executions fail at template resolution until the trigger picks another default.
+ * Read with `toTupleWithWarnings` because the backend puts `warnings` beside `message`, which the
+ * plain `toTuple` reader would drop.
+ */
 export async function deleteTemplate(
     databaseId: string,
     pipelineId: string,
     templateId: string
-): Promise<[boolean, any]> {
-    return toTuple(() =>
+): Promise<[boolean, ResultWithWarnings | string]> {
+    return toTupleWithWarnings(() =>
         apiClient.del(`database/${databaseId}/pipelines/${pipelineId}/templates/${templateId}`, {})
     );
 }

@@ -82,7 +82,10 @@ function validateDescriptionLength(description: string) {
     if (description === undefined) return undefined;
     const min = 4,
         max = 256;
-    return description.length >= min && description.length <= max
+    // The API removes surrounding whitespace before applying its own length constraint, so
+    // the trimmed length is what decides whether a value is accepted.
+    const trimmed = description.trim();
+    return trimmed.length >= min && trimmed.length <= max
         ? null
         : `Description to be between ${min} and ${max} characters`;
 }

@@ -2,9 +2,9 @@ name: Build and Scan for Vulnerabilities
 
 on:
     push:
-        branches: [main]
+        branches: [main, "release/**"]
     pull_request:
-        branches: [main]
+        branches: [main, "release/**"]
 
 # Least-privilege token: the build job only checks out code and uploads artifacts
 permissions:
@@ -94,11 +94,14 @@ jobs:
             #   working-directory: vams/web
             #   run: npm audit
 
-            # - name: Web test
-            #   working-directory: vams/web
-            #   env:
-            #       CI: "true"
-            #   run: npm run test
+            # The web suite runs on a PUSH to main or a release branch, not on every pull request.
+            # Scoped to pushes so PR feedback stays fast
+            - name: Web test
+              if: github.event_name == 'push'
+              working-directory: vams/web
+              env:
+                  CI: "true"
+              run: npx jest --ci
             #####
 
             - name: Web build
@@ -143,7 +146,40 @@ jobs:
                   input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
             #####
-            #- name: run checks
-            #  working-directory: vams/backend
-            #  run: make all
+            # The backend suite runs on a PUSH to main or a release branch.
+            #
+            # `pytest` directly rather than `make all`: that target chains install + flake8 + mypy +
+            # coverage, and its sibling `test` target invokes `ptw` — pytest-WATCH, which never exits and
+            # would hang a runner. Running the suite is the property being restored here; adding lint and
+            # type-check in the same step would make an unrelated mypy finding read as a test regression.
+            #
+            # `backendPipelines` stays out deliberately. Those suites must be invoked one directory per
+            # process: 12 test-module basenames are duplicated across pipeline `lambda/tests/` dirs.
+            # Adding them needs a matrix over ~30 directories, which is a separate change.
+            # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
+            # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
+            # because it is exported from a lock resolved under that constraint. Under the job's 3.12.7
+            # interpreter all 46 markers evaluate FALSE, so `pip install -r requirements-dev.txt` installs
+            # nothing, exits 0, and pytest then fails at collection — a green install followed by an
+            # inexplicable failure.
+            #
+            # Switched here rather than job-wide: these are the LAST steps in the job, so nothing after
+            # them can be affected, and the earlier VamsCLI/ash/synth steps keep the interpreter they
+            # already pass on. (VamsCLI declares >= 3.12, so it would tolerate 3.13 too — but changing
+            # what currently passes is not part of restoring the backend suite.)
+            - name: Setup Python for the backend suite
+              if: github.event_name == 'push'
+              uses: actions/setup-python@v4
+              with:
+                  python-version: 3.13
+
+            - name: Install backend dependencies
+              if: github.event_name == 'push'
+              working-directory: vams/backend
+              run: pip install -r requirements-dev.txt
+
+            - name: Run backend pytest tests
+              if: github.event_name == 'push'
+              working-directory: vams/backend
+              run: pytest -q --tb=short
             #####

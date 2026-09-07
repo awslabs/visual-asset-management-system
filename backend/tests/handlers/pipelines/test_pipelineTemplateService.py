@@ -5,11 +5,14 @@
 Parent-pipeline Tier-2 auth, template hybrid inline storage, and tag-schema validation are
 exercised; CasbinEnforcer/request_to_claims/tables/default-bucket are patched."""
 
+import io
 import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.backend.common.workflows.defaultBucket import default_bucket_key
+from backend.backend.handlers.pipelines import pipelineTemplateService as pts
 from backend.backend.handlers.pipelines.pipelineTemplateService import lambda_handler
 
 MOD = "backend.backend.handlers.pipelines.pipelineTemplateService"
@@ -33,6 +36,12 @@ def _enforcer(api=True, obj=True):
 
 
 PIPELINE_ITEM = {"databaseId": "db1", "pipelineId": "pipe1", "pipelineName": "P"}
+# The default asset bucket as resolve_default_bucket returns it. Registered at the bucket root,
+# so a stored (relative) key and its full bucket key coincide.
+DEFAULT_BUCKET = {"bucketId": "b-id", "bucketName": "b", "baseAssetsPrefix": ""}
+# The same bucket registered under a non-root prefix (the all-imports / external-bucket shape): the
+# area VAMS owns is the prefix, not the bucket root.
+PREFIXED_BUCKET = {"bucketId": "b-id", "bucketName": "b", "baseAssetsPrefix": "vamsroot/"}
 BASE_PATH = "/database/db1/pipelines/pipe1/templates"
 BASE_PARAMS = {"databaseId": "db1", "pipelineId": "pipe1"}
 
@@ -70,7 +79,7 @@ class TestTemplateService:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -80,7 +89,7 @@ class TestTemplateService:
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
         mock_get_row.return_value = None  # no existing template
-        mock_bucket.return_value = "default-bucket"
+        mock_bucket.return_value = DEFAULT_BUCKET
         table = MagicMock()
         mock_table.return_value = table
         body = {"templateName": "conv-glb-obj", "configFormat": "yaml",
@@ -96,7 +105,7 @@ class TestTemplateService:
     @patch(f"{MOD}._tag_schema_table")
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -106,7 +115,7 @@ class TestTemplateService:
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
         mock_get_row.return_value = None
-        mock_bucket.return_value = "default-bucket"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_tmpl_table.return_value = MagicMock()
         tag_table = MagicMock()
         tag_table.query.return_value = {"Items": []}  # no existing tag-schema row
@@ -118,7 +127,7 @@ class TestTemplateService:
         # tag schema row persisted
         tag_table.put_item.assert_called_once()
 
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -127,7 +136,7 @@ class TestTemplateService:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         tmpl_table = MagicMock()
         with patch(f"{MOD}._get_template_row", return_value=None), \
                 patch(f"{MOD}._templates_table", return_value=tmpl_table), \
@@ -142,7 +151,7 @@ class TestTemplateService:
 
     @patch(f"{MOD}._get_template_row")
     @patch(f"{MOD}._tag_schema_table")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -151,7 +160,7 @@ class TestTemplateService:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_get_row.return_value = {"templateId": "tmpl1"}  # template exists
         tag_table = MagicMock()
         tag_table.query.return_value = {"Items": []}  # no existing tag-schema row
@@ -168,7 +177,7 @@ class TestTemplateService:
 
     @patch(f"{MOD}._get_template_row")
     @patch(f"{MOD}._tag_schema_table")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -179,7 +188,7 @@ class TestTemplateService:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_get_row.return_value = {"templateId": "tmpl1"}
         owner = "db1:pipe1:tmpl1"
         tag_table = MagicMock()
@@ -214,7 +223,7 @@ class TestTemplateService:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -224,7 +233,7 @@ class TestTemplateService:
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
         mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1"}
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         table = MagicMock()
         table.query.return_value = {"Items": []}
         mock_table.return_value = table
@@ -243,7 +252,7 @@ class TestDefaultTemplate:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -253,7 +262,7 @@ class TestDefaultTemplate:
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
         mock_get_row.return_value = None
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         table = MagicMock()
         # One OTHER template is currently the default; it must be unset.
         table.query.return_value = {
@@ -278,7 +287,7 @@ class TestDefaultTemplate:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -288,7 +297,7 @@ class TestDefaultTemplate:
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
         mock_get_row.return_value = None
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         table = MagicMock()
         mock_table.return_value = table
         body = {"templateName": "t", "configFormat": "yaml", "configBody": "x: 1"}
@@ -305,7 +314,7 @@ class TestUpdateConfigBodyJsonValidation:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -318,7 +327,7 @@ class TestUpdateConfigBodyJsonValidation:
         # Stored template is json-format; the update omits configFormat.
         mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1",
                                      "configFormat": "json", "bodyStorage": "inline"}
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_table.return_value = MagicMock()
         path = BASE_PATH + "/tmpl1"
         params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
@@ -328,7 +337,7 @@ class TestUpdateConfigBodyJsonValidation:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -339,7 +348,7 @@ class TestUpdateConfigBodyJsonValidation:
         mock_parent.return_value = (True, PIPELINE_ITEM)
         mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1",
                                      "configFormat": "json", "bodyStorage": "inline"}
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_table.return_value = MagicMock()
         path = BASE_PATH + "/tmpl1"
         params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
@@ -361,7 +370,7 @@ class TestShrinkToInlineCleanupOrdering:
 
     def _patches(self):
         return (patch(f"{MOD}._get_template_row", return_value=dict(self.S3_ROW)),
-                patch(f"{MOD}._default_bucket_name", return_value="b"),
+                patch(f"{MOD}._default_bucket", return_value=DEFAULT_BUCKET),
                 patch(f"{MOD}._rehydrate_template",
                       return_value={"configBody": '{"big": 1}', "webFormJson": ""}))
 
@@ -566,7 +575,7 @@ class TestGlobalScopeManagement:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._pipeline_table")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -577,7 +586,7 @@ class TestGlobalScopeManagement:
         mock_enforcer.return_value = _action_enforcer({"GET", "POST"})  # run-only role
         mock_pipeline_table.return_value = MagicMock(
             get_item=MagicMock(return_value={"Item": self.GLOBAL_PIPELINE}))
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_get_row.return_value = None
         table = MagicMock()
         mock_table.return_value = table
@@ -588,7 +597,7 @@ class TestGlobalScopeManagement:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._pipeline_table")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -599,7 +608,7 @@ class TestGlobalScopeManagement:
         mock_enforcer.return_value = _action_enforcer({"GET", "POST", "PUT", "DELETE"})
         mock_pipeline_table.return_value = MagicMock(
             get_item=MagicMock(return_value={"Item": self.GLOBAL_PIPELINE}))
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_get_row.return_value = None
         table = MagicMock()
         table.query.return_value = {"Items": []}
@@ -659,7 +668,7 @@ class TestTagSchemaRouteMatching:
     templateId is literally 'tagSchema' reaches the template routes."""
 
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._tag_schema_table")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
@@ -669,7 +678,7 @@ class TestTagSchemaRouteMatching:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_tag_table.return_value = MagicMock(query=MagicMock(return_value={"Items": []}))
         mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1",
                                      "templateId": "tagSchema", "configFormat": "json",
@@ -689,7 +698,7 @@ class TestTagSchemaShrinkToInlineCleanup:
     @patch(f"{MOD}.s3_client")
     @patch(f"{MOD}._get_template_row")
     @patch(f"{MOD}._tag_schema_table")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -698,7 +707,7 @@ class TestTagSchemaShrinkToInlineCleanup:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_get_row.return_value = {"templateId": "tmpl1"}
         owner = "db1:pipe1:tmpl1"
         prior_key = "pipelines/templates/db1/pipe1/tmpl1/tagSchema.json"
@@ -730,7 +739,7 @@ class TestFormatOnlyUpdateRevalidation:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -739,7 +748,7 @@ class TestFormatOnlyUpdateRevalidation:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_get_row.return_value = dict(self.ROW)
         table = MagicMock()
         mock_table.return_value = table
@@ -751,7 +760,7 @@ class TestFormatOnlyUpdateRevalidation:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -760,7 +769,7 @@ class TestFormatOnlyUpdateRevalidation:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         row = dict(self.ROW)
         row["configBody"] = '{"a": 1}'
         mock_get_row.return_value = row
@@ -771,7 +780,7 @@ class TestFormatOnlyUpdateRevalidation:
 
     @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._get_template_row")
-    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._default_bucket")
     @patch(f"{MOD}._enforce_parent_pipeline")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -782,7 +791,7 @@ class TestFormatOnlyUpdateRevalidation:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_bucket.return_value = "b"
+        mock_bucket.return_value = DEFAULT_BUCKET
         mock_get_row.return_value = dict(self.ROW)
         mock_table.return_value = MagicMock()
         resp = lambda_handler(
@@ -881,3 +890,170 @@ class TestTagSchemaRetypeParityAcrossBothRoutes:
                          (mock_enforcer, mock_claims, mock_parent, mock_get_row, mock_rehydrate))
         assert resp["statusCode"] != 400, (
             f"an integer-typed PARAM keeps '{self.UNQUOTED_BODY}' valid, so it must be allowed: {resp}")
+
+
+@pytest.mark.unit
+class TestOffloadedKeysCarryTheDefaultBucketPrefix:
+    """Every S3 call for an offloaded body or tag schema joins the stored key to the default bucket's
+    baseAssetsPrefix, so the write, this handler's own read, and the trigger service — which reads the
+    same tag-schema object through defaultBucket.default_bucket_key — address ONE object.
+
+    The stored row keeps the RELATIVE key, so where the bucket is registered stays out of the record.
+    """
+
+    CB_KEY = "pipelines/templates/db1/pipe1/tmpl1/configBody"
+    WF_KEY = "pipelines/templates/db1/pipe1/tmpl1/webForm.json"
+    TAG_KEY = "pipelines/templates/db1/pipe1/tmpl1/tagSchema.json"
+    # Above the 320KB inline threshold, so both bodies offload to the default bucket.
+    BIG_BODY = "big: " + ("x" * (330 * 1024))
+    BIG_SCHEMA = [{"tagKey": "prompt", "type": "string", "default": "y" * (330 * 1024)}]
+
+    @staticmethod
+    def _stream(text):
+        return lambda **kwargs: {"Body": io.BytesIO(text.encode("utf-8"))}
+
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._default_bucket", return_value=PREFIXED_BUCKET)
+    def test_body_write_prefixes_the_key_and_stores_it_relative(self, _mock_bucket, mock_s3):
+        storage = pts._store_template_bodies("db1", "pipe1", "tmpl1", self.BIG_BODY, "")
+        assert storage["bodyStorage"] == "s3"
+        # The row carries the prefix-independent key ...
+        assert storage["configBodyS3Key"] == self.CB_KEY
+        assert storage["webFormS3Key"] == self.WF_KEY
+        # ... and the object lands inside the area VAMS owns in the bucket.
+        written = [(c.kwargs["Bucket"], c.kwargs["Key"]) for c in mock_s3.put_object.call_args_list]
+        assert written == [("b", "vamsroot/" + self.CB_KEY), ("b", "vamsroot/" + self.WF_KEY)]
+
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._default_bucket", return_value=PREFIXED_BUCKET)
+    def test_body_read_uses_the_key_the_write_used(self, _mock_bucket, mock_s3):
+        mock_s3.get_object.side_effect = self._stream("stored")
+        row = {"bodyStorage": "s3", "configBodyS3Key": self.CB_KEY, "webFormS3Key": self.WF_KEY}
+        bodies = pts._rehydrate_template(row)
+        assert bodies["configBody"] == "stored" and bodies["webFormJson"] == "stored"
+        read = [c.kwargs["Key"] for c in mock_s3.get_object.call_args_list]
+        assert read == ["vamsroot/" + self.CB_KEY, "vamsroot/" + self.WF_KEY]
+
+    @patch(f"{MOD}._tag_schema_table")
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._default_bucket", return_value=PREFIXED_BUCKET)
+    def test_tag_schema_object_key_matches_the_trigger_service(self, _mock_bucket, mock_s3,
+                                                               mock_tag_table):
+        tag_table = MagicMock()
+        tag_table.query.return_value = {"Items": []}
+        mock_tag_table.return_value = tag_table
+        assert pts._store_tag_schema("db1", "pipe1", "tmpl1", self.BIG_SCHEMA, "u") == []
+        saved = tag_table.put_item.call_args.kwargs["Item"]
+        assert saved["bodyStorage"] == "s3" and saved["fieldsS3Key"] == self.TAG_KEY
+        # workflowTriggerService._load_template_tag_schema_fields reads exactly this expression, and a
+        # miss there is swallowed — the headless-template check silently stops running.
+        assert mock_s3.put_object.call_args.kwargs["Key"] == default_bucket_key(
+            PREFIXED_BUCKET, saved["fieldsS3Key"])
+
+    @patch(f"{MOD}._tag_schema_table")
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._default_bucket", return_value=PREFIXED_BUCKET)
+    def test_tag_schema_read_uses_the_prefixed_key(self, _mock_bucket, mock_s3, mock_tag_table):
+        mock_s3.get_object.side_effect = self._stream(json.dumps([{"tagKey": "prompt"}]))
+        tag_table = MagicMock()
+        tag_table.query.return_value = {"Items": [{
+            "tagSchemaId": "id", "pipelineDatabaseId:pipelineId:templateId": "db1:pipe1:tmpl1",
+            "bodyStorage": "s3", "fieldsS3Key": self.TAG_KEY,
+        }]}
+        mock_tag_table.return_value = tag_table
+        fields = pts._load_tag_schema_fields("db1", "pipe1", "tmpl1")
+        assert [f["tagKey"] for f in fields] == ["prompt"]
+        assert mock_s3.get_object.call_args.kwargs["Key"] == "vamsroot/" + self.TAG_KEY
+
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._default_bucket", return_value=PREFIXED_BUCKET)
+    def test_cleanup_deletes_the_prefixed_key(self, _mock_bucket, mock_s3):
+        # A delete addressed at the bucket root would leave the real object behind and orphaned.
+        pts._delete_offloaded_objects({"bodyStorage": "s3", "configBodyS3Key": self.CB_KEY,
+                                       "webFormS3Key": self.WF_KEY})
+        pts._delete_tag_schema_object(self.TAG_KEY)
+        deleted = [c.kwargs["Key"] for c in mock_s3.delete_object.call_args_list]
+        assert deleted == ["vamsroot/" + self.CB_KEY, "vamsroot/" + self.WF_KEY,
+                           "vamsroot/" + self.TAG_KEY]
+
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._default_bucket", return_value=DEFAULT_BUCKET)
+    def test_root_registered_bucket_still_uses_the_bare_key(self, _mock_bucket, mock_s3):
+        # The positive control, and the standard deployment: with the default bucket registered at the
+        # root the joined key IS the stored key, so no existing object moves.
+        mock_s3.get_object.side_effect = self._stream("stored")
+        storage = pts._store_template_bodies("db1", "pipe1", "tmpl1", self.BIG_BODY, "")
+        written = [c.kwargs["Key"] for c in mock_s3.put_object.call_args_list]
+        assert written == [self.CB_KEY, self.WF_KEY]
+        pts._rehydrate_template({"bodyStorage": "s3", "configBodyS3Key": storage["configBodyS3Key"],
+                                 "webFormS3Key": storage["webFormS3Key"]})
+        read = [c.kwargs["Key"] for c in mock_s3.get_object.call_args_list]
+        assert read == [self.CB_KEY, self.WF_KEY]
+
+
+@pytest.mark.unit
+class TestDeleteTemplateTriggerReferenceWarnings:
+    """Deleting a template a trigger still names as a default succeeds and returns a non-blocking
+    `warnings` list naming the referencing workflow(s).
+
+    The reference lives on the trigger row, which this handler does not own, so the delete is not
+    refused; without the warning the operator gets no signal at all — a triggered run that still names
+    the deleted template is rejected at template resolution and the dispatcher only logs it."""
+
+    ROW = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1"}
+    PATH = BASE_PATH + "/tmpl1"
+    PARAMS = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
+
+    @staticmethod
+    def _triggers_table(referenced_template_id):
+        table = MagicMock()
+        table.query.return_value = {"Items": [{
+            "workflowDatabaseId": "wfdb", "workflowId": "wf1",
+            "triggerType": "fileUpload#nightly", "triggerBaseType": "fileUpload",
+            "triggerConfig": {"defaultTemplateIds": {"db1:pipe1": referenced_template_id}},
+        }]}
+        return table
+
+    def _delete(self, referenced_template_id, templates_table):
+        with patch(f"{MOD}._get_template_row", return_value=dict(self.ROW)), \
+                patch(f"{MOD}._templates_table", return_value=templates_table), \
+                patch(f"{MOD}._triggers_table",
+                      return_value=self._triggers_table(referenced_template_id)), \
+                patch(f"{MOD}._tag_schema_table",
+                      return_value=MagicMock(query=MagicMock(return_value={"Items": []}))):
+            return lambda_handler(_event("DELETE", self.PATH, self.PARAMS), MagicMock())
+
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_referenced_template_delete_warns_and_still_deletes(self, mock_enforcer, mock_claims,
+                                                                mock_parent):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        resp = self._delete("tmpl1", table)
+        # A DELETE that succeeds today keeps succeeding; the reference is reported, not enforced.
+        assert resp["statusCode"] == 200
+        table.delete_item.assert_called_once()
+        body = json.loads(resp["body"])
+        assert body["message"] == "Template deleted"
+        assert len(body["warnings"]) == 1
+        assert "wfdb:wf1" in body["warnings"][0]
+        assert "fileUpload#nightly" in body["warnings"][0]
+
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_unreferenced_template_delete_carries_no_warnings(self, mock_enforcer, mock_claims,
+                                                              mock_parent):
+        # The positive control: the trigger names a DIFFERENT template, so a clean delete response is
+        # unchanged (no warnings key at all).
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        resp = self._delete("some-other-template", table)
+        assert resp["statusCode"] == 200
+        table.delete_item.assert_called_once()
+        assert "warnings" not in json.loads(resp["body"])

@@ -12,7 +12,9 @@ aws_lambda_powertools, extra='ignore').
 from typing import Any, Dict, List, Optional
 
 from pydantic import Field
-from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
+from common.validators import trim_name
+from models.pipelines import reject_control_characters
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="WorkflowV2Models")
@@ -194,23 +196,6 @@ def _validate_trigger_default_template_ids(default_template_ids):
             _validate_id(template_id)
 
 
-def _validate_single_line_text(values):
-    """Reject control characters / line breaks in the workflow's ABAC-visible name fields, using the
-    shared rule the pipeline models apply to their equivalents.
-
-    Scoped to workflowName and category because those are the ABAC CONSTRAINT fields (surfaced as
-    `name` / `category` on the Tier-2 Casbin object): a `^<value>$` policy rule matches a trailing
-    newline in Python, so a distinct stored name would satisfy a grant written for another.
-
-    `description` is deliberately NOT included. It is not an ABAC constraint field, so it gains no
-    security benefit, and the web offers it as a multi-line textarea — guarding it rejected exactly
-    what that control produces. Log integrity is not an argument for it either: auditLogging writes
-    values through json.dumps, which escapes a newline rather than emitting one."""
-    from models.pipelines import validate_no_control_characters
-    for field in ("workflowName", "category"):
-        validate_no_control_characters(values.get(field), field)
-
-
 class WorkflowSystemConfigModel(BaseModel, extra='ignore'):
     """Workflow system-config block."""
     inputFileArity: str = "one"
@@ -286,6 +271,12 @@ class SpecifiedPipelineInput(BaseModel, extra='ignore'):
     jobName: Optional[str] = Field("", max_length=64)
     defaultTemplateId: Optional[str] = Field("", max_length=64)
 
+    # Ids trim before the id-format check below, so a padded spelling resolves the row it names
+    # rather than being rejected as a distinct value.
+    _trim_names = validator(
+        'pipelineId', 'pipelineDatabaseId', 'jobName', 'defaultTemplateId',
+        pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_ids(cls, values):
         # pipelineId (and pipelineDatabaseId when present) are used as DynamoDB key values to
@@ -322,6 +313,19 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
     subDashboardUrl: Optional[str] = Field("", max_length=2048)
     enabled: Optional[bool] = True
 
+    # workflowName and category are the ABAC CONSTRAINT fields (surfaced as `name` / `category` on
+    # the Tier-2 Casbin object) and both reach single-line log entries, so a control character in
+    # either is refused rather than normalized away. `description` is deliberately excluded — not an
+    # ABAC field, and the web offers it as a multi-line textarea.
+    _reject_control_chars = validator(
+        'workflowName', 'category', pre=True, allow_reuse=True)(reject_control_characters)
+    # Names and ids then trim their surrounding whitespace; interior whitespace is preserved.
+    # workflowName and category carry no regex, so ' Prod ' and 'Prod' would otherwise be two rows a
+    # reader cannot tell apart, and a grant written for one would miss the other.
+    _trim_names = validator(
+        'databaseId', 'workflowId', 'workflowName', 'category',
+        pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         _validate_id(values.get("databaseId"), allow_global=True)
@@ -337,9 +341,6 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
         _validate_output_target(values.get("systemConfig"))
         _validate_system_config_shapes(values.get("systemConfig"))
         _validate_subdashboard_url(values.get("subDashboardUrl"))
-        # workflowName and category are ABAC constraint fields (surfaced as `name` / `category` on the
-        # Tier-2 Casbin object) and both appear in single-line log entries.
-        _validate_single_line_text(values)
         return values
 
 
@@ -355,6 +356,12 @@ class UpdateWorkflowRequestModel(BaseModel, extra='ignore'):
     enabled: Optional[bool] = None
     # Clearing this is the path re-registration of a built-in takes to restore an archived row.
     archived: Optional[bool] = None
+
+    # The same two rules as the create model, in the same order, so the paths agree on what is
+    # refused and on the stored spelling.
+    _reject_control_chars = validator(
+        'workflowName', 'category', pre=True, allow_reuse=True)(reject_control_characters)
+    _trim_names = validator('workflowName', 'category', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -372,7 +379,6 @@ class UpdateWorkflowRequestModel(BaseModel, extra='ignore'):
             _validate_output_target(cfg)
             _validate_system_config_shapes(cfg)
         _validate_subdashboard_url(values.get("subDashboardUrl"))
-        _validate_single_line_text(values)
         return values
 
 
@@ -479,3 +485,4 @@ class TriggerResponseModel(BaseModel, extra='ignore'):
 class GetTriggersResponseModel(BaseModel, extra='ignore'):
     """Response model for listing a workflow's triggers."""
     Items: List[TriggerResponseModel] = []
+    NextToken: Optional[str] = None

@@ -9,6 +9,14 @@ A tag/tag-type is *global* when its ``databaseId`` is absent or the sentinel
 multiple databases (this is why ``name_used_by_any_database`` exists — a GLOBAL
 name may not collide with a database-specific one). Assets still reference tags
 by bare name, resolved within the asset's own database plus GLOBAL.
+
+A listing selects rows by partition rather than by a per-item visibility rule:
+``?databaseId=X`` queries partition X alone and returns no GLOBAL rows,
+``?scope=global`` queries the GLOBAL partition alone, and ``?scope=all`` (or no
+scope) scans every partition — see ``_query_all_in_partition`` in
+handlers/tags/tagService.py and handlers/tagTypes/tagTypeService.py. The
+"own database plus GLOBAL" union is the asset-resolution rule only, and
+createAsset.py reads both scopes explicitly for it.
 """
 
 from typing import Optional
@@ -26,25 +34,6 @@ def normalize_scope(database_id: Optional[str]) -> str:
     if database_id is None or database_id == "":
         return GLOBAL_SCOPE
     return database_id
-
-
-def is_visible_in_scope(
-    entity_database_id: Optional[str],
-    requested_database_id: Optional[str],
-    global_only: bool = False,
-) -> bool:
-    """Whether an entity with entity_database_id is visible for a request scope.
-
-    - global_only=True: only global entities are visible.
-    - requested_database_id set to X: global entities + entities scoped to X.
-    - requested_database_id None (admin "all" view): everything visible.
-    """
-    scope = normalize_scope(entity_database_id)
-    if global_only:
-        return scope == GLOBAL_SCOPE
-    if requested_database_id is None:
-        return True
-    return scope == GLOBAL_SCOPE or scope == requested_database_id
 
 
 def verify_database_exists(database_id: str, database_table) -> bool:

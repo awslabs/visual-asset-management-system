@@ -11,6 +11,7 @@ locally but the lambda execution continues without disruption.
 
 import json
 import boto3
+from botocore.config import Config
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from handlers.auth import request_to_claims
@@ -20,9 +21,11 @@ from common.resourceNames import ResourceKeys, get_log_group_name
 # Initialize logger for audit logging module
 logger = safeLogger(service_name="AuditLogging")
 
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+
 # Initialize CloudWatch Logs client
 try:
-    cloudwatch_logs = boto3.client('logs')
+    cloudwatch_logs = boto3.client('logs', config=retry_config)
 except Exception as e:
     logger.exception(f"Failed to initialize CloudWatch Logs client: {e}")
     cloudwatch_logs = None
@@ -46,6 +49,61 @@ AUDIT_EVENT_TRUNCATION_MARKER = " ...[truncated]"
 # the rest carry a reference to it, which keeps a write proportional to the number of entries.
 AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES = AUDIT_BATCH_MAX_BYTES
 AUDIT_EVENT_ECHO_REFERENCE = " --- [event: <shared with the first entry written at this timestamp>]"
+
+# The log stream this container has created in each audit log group. The stream name is the current
+# date, so an entry ages out at the day boundary and CreateLogStream -- an account-wide 50 TPS
+# quota -- is called once per group per day instead of once per audit write. A failed write drops
+# the entry, so a stream that went away is created again by the write after it.
+_created_log_streams: Dict[str, str] = {}
+
+# The nine audit log groups, resolved once per container at import (Rule 10) rather than on each
+# write. A name absent from SSM is recorded as None instead of raising: this module's contract is
+# that a failed audit write never disrupts the caller, and a hard failure here would turn one
+# unpublished parameter into a cold-start 500 on every request. `_audit_log_group()` retries a name
+# that did not resolve, so a transient SSM failure at import does not silence the container's audit
+# trail for its whole lifetime.
+_AUDIT_LOG_GROUP_KEYS = (
+    ResourceKeys.AUDIT_LOG_AUTHENTICATION,
+    ResourceKeys.AUDIT_LOG_AUTHORIZATION,
+    ResourceKeys.AUDIT_LOG_FILEUPLOAD,
+    ResourceKeys.AUDIT_LOG_FILEDOWNLOAD,
+    ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED,
+    ResourceKeys.AUDIT_LOG_AUTHOTHER,
+    ResourceKeys.AUDIT_LOG_AUTHCHANGES,
+    ResourceKeys.AUDIT_LOG_ACTIONS,
+    ResourceKeys.AUDIT_LOG_ERRORS,
+)
+
+_audit_log_group_names: Dict[str, Optional[str]] = {}
+
+
+def _resolve_audit_log_group(key) -> Optional[str]:
+    """Resolve one audit log-group name, returning None instead of raising."""
+    try:
+        return get_log_group_name(key)
+    except Exception as e:
+        logger.error(f"Audit log group name not resolved for {key.param_key}: {e}")
+        return None
+
+
+for _key in _AUDIT_LOG_GROUP_KEYS:
+    _audit_log_group_names[_key.param_key] = _resolve_audit_log_group(_key)
+
+
+def _audit_log_group(key) -> Optional[str]:
+    """Return the container's resolved name for an audit log group.
+
+    A hit is a dict lookup, so an audited request makes no SSM call. A name that did not resolve at
+    import is retried here and cached on success; the resolver's own negative record bounds the cost
+    of a genuinely unpublished parameter to one sweep per its missing-key window per container.
+    """
+    name = _audit_log_group_names.get(key.param_key)
+    if name:
+        return name
+    name = _resolve_audit_log_group(key)
+    if name:
+        _audit_log_group_names[key.param_key] = name
+    return name
 
 
 def _extract_user_context(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -250,18 +308,20 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
         # Create log stream name based on current date
         log_stream_name = datetime.utcnow().strftime("%Y/%m/%d")
 
-        # Ensure log stream exists (create if it doesn't)
-        try:
-            cloudwatch_logs.create_log_stream(
-                logGroupName=log_group_name,
-                logStreamName=log_stream_name
-            )
-        except cloudwatch_logs.exceptions.ResourceAlreadyExistsException:
-            # Log stream already exists, which is fine
-            pass
-        except Exception as e:
-            logger.exception(f"Failed to create log stream {log_stream_name} in {log_group_name}: {e}")
-            return
+        # Ensure log stream exists (create if it doesn't), once per group per day per container
+        if _created_log_streams.get(log_group_name) != log_stream_name:
+            try:
+                cloudwatch_logs.create_log_stream(
+                    logGroupName=log_group_name,
+                    logStreamName=log_stream_name
+                )
+            except cloudwatch_logs.exceptions.ResourceAlreadyExistsException:
+                # Log stream already exists, which is fine
+                pass
+            except Exception as e:
+                logger.exception(f"Failed to create log stream {log_stream_name} in {log_group_name}: {e}")
+                return
+            _created_log_streams[log_group_name] = log_stream_name
 
         #Add event at the end of each message.
         event_suffix = f" --- [event: {json.dumps(masked_event)}]" if masked_event else ""
@@ -290,6 +350,9 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                     logEvents=batch
                 )
             except Exception as e:
+                # The stream may have gone away under the entry recorded above, so the entry is
+                # dropped and the write after this one creates the stream again.
+                _created_log_streams.pop(log_group_name, None)
                 logger.exception(
                     f"Failed to write {len(batch)} audit entries to CloudWatch log group "
                     f"{log_group_name}: {e}"
@@ -310,7 +373,7 @@ def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: 
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHENTICATION)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHENTICATION)
         if not log_group_name:
             logger.error("AUDIT_LOG_AUTHENTICATION resource name not resolved")
             return
@@ -336,7 +399,7 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
             logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
             return
@@ -381,7 +444,7 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
             logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
             return
@@ -419,7 +482,7 @@ def log_file_upload(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEUPLOAD)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEUPLOAD)
         if not log_group_name:
             logger.error("AUDIT_LOG_FILEUPLOAD resource name not resolved")
             return
@@ -468,7 +531,7 @@ def log_file_download(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
         if not log_group_name:
             logger.error("AUDIT_LOG_FILEDOWNLOAD resource name not resolved")
             return
@@ -513,7 +576,7 @@ def log_file_download_bulk(
         custom_data_base: Data common to every entry (e.g. downloadType)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
         if not log_group_name:
             logger.error("AUDIT_LOG_FILEDOWNLOAD resource name not resolved")
             return
@@ -560,7 +623,7 @@ def log_file_download_streamed(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED)
         if not log_group_name:
             logger.error("AUDIT_LOG_FILEDOWNLOAD_STREAMED resource name not resolved")
             return
@@ -597,7 +660,7 @@ def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Opti
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHOTHER)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHOTHER)
         if not log_group_name:
             logger.error("AUDIT_LOG_AUTHOTHER resource name not resolved")
             return
@@ -623,7 +686,7 @@ def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Op
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHCHANGES)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHCHANGES)
         if not log_group_name:
             logger.error("AUDIT_LOG_AUTHCHANGES resource name not resolved")
             return
@@ -649,7 +712,7 @@ def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optiona
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_ACTIONS)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_ACTIONS)
         if not log_group_name:
             logger.error("AUDIT_LOG_ACTIONS resource name not resolved")
             return
@@ -675,7 +738,7 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_ERRORS)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_ERRORS)
         if not log_group_name:
             logger.error("AUDIT_LOG_ERRORS resource name not resolved")
             return
@@ -714,7 +777,7 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         failure_reason: Generic failure reason (optional, for failures only)
     """
     try:
-        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
             logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
             return

@@ -23,7 +23,10 @@ RUN apt-get update && apt-get install -y \
 RUN git lfs install
 
 # Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+# The installer URL carries the version, so a rebuild installs the CLI this image was built and
+# validated with rather than whatever is current. Override with --build-arg to move it.
+ARG AWS_CLI_VERSION=2.36.39
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
     unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
@@ -31,8 +34,19 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
 
-# Clone cosmos-reason2 repository
-RUN git clone https://github.com/nvidia-cosmos/cosmos-reason2.git /opt/cosmos-reason2
+# Clone cosmos-reason2, pinned to a commit. A clone with no ref makes the framework version part
+# of WHEN the image was built rather than of what VAMS commit built it, and `uv sync --locked`
+# below resolves against the lockfile AT this commit. Override with --build-arg to move the pin; a
+# full 40-character commit id is required, since the rev-parse check below rejects a branch or tag
+# name (both of which move).
+ARG COSMOS_REASON_REPO=https://github.com/nvidia-cosmos/cosmos-reason2.git
+ARG COSMOS_REASON_COMMIT=a3b4a1db4065fe13c4b1f4d2fb8605bad647f4b9
+RUN git clone ${COSMOS_REASON_REPO} /opt/cosmos-reason2 && \
+    cd /opt/cosmos-reason2 && \
+    git checkout --detach ${COSMOS_REASON_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${COSMOS_REASON_COMMIT}" && \
+    git rev-parse HEAD > /opt/cosmos-reason2/VAMS_UPSTREAM_COMMIT && \
+    git log -1 --format="cosmos-reason2 %H %ai %s"
 
 # Install Python dependencies using uv
 WORKDIR /opt/cosmos-reason2

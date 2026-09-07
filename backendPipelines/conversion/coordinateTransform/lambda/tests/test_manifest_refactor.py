@@ -260,8 +260,9 @@ class TestConstructPipelineReadsFromS3:
         assert params["sourceCrs"] == "EPSG:4326"
         assert params["targetCrs"] == "EPSG:3857"
         assert params["outputFormats"] == ["las", "ply"]
-        # The container consumes the legacy-projected metadata view.
-        assert json.loads(definition["inputMetadata"])["VAMS"]["assetMetadata"]["targetCrs"] == "EPSG:3857"
+        # The legacy-projected metadata view is resolved into the parameters above; its content is
+        # not forwarded in the payload.
+        assert definition["inputMetadata"] == ""
 
     def test_grouped_metadata_envelope_for_other_asset_does_not_override(self):
         mod = self._load()

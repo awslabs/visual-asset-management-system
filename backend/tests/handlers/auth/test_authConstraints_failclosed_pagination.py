@@ -23,12 +23,20 @@ Three defects, the first two order-dependent:
     this before 158 would have converted a cold-start failure into a per-request write failure, so
     158 lands first and makes the ``roles_table is None`` branch unreachable.
 
-*   **S2-BACKEND-029** -- ``NextToken`` was emitted as the raw DynamoDB ``LastEvaluatedKey`` dict but
-    consumed as a ``startingToken`` string. Every client serializes the object on the way back
-    (``apiClient.buildUrl`` renders it ``"[object Object]"``), that string reached
-    ``ExclusiveStartKey``, boto3 raised ``ParamValidationError`` and the handler answered a generic
-    400. The token is now the opaque base64 of the ``LastEvaluatedKey`` that the asset and metadata
-    listings already use, decoded back to a dict on input.
+*   **S2-BACKEND-029** -- the listing paged at the DynamoDB cursor over DENORMALIZED rows while
+    reporting deduplicated constraints, which broke it in two ways. ``NextToken`` was emitted as the
+    raw ``LastEvaluatedKey`` dict but consumed as a ``startingToken`` string, so every client
+    serialized the object on the way back (``apiClient.buildUrl`` renders it ``"[object Object]"``),
+    that string reached ``ExclusiveStartKey``, boto3 raised ``ParamValidationError`` and the handler
+    answered a generic 400. And deduplication ran over the page just read, so ``pageSize`` counted
+    rows rather than constraints and a constraint whose ``#group#``/``#user#`` rows landed on more
+    than one page was emitted by each of them.
+
+    The listing reads the constraints table to exhaustion, dedups across the whole set, orders it by
+    base constraintId and serves an offset slice. ``NextToken`` is the opaque base64 of the next
+    decimal offset -- the convention ``paginate_metadata_records`` uses -- and ``pageSize`` counts
+    constraints. The ordering is load-bearing: every page re-reads the table and scan order is not
+    contractual, so without it an offset would drop and repeat items.
 
 Every deny assertion here is paired with a positive control on the same fixture, because "denied" is
 also satisfied by a handler that denies everything. The Tier-1 tests assert the enforcer was never
@@ -51,6 +59,7 @@ from unittest.mock import MagicMock, patch
 from backend.backend.handlers.auth import request_to_claims as real_request_to_claims
 from backend.backend.handlers.auth import authConstraintsService as svc
 from backend.backend.handlers.auth.authConstraintsService import lambda_handler
+from backend.tests.pagingStub import BareMockReader, Pager
 
 
 _CLAIMS = {"tokens": ["test-user-id"], "roles": ["admin"], "mfaEnabled": False}
@@ -140,8 +149,10 @@ def _write_body(identifier, group_ids=("g1",)):
 def constraints_table(monkeypatch):
     """moto-backed constraints + roles tables, seeded with ten denormalized rows.
 
-    moto evaluates the real DynamoDB Limit / LastEvaluatedKey semantics, so the pagination walk is
-    exercised rather than re-implemented by the test.
+    moto evaluates the real DynamoDB Limit / LastEvaluatedKey semantics, so the offset walk over the
+    deduplicated set is exercised rather than re-implemented by the test. Ten small rows fit one scan
+    call, so the listing's own read-to-exhaustion loop is NOT exercised here -- that is what
+    ``TestTheScanReadsEveryTablePage`` drives through the scripted pager.
     """
     assert svc.constraints_table_name, "constraints table name did not resolve"
     assert svc.roles_table_name, "roles table name did not resolve"
@@ -388,9 +399,11 @@ class TestEmptyTokensDenyBeforeCasbinIsConsulted:
         response = lambda_handler(event, {})
 
         assert response['statusCode'] == 200
-        factory.assert_called_once()
+        assert factory.called, "it was never called at all"
+        assert factory.call_count <= 1, factory.call_count
         assert factory.call_args[0][0] == _CLAIMS
-        enforcer.enforceAPI.assert_called_once()
+        assert enforcer.enforceAPI.called, "it was never called at all"
+        assert enforcer.enforceAPI.call_count <= 1, enforcer.enforceAPI.call_count
         assert enforcer.enforceAPI.call_args[0][0] is event
 
     def test_authenticated_request_still_denies_when_casbin_denies(
@@ -402,7 +415,8 @@ class TestEmptyTokensDenyBeforeCasbinIsConsulted:
         response = lambda_handler(_list_event({'pageSize': '3'}), {})
 
         assert response['statusCode'] == 403
-        enforcer.enforceAPI.assert_called_once()
+        assert enforcer.enforceAPI.called, "it was never called at all"
+        assert enforcer.enforceAPI.call_count <= 1, enforcer.enforceAPI.call_count
 
 
 @pytest.mark.unit
@@ -440,7 +454,10 @@ class TestRoleValidationFailsClosed:
 
         assert response['statusCode'] != 200
         assert _all_row_ids(constraints_table) == before
-        exploding_roles_table.get_item.assert_called_once_with(Key={'roleName': 'g1'})
+        # The KEY is the claim; the count is not. A retry or a safety re-read of the same key is a
+        # safe change that assert_called_once_with would fail.
+        assert exploding_roles_table.get_item.called, "the roles table was never read"
+        exploding_roles_table.get_item.assert_any_call(Key={'roleName': 'g1'})
 
     def test_absent_roles_table_refuses_the_write(
             self, constraints_table, authenticated, enforcer_spy, monkeypatch):
@@ -492,15 +509,18 @@ class TestPaginationTokenRoundTrips:
         assert isinstance(page['NextToken'], str)
         assert str(page['NextToken']) == page['NextToken']
 
-    def test_next_token_carries_the_last_evaluated_key(
+    def test_next_token_carries_the_offset_of_the_next_constraint(
             self, constraints_table, authenticated, enforcer_spy):
-        """The one test that pins the convention rather than the property: base64 of the JSON
-        LastEvaluatedKey, as the asset and metadata listings emit it."""
+        """The one test that pins the convention rather than the property: base64 of the decimal
+        offset into the deduplicated constraint list, as the metadata listing emits it.
+
+        Not a DynamoDB key: pageSize counts constraints while the cursor addresses denormalized
+        rows, so the two cannot be the same value.
+        """
         page = self._page({'pageSize': '3'})
 
-        decoded = json.loads(base64.b64decode(page['NextToken']).decode('utf-8'))
-        assert isinstance(decoded, dict)
-        assert decoded['constraintId'] in _SEEDED_ROWS
+        decoded = base64.b64decode(page['NextToken']).decode('utf-8')
+        assert decoded == '3', "the token must address the 4th constraint, not a table cursor"
 
     def test_page_two_is_served_and_differs_from_page_one(
             self, constraints_table, authenticated, enforcer_spy):
@@ -567,6 +587,237 @@ class TestPaginationTokenRoundTrips:
         )
 
         assert response['statusCode'] == 200
+
+    def test_the_emitted_token_survives_the_request_model_it_comes_back_through(
+            self, constraints_table, authenticated, enforcer_spy):
+        """The emit side and the accept side are two different declarations, and only the model
+        the token comes back through says whether they agree.
+
+        ``GetConstraintsRequestModel.startingToken`` is a bounded ``str``, so a token that is not
+        one -- or is longer than the bound -- is altered or refused on the way in while the emitting
+        page still looks perfect. Assert the value the model hands the handler is the value the
+        handler emitted, then page from *that* value rather than from the raw token.
+        """
+        first = self._page({'pageSize': '3'})
+        token = first['NextToken']
+
+        bound = svc.GetConstraintsRequestModel.__fields__['startingToken'].field_info.max_length
+        assert bound, "startingToken no longer declares a max_length to check the token against"
+        assert len(token) <= bound
+
+        parsed = svc.parse(
+            {'pageSize': '3', 'startingToken': token}, model=svc.GetConstraintsRequestModel
+        )
+        assert parsed.startingToken == token
+
+        second = self._page({'pageSize': '3', 'startingToken': parsed.startingToken})
+        assert self._base_ids(second), "the model-parsed token did not reach page 2"
+        assert self._base_ids(second) != self._base_ids(first)
+
+    @pytest.mark.parametrize(
+        "decoded_text",
+        ['"cons-one"', '["cons-one"]', 'null', '{"constraintId": "cons-one#group#g1"}', '-1'],
+    )
+    def test_a_token_that_decodes_to_something_other_than_an_offset_names_the_token(
+            self, constraints_table, authenticated, enforcer_spy, decoded_text):
+        """Well-formed base64 is still not necessarily an offset.
+
+        The decode raises for none of these, so without the ``int()`` and the sign check the value
+        reaches the slice and the failure surfaces as the same generic retrieval failure a broken
+        table gives, leaving the caller unable to tell a bad token from a bad table. The dict case is
+        the shape the OLD convention emitted, so an old token in a bookmarked URL is refused rather
+        than silently serving page one.
+        """
+        token = base64.b64encode(decoded_text.encode('utf-8')).decode('utf-8')
+
+        response = lambda_handler(_list_event({'pageSize': '3', 'startingToken': token}), {})
+
+        assert response['statusCode'] == 400
+        assert 'Invalid pagination token' in json.loads(response['body'])['message']
+        # Rule 11: the rejected token is caller input and must not come back out.
+        assert token not in response['body']
+
+    def test_a_hand_built_offset_token_is_accepted(
+            self, constraints_table, authenticated, enforcer_spy):
+        """Positive control for the class above, and the arm that pins base64 of a decimal as the
+        accepted form: the reject path must not have become reject-everything."""
+        token = base64.b64encode(b'3').decode('utf-8')
+
+        page = self._page({'pageSize': '3', 'startingToken': token})
+
+        assert self._base_ids(page) == set(sorted(_CONSTRAINT_IDS)[3:])
+        assert 'NextToken' not in page
+
+
+class _WalkPremiseFailure(Exception):
+    """A walk that never got far enough to say anything about repeats.
+
+    Deliberately not an ``AssertionError``: the repeat test below expects one of those and only one
+    of those, so a listing that 500s or a walk that never ends has to raise something the ``xfail``
+    marker does not absorb.
+    """
+
+
+@pytest.mark.unit
+class TestDeduplicationSpansTheWholeWalk:
+    """No constraint may be emitted by more than one page of a walk.
+
+    The rows being deduplicated are not neighbours: ``constraintId`` is the table's partition key and
+    every denormalized ``#group#``/``#user#`` row carries a distinct one, so one constraint's rows are
+    spread through scan order rather than sitting together. Deduplicating within the page just read
+    therefore emitted a constraint from every page holding any of its rows -- up to one page per row,
+    not merely the two either side of a boundary -- and every client concatenates the pages (the web
+    listing ``fetchConstraints`` and ``vamscli role constraint list --auto-paginate`` both do), so the
+    constraint repeated within one assembled list. Deduplicating across the whole set before slicing
+    is what makes the page a page of constraints.
+
+    Ten rows at three per page could not align under the old shape: the walk ended on a page of one
+    row, and one row cannot also hold that constraint's other row, so at least one constraint was
+    emitted twice whatever order the scan returned.
+    """
+
+    @staticmethod
+    def _pages(page_size):
+        """Every page of the walk, as a list of base-constraintId sets."""
+        pages = []
+        query_parameters = {'pageSize': page_size}
+        for _ in range(20):
+            response = lambda_handler(_list_event(query_parameters), {})
+            if response['statusCode'] != 200:
+                raise _WalkPremiseFailure(f"listing failed mid-walk: {response['body']}")
+            page = json.loads(response['body'])['message']
+            pages.append({item['constraintId'] for item in page['Items']})
+            token = page.get('NextToken')
+            if not token:
+                return pages
+            query_parameters = {'pageSize': page_size, 'startingToken': token}
+        raise _WalkPremiseFailure("pagination walk did not terminate")
+
+    @staticmethod
+    def _repeated(pages):
+        counts = {}
+        for page in pages:
+            for base_id in page:
+                counts[base_id] = counts.get(base_id, 0) + 1
+        return {base_id for base_id, count in counts.items() if count > 1}
+
+    def test_no_constraint_is_emitted_by_more_than_one_page(
+            self, constraints_table, authenticated, enforcer_spy):
+        pages = self._pages('3')
+        if len(pages) <= 1:
+            raise _WalkPremiseFailure("fixture did not produce more than one page")
+
+        assert self._repeated(pages) == set()
+
+    def test_every_non_final_page_holds_exactly_page_size_constraints(
+            self, constraints_table, authenticated, enforcer_spy):
+        """pageSize counts constraints, not the denormalized rows behind them.
+
+        This is the discriminating direction, and the upper bound is not: two rows dedup to AT MOST
+        two constraints, so "no page held more than pageSize" was true of the row-limited shape as
+        well. A non-final page short of pageSize is the observable symptom of a page bounded by rows
+        -- five constraints at three per page must come back 3 then 2, never 1 then 1 then ....
+        """
+        pages = self._pages('3')
+        if len(pages) <= 1:
+            raise _WalkPremiseFailure("fixture did not produce more than one page")
+
+        assert [len(page) for page in pages] == [3, 2]
+
+    def test_max_items_bounds_the_page(
+            self, constraints_table, authenticated, enforcer_spy):
+        """``maxItems`` was accepted by the request model and then ignored entirely; the page is now
+        the smaller of the two, which is what makes it agree with ``validate_pagination_info``'s
+        fallback path (it caps pageSize to maxItems there)."""
+        response = lambda_handler(_list_event({'pageSize': '3', 'maxItems': '2'}), {})
+
+        assert response['statusCode'] == 200
+        page = json.loads(response['body'])['message']
+        assert len(page['Items']) == 2
+        assert 'NextToken' in page
+
+    def test_the_page_is_bounded_by_the_payload_ceiling(
+            self, constraints_table, authenticated, enforcer_spy):
+        """Rule 15: dropping the scan ``Limit`` removed the 1 MB-per-call bound that used to hold the
+        response down, so the listing carries its own ceiling.
+
+        Asserted on the resolved bound rather than on a page of 3000 seeded constraints, which is not
+        a unit fixture. The request model's default is that same ceiling, so a caller that sends no
+        pageSize -- which is every web request -- gets a bounded page.
+        """
+        page_size_field = svc.GetConstraintsRequestModel.__fields__['pageSize'].field_info
+        assert page_size_field.default == svc.MAX_CONSTRAINT_LIST_PAGE_SIZE
+        assert svc.MAX_CONSTRAINT_LIST_PAGE_SIZE < page_size_field.le, (
+            "the ceiling must sit below the accepted maximum, or it clamps nothing"
+        )
+
+        # Must-still-work: a pageSize above the ceiling is clamped rather than refused, so the
+        # request that used to work still answers 200 and the caller still reaches every constraint.
+        response = lambda_handler(_list_event({'pageSize': str(page_size_field.le)}), {})
+        assert response['statusCode'] == 200
+        served = json.loads(response['body'])['message']
+        assert {item['constraintId'] for item in served['Items']} == set(_CONSTRAINT_IDS)
+
+    def test_a_walk_that_fits_one_page_repeats_nothing(
+            self, constraints_table, authenticated, enforcer_spy):
+        """Control on the instrument above: the repeat detector reports nothing when every row is on
+        one page, so a repeat it does report is a repeat and not an artefact of the detector."""
+        pages = self._pages('500')
+
+        assert len(pages) == 1
+        assert pages[0] == set(_CONSTRAINT_IDS)
+        assert self._repeated(pages) == set()
+
+
+@pytest.mark.unit
+class TestTheScanReadsEveryTablePage:
+    """The listing's own read must page to exhaustion, which nothing else here can show.
+
+    The seeded fixture is ten small rows, so moto answers every scan in ONE call with no
+    ``LastEvaluatedKey``: a regression to a single un-looped scan would satisfy every other test in
+    this file. These two drive the read through the shared scripted pager instead, where the second
+    table page is reachable only by threading the cursor.
+    """
+
+    @staticmethod
+    def _row(constraint_id, group_id):
+        return _seed_item(f"{constraint_id}#group#{group_id}")
+
+    def test_a_constraint_whose_rows_sit_on_a_later_table_page_is_still_listed(
+            self, authenticated, enforcer_spy, monkeypatch):
+        pager = Pager(
+            {'Items': [self._row('cons-one', 'g1')],
+             'LastEvaluatedKey': {'constraintId': 'cons-one#group#g1'}},
+            {'Items': [self._row('cons-two', 'g1')]},
+            name="constraints scan",
+        )
+        monkeypatch.setattr(svc, 'constraints_table', MagicMock(scan=pager))
+
+        response = lambda_handler(_list_event({'pageSize': '10'}), {})
+
+        assert response['statusCode'] == 200
+        page = json.loads(response['body'])['message']
+        assert {item['constraintId'] for item in page['Items']} == {'cons-one', 'cons-two'}
+        pager.assert_paged_to_exhaustion()
+
+    def test_a_reader_that_never_signals_the_end_is_not_walked_forever(
+            self, authenticated, enforcer_spy, monkeypatch):
+        """The loop tests for the PRESENCE of ``LastEvaluatedKey``, not its value.
+
+        ``BareMockReader`` answers every page with a bare ``MagicMock``, whose ``.get()`` is truthy
+        for every key -- the shape that hangs a value-form loop. A presence-form loop reads once and
+        stops, which is why this test finishing is part of the assertion.
+        """
+        reader = BareMockReader(name="constraints scan")
+        monkeypatch.setattr(svc, 'constraints_table', MagicMock(scan=reader))
+
+        response = lambda_handler(_list_event({'pageSize': '10'}), {})
+
+        assert response['statusCode'] == 200
+        assert reader.calls, "the reader was never consulted, so the loop form is unverified"
+        assert len(reader.calls) <= 1, (
+            f"the loop read {len(reader.calls)} times off a reader that never omits the key, so it "
+            "is deciding on the key's value")
 
 
 @pytest.mark.unit
@@ -704,6 +955,7 @@ class TestRestShapedEventFailsClosedAndPaginates:
         )
 
         assert response['statusCode'] == 200
-        factory.assert_called_once()
+        assert factory.called, "it was never called at all"
+        assert factory.call_count <= 1, factory.call_count
         assert factory.call_args[0][0]['tokens'] == ['test-user-id']
         assert 'cons-one#group#g1' not in _all_row_ids(constraints_table)

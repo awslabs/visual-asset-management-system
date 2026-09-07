@@ -166,7 +166,7 @@ The **Pipelines** page lists all registered processing pipelines. Pipelines defi
 
 Each pipeline entry shows its name and id, its execution type, its owning database, its category, and how many configuration templates it carries, together with **Disabled** or **Archived** where either applies. Entries are grouped by category or by database, and the list can be filtered by execution type, status, and database.
 
-Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one.
+Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one. Deleting a template from the **Templates** list reports a warning, kept on the list, when an auto-triggered workflow's trigger had chosen it as this pipeline's default.
 
 ![Pipelines page listing registered pipelines grouped by category](/img/pipelines_page_20260803_v2.6.png)
 

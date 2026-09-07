@@ -14,9 +14,13 @@ On invocation it:
      its latest S3 versionId changed). Records PipelineExecutionOutputFiles rows (with
      s3VersionId) for N, and sets N's stop date + SUCCEEDED status.
   2. Prepares pipeline N+1 by writing its resolved input manifest (originals overlaid by any
-     output-files versions that shadow the same relative path) to the asset bucket, and
+     output-files versions that shadow the same relative path) to the run I/O bucket, and
      returns the N+1 config + manifest S3 locations as this state's SFN result so the next
      pipeline state reads them.
+
+Every run-I/O key in the SFN payload is relative to the VAMS-owned area of the run I/O bucket
+(`workflowExecutionS3InputOutputBasePrefix`); this lambda joins the two before any S3 call. Auxiliary
+prefixes are NOT joined — the auxiliary bucket is VAMS-created and has no such area.
 
 This lambda is reused for every interim gap; the SFN payload carries the gap-specific
 from/to pipeline indices + ids. It does NOT modify use-case pipeline containers.
@@ -54,6 +58,8 @@ try:
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    pipeline_execution_input_configuration_table = get_table_name(
+        ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
     # Auxiliary bucket name, written into each next pipeline's manifest.auxBucket. Resolved here
     # (not threaded through the SFN input) so the aux bucket lives in one place per its purpose.
     bucket_name_assetAuxiliary = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
@@ -65,6 +71,19 @@ try:
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
+
+
+def _run_base_prefix(body):
+    """The VAMS-owned area of the run I/O bucket for this execution, threaded through the SFN input.
+
+    Every key the ASL supplies (the output listing prefix, the next step's manifest/config keys, the
+    output prefixes written into its manifest) is relative to that area, so each one is joined to this
+    before it reaches S3. Absent means the bucket root, which is both the shape a VAMS-created default
+    bucket has and what an execution started by a definition created before the field existed sends.
+
+    The aux temp prefix is deliberately NOT joined to it: the auxiliary bucket is VAMS-created and
+    carries no baseAssetsPrefix."""
+    return er.normalize_base_prefix((body or {}).get('workflowExecutionS3InputOutputBasePrefix', ''))
 
 
 def _relative_to_asset(full_file_key, base_key):
@@ -130,9 +149,11 @@ def record_previous_pipeline_outputs(body):
     from_pipeline_execution_id = body.get('fromPipelineExecutionId', '')
     prior_pipeline_execution_ids = body.get('priorPipelineExecutionIds', []) or []
     workflow_execution_id = body.get('workflowExecutionId', '')
-    # The shared pipeline output folder lives in the workflow-execution I/O bucket.
+    # The shared pipeline output folder lives inside the VAMS-owned area of the workflow-execution
+    # I/O bucket; the ASL supplies the prefix relative to that area.
     wf_exec_bucket = body.get('workflowExecutionS3InputOutputBucket', '')
-    output_files_prefix = body.get('outputFilesPrefix', '')
+    output_files_prefix = er.run_bucket_key(
+        _run_base_prefix(body), body.get('outputFilesPrefix', ''))
 
     # Baseline = output versions recorded by the pipelines BEFORE N (excludes N itself).
     baseline = eo.recorded_output_versions(
@@ -246,18 +267,21 @@ def prepare_next_pipeline(body, current_output_files=None):
     invocation, so the shared output folder is listed once per step transition rather than twice."""
     # The workflow-execution I/O bucket holds the shared pipeline output folder + the per-pipeline
     # manifest/config files (NOT the input asset files, whose own buckets come from the input rows).
+    # All three arrive relative to the bucket's VAMS-owned area and are joined to it here, so every
+    # S3 call below and every location written into the next manifest names a real object.
     wf_exec_bucket = body.get('workflowExecutionS3InputOutputBucket', '')
-    output_files_prefix = body.get('outputFilesPrefix', '')
+    base_prefix = _run_base_prefix(body)
+    output_files_prefix = er.run_bucket_key(base_prefix, body.get('outputFilesPrefix', ''))
     workflow_execution_id = body.get('workflowExecutionId', '')
-    next_manifest_key = body.get('nextPipelineManifestS3Key', '')
-    next_config_key = body.get('nextPipelineConfigS3Key', '')
+    next_manifest_key = er.run_bucket_key(base_prefix, body.get('nextPipelineManifestS3Key', ''))
+    next_config_key = er.run_bucket_key(base_prefix, body.get('nextPipelineConfigS3Key', ''))
 
     # Envelope context for the next pipeline (output/aux/metadata locations + system config). The
-    # output prefixes are asset-bucket-RELATIVE (threaded from the ASL) and pair with the output
-    # bucket (the workflow-execution I/O bucket); the aux temp prefix is bucket-relative and
-    # execution-scoped. The next pipeline's orchestration event prefix is built here from the
-    # env-sourced source prefix + execution id + the next pipeline-execution id (the bus config
-    # is not threaded through the SFN input).
+    # output prefixes reach the manifest as FULL keys in the output bucket (the workflow-execution
+    # I/O bucket), since the pipeline writes to them directly. The aux temp prefix is relative to the
+    # AUXILIARY bucket and takes no base prefix. The next pipeline's orchestration event prefix is
+    # built here from the env-sourced source prefix + execution id + the next pipeline-execution id
+    # (the bus config is not threaded through the SFN input).
     aux_bucket = bucket_name_assetAuxiliary
     next_aux_temp_prefix = body.get('nextPipelineAuxTempPrefix', '')
     next_event_prefix = ""
@@ -265,16 +289,16 @@ def prepare_next_pipeline(body, current_output_files=None):
     if orchestration_event_source_prefix and next_pexec_id:
         next_event_prefix = er.orchestration_event_prefix(
             orchestration_event_source_prefix, workflow_execution_id, next_pexec_id)
-    next_metadata_location = resolve_next_metadata_location(body, wf_exec_bucket)
+    next_metadata_location = resolve_next_metadata_location(body, wf_exec_bucket, base_prefix)
 
     envelope_context = {
         "inputMetadataS3Location": next_metadata_location,
         "outputs": er.build_manifest_outputs(
             bucket=wf_exec_bucket,
-            files=body.get('outputFilesPrefixRelative', ''),
-            previews=body.get('outputPreviewsPrefixRelative', ''),
-            metadata=body.get('outputMetadataPrefixRelative', ''),
-            results=body.get('outputResultsPrefixRelative', '')),
+            files=er.run_bucket_key(base_prefix, body.get('outputFilesPrefixRelative', '')),
+            previews=er.run_bucket_key(base_prefix, body.get('outputPreviewsPrefixRelative', '')),
+            metadata=er.run_bucket_key(base_prefix, body.get('outputMetadataPrefixRelative', '')),
+            results=er.run_bucket_key(base_prefix, body.get('outputResultsPrefixRelative', ''))),
         "outputTarget": er.build_manifest_output_target(
             location_type=body.get('outputLocationType', 'asset'),
             asset_id=body.get('outputAssetId', ''),
@@ -308,6 +332,8 @@ def prepare_next_pipeline(body, current_output_files=None):
     # metadata payload is read lazily (only when a metadata-content tag is present).
     _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key)
 
+    # Reported as the objects that were written, so the keys are the full run-bucket ones rather than
+    # the relative form the payload carried.
     return {
         "inputManifestS3Location": f"s3://{wf_exec_bucket}/{next_manifest_key}" if next_manifest_key else "",
         "inputConfigurationS3Location": f"s3://{wf_exec_bucket}/{next_config_key}" if next_config_key else "",
@@ -316,7 +342,7 @@ def prepare_next_pipeline(body, current_output_files=None):
     }
 
 
-def resolve_next_metadata_location(body, wf_exec_bucket):
+def resolve_next_metadata_location(body, wf_exec_bucket, base_prefix=""):
     """The metadata S3 location the NEXT pipeline step reads.
 
     Per-step DELIVERY of the two-level metadataInputs contract: the next step reads its OWN narrowed
@@ -325,13 +351,18 @@ def resolve_next_metadata_location(body, wf_exec_bucket):
     launch, where template overrides resolve; only the resulting key travels. The INTAKE half is the
     workflow gate in executeWorkflow._build_grouped_metadata.
 
+    The threaded key is relative to the run bucket's VAMS-owned area, like every other key the SFN
+    input carries, so base_prefix is joined on to build the location. The shared location already
+    arrives as a full URI (the ASL mints it), so it passes through untouched.
+
     Fails CLOSED to today's behavior: this runs MID-EXECUTION, so an absent or unusable threaded key
     delivers the SHARED envelope rather than nothing. Handing a step an empty payload would break a
     pipeline that needs metadata — worse than delivering the wider set."""
     shared_location = (body or {}).get('inputMetadataS3Location', '')
     next_metadata_key = (body or {}).get('nextPipelineMetadataS3Key', '')
     if isinstance(next_metadata_key, str) and next_metadata_key.strip():
-        return f"s3://{wf_exec_bucket}/{next_metadata_key.strip()}"
+        return "s3://{}/{}".format(
+            wf_exec_bucket, er.run_bucket_key(base_prefix, next_metadata_key.strip()))
     if next_metadata_key not in ("", None):
         logger.warning(
             f"Ignoring malformed nextPipelineMetadataS3Key ({next_metadata_key!r}); delivering the "
@@ -339,12 +370,35 @@ def resolve_next_metadata_location(body, wf_exec_bucket):
     return shared_location
 
 
+def _next_pipeline_config_format(body):
+    """The next step's declared configFormat, read from the input-configuration row executeWorkflow
+    persisted for it at launch (PK nextPipelineExecutionId, SK recordType='configuration').
+
+    The format decides how a system tag's scalar value is escaped, so it must be the same value
+    step 1's render used — the row is where that value already lives, which also means an execution
+    already in flight is rendered correctly without re-saving its state machine.
+
+    A row that carries no format, or no row at all (an execution launched before the format was
+    persisted), degrades to json — the default every non-xml format shares. A read FAULT raises, so
+    the interim state's Catch reconciles the run rather than the step silently receiving a body
+    escaped for the wrong format."""
+    pipeline_execution_id = (body or {}).get('nextPipelineExecutionId', '')
+    if not pipeline_execution_id:
+        return tr.CONFIG_FORMAT_JSON
+    table = dynamodb.Table(pipeline_execution_input_configuration_table)
+    resp = table.get_item(
+        Key={"pipelineExecutionId": pipeline_execution_id, "recordType": "configuration"})
+    row = resp.get("Item") or {}
+    return row.get("configFormat", "") or tr.CONFIG_FORMAT_JSON
+
+
 def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key):
     """Read the next pipeline's raw input configuration from S3, substitute its template tags
     against the next-pipeline manifest + execution context, and re-write it in place. No-op when
     there is no config key or the config has no tags. Never raises on a missing config object (an
-    absent config is simply left as-is); a bad/unknown tag DOES raise (strict) so the failure is
-    caught by the interim state's Catch and reconciled as a workflow failure."""
+    absent config is simply left as-is). Rendered non-strictly, matching step 1's body render: a
+    {{tag}} with no template tag declared behind it reaches the pipeline as its own literal text
+    rather than failing the run mid-way through it."""
     if not next_config_key:
         return
     try:
@@ -403,7 +457,8 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
             return payload.get("metadata") or {}
         return payload
 
-    rendered = tr.render_config(raw_cfg, manifest, exec_context, metadata_loader=_metadata_payload)
+    rendered = tr.render_config(raw_cfg, manifest, exec_context, metadata_loader=_metadata_payload,
+                                config_format=_next_pipeline_config_format(body), strict=False)
     s3c.put_object(Bucket=wf_exec_bucket, Key=next_config_key,
                    Body=rendered.encode("utf-8"), ContentType="application/json")
 

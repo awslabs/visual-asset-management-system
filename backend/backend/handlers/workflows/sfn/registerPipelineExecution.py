@@ -35,6 +35,7 @@ success/failure callback a pipeline already uses.
 
 import json
 import boto3
+from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
@@ -42,7 +43,8 @@ from common.validators import validate
 
 logger = safeLogger(service="RegisterPipelineExecution")
 
-dynamodb = boto3.resource('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 
 try:
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
@@ -51,6 +53,11 @@ except Exception as e:
     raise e
 
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
+
+# Statuses that mean the pipeline execution has finished. Registration is asynchronous — the pipeline
+# emits the event after it has the resource's id — so an event can arrive after the row is terminal.
+ABORTED_STATUS = "ABORTED"
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", ABORTED_STATUS, "TIMED_OUT")
 
 
 # Sub-process resource types a pipeline may register. Step Functions executions are the only
@@ -192,6 +199,21 @@ def register(detail):
         logger.info(f"Registration event for {pipeline_execution_id} reported only already-registered "
                     f"locators; nothing to record")
         return
+
+    # A sub-process reported onto a row that is already ABORTED is a resource the abort could not have
+    # seen: it stops what the row carried when it read it. The entry is still recorded, because being
+    # on the row is what lets a repeated abort of the workflow execution stop it — but nothing else
+    # will act on it unaided, so it is named at warning level rather than logged as routine.
+    row_status = row.get("executionStatus", "")
+    if new_subs and row_status == ABORTED_STATUS:
+        logger.warning(
+            f"Sub-process registration for pipeline execution {pipeline_execution_id} arrived after "
+            f"the row was stamped {ABORTED_STATUS}, so the abort did not stop it. Recorded so a "
+            f"repeated abort of workflow execution {row.get('workflowExecutionId', '')} stops it. "
+            f"Resource types: {[s.get('resourceType', '') for s in new_subs]}")
+    elif new_subs and row_status in TERMINAL_STATUSES:
+        logger.info(f"Sub-process registration for pipeline execution {pipeline_execution_id} arrived "
+                    f"after the row reached {row_status}; recorded for log retrieval")
 
     # Atomic list_append (if_not_exists seeds an empty list) so concurrent registration events
     # accumulate without clobbering each other.

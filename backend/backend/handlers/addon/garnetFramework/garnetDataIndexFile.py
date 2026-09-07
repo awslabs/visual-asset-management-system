@@ -23,6 +23,11 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.batchItemFailures import (
+    all_batch_item_failures,
+    batch_item_identifier,
+    with_batch_item_failures,
+)
 from common.syncTracking import (
     SYNC_OBJECT_TYPE_ASSET_FILE,
     SYNC_ACTION_CREATE,
@@ -33,6 +38,7 @@ from common.syncTracking import (
     write_outbound_sync_record,
 )
 from common.validators import validate
+from common.dynamodb import query_all_items
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -135,10 +141,17 @@ s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
 #######################
 
 def extract_file_extension(file_path: str) -> Optional[str]:
-    """Extract file extension from file path"""
-    if '.' in file_path and not file_path.endswith('/'):
-        return file_path.split('.')[-1].lower()
-    return None
+    """Extract file extension from file path.
+
+    Read from the basename, so a dot in a parent folder name (`/folder.v2/LICENSE`)
+    is not mistaken for an extension. A file with no extension has none.
+    """
+    if file_path.endswith('/'):
+        return None
+    basename = os.path.basename(file_path)
+    if '.' not in basename:
+        return None
+    return basename.split('.')[-1].lower()
 
 def is_folder_path(file_path: str) -> bool:
     """Check if path represents a folder.
@@ -244,12 +257,13 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
         attributes = {}
         
         # Query assetFileMetadataStorageTable for metadata fields
-        response = asset_file_metadata_table.query(
+        metadata_items = query_all_items(
+            asset_file_metadata_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in metadata_items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType', 'string')
@@ -266,12 +280,13 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
                 }
         
         # Query fileAttributeStorageTable for attribute fields
-        response = file_attribute_table.query(
+        attribute_items = query_all_items(
+            file_attribute_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in attribute_items:
             attribute_key = item.get('attributeKey')
             attribute_value = item.get('attributeValue')
             attribute_value_type = item.get('attributeValueType', 'string')
@@ -892,6 +907,9 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
         
         successful_records = 0
         failed_records = 0
+        # Identifiers of records the event-source mapping must redrive. Counting alone left a
+        # failed record deleted from the queue and its document never indexed.
+        batch_failures = []
         
         # Extract bucket info from top-level event (if present from sqsBucketSync)
         asset_bucket_name = event.get('ASSET_BUCKET_NAME')
@@ -926,6 +944,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             
                             # Check if SNS message contains Records array (nested from sqsBucketSync)
                             elif 'Records' in sns_message:
@@ -942,6 +961,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                             successful_records += 1
                                         else:
                                             failed_records += 1
+                                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                                     elif inner_event_source == 'aws:sqs':
                                         # Nested SQS record (from sqsBucketSync)
@@ -970,45 +990,52 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                                                 successful_records += 1
                                                             else:
                                                                 failed_records += 1
+                                                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                         except json.JSONDecodeError as inner_e:
                                             logger.exception(f"Error parsing nested SQS/SNS message: {inner_e}")
                                             failed_records += 1
+                                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                                     else:
                                         logger.warning(f"Unknown inner event source: {inner_event_source}")
                                         failed_records += 1
+                                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             
                             else:
                                 logger.warning(f"SNS message format not recognized: {list(sns_message.keys())}")
                                 failed_records += 1
+                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         else:
                             logger.warning("SQS message is not an SNS notification")
                             failed_records += 1
+                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                     except json.JSONDecodeError as e:
                         logger.exception(f"Error parsing SQS/SNS message: {e}")
                         failed_records += 1
+                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
                     failed_records += 1
+                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
         
         logger.info(f"Garnet file indexing completed: {successful_records} successful, {failed_records} failed")
         
-        return {
+        return with_batch_item_failures({
             'statusCode': 200,
             'body': {
                 'message': 'Garnet file indexing completed',
                 'successful_records': successful_records,
                 'failed_records': failed_records
             }
-        }
+        }, event, batch_failures)
         
     except Exception as e:
         logger.exception(f"Error in Garnet file indexer lambda handler: {e}")
-        return {
+        return with_batch_item_failures({
             'statusCode': 500,
             'body': {
                 'message': 'Error processing Garnet file indexing',
                 'error': str(e)
             }
-        }
+        }, event, all_batch_item_failures(event))

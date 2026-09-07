@@ -262,6 +262,19 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 -   [ ] **Test Deployment**: Deploy to test environment and verify functionality
 -   [ ] **Test Feature Switches**: Verify feature switches work correctly
 -   [ ] **Add a T1 synth assertion for anything partition-, distribution-, or VPC-sensitive** (see below)
+-   [ ] **Label a temporary test** — a test proving one specific change landed (a removed construct, a
+        deleted suppression entry, a renamed export) carries a `TEMPORARY-TEST` token in a comment directly
+        above its `it(...)`, naming what it pins. Jest has no marker system, so release cleanup finds them
+        with `grep -rn "TEMPORARY-TEST" infra/test`.
+
+        Most absence assertions in `infra/test` are **not** temporary and must not be labelled or removed:
+        a weaker TLS policy, an `arn:aws:s3:::*` wildcard, a `cdk-nag` suppression hiding a finding, a
+        HuggingFace token reaching a synthesized template, `'unsafe-inline'` in the base CSP. Each forbids
+        something a future edit could plausibly write, so each guard can still fire.
+
+        The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is
+        **wrong** — a forbid-forever guardrail also has zero occurrences, and that absence is the guard
+        working. Full criterion: root `CLAUDE.md` Rule 13; Claude Code counterpart: `infra/CLAUDE.md`.
 
 ##### **The T1 tier: synth assertions across all three config templates**
 
@@ -279,7 +292,7 @@ expectAbsent("EventSourceMapping with Tags", withTags, {
 });
 ```
 
-Four rules for writing one:
+Five rules for writing one:
 
 1. **`expectAbsent()` requires a positive control.** A negative assertion on a restricted partition is
    satisfied equally by correct behaviour and by a template that emitted nothing. The control is a required
@@ -293,6 +306,21 @@ Four rules for writing one:
    `Template.fromStack(root)` sees ~17 resources out of ~600.
 4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
    and then a token boundary, so the assertion passes while checking nothing. Use `SynthResult.flatten()`.
+5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the fifteen
+   pipeline Dockerfiles that is **not in the repository** —
+   `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
+   Download Ignore", because it arrives from an upstream sync. With the flag false,
+   `batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which
+   resolves that path when the construct is built — before any bundling-skip logic, so rule 2's Docker stub
+   does not help — and a fresh checkout has no such file. That makes it a **CI-only failure**: locally a
+   previous sync left the file behind and the synth succeeds, so the same commit is green on a developer
+   machine and red on a runner with `«CannotFindFile»` pointing at `addContainer` rather than at the config.
+   `templateSynth.ts` now refuses the configuration up front (`assertNoUntrackedDockerAsset`) so it fails
+   locally too, and it checks the CONFIG rather than whether the file happens to be present — a presence
+   check passes on any machine that synthesized splat recently, which is the trap itself. Setting the flag
+   changes nothing a subnet, endpoint or Batch assertion looks at: the public/private subnet condition
+   (`vpcBuilder-nestedStack.ts:348`) and `needsEcsPrivate` (`:750`) both key on `useSplatToolbox.enabled`
+   alone, and only the image source moves.
 
 The harness resets `s3AssetBucketRecords` between synths — it is a module-level mutable array with no reset,
 so a second synth in the same process otherwise fails with `There is already a Construct with name
@@ -743,8 +771,46 @@ Both halves are required, and each is inert without the other:
     Without the grant the call raises `AccessDeniedException`, the handler logs it, and the task hangs
     exactly as before.
 
+A nested `RequestResponse` invoke needs its own result check on top of those two halves. A Lambda that
+raised still returns `StatusCode` 200 — the failure is reported in `FunctionError` — so a
+`StatusCode`-only check reads a failed launch as success, no route reports the token, and the callback task
+blocks until `taskTimeout`. Copy the guard verbatim (canonical copy:
+`backendPipelines/multi/modelOps/lambda/vamsExecuteModelOps.py`):
+
+```python
+if lambda_response.get('FunctionError'):
+    raise Exception(
+        "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get('FunctionError')))
+```
+
+That propagation is also why, **in the nested-invoke pipelines**, `openPipeline`'s
+`abort_external_workflow` deliberately does NOT wrap its own `send_task_failure` in try/except. Swallowing
+it there returns a payload-level 400 under a clean invoke — a shape the caller does not inspect — so the
+failed callback becomes invisible and the task hangs for its full `taskTimeout`. Letting it propagate is
+what sets `FunctionError`, so the caller reports the token under the `vamsExecute` function's own role; a
+duplicate `SendTaskFailure` on an already-failed token raises `TaskDoesNotExist` inside that handler's own
+wrapped abort, which only logs.
+
+That rule's scope is the `FunctionError` channel, so it holds only where a **lambda** invokes
+`openPipeline`. Where `openPipeline` is a state machine **state** instead — a `tasks.LambdaInvoke`, as in
+`simulation/isaacLabTraining` — no calling lambda inspects a result and Step Functions fails the state
+directly on a raise, so wrapping the callback is correct there. `grep -rn "InvocationType"
+<pipeline>/lambda/*.py` is the discriminator: hits mean nested invoke, so do not wrap.
+
 Report the token before propagating so the original error still reaches Amazon CloudWatch, and make the call
-conditional on a token being present — a direct invoke carries none.
+conditional on a token being present — a direct invoke carries none. The abort helpers truncate `cause` to
+256 characters, which suits a one-sentence pre-invoke rejection; a handler reporting a finished JOB's outcome
+carries the child's own output and bounds that text itself to fit the 32768-character limit, as
+`backendPipelines/multi/rapidPipelineEKS`'s CHECK_JOB path does.
+
+**On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
+lambda's own return value both land in the execution record, which is durable and readable by anyone who can
+read the execution, and on a run that worked a third-party tool's stdout has no diagnostic value there.
+Fetch the log and write it to the function's own log stream — which keeps the read permission exercised and
+leaves an operator a tail — but keep it out of both payloads. A size bound is not redaction: it makes the
+payload fit, it does not make the content appropriate to store. Pin both halves together
+(`backendPipelines/multi/rapidPipelineEKS/lambda/tests/test_pod_log_bounding.py`): absent from the success
+payloads, present in the log stream, since removing the FETCH would satisfy the first alone.
 
 ### **Capturing a Child Process's Output for the Execution Record**
 
@@ -754,7 +820,7 @@ an operator reads. `subprocess.run(check=True)` with no capture leaves the child
 stdout — the output reaches Amazon CloudWatch, but the container never sees it, so the exception can only
 report an exit code.
 
-Use the `_run_streaming` helper the five NVIDIA inference containers carry (canonical copy:
+Use the `_run_streaming` helper the four deployable NVIDIA inference containers carry (canonical copy:
 `backendPipelines/genAi/nvidia/cosmos/3/container/inference.py`) and put its returned tail in the raised
 message:
 
@@ -778,8 +844,19 @@ if returncode != 0:
 The helper is duplicated per container rather than shared: each container is its own Docker build context
 whose Dockerfile `COPY`s an explicit file list, so no shared module is importable at container runtime.
 Inline it into the existing entry point rather than adding a file — a new file also needs a Dockerfile
-`COPY` edit, and a missed one fails at container **runtime**, not at build. A no-drift test compares all
-copies structurally, so edit one and propagate in the same change.
+`COPY` edit, and a missed one fails at container **runtime**, not at build. A no-drift test compares the
+four deployable copies structurally, so edit one and propagate in the same change. A fifth copy sits in
+`backendPipelines/genAi/nvidia/cosmos/predict/containerv1/`, retained as a reference implementation with no
+configuration key that deploys it; it is outside the no-drift set, so a change made across the deployable
+four does not reach it.
+
+### **Pipeline Test Conventions**
+
+**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). Two of seven pipelines had been fixed and five had not, with every per-pipeline suite green.
+
+**Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
+
+**A suite that reads configuration from the process environment must restore it.** `splatToolbox/lambda/tests/test_extension_gate.py` reads `ALLOWED_INPUT_FILEEXTENSIONS` from the process env at import, so another suite that sets it without restoring makes splat's tests fail on unrelated assertions. Pass the value explicitly on every load, or restore what you changed.
 
 ### **Pipeline Directory Structure (`/backendPipelines/`)**
 
@@ -874,9 +951,16 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    nothing. A filter only ever NARROWS eligibility. A match-everything pattern in an `exclude` list
    (`*`, `**`, `*.*`, `/*`, `/**`) is REJECTED on save at every level including triggers, since exclude
    is applied last and would remove every file — leave the list empty to exclude nothing.
-2. **`requireTemplate: true` needs a default template.** Execute auto-selects the default; with none,
-   every caller must name a `templateId`. A bundle with exactly one template has it promoted
-   automatically -- with two or more, mark one `"isDefault": true`.
+2. **A `requireTemplate: true` bundle either marks a default or is deliberately mutually exclusive.**
+   Execute auto-selects the default; with none, every caller must name a `templateId`. A bundle with
+   exactly one template has it promoted automatically. With two or more, which shape applies is a
+   product decision: mark one `"isDefault": true` when one template is the ordinary choice, or mark
+   **none** when the templates are mutually exclusive outputs and choosing for the caller would produce
+   the wrong artifact. Four bundles are the second shape -- `conversion-3d-basic`, `rapid-pipeline`,
+   `vntana-model-ops` and `3dRecon-splat-toolbox` -- so a run naming no `templateId` is correctly
+   rejected, and every trigger or script launching them must supply one.
+   `infra/test/pipelines/vamsSchemaTemplateDefaults.test.ts` asserts each multi-template bundle is one
+   shape or the other.
 3. **`inputFileArity: "none"`** means no input files, so `assetId` / `databaseId` resolve from the
    execution's output target (`outputAssetId` / `outputDatabaseId`).
 4. **`assetScope` accepts two vocabularies** -- the shorthand `{"wholeAsset": true|false}` and the
@@ -931,7 +1015,10 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    set it to the MAXIMUM any pipeline/template combination in that workflow can require; a lower gate
    rejects a selection a template would have accepted.
 9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
-   `{jobName}` folder in `pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`, is persisted
+   `{jobName}` folder in `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`
+   — relative to the area VAMS owns in the default asset bucket, which
+   `executionRecords.run_bucket_key()` joins that bucket's `baseAssetsPrefix` onto; the state machine
+   carries the relative form and the prefix as separate values. It is persisted
    on the workflow record as the derived `jobNames[]`, and is what `executeWorkflow` reads to
    reconstruct those prefixes at launch. Omit it in a bundle unless the pipeline id would not identify
    the step — blank already falls back to the pipeline id, keeping each step's output distinct. It
@@ -1167,6 +1254,33 @@ backendPipelines/newPipeline/
 └── README.md                   # Pipeline documentation
 ```
 
+#### **CodeBuild Image Tag Coordination**
+
+A pipeline whose image is built by AWS CodeBuild pushes and consumes ONE content-addressed tag. The
+construct supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`,
+and the pull site names that same value; a shared compute construct takes it as one prop together with
+the repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on
+`batch-gpu-pipeline.ts`) so the tag cannot be omitted while the repository is supplied. The buildspec
+must not default `IMAGE_TAG` — it fails the build when the project supplied none, because a default
+pushes a tag the AWS Batch job definition does not name and the deploy still reports success, with
+every execution then failing `CannotPullContainerError`. `:latest` is pushed alongside solely as the
+`--cache-from` alias, since a content-addressed tag never pre-exists and a cold cache adds hours to a
+GPU image build. Coverage: `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the
+immutable-tag block of `infra/test/pipelines/containerBuildSources.test.ts`.
+
+#### **Pinned Upstream Clones in a Container Build**
+
+A container that clones an upstream repository while the image builds clones a FIXED revision:
+an `ARG <NAME>_COMMIT=<40-hex>` default, `git checkout --detach` of it, and
+`test "$(git rev-parse HEAD)" = "${<NAME>_COMMIT}"` **in the same `RUN`** — a checkout in a later
+instruction is a different layer and pins nothing. The resolved id is written into the image and
+echoed by the entrypoint, so a run's log names the code it ran. Without the verification step the
+pin is decorative: `--build-arg <NAME>_COMMIT=main` checks out a moving ref and the build still
+succeeds. The same holds for `COPY --from=<image>:<tag>` and for any installer URL that omits a
+version. Coverage: the NVIDIA block of `infra/test/pipelines/containerBuildSources.test.ts`, which
+names the Dockerfiles explicitly because a `**/Dockerfile` glob passes locally and fails in CI on
+the gitignored splat Dockerfile.
+
 #### **Container Lambda Handler Pattern**
 
 ```python
@@ -1178,10 +1292,13 @@ Pipeline Lambda that orchestrates container-based processing.
 import json
 import boto3
 import logging
+from botocore.config import Config
 from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
-batch_client = boto3.client('batch')
+
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+batch_client = boto3.client('batch', config=retry_config)
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
@@ -1246,6 +1363,14 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
     Six pipelines run in isolated subnets (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+
+9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
+
+    `.gitignore` does **not** identify them — it lists only `Dockerfile`, `/src/*`, `LOCAL_DEBUG_README.md` and `.synced-commit`, so a tracked file such as `build_models_tar.py` looks VAMS-owned and is not. The observable proxy is the mtime: after a sync, upstream's files carry the marker's timestamp while VAMS additions (`__main__.py`, `vams_utils/`, `vams_bake_models.py`) keep their own. To change behaviour in an upstream-owned file, use a **programmatic injection** after the copy — the pattern the sync already applies to the Dockerfile — anchored on a pattern that throws when the anchor is missing.
+
+10. **Adaptive Retry Configuration on Every Client**: every `boto3.client(...)` and `boto3.resource(...)` in `backendPipelines/` takes `config=Config(retries={'max_attempts': 5, 'mode': 'adaptive'})`. A pipeline Lambda or container calls Step Functions, Amazon S3, and EventBridge for the length of a job — hours on the GPU pipelines — so a bare client sits on botocore's default retry mode with no client-side rate limiting, and a sustained burst surfaces as a throttling error rather than being smoothed.
+
+    Declare the constant **above the first client**, not merely after the imports: a few modules interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds a client and then keeps importing), and a constant placed after the last import lands below the client that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request. A deliberate departure (a non-idempotent call a retry would duplicate) needs a comment saying why, because the ratchet cannot tell it from an oversight. Coverage: `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`.
 
 #### **Pipeline Configuration Rules**
 

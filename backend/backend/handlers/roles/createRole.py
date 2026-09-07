@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.dynamodb import to_update_expr
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -136,6 +137,9 @@ def create_role(role_data, claims_and_roles):
 def update_role(role_data, claims_and_roles):
     """Update an existing role
 
+    Only the fields present in role_data are written -- an omitted field keeps its stored
+    value. roleName identifies the role and is never part of the update.
+
     Args:
         role_data: Dictionary with role update data
         claims_and_roles: User claims and roles for authorization
@@ -145,6 +149,7 @@ def update_role(role_data, claims_and_roles):
 
     Raises:
         AuthorizationDenied: If the caller is not authorized to update the role
+        VAMSGeneralErrorResponse: If role_data carries nothing but roleName
     """
     # Check authorization
     role_object = {
@@ -159,25 +164,25 @@ def update_role(role_data, claims_and_roles):
     if not casbin_enforcer.enforce(role_object, "PUT"):
         raise AuthorizationDenied()
 
+    # Attributes to write, excluding the key
+    updates = {field: value for field, value in role_data.items() if field != 'roleName'}
+    if not updates:
+        raise VAMSGeneralErrorResponse("No role fields supplied to update")
+
+    keys_map, values_map, update_expression = to_update_expr(updates)
+
     try:
         # Update the role
         logger.info(f"Updating role {role_data['roleName']}")
-        
+
         roles_table.update_item(
             Key={'roleName': role_data['roleName']},
-            UpdateExpression='SET description = :desc, #source = :source, sourceIdentifier = :sourceIdentifier, mfaRequired = :mfaRequired',
-            ExpressionAttributeNames={
-                '#source': 'source'
-            },
-            ExpressionAttributeValues={
-                ':desc': role_data['description'],
-                ':source': role_data.get('source'),
-                ':sourceIdentifier': role_data.get('sourceIdentifier'),
-                ':mfaRequired': role_data.get('mfaRequired', False)
-            },
+            UpdateExpression=update_expression,
+            ExpressionAttributeNames=keys_map,
+            ExpressionAttributeValues=values_map,
             ConditionExpression='attribute_exists(roleName)'
         )
-        
+
         # Return success response
         now = datetime.utcnow().isoformat()
         return RoleOperationResponseModel(
@@ -301,27 +306,36 @@ def handle_put_request(event):
             logger.error("Request body is not a string or dict")
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
-        # Validate required fields
-        if 'roleName' not in body or 'description' not in body:
-            return validation_error(body={'message': "roleName and description are required"}, event=event)
-        
+        # Validate required fields -- an update applies the fields it supplies, so roleName is the
+        # only one the request has to name. A body carrying nothing else is refused by update_role.
+        if 'roleName' not in body:
+            return validation_error(body={'message': "roleName is required"}, event=event)
+
+        # An explicit null is not the same as an omitted field: it would write NULL over a
+        # description RoleResponseModel declares as a required string, leaving the role unreadable
+        # through the listing. Omit the field to leave the stored description alone.
+        if 'description' in body and body['description'] is None:
+            return validation_error(body={'message': "description cannot be null"}, event=event)
+
         # Parse and validate the request model
         request_model = parse(body, model=UpdateRoleRequestModel)
-        
+
         # Update the role
-        result = update_role(
-            request_model.dict(exclude_unset=True),
-            claims_and_roles
-        )
-        
-        # AUDIT LOG: Role updated
-        log_auth_changes(event, "roleUpdate", {
+        update_data = request_model.dict(exclude_unset=True)
+        result = update_role(update_data, claims_and_roles)
+
+        # AUDIT LOG: Role updated -- each optional field is recorded only when the request
+        # supplied it, so an untouched MFA gate or description is not reported as having been set
+        audit_details = {
             "roleName": result.roleName,
-            "operation": "update",
-            "description": request_model.description,
-            "mfaRequired": request_model.mfaRequired
-        })
-        
+            "operation": "update"
+        }
+        if 'description' in update_data:
+            audit_details["description"] = update_data['description']
+        if 'mfaRequired' in update_data:
+            audit_details["mfaRequired"] = update_data['mfaRequired']
+        log_auth_changes(event, "roleUpdate", audit_details)
+
         # Return success response
         return success(body=result.dict())
 

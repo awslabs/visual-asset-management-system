@@ -588,17 +588,39 @@ export class ApiBuilderNestedStack extends NestedStack {
             registry: registry,
         });
 
-        // Create SQS queue for large file processing
-        const largeFileProcessingQueue = new sqs.Queue(this, "LargeFileProcessingQueue", {
-            queueName: `${config.name}-${config.env.coreStackName}-sqsUploadLargeFile-queue`,
-            visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
-            retentionPeriod: cdk.Duration.days(5),
-            deadLetterQueue: undefined, // No DLQ initially as per requirements
+        // Dead-letter queue for the large-file processing queue.
+        //
+        // Each message here is one large upload a user is waiting on. Without a DLQ a message the
+        // event source cannot land is redelivered every 15 minutes for its full 5-day retention and
+        // then discarded, with no record of which upload was lost: the same silent cycle measured on
+        // the bucket-sync queues, where 15 records circulated for 14 hours with Errors and Throttles
+        // both zero because AWS Lambda's recursive-loop detection was dropping the invocations before
+        // the handler ran. Retention is longer than the source queue's precisely so a failed upload
+        // outlives the window in which it would otherwise have expired unnoticed.
+        const largeFileProcessingDlq = new sqs.Queue(this, "LargeFileProcessingDLQ", {
+            retentionPeriod: cdk.Duration.days(14),
             encryption: storageResources.encryption.kmsKey
                 ? sqs.QueueEncryption.KMS
                 : sqs.QueueEncryption.SQS_MANAGED,
             encryptionMasterKey: storageResources.encryption.kmsKey,
             enforceSSL: true,
+        });
+
+        // Create SQS queue for large file processing
+        const largeFileProcessingQueue = new sqs.Queue(this, "LargeFileProcessingQueue", {
+            queueName: `${config.name}-${config.env.coreStackName}-sqsUploadLargeFile-queue`,
+            visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
+            retentionPeriod: cdk.Duration.days(5),
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
+            // 3 receives, matching the indexer and bucket-sync queues, so a record that cannot be
+            // processed reaches a DLQ after the same number of attempts wherever it entered VAMS.
+            // The event source mapping uses batchSize 1, so dead-lettering isolates the one failing
+            // upload rather than a batch of unrelated ones.
+            deadLetterQueue: { queue: largeFileProcessingDlq, maxReceiveCount: 3 },
         });
 
         const uploadFileFunction = buildUploadFileFunction(

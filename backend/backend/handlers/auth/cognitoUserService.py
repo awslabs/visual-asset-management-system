@@ -12,7 +12,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import API_COGNITO_USER_RESET_PASSWORD
-from common.validators import validate
+from common.validators import validate, normalize_userid, find_confusable_userid
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -39,6 +39,9 @@ retry_config = Config(
 
 cognito_client = boto3.client('cognito-idp', config=retry_config)
 logger = safeLogger(service_name="CognitoUserService")
+
+# Largest page Cognito's ListUsers accepts.
+COGNITO_LIST_USERS_PAGE_SIZE = 60
 
 # Global variables for claims and roles
 claims_and_roles = {}
@@ -68,6 +71,28 @@ def check_cognito_enabled():
     if not user_pool_id:
         logger.error("User pool ID not configured")
         raise VAMSGeneralErrorResponse("Cognito configuration error")
+
+
+def find_confusable_pool_userid(user_id):
+    """Return an existing pool username that reads the same as user_id, or None.
+
+    Cognito serves at most 60 usernames per page and offers no comparison the check could push down,
+    so the pool is walked to exhaustion. Only user creation runs this, once per created user; a
+    failure to enumerate propagates, since an unverified id must not be created.
+    """
+    params = {
+        'UserPoolId': user_pool_id,
+        'Limit': COGNITO_LIST_USERS_PAGE_SIZE
+    }
+    while True:
+        response = cognito_client.list_users(**params)
+        existing = [user.get('Username', '') for user in response.get('Users', [])]
+        collision = find_confusable_userid(user_id, existing)
+        if collision is not None:
+            return collision
+        if 'PaginationToken' not in response:
+            return None
+        params['PaginationToken'] = response['PaginationToken']
 
 
 def extract_user_attributes(user):
@@ -175,13 +200,23 @@ def create_cognito_user(user_data, claims_and_roles):
     try:
         check_cognito_enabled()
         
-        user_id = user_data['userId']
+        user_id = normalize_userid(user_data['userId'])
         email = user_data['email']
         # Handle both 'phone' and 'phoneNumber' keys for compatibility
         phone = user_data.get('phone') or user_data.get('phoneNumber')
-        
+
         logger.info(f"Creating Cognito user {user_id} with email {email} and phone {phone}")
-        
+
+        # Uniqueness of appearance, checked at creation only: an id already in the pool keeps
+        # working, and this is the last point where the author can still pick another one. Casbin
+        # compares exact strings, so the cost of a lookalike is that an operator reading the
+        # user-roles list, the constraint editor or an audit record cannot tell the two apart.
+        confusable_user_id = find_confusable_pool_userid(user_id)
+        if confusable_user_id is not None:
+            logger.error(f"userId {user_id} reads the same as the existing user {confusable_user_id}")
+            raise VAMSGeneralErrorResponse(
+                "User ID is too similar to an existing user. Choose a different user ID.")
+
         # Build user attributes
         user_attributes = [
             {'Name': 'email', 'Value': email},
@@ -214,7 +249,10 @@ def create_cognito_user(user_data, claims_and_roles):
             operation="create",
             timestamp=now
         )
-        
+
+    except VAMSGeneralErrorResponse:
+        # Re-raise VAMS errors, so the reason creation was refused reaches the caller
+        raise
     except ClientError as e:
         error_code = e.response['Error']['Code']
         logger.exception(f"Cognito error creating user: {error_code}")
@@ -232,11 +270,14 @@ def create_cognito_user(user_data, claims_and_roles):
 def update_cognito_user(user_id, update_data, claims_and_roles):
     """Update an existing Cognito user's email and/or phone
     
+    The update is partial: an attribute the request does not mention keeps the value it has.
+    Removing the stored phone number therefore takes the explicit clearPhone instruction.
+    
     Args:
         user_id: The user ID to update
-        update_data: Dictionary with update data (email and/or phone)
+        update_data: Dictionary with update data (email and/or phone, and clearPhone)
         claims_and_roles: User claims and roles for authorization
-        
+    
     Returns:
         CognitoUserOperationResponseModel with operation result
     """
@@ -245,6 +286,7 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
         
         # Handle both 'phone' and 'phoneNumber' keys for compatibility
         phone = update_data.get('phone') or update_data.get('phoneNumber')
+        clear_phone = bool(update_data.get('clearPhone'))
         
         logger.info(f"Updating Cognito user {user_id} with email {update_data.get('email')} and phone {phone}")
         
@@ -257,7 +299,8 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
                 {'Name': 'email_verified', 'Value': 'true'}
             ])
         
-        # Handle phone number - if phone has a value, set it; otherwise clear it
+        # Handle phone number - a value replaces it, clearPhone removes it, and a request
+        # carrying neither leaves the stored number alone
         if phone:
             # Phone number provided - update it and mark as verified
             user_attributes.extend([
@@ -265,8 +308,8 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
                 {'Name': 'phone_number_verified', 'Value': 'true'}
             ])
             logger.info(f"Adding phone number attribute: {phone}")
-        else:
-            # Phone number not provided or empty - set to empty and mark as not verified
+        elif clear_phone:
+            # Removal asked for explicitly - set to empty and mark as not verified
             user_attributes.extend([
                 {'Name': 'phone_number', 'Value': ''},
                 {'Name': 'phone_number_verified', 'Value': 'false'}
@@ -503,7 +546,10 @@ def handle_post_request(event):
             user_id = path_parameters.get('userId')
             if not user_id:
                 return validation_error(body={'message': "userId is required"}, event=event)
-            
+
+            # The stored id is the normalized one, so the lookup normalizes too
+            user_id = normalize_userid(user_id)
+
             # Validate userId
             (valid, message) = validate({
                 'userId': {
@@ -621,6 +667,9 @@ def handle_put_request(event):
         if not user_id:
             return validation_error(body={'message': "userId is required"}, event=event)
         
+        # The stored id is the normalized one, so the lookup normalizes too
+        user_id = normalize_userid(user_id)
+        
         # Validate userId
         (valid, message) = validate({
             'userId': {
@@ -650,13 +699,49 @@ def handle_put_request(event):
             logger.error("Request body is not a string or dict")
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
-        # Parse and validate the request model
-        request_model = parse(body, model=UpdateCognitoUserRequestModel)
+        # clearPhone is the explicit instruction to remove the stored number - the update model
+        # carries email and phone only, so the instruction is read from the body and checked here
+        clear_phone = False
+        if isinstance(body, dict) and 'clearPhone' in body:
+            # The dispatcher takes string values, so the JSON boolean is rendered before it is
+            # checked - passed raw it is refused as the wrong type rather than read as a boolean
+            instruction = str(body['clearPhone'])
+            (valid, message) = validate({
+                'clearPhone': {
+                    'value': instruction,
+                    'validator': 'BOOL'
+                }
+            })
+            if not valid:
+                logger.error(message)
+                return validation_error(body={'message': message}, event=event)
+            clear_phone = instruction.strip().lower() == 'true'
+
+        if clear_phone and body.get('phone'):
+            logger.error(f"Update for user {user_id} carries both a phone number and clearPhone")
+            return validation_error(
+                body={'message': "phone and clearPhone cannot both be sent"}, event=event)
+
+        if clear_phone and 'email' not in body:
+            # A request whose only instruction is the removal carries neither of the fields the
+            # update model accepts. An email the request does carry is parsed and validated,
+            # so an unusable one is reported rather than dropped
+            update_data = {'clearPhone': True}
+            audit_email = None
+            audit_phone = None
+        else:
+            # Parse and validate the request model
+            request_model = parse(body, model=UpdateCognitoUserRequestModel)
+            update_data = request_model.dict(exclude_unset=True)
+            if clear_phone:
+                update_data['clearPhone'] = True
+            audit_email = request_model.email
+            audit_phone = request_model.phone
         
         # Update the user
         result = update_cognito_user(
             user_id,
-            request_model.dict(exclude_unset=True),
+            update_data,
             claims_and_roles
         )
         
@@ -664,8 +749,9 @@ def handle_put_request(event):
         log_auth_changes(event, "cognitoUserUpdate", {
             "userId": result.userId,
             "operation": "update",
-            "email": request_model.email,
-            "phone": request_model.phone
+            "email": audit_email,
+            "phone": audit_phone,
+            "clearPhone": clear_phone
         })
         
         return success(body=result.dict())
@@ -697,7 +783,10 @@ def handle_delete_request(event):
         user_id = path_parameters.get('userId')
         if not user_id:
             return validation_error(body={'message': "userId is required"}, event=event)
-        
+
+        # The stored id is the normalized one, so the lookup normalizes too
+        user_id = normalize_userid(user_id)
+
         # Validate userId
         (valid, message) = validate({
             'userId': {

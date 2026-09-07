@@ -489,3 +489,179 @@ class TestEmptyPolicyTextIsNotRetried:
         assert len(slept.call_args_list) <= authz.CASBIN_GET_POLICY_RETRY_ATTEMPTS - 1
         # A failed read must not be cached as this user's policy.
         assert "failing-read-user" not in authz.casbin_user_policy_map
+
+
+@pytest.mark.unit
+class TestNoScanReaderIsHeldAtModuleLevel:
+    """The scan assertions above are made against a client patched in after import.
+
+    A scan reader built once at import time is therefore invisible to them: the module held
+    ``paginator = _dynamodb_client.get_paginator("scan")`` beside the client, and the reads
+    went through that global rather than through the client the tests substitute. Patching
+    ``_dynamodb_client`` does not repoint an already-built paginator, so ``paginator_calls ==
+    []`` was satisfied by the scan happening somewhere the fake could not see.
+
+    The claim is therefore made about the MODULE, where a reintroduced global would live.
+    """
+
+    def test_no_scan_reader_is_built_beside_the_client(self):
+        # The control: the client the reads DO go through is present, so the absence below is
+        # about a scan reader specifically and not about a module that holds no reader at all.
+        assert hasattr(authz, "_dynamodb_client")
+
+        assert not hasattr(authz, "paginator"), (
+            "a module-level scan reader is back; the fake-client scan assertions in this file "
+            "cannot observe reads made through it")
+
+    def test_the_client_the_reads_use_is_the_one_a_test_can_substitute(self):
+        """Pins what makes every other assertion in this file non-vacuous.
+
+        Each read must resolve ``_dynamodb_client`` at call time from the module, so patching
+        the attribute intercepts it. A reader captured at import (a paginator, a bound method,
+        a module-level alias) would leave these tests asserting about a client nothing calls.
+        """
+        client = _FakeDynamoClient(user_role_pages=[{"Items": [_assignment("u1", "roleA")]}])
+        svc = _service(mfa=True)
+
+        with patch.object(authz, "_dynamodb_client", client):
+            svc._read_current_user_roles_from_table()
+
+        assert client.query_calls
+
+
+@pytest.fixture
+def _clean_end_to_end_policy_cache():
+    """The same scoped cleanup as _clean_policy_cache, for the ids used below.
+
+    Kept separate rather than added to that fixture's list so each set of tests names the ids
+    it is responsible for.
+    """
+    ids = ["e2e-unprovisioned", "e2e-assigned", "e2e-failing-query"]
+    for user_id in ids:
+        authz.casbin_user_policy_map.pop(user_id, None)
+    yield
+    for user_id in ids:
+        authz.casbin_user_policy_map.pop(user_id, None)
+
+
+@pytest.mark.unit
+class TestARoleLessUserIsDeniedFromTheRealReadPath:
+    """Joins the two halves the rest of the file proves separately.
+
+    ``TestEmptyPolicyTextIsNotRetried`` stubs ``_create_policy_text_helper`` to return ``""``,
+    and the read tests never go through ``_create_policy_text``. Neither therefore states the
+    reported behaviour itself: that a caller whose assignment Query returns ZERO ROWS reaches
+    the deny-all without sleeping, having read the tables once. Composed here, so a change that
+    reintroduced the retry — or that stopped producing an empty policy text for a role-less
+    caller — fails a test whichever half it lands in.
+
+    Both session kinds are driven, because they take different read paths to the same empty
+    result: an MFA session reads assignments only, a non-MFA session also reads each named
+    role by key. With no assignments there is no name to read, which the get_item assertion
+    states rather than assumes.
+    """
+
+    @pytest.mark.parametrize("mfa", [True, False])
+    def test_zero_assignments_deny_without_sleeping(
+            self, mfa, _clean_end_to_end_policy_cache):
+        client = _FakeDynamoClient(user_role_pages=[{"Items": []}])
+        svc = _service(user_id="e2e-unprovisioned", mfa=mfa)
+
+        with patch.object(authz, "_dynamodb_client", client), \
+             patch.object(authz.time, "sleep") as slept:
+            policy_text = svc._create_policy_text()
+
+        assert policy_text == authz.POLICY_TEXT_DENY_ALL
+        assert slept.call_args_list == []
+        # One partition read, and nothing else: no retry cycle re-ran the reads, and with no
+        # assignment there is no role name to look up.
+        assert client.tables_queried() == [USER_ROLES_TABLE]
+        assert client.get_item_calls == []
+        assert client.scan_calls == []
+
+    @pytest.mark.parametrize("mfa", [True, False])
+    def test_an_assigned_role_still_becomes_a_grant_on_the_same_path(
+            self, mfa, _clean_end_to_end_policy_cache):
+        """Positive control: the path under test still builds a policy when there is one.
+
+        Without this, "denies with no sleeps" would be equally satisfied by a build that had
+        stopped granting anything at all.
+        """
+        client = _FakeDynamoClient(
+            user_role_pages=[{"Items": [_assignment("e2e-assigned", "roleA")]}],
+            roles={"roleA": {"roleName": {"S": "roleA"}}},
+        )
+        svc = _service(user_id="e2e-assigned", mfa=mfa)
+
+        with patch.object(authz, "_dynamodb_client", client), \
+             patch.object(authz.time, "sleep") as slept:
+            policy_text = svc._create_policy_text()
+
+        assert policy_text != authz.POLICY_TEXT_DENY_ALL
+        assert _roles_granted(policy_text) == ["roleA"]
+        assert slept.call_args_list == []
+        assert client.scan_calls == []
+        # The non-MFA session resolves the role record by key; the MFA session has no need to.
+        assert bool(client.role_names_read()) is (not mfa)
+
+    def test_a_failing_assignment_query_still_retries_and_is_not_cached(
+            self, _clean_end_to_end_policy_cache):
+        """The distinction the empty case rests on, stated at the read rather than the helper.
+
+        "The Query returned nothing" and "the Query failed" must not collapse into one
+        outcome: the first is this caller's answer, the second is unknown and keeps its
+        retries and its refusal to cache.
+        """
+        class _FailingQuery(_FakeDynamoClient):
+            def query(self, **kwargs):
+                self.query_calls.append(kwargs)
+                raise RuntimeError("throttled")
+
+        client = _FailingQuery(user_role_pages=[{"Items": []}])
+        svc = _service(user_id="e2e-failing-query", mfa=True)
+
+        with patch.object(authz, "_dynamodb_client", client), \
+             patch.object(authz.time, "sleep") as slept:
+            policy_text = svc._create_policy_text()
+
+        assert policy_text == authz.POLICY_TEXT_DENY_ALL
+        assert len(slept.call_args_list) >= 1
+        assert len(slept.call_args_list) <= authz.CASBIN_GET_POLICY_RETRY_ATTEMPTS - 1
+        # Retried means re-read: the empty case above reads once, this one reads per attempt.
+        assert len(client.query_calls) == authz.CASBIN_GET_POLICY_RETRY_ATTEMPTS
+        assert "e2e-failing-query" not in authz.casbin_user_policy_map
+
+
+@pytest.mark.unit
+class TestRolesTableReadCostScalesWithTheCaller:
+    """The bound the by-key read exists to establish: the roles table's SIZE does not enter.
+
+    ``TestRoleRecordReads`` names roles that must not have been read, which holds only for the
+    names it thought to list. Stated here as a COUNT instead, over two deployments whose role
+    tables differ twentyfold, so it also covers a read of a role the test never named — the
+    property a filtered Scan cannot have however narrow its filter.
+    """
+
+    @staticmethod
+    def _client(assigned, roles_in_table):
+        return _FakeDynamoClient(
+            user_role_pages=[{"Items": [_assignment("u1", name) for name in assigned]}],
+            roles={name: {"roleName": {"S": name}} for name in roles_in_table},
+        )
+
+    @pytest.mark.parametrize("deployment_role_count", [2, 40])
+    def test_reads_are_bounded_by_the_callers_distinct_assignments(self, deployment_role_count):
+        others = [f"other{index}" for index in range(deployment_role_count)]
+        client = self._client(["roleA", "roleB", "roleA"], ["roleA", "roleB"] + others)
+        svc = _service(mfa=False)
+
+        with patch.object(authz, "_dynamodb_client", client):
+            policy_text = svc._create_policy_text_helper()
+
+        # Control: the reads that did happen are the ones that produced the grants, so the
+        # count below is a bound on real work rather than on a build that read nothing.
+        assert sorted(set(_roles_granted(policy_text))) == ["roleA", "roleB"]
+        # Two distinct assignments, two role reads, whatever the deployment holds. The
+        # duplicate assignment adds no read either.
+        assert len(client.get_item_calls) == 2
+        assert client.scan_calls == []

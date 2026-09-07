@@ -553,9 +553,10 @@ export class VPCBuilderNestedStack extends NestedStack {
             });
 
             // Create VPC endpoint for AWS Deadline Cloud (management API) when the DeadlineCloud
-            // execution type is enabled. The job-callback lambda is the only in-VPC caller
-            // (deadline:GetJob), so the endpoint is created only when lambdas run in the VPC —
-            // job submission itself is a Step Functions service integration and never traverses
+            // execution type is enabled. The in-VPC callers are the job-callback lambda
+            // (deadline:GetJob) and the abort and error-handler lambdas that cancel a registered
+            // farm job, so the endpoint is created only when lambdas run in the VPC — job
+            // submission itself is a Step Functions service integration and never traverses
             // the VPC. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so config
             // validation blocks enabling the type there and this endpoint is never created in
             // those partitions.

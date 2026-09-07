@@ -36,6 +36,13 @@ class ConfigError(RuntimeError):
     """Raised when configuration is missing or invalid."""
 
 
+# Ceiling for VAMS_PAGE_SIZE. The metadata GETs refuse a pageSize above 1000 with a 400 rather than
+# reducing it, and this one value is sent as pageSize on every paged read, so a larger clamp lets an
+# operator's environment variable turn an ordinary metadata read into an error. Every other paged
+# route accepts 1000, and the routes with a tighter limit of their own apply it at the call site.
+MAX_PAGE_SIZE = 1000
+
+
 @dataclass(frozen=True)
 class Config:
     profile: Optional[str] = None
@@ -63,5 +70,5 @@ class Config:
             # Destructive tools require writes to also be enabled.
             enable_destructive=enable_destructive and enable_writes,
             max_pages=max(1, max_pages),
-            page_size=max(1, min(page_size, 2000)),
+            page_size=max(1, min(page_size, MAX_PAGE_SIZE)),
         )

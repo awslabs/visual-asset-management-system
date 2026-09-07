@@ -29,6 +29,7 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 
 from common.validators import validate
 from common.resourceNames import get_table_name, ResourceKeys
+from common.dynamodb import validate_pagination_info
 from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -62,8 +63,9 @@ from common.workflows.triggerTemplateValidation import (
 
 logger = safeLogger(service_name="WorkflowTriggerService")
 
-dynamodb = boto3.resource("dynamodb")
-s3_client = boto3.client("s3")
+retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+s3_client = boto3.client("s3", config=retry_config)
 
 # The headless-template checks read the parent workflow's pipeline records and their default templates
 # advisorily: an unreadable table skips the check. Those reads are bounded so an unreachable table
@@ -89,6 +91,13 @@ OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
+
+# Page a trigger listing serves when the caller asks for no size, and the ceiling on one it does ask
+# for. A trigger row carries its whole triggerConfig (up to 250 x 512-char input filter patterns and
+# 100 defaultTemplateIds entries), so the remainder is offered as a NextToken rather than
+# accumulated into one synchronous response.
+DEFAULT_LIST_PAGE_ITEMS = 100
+MAX_LIST_PAGE_ITEMS = 500
 
 
 def _build_file_upload_config(request):
@@ -378,15 +387,46 @@ def _row_to_response(row):
     )
 
 
-def list_triggers(database_id, workflow_id):
+def _pagination_config(query_params):
+    """Boto3 paginator config from the validated query params (validate_pagination_info fills
+    maxItems/pageSize/startingToken). Both sizes are clamped to MAX_LIST_PAGE_ITEMS so a caller
+    cannot ask one request to accumulate the whole partition; the remainder is reachable through
+    NextToken. Mirrors workflowService._pagination_config, so a token minted here is the same
+    opaque encoding every other workflow-domain listing produces."""
+    max_items = min(int(query_params["maxItems"]), MAX_LIST_PAGE_ITEMS)
+    page_size = min(int(query_params["pageSize"]), max_items)
+    return {
+        "MaxItems": max_items,
+        "PageSize": page_size,
+        "StartingToken": query_params["startingToken"],
+    }
+
+
+def list_triggers(database_id, workflow_id, query_params):
+    """One bounded page of the workflow's triggers, plus a NextToken while more remain.
+
+    A workflow may carry several triggers of one base type, each with its own inputFileFilters and
+    defaultTemplateIds, so the row set can outgrow both a single query page and a synchronous
+    response. The page is served through the botocore paginator, which reads past DynamoDB's own
+    1 MB boundary to fill it and encodes the resume position as the opaque string the
+    startingToken parameter accepts.
+
+    ``query_params`` has already been through validate_pagination_info, which is where the
+    maxItems/pageSize/startingToken defaults come from."""
     composite = wr.workflow_composite_key(database_id, workflow_id)
-    items = []
-    response = _triggers_table().query(
-        KeyConditionExpression=Key("workflowDatabaseId:workflowId").eq(composite)
-    )
-    for row in response.get("Items", []):
-        items.append(_row_to_response(row))
-    return GetTriggersResponseModel(Items=items)
+
+    paginator = dynamodb.meta.client.get_paginator("query")
+    page = paginator.paginate(
+        TableName=triggers_table_name,
+        KeyConditionExpression=Key("workflowDatabaseId:workflowId").eq(composite),
+        PaginationConfig=_pagination_config(query_params),
+    ).build_full_result()
+
+    result = GetTriggersResponseModel(
+        Items=[_row_to_response(row) for row in page.get("Items", [])])
+    if "NextToken" in page:
+        result.NextToken = page["NextToken"]
+    return result
 
 
 def get_trigger(database_id, workflow_id, trigger_type):
@@ -537,6 +577,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     logger.info(event)
     try:
         path_parameters = event.get("pathParameters", {}) or {}
+        query_parameters = event.get("queryStringParameters", {}) or {}
+        # Bound the default page: an unparameterized trigger listing returns a small page plus a
+        # NextToken rather than accumulating the partition into one response (Rule 15 / 6 MB cap).
+        validate_pagination_info(query_parameters, DEFAULT_LIST_PAGE_ITEMS)
         method = event["requestContext"]["http"]["method"]
 
         claims_and_roles = request_to_claims(event)
@@ -597,7 +641,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 if not row:
                     return validation_error(status_code=404, body={"message": "Trigger not found"}, event=event)
                 return success(body={"message": _row_to_response(row).dict()})
-            return success(body={"message": list_triggers(database_id, workflow_id).dict()})
+            return success(body={
+                "message": list_triggers(database_id, workflow_id, query_parameters).dict()})
 
         if method == "PUT":
             if not trigger_type:

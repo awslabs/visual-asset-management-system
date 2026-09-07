@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field
 from pydantic import ValidationError as PydanticValidationError
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
+from common.validators import trim_name
 from models.common import validation_error_message
 from common.workflows import executionValidation as ev
 from common.workflows import templateRender as tr
@@ -155,6 +156,16 @@ def validate_no_control_characters(value, field_name):
         raise ValueError(f"{field_name} must not contain control characters or line breaks")
 
 
+def reject_control_characters(value, field):
+    """Field-validator form of validate_no_control_characters, for wiring as a `pre=True` validator.
+
+    Declared BEFORE the trim on the same field so the rule sees the value as submitted: `.strip()`
+    removes a trailing newline, tab or NEL, which would otherwise turn a rejection into a silent
+    normalization of the exact shape the guard exists to refuse."""
+    validate_no_control_characters(value, field.name)
+    return value
+
+
 def _validate_system_config_shape(cfg, context):
     """Validate the shared systemConfig value shapes used by both pipeline systemConfig and a
     template's `overrides`: inputFileArity enum, assetScope/metadataInputs boolean maps with known
@@ -231,12 +242,19 @@ def _validate_input_file_filters(filters, context):
 
 
 def _validate_template_overrides(overrides):
-    """Validate a template's `overrides` object at save time: only the overridable keys are allowed,
-    and each present value is validated against the shared systemConfig shape. No-op when absent."""
+    """Validate a template's `overrides` object at save time: the block's serialized size is bounded
+    as systemConfig's is, only the overridable keys are allowed, and each present value is validated
+    against the shared systemConfig shape. No-op when absent."""
     if overrides is None:
         return
     if not isinstance(overrides, dict):
         raise ValueError("overrides must be an object")
+    # Same budget as systemConfig, for the same reason: overrides is stored whole on the template row
+    # beside an inline body of up to templateBodyStorage.INLINE_THRESHOLD_BYTES, and its own
+    # inputFileFilters caps multiply out to ~257 KB — well past what the row can hold. Bounding it
+    # here makes an oversized block a 400 at parse time instead of an unpersistable item discovered
+    # by put_item.
+    _validate_config_block_size(overrides, "overrides")
     for key in overrides:
         if key not in TEMPLATE_OVERRIDE_KEYS:
             raise ValueError(
@@ -553,7 +571,7 @@ def _execution_config_sub_block(config, key):
     return block
 
 
-def _validate_execution_config(execution_config, require_lambda_resource_id=False):
+def _validate_execution_config(execution_config):
     """Validate the executionConfig block beyond executionType: the per-type resource sub-fields
     (which are baked into the deployed Step Functions definition), the top-level key set and size, and
     the callback/timeout scalars.
@@ -562,10 +580,12 @@ def _validate_execution_config(execution_config, require_lambda_resource_id=Fals
     EventBridge ARN/source/detailType, an out-of-bounds taskTimeout, or an invalid waitForCallback is
     rejected at parse time rather than emitted into a broken state machine.
 
-    `require_lambda_resource_id` demands a Lambda target rather than accepting an empty one. It is set
-    on the update path, where the stored config is replaced wholesale and nothing fills an absent
-    resourceId, so an empty value would persist a state machine target of "". On create an empty value
-    is the request to auto-provision a function, which the handler does before the row is written.
+    An EMPTY `lambda.resourceId` is accepted on both create and update, because it is not the request
+    it looks like: on create it asks the handler to auto-provision a function, and on update it asks
+    to keep the function the row already runs. Neither can be settled here — the model sees no stored
+    row — so the guarantee that a Lambda-type row never persists an empty invoke target lives in
+    pipelineService.create_pipeline / update_pipeline, via _carry_over_provisioned_lambda followed by
+    _provision_lambda_for_pipeline, which raises when the deployment cannot provision one.
     Raises ValueError on failure."""
     from common.validators import validate
     config = execution_config or {}
@@ -582,8 +602,6 @@ def _validate_execution_config(execution_config, require_lambda_resource_id=Fals
         # Lambda function ARN (partition-aware) or a bare function name/alias. Reject anything
         # else so a malformed target is caught at authoring time, not at execute time.
         resource_id = _execution_config_sub_block(config, "lambda").get("resourceId")
-        if not resource_id and require_lambda_resource_id:
-            raise ValueError("lambda.resourceId is required for the Lambda execution type")
         if resource_id:
             if not isinstance(resource_id, str):
                 raise ValueError("lambda.resourceId must be a string")
@@ -687,6 +705,19 @@ class CreatePipelineRequestModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = Field(default_factory=dict)
     enabled: Optional[bool] = True
 
+    # pipelineName and category are the ABAC CONSTRAINT fields (surfaced as `name` / `category` on
+    # the Tier-2 Casbin object) and both reach single-line log entries, so a control character in
+    # either is refused rather than normalized away. `description` is deliberately excluded — not an
+    # ABAC field, and the web offers it as a multi-line textarea.
+    _reject_control_chars = validator(
+        'pipelineName', 'category', pre=True, allow_reuse=True)(reject_control_characters)
+    # Names and ids then trim their surrounding whitespace; interior whitespace is preserved.
+    # pipelineName and category carry no regex, so ' Prod ' and 'Prod' would otherwise be two rows a
+    # reader cannot tell apart, and a grant written for one would miss the other.
+    _trim_names = validator(
+        'databaseId', 'pipelineId', 'pipelineName', 'category',
+        pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         _validate_id(values.get("databaseId"), allow_global=True)
@@ -697,13 +728,6 @@ class CreatePipelineRequestModel(BaseModel, extra='ignore'):
             raise ValueError(f"executionType must be one of {PIPELINE_EXECUTION_TYPES}")
         _validate_execution_config(values.get("executionConfig"))
         _validate_pipeline_system_config(values.get("systemConfig"))
-        # pipelineName and category are the ABAC CONSTRAINT fields (surfaced as `name` / `category`
-        # on the Tier-2 Casbin object): a `^<value>$` policy rule matches a trailing newline in
-        # Python, so a distinct stored name would satisfy a grant written for another.
-        # `description` is deliberately excluded — not an ABAC field, and the web offers it as a
-        # multi-line textarea, so guarding it rejected exactly what that control produces.
-        for field in ("pipelineName", "category"):
-            validate_no_control_characters(values.get(field), field)
         return values
 
 
@@ -719,6 +743,12 @@ class UpdatePipelineRequestModel(BaseModel, extra='ignore'):
     # path re-registration of a built-in takes to restore an archived row).
     archived: Optional[bool] = None
 
+    # The same two rules as the create model, in the same order, so the paths agree on what is
+    # refused and on the stored spelling.
+    _reject_control_chars = validator(
+        'pipelineName', 'category', pre=True, allow_reuse=True)(reject_control_characters)
+    _trim_names = validator('pipelineName', 'category', pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         if not any(v is not None for v in values.values()):
@@ -730,13 +760,6 @@ class UpdatePipelineRequestModel(BaseModel, extra='ignore'):
                 raise ValueError(f"executionType must be one of {PIPELINE_EXECUTION_TYPES}")
             _validate_execution_config(exec_config)
         _validate_pipeline_system_config(values.get("systemConfig"))
-        # pipelineName and category are the ABAC CONSTRAINT fields (surfaced as `name` / `category`
-        # on the Tier-2 Casbin object): a `^<value>$` policy rule matches a trailing newline in
-        # Python, so a distinct stored name would satisfy a grant written for another.
-        # `description` is deliberately excluded — not an ABAC field, and the web offers it as a
-        # multi-line textarea, so guarding it rejected exactly what that control produces.
-        for field in ("pipelineName", "category"):
-            validate_no_control_characters(values.get(field), field)
         return values
 
 
@@ -774,7 +797,8 @@ class GetPipelinesResponseModel(BaseModel, extra='ignore'):
 
 def _validate_tag_schema_field_bounds(tag_schema):
     """Run each raw tag definition through TemplateTagFieldModel so its per-field bounds (key/label/
-    description/enum/default lengths) apply on the paths that carry the schema as a plain dict list.
+    description/enum/default lengths) apply on the paths that carry the schema as a plain dict list,
+    and reject a key the definition does not declare.
 
     The entries stay dicts: the declared-schema rules run in
     common/workflows/templateTagSchema.validate_tag_schema, which inspects dicts, and the handler
@@ -787,9 +811,18 @@ def _validate_tag_schema_field_bounds(tag_schema):
         raise ValueError("tagSchema must be a list of tag definitions")
     if len(tag_schema) > MAX_TAG_SCHEMA_FIELDS:
         raise ValueError(f"tagSchema may contain at most {MAX_TAG_SCHEMA_FIELDS} tag definitions")
+    allowed_keys = tuple(TemplateTagFieldModel.__fields__)
     for index, field in enumerate(tag_schema):
         if not isinstance(field, dict):
             raise ValueError(f"tagSchema[{index}] must be an object")
+        # The definition is persisted verbatim and every reader resolves a named key with .get(), so a
+        # misspelled one is neither read nor reported: `requried` leaves the tag OPTIONAL and a run
+        # that supplies no value renders it empty, and `Type` leaves it a string. Rejecting the key
+        # turns that into a 400 rather than a schema weaker than the one authored.
+        for key in field:
+            if key not in allowed_keys:
+                raise ValueError(
+                    f"tagSchema[{index}] has unknown key '{key}'; allowed: {allowed_keys}")
         try:
             TemplateTagFieldModel(**field)
         except PydanticValidationError as e:
@@ -823,6 +856,14 @@ class CreateTemplateRequestModel(BaseModel, extra='ignore'):
     # table); when omitted the template has no user-defined tags.
     tagSchema: Optional[List[Dict[str, Any]]] = None
 
+    # templateName reaches single-line log entries, so a control character in it is refused. The
+    # multi-line bodies (configBody, webFormJson, inputInstructions) are exempt — authored documents.
+    _reject_control_chars = validator(
+        'templateName', pre=True, allow_reuse=True)(reject_control_characters)
+    # templateName carries no regex, so a padded spelling would otherwise be a second template a
+    # reader cannot distinguish from the first.
+    _trim_names = validator('templateId', 'templateName', pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         if values.get("templateId"):
@@ -834,9 +875,6 @@ class CreateTemplateRequestModel(BaseModel, extra='ignore'):
         # user tag by its declaration without reading the stored schema.
         _validate_template_bodies(values.get("configFormat"), values.get("configBody"),
                                   values.get("webFormJson"), values.get("tagSchema"))
-        # templateName reaches single-line log entries. The multi-line bodies (configBody,
-        # webFormJson, inputInstructions) are exempt — they are authored documents.
-        validate_no_control_characters(values.get("templateName"), "templateName")
         _validate_tag_schema_field_bounds(values.get("tagSchema"))
         return values
 
@@ -854,6 +892,11 @@ class UpdateTemplateRequestModel(BaseModel, extra='ignore'):
     isDefault: Optional[bool] = None
     tagSchema: Optional[List[Dict[str, Any]]] = None
 
+    # The same two rules as the create model, in the same order.
+    _reject_control_chars = validator(
+        'templateName', pre=True, allow_reuse=True)(reject_control_characters)
+    _trim_names = validator('templateName', pre=True, allow_reuse=True)(trim_name)
+
     @root_validator
     def validate_fields(cls, values):
         if not any(v is not None for v in values.values()):
@@ -865,9 +908,6 @@ class UpdateTemplateRequestModel(BaseModel, extra='ignore'):
         # user tag by its declaration without reading the stored schema.
         _validate_template_bodies(values.get("configFormat"), values.get("configBody"),
                                   values.get("webFormJson"), values.get("tagSchema"))
-        # templateName reaches single-line log entries. The multi-line bodies (configBody,
-        # webFormJson, inputInstructions) are exempt — they are authored documents.
-        validate_no_control_characters(values.get("templateName"), "templateName")
         _validate_tag_schema_field_bounds(values.get("tagSchema"))
         return values
 
@@ -910,6 +950,21 @@ class SetTagSchemaRequestModel(BaseModel, extra='ignore'):
     validated against the shared primitive type set + reserved-key rules by the handler."""
     fields: List[TemplateTagFieldModel] = Field(
         default_factory=list, max_items=MAX_TAG_SCHEMA_FIELDS)
+
+    @root_validator(pre=True)
+    def validate_raw_fields(cls, values):
+        # Pre-parse, because the typed list is what this path persists: TemplateTagFieldModel is
+        # extra='ignore', so by the time the models exist an unrecognized key has already been dropped
+        # and the entry reads back as that field's default. The raw dicts are the only place the key is
+        # still visible. An entry the caller supplied as an already-parsed TemplateTagFieldModel — which
+        # the typed field accepts — is normalized back to its declared keys rather than read as a
+        # non-object: it can hold no unrecognized key, and every entry keeps its position so a reported
+        # index names the entry the caller wrote.
+        raw = values.get("fields")
+        if isinstance(raw, list):
+            _validate_tag_schema_field_bounds(
+                [f.dict() if isinstance(f, TemplateTagFieldModel) else f for f in raw])
+        return values
 
 
 class TagSchemaResponseModel(BaseModel, extra='ignore'):

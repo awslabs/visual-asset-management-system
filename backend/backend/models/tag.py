@@ -6,7 +6,7 @@
 from typing import List, Optional, Literal
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
-from common.validators import validate, object_name_pattern
+from common.validators import validate, object_name_pattern, trim_name
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="TagModels")
@@ -14,6 +14,13 @@ logger = safeLogger(service_name="TagModels")
 # Maximum length of a pagination token. Tokens this service issues are a
 # base64-encoded DynamoDB LastEvaluatedKey, well under this bound.
 MAX_TAG_TOKEN_LENGTH = 4096
+
+# Pagination ceilings. Both listings feed maxItems into a boto3 paginator's PaginationConfig with
+# build_full_result(), which accumulates pages until the budget is spent, so an uncapped value walks
+# the table to exhaustion inside one invocation. The values match the shared ceilings in
+# common/dynamodb.py, which the same handler falls back to when this model rejects a request.
+MAX_TAG_LIST_MAX_ITEMS = 30000
+MAX_TAG_LIST_PAGE_SIZE = 10000
 
 
 def _normalize_required_flag(v):
@@ -38,16 +45,20 @@ def _normalize_required_flag(v):
 
 class GetTagsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing tags"""
-    maxItems: Optional[int] = Field(default=30000, ge=1)
-    pageSize: Optional[int] = Field(default=3000, ge=1)
+    maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_TAG_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=3000, ge=1, le=MAX_TAG_LIST_PAGE_SIZE)
     startingToken: Optional[str] = Field(default=None, max_length=MAX_TAG_TOKEN_LENGTH)
 
 class CreateTagRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new tag"""
-    tagName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    tagTypeName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    
+    tagName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256)
+    tagTypeName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+
+    _trim_names = validator('tagName', 'tagTypeName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
     databaseId: Optional[str] = None  # None/absent = global scope
     @root_validator
     def validate_fields(cls, values):
@@ -83,10 +94,14 @@ class CreateTagRequestModel(BaseModel, extra='ignore'):
 
 class UpdateTagRequestModel(BaseModel, extra='ignore'):
     """Request model for updating an existing tag"""
-    tagName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
-    tagTypeName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    
+    tagName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256)
+    tagTypeName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+
+    _trim_names = validator('tagName', 'tagTypeName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
     databaseId: Optional[str] = None  # None/absent = global scope
     @root_validator
     def validate_fields(cls, values):
@@ -147,16 +162,20 @@ class TagOperationResponseModel(BaseModel, extra='ignore'):
 
 class GetTagTypesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing tag types"""
-    maxItems: Optional[int] = Field(default=30000, ge=1)
-    pageSize: Optional[int] = Field(default=3000, ge=1)
+    maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_TAG_LIST_MAX_ITEMS)
+    pageSize: Optional[int] = Field(default=3000, ge=1, le=MAX_TAG_LIST_PAGE_SIZE)
     startingToken: Optional[str] = Field(default=None, max_length=MAX_TAG_TOKEN_LENGTH)
 
 class CreateTagTypeRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new tag type"""
-    tagTypeName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    tagTypeName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256)
     required: Optional[str] = Field(default="False", regex="^(True|False)$")
 
+    _trim_names = validator('tagTypeName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
     _normalize_required = validator('required', pre=True, allow_reuse=True)(_normalize_required_flag)
     databaseId: Optional[str] = None  # None/absent = global scope
 
@@ -195,10 +214,14 @@ class CreateTagTypeRequestModel(BaseModel, extra='ignore'):
 
 class UpdateTagTypeRequestModel(BaseModel, extra='ignore'):
     """Request model for updating an existing tag type"""
-    tagTypeName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
-    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    tagTypeName: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256)
     required: Optional[str] = Field(default="False", regex="^(True|False)$")
 
+    _trim_names = validator('tagTypeName', pre=True, allow_reuse=True)(trim_name)
+
+    # Free-form caller text trims its surrounding whitespace before the length check.
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
     _normalize_required = validator('required', pre=True, allow_reuse=True)(_normalize_required_flag)
     databaseId: Optional[str] = None  # None/absent = global scope
 

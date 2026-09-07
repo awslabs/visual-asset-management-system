@@ -4,7 +4,8 @@
  */
 
 import { apiClient } from "../../../services/apiClient";
-import { toTuple } from "./client";
+import { toTuple, toTupleWithWarnings } from "./client";
+import type { ResultWithWarnings } from "./client";
 import type { ExecuteRequest, Execution, ExecutionDetail, ExecuteResponse } from "../types";
 
 export async function executeWorkflow(
@@ -81,11 +82,18 @@ export async function getExecutionLogs(
     });
 }
 
+/**
+ * Abort an execution, or every active execution in a group. The abort itself always succeeds, but
+ * the response carries a `warnings` array when a registered sub-process could not be stopped — a
+ * Batch job or Deadline Cloud farm job left running after the execution is marked ABORTED. Read with
+ * `toTupleWithWarnings` because the backend puts `warnings` beside `message`, which the plain
+ * `toTuple` reader would drop; that array is the only signal the compute was not released.
+ */
 export async function abortExecution(
     executionId: string,
     groupId?: string
-): Promise<[boolean, any]> {
-    return toTuple(() => {
+): Promise<[boolean, ResultWithWarnings | string]> {
+    return toTupleWithWarnings(() => {
         const opts = groupId ? { queryStringParameters: { groupId } } : {};
         return apiClient.del(`workflows/executions/${executionId}`, opts);
     });

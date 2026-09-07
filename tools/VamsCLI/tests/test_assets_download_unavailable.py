@@ -212,3 +212,98 @@ class TestFlattenConflictDoesNotInvokeTheListCommand:
             assert 'unexpected extra argument' not in result.output
             assert 'Try ' not in result.output  # Click's "Try '... --help' for help." usage footer
             mocks['api_client'].list_assets.assert_not_called()
+
+
+class TestShareableLinksNameTheReasonAFileWasSkipped:
+    """The `--shareable-links-only` sibling of the defect above.
+
+    That path does not download, so a refusal cannot be a "failed download" — it is legitimately a skip.
+    What it must not do is discard the reason. `generate_presigned_urls` records an `error` per key,
+    INCLUDING the request-level error when a whole chunk is rejected, and the file-download branch a few
+    lines below already reads it. This branch dropped it and reported only
+    "N file(s) skipped - not available for download".
+
+    MEASURED live against a deployment, which is how it was found: a non-distributable asset returned
+    `25 file(s) skipped - not available for download` while the API had answered
+    `400 VAMS General Error: Asset not distributable`. The caller was told neither the cause nor anything
+    it could act on — and "not available for download" reads like a per-file property (archived, missing)
+    rather than one asset-level flag they can change.
+    """
+
+    @patch('vamscli.commands.assets.generate_presigned_urls')
+    def test_the_api_reason_reaches_the_message_and_the_payload(
+        self, mock_urls, cli_runner, assets_command_mocks
+    ):
+        reason = ('Failed to generate bulk download URLs: Invalid request (400): '
+                  'VAMS General Error: Asset not distributable')
+        with assets_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = _listing('/a.glb', '/b.laz')
+            mock_urls.return_value = {
+                '/a.glb': {'error': reason},
+                '/b.laz': {'error': reason},
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database', '-a', 'test-asset',
+                '--shareable-links-only', '--json-output',
+            ])
+
+            data = json.loads(result.output)
+            assert 'not distributable' in data['message'], data
+            # Stated ONCE for a shared cause rather than repeated per file: a request-level rejection
+            # applies to every key in the chunk, and two files here share it.
+            assert data['message'].count('not distributable') == 1, data['message']
+            assert data['skippedFileReasons'] == {'/a.glb': reason, '/b.laz': reason}, data
+            assert sorted(data['skippedFiles']) == ['/a.glb', '/b.laz'], data
+            assert data['totalFiles'] == 0
+
+    @patch('vamscli.commands.assets.generate_presigned_urls')
+    def test_distinct_reasons_are_all_reported(self, mock_urls, cli_runner, assets_command_mocks):
+        """Two files refused for different reasons must not collapse into one.
+
+        Without this, "state the shared cause once" could be satisfied by reporting only the first.
+        """
+        with assets_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = _listing('/a.glb', '/b.laz')
+            mock_urls.return_value = {
+                '/a.glb': {'error': 'Object is archived'},
+                '/b.laz': {'error': 'URL generation failed'},
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database', '-a', 'test-asset',
+                '--shareable-links-only', '--json-output',
+            ])
+
+            data = json.loads(result.output)
+            assert 'archived' in data['message'], data
+            assert 'URL generation failed' in data['message'], data
+            assert data['skippedFileReasons']['/a.glb'] == 'Object is archived'
+            assert data['skippedFileReasons']['/b.laz'] == 'URL generation failed'
+
+    @patch('vamscli.commands.assets.generate_presigned_urls')
+    def test_a_fully_successful_run_reports_no_skips(self, mock_urls, cli_runner,
+                                                    assets_command_mocks):
+        """Positive control: the working path must not grow a skip report.
+
+        Every assertion above is about the skip branch, so without this a change that marked every file
+        skipped would satisfy them.
+        """
+        with assets_command_mocks as mocks:
+            mocks['api_client'].list_asset_files.return_value = _listing('/a.glb')
+            mock_urls.return_value = {'/a.glb': {'downloadUrl': 'https://example.invalid/a'}}
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/tmp',
+                '-d', 'test-database', '-a', 'test-asset',
+                '--shareable-links-only', '--json-output',
+            ])
+
+            data = json.loads(result.output)
+            assert data['totalFiles'] == 1, data
+            assert 'skipped' not in data['message'], data
+            assert 'skippedFiles' not in data, data
+            assert 'skippedFileReasons' not in data, data
+            assert data['shareableLinks'][0]['downloadUrl'] == 'https://example.invalid/a'

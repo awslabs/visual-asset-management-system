@@ -1,10 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM --platform=linux/amd64 condaforge/mambaforge:latest as build
-
-#Create appuser for container runtime processes
-#RUN adduser --system appuser 
+FROM --platform=linux/amd64 condaforge/mambaforge:24.9.2-0 as build
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
@@ -61,7 +58,8 @@ RUN conda-pack -n pdal --dest-prefix=/opt/conda/envs/pdal -o  /tmp/env.tar && \
     mkdir /venv && cd /venv && tar xf /tmp/env.tar  && \
     rm /tmp/env.tar
 
-FROM condaforge/miniforge3
+# Runtime stage platform must match the build stage: the PDAL binaries are copied from /venv
+FROM --platform=linux/amd64 condaforge/miniforge3:26.5.3-0
 
 ENV CONDAENV="/opt/conda/envs/pdal"
 COPY --from=build /venv "/opt/conda/envs/pdal"
@@ -82,8 +80,18 @@ COPY ./ ./pc_pipeline
 #Install requirements (boto3, etc.)
 RUN conda install -c conda-forge --file ./pc_pipeline/requirements.txt
 
-#Switch suer to app user for runtime operations
-#USER appuser
+# Create the runtime user. This stage needs its own: a user created in the `build` stage above is
+# discarded with it, and uncommenting it there would fail this stage's USER with "unable to find user".
+#
+# HOME has to exist and be writable. This stage's ENTRYPOINT runs under `conda run`, which reads HOME
+# and writes to it, and a system account with no home directory makes that fail at container start
+# rather than at build. No WORKDIR is set here, so create_dir(["tmp", "input"]) resolves against / and
+# lands in the 1777 /tmp, which any user can write.
+RUN useradd --create-home --uid 10001 --user-group appuser
+ENV HOME=/home/appuser
+
+#Switch user to app user for runtime operations
+USER appuser
 
 SHELL ["conda", "run", "--no-capture-output", "-n", "pdal", "/bin/sh", "-c"]
 ENTRYPOINT ["python3", "-m", "pc_pipeline"]

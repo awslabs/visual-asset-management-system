@@ -459,6 +459,65 @@ class TestTimeGuard:
 
 
 @pytest.mark.unit
+class TestFileReindexAbortReporting:
+    """The file half of the timeout path, asserted separately from the asset half.
+
+    This is where the finding said the timeout actually bites -- thousands of
+    files per asset across every bucket. The reporting is also wired differently
+    here: an aborted bucket adds nothing to `failed`, so `failed_count` stays 0
+    and the abort reaches the CloudFormation response ONLY through the errors
+    list. That coupling is what makes an aborted file reindex report FAILED
+    rather than SUCCESS, so it is asserted directly instead of being inferred
+    from the asset-side guard.
+    """
+
+    BUCKETS = [
+        {"bucketName": "bucket-one", "baseAssetsPrefix": "", "bucketId": "b1"},
+        {"bucketName": "bucket-two", "baseAssetsPrefix": "", "bucketId": "b2"},
+    ]
+
+    def _run(self, m, remaining_ms):
+        s3 = MagicMock()
+        # A list, not a generator: both buckets must be able to walk it.
+        s3.get_paginator.return_value.paginate.return_value = [
+            {"Contents": [{"Key": "a1/model.glb"}]}]
+        utility = _utility(m, time_remaining_ms=lambda: remaining_ms,
+                          min_remaining_ms=60000)
+        with patch.object(m, "s3_client", s3), \
+                patch.object(m.ReindexUtility, "_scan_s3_buckets_table",
+                             return_value=self.BUCKETS), \
+                patch.object(m.ReindexUtility, "_resolve_database_id",
+                             return_value="db1"):
+            return utility.reindex_files(dry_run=True)
+
+    def test_abort_stops_the_walk_and_cannot_report_success(self, crReindexer):
+        m = crReindexer
+        results = self._run(m, remaining_ms=1000)
+
+        assert results.get("aborted") is True
+        assert results["buckets_processed"] == 1, \
+            "a bucket that could not finish must not be followed by another"
+        assert any(error.get("type") == "timeout_guard"
+                   for error in results["errors"])
+        # An aborted bucket contributes no failures, so the count alone cannot
+        # carry the signal -- pinned so a change here has to stay deliberate.
+        assert results["failed_count"] == 0
+        assert m.reindex_failure_reasons({"files": results}), \
+            "an aborted file reindex would be reported to CloudFormation as SUCCESS"
+
+    def test_ample_time_walks_every_bucket_and_reports_success(self, crReindexer):
+        """Positive control: the guard does not fire on a healthy run, and a
+        complete file reindex is still reportable as SUCCESS."""
+        m = crReindexer
+        results = self._run(m, remaining_ms=900000)
+
+        assert results.get("aborted") is not True
+        assert results["buckets_processed"] == 2
+        assert results["total_count"] == 2
+        assert m.reindex_failure_reasons({"files": results}) == []
+
+
+@pytest.mark.unit
 class TestResponseUrlIsNotLogged:
     def test_presigned_response_url_never_reaches_the_logger(self, crReindexer):
         m = crReindexer
@@ -488,3 +547,53 @@ class TestResponseUrlIsNotLogged:
             "the raw logging module is imported again"
         assert m.logger.__class__.__module__ != "logging", \
             f"logger is a stdlib logger: {type(m.logger)}"
+
+    def test_a_failed_response_delivery_does_not_log_the_presigned_url(self, crReindexer):
+        """The delivery failure is the second way the URL reaches CloudWatch.
+
+        urllib3 puts the request URI in its own exception message
+        (`<pool>: Max retries exceeded with url: /...?X-Amz-Signature=...`), so
+        interpolating the exception publishes the presigned ResponseURL just as
+        dumping the event did. This is asserted against `send_cfn_response`
+        directly, and with a transport that RAISES: every other test in this file
+        either patches the function out or hands it a stub that answers, so the
+        except branch is not otherwise reached.
+        """
+        m = crReindexer
+        recorder = MagicMock()
+        failing_http = MagicMock()
+        failing_http.request.side_effect = m.urllib3.exceptions.MaxRetryError(
+            "HTTPSConnectionPool(host='cloudformation-custom-resource-response-"
+            "useast1.s3.amazonaws.com', port=443)",
+            RESPONSE_URL,
+            OSError("connection refused"),
+        )
+
+        with patch.object(m, "logger", recorder), \
+                patch.object(m, "http", failing_http):
+            m.send_cfn_response(_cfn_event(), _context(), "FAILED",
+                                reason="Reindexing did not complete")
+
+        rendered = "\n".join(repr(call) for call in recorder.method_calls)
+        assert "X-Amz-Signature" not in rendered
+        assert RESPONSE_URL not in rendered
+        # Positive control: the delivery failure is still reported, and still names
+        # the fault, so the two assertions above are not passing on silence.
+        assert "Failed to send CloudFormation response" in rendered
+        assert "MaxRetryError" in rendered
+
+    def test_a_delivered_response_still_reaches_the_presigned_url(self, crReindexer):
+        """Positive control: the URL must still be USED, only never logged."""
+        m = crReindexer
+        recorder = MagicMock()
+        delivering_http = MagicMock()
+        delivering_http.request.return_value = MagicMock(status=200)
+
+        with patch.object(m, "logger", recorder), \
+                patch.object(m, "http", delivering_http):
+            m.send_cfn_response(_cfn_event(), _context(), "SUCCESS")
+
+        assert delivering_http.request.call_args.args[1] == RESPONSE_URL
+        rendered = "\n".join(repr(call) for call in recorder.method_calls)
+        assert RESPONSE_URL not in rendered
+        assert "CloudFormation response status" in rendered

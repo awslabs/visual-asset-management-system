@@ -43,6 +43,9 @@ tools/VamsMCP/
     test_client_helpers.py   # paginate(), unwrap_message(), trim_search_results()
     test_server_tools.py     # tool behavior + the source-layout assertions of Mandatory Rule 4
     test_gated_tools.py      # the write/destructive tool bodies, via a module reload with both gates on
+    test_comment_subscription_tools.py
+                             # the comment / subscription / metadata-schema / API-key tools: the three
+                             # response shapes they span, and their docstring contracts
 ```
 
 **No dotenv.** `config.py` reads `os.environ` only, and there is no `python-dotenv` dependency. That
@@ -80,8 +83,11 @@ asymmetry other callers rely on):
 -   `_paginate_with_page_metadata(fetch_page, passthrough_keys=..., ...)` —
     paginates while collecting each page's `warnings` (deduplicated, in order)
     and named echo fields onto the result, marking it `truncated` when any page
-    withheld rows. `list_executions` uses it to carry `warnings` plus the applied
-    `filterStartDate` / `filterEndDate` window.
+    withheld rows. `list_executions` and `list_workflow_executions` both use it to
+    carry `warnings` plus the applied `filterStartDate` / `filterEndDate` window.
+-   `_bounded_message_list(page, max_items, page_size, noun)` — lifts a **bare
+    array** nested under `message` onto `Items`, and flags the bound the route
+    applied. Used by the two asset-scoped comment listings (Mandatory Rule 7).
 
 ---
 
@@ -136,6 +142,26 @@ asymmetry other callers rely on):
    unwraps the legacy `message` envelope used by tags, tag types, workflows, and
    workflow executions. Verify both against the handler's response model before
    adding a list tool; a mismatch silently returns zero items.
+
+    **A `message` envelope can hold a BARE ARRAY, and then neither helper finds the
+    rows.** `unwrap_message()` returns the page untouched when `message` is not a
+    dict, and `paginate()` reads `items_key` off whatever it gets — so for
+    `{"message": [row, ...]}` both hand back zero rows on a successful call, which
+    reads as an empty thread rather than a wiring defect. The asset-scoped comment
+    listings are that shape; use `_bounded_message_list()`. Three variants now
+    exist across the API, so check which one a route returns before choosing a
+    helper: a bare array under `message`, an `Items`/`NextToken` page under
+    `message` (subscriptions), and no envelope at all (metadata schemas, API keys).
+
+    **A route can accept the pagination parameters and discard the token.** The
+    comment listings apply `maxItems`/`pageSize` and return no `NextToken` — the
+    service returns `response["Items"]` and drops it — so rows past the bound are
+    unreachable through the API. Do not paper over it with a client-side walk, and
+    do not offer a `starting_token` that could never be filled. Report the bound
+    instead: it is knowable without a token, because the handler takes `maxItems`
+    as given, falls back to `pageSize`, and otherwise applies
+    `COMMENT_LIST_DEFAULT_BOUND`, so a result that reached the effective bound can
+    be flagged even when the caller narrowed nothing.
 
     **Unwrap the envelope on non-paginated pipeline/workflow/execution tools.**
     Every `APIClient` method in that domain returns the handler's raw
@@ -192,6 +218,15 @@ asymmetry other callers rely on):
    accepts, and forward a parameter only in the mode that acts on it (the log
    paging parameters are sent in `full` mode only, since truncated mode returns
    one joined blob and no continuation token).
+
+    **The converse is equally a defect: never expose a parameter the endpoint does
+    not act on.** A knob that silently does nothing is worse than its absence,
+    because the agent draws a conclusion from having set it. Two shapes to refuse:
+    a parameter the handler forwards and the service ignores (`showDeleted` on the
+    asset-scoped comment routes), and one whose only valid value can never be
+    obtained (`starting_token` on a route that returns no token). Say in the
+    docstring that the capability is absent, so the agent stops looking for it —
+    and pin the absence with a test, or the next reader adds it back as a fix.
 
 10. **Support both `mcp` major versions.** `mcp` 1.x exposes `FastMCP` from
     `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
@@ -285,6 +320,17 @@ pytest
 ```
 
 Tests mock `vams_mcp.server.CLIENT` so no live VAMS deployment is required.
+
+### Mark a Temporary Test with `@pytest.mark.temporary`
+
+A test written to prove one specific change landed — a removed tool, a renamed call site — carries
+`@pytest.mark.temporary` (registered in `pyproject.toml`) plus a line saying what it pins, so release
+cleanup can find it with `pytest -m temporary --collect-only`.
+
+Do **not** mark the source-layout guards in `tests/test_server_tools.py`. They are durable: a duplicate
+`def` silently shadows an earlier tool, a `def` placed outside its gate block never executes, and a read
+tool calling a mutating `APIClient` method is a permission defect — each stays writable, so each guard
+can still fire. Full criterion: root `CLAUDE.md` Rule 13.
 
 ---
 

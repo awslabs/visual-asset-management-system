@@ -269,6 +269,31 @@ Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
 All rights reserved.
 ```
 
+### Gaussian Splat Toolbox Pipeline
+
+**Gaussian Splat Toolbox Model Weights (shipped in the container image)**
+
+| Name                          | Version | License      | Notes                                                                     |
+| :---------------------------- | :------ | :----------- | :------------------------------------------------------------------------ |
+| U^2-Net (`u2net.pth`)         | latest  | Apache-2.0   | Background removal, default model; redistributed by backgroundremover     |
+| U^2-Net small (`u2netp.pth`)  | latest  | Apache-2.0   | Background removal, reduced-size variant                                  |
+| U^2-Net human segmentation    | latest  | Apache-2.0   | Human-subject segmentation (`u2net_human_seg.pth` and its ONNX form)      |
+| rembg                         | latest  | MIT          | Resolves and verifies the ONNX segmentation models the image ships        |
+| BiRefNet portrait             | latest  | MIT          | Portrait matting, opened alongside the human-segmentation ONNX model      |
+| SAM 2.1 hiera-large           | 2.1     | Apache-2.0   | Mask generation for object removal (`sam2.1_hiera_large.pt`)              |
+| torchvision model checkpoints | latest  | BSD-3-Clause | MobileNetV3, Faster R-CNN, VGG16 and AlexNet weights loaded via torch.hub |
+
+**Model Weight Distribution**
+
+These weights are downloaded during the container image build and ship inside the image, so a job needs
+no internet access to use background removal or object removal. Stable Diffusion XL, used by the
+object-erase path, is not shipped: it is fetched at run time and therefore needs egress from the job's
+subnets. The `u2net`, `u2netp` and `u2net_human_seg` weights are the U^2-Net models as redistributed by
+[backgroundremover](https://github.com/nadermx/backgroundremover) (MIT); the ONNX forms are resolved
+through [rembg](https://github.com/danielgatis/rembg) (MIT), which supplies each model's URL and
+verifies its checksum. The torchvision checkpoints come from `download.pytorch.org` and are named by
+content hash.
+
 ### Isaac Lab Training Pipeline
 
 **Isaac Lab Training Pipeline Dependencies**

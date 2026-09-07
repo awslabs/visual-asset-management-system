@@ -16,6 +16,13 @@ from botocore.exceptions import ClientError
 
 # Import custom logging utilities
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="KubernetesUtils")
 
@@ -289,7 +296,7 @@ def get_k8s_client():
 
     # Get cluster info with retries
     def get_cluster_info():
-        eks_client = boto3.client('eks')
+        eks_client = boto3.client('eks', config=retry_config)
         return eks_client.describe_cluster(name=cluster_name)
 
     cluster_info = with_retries(get_cluster_info)
@@ -353,7 +360,7 @@ def get_k8s_client():
 
         try:
             # Get cluster info for diagnostics
-            eks_client = boto3.client('eks')
+            eks_client = boto3.client('eks', config=retry_config)
             cluster_info = eks_client.describe_cluster(name=cluster_name)
             logger.info(f"⚠️ EKS CLUSTER DEBUG: Cluster status: {cluster_info['cluster']['status']}")
             logger.info(f"⚠️ EKS CLUSTER DEBUG: Cluster endpoint in AWS: {cluster_info['cluster']['endpoint']}")
@@ -414,7 +421,7 @@ def get_k8s_client():
 
             # Log IAM information for debugging
             try:
-                sts_client = boto3.client('sts')
+                sts_client = boto3.client('sts', config=retry_config)
                 identity = sts_client.get_caller_identity()
                 logger.info(f"⚠️ AUTHENTICATION DEBUG: Lambda running as: {identity.get('Arn')}")
                 logger.info(f"⚠️ AUTHENTICATION DEBUG: Account: {identity.get('Account')}")
@@ -424,7 +431,7 @@ def get_k8s_client():
 
             # Log IAM information for debugging
             try:
-                sts_client = boto3.client('sts')
+                sts_client = boto3.client('sts', config=retry_config)
                 identity = sts_client.get_caller_identity()
                 logger.warning(f"⚠️ AUTH DEBUG: Lambda running as: {identity.get('Arn')}")
                 logger.warning(f"⚠️ AUTH DEBUG: Account: {identity.get('Account')}")
@@ -448,7 +455,7 @@ def get_k8s_client():
 
                 # Method 1B: Use boto3 to get token directly via EKS client
                 try:
-                    eks_client = boto3.client('eks')
+                    eks_client = boto3.client('eks', config=retry_config)
                     logger.warning("⚠️ AUTH DEBUG: Attempting token generation with EKS client")
 
                     # Try two different methods for getting a token based on boto3 version
@@ -672,7 +679,7 @@ def get_k8s_client():
 
                     # Get STS credentials
                     session = boto3.session.Session()
-                    sts = session.client('sts')
+                    sts = session.client('sts', config=retry_config)
                     service_id = 'sts'
                     region = session.region_name or 'us-west-2'
 
@@ -933,7 +940,7 @@ def get_k8s_client():
 
         # Get cluster role binding info - debug only
         try:
-            eks_client = boto3.client('eks')
+            eks_client = boto3.client('eks', config=retry_config)
 
             # Describe the cluster for authentication details
             cluster_info = eks_client.describe_cluster(name=cluster_name)

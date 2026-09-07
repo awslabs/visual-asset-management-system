@@ -6,6 +6,10 @@ The Asset Versions API provides version management for assets, including creatin
 All endpoints require a valid JWT token in the `Authorization` header. Asset version operations are subject to two-tier Casbin authorization on the parent asset.
 :::
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `comment` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## List asset versions
@@ -22,6 +26,18 @@ GET /database/{databaseId}/assets/{assetId}/getVersions
 | ------------ | ------ | -------- | ------------------- |
 | `databaseId` | string | Yes      | Database identifier |
 | `assetId`    | string | Yes      | Asset identifier    |
+
+### Query parameters
+
+| Parameter       | Type    | Required | Default | Description                                       |
+| --------------- | ------- | -------- | ------- | ------------------------------------------------- |
+| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000` |
+| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`          |
+| `startingToken` | string  | No       | `null`  | Pagination token from a previous response         |
+| `showArchived`  | boolean | No       | `false` | Include archived versions                         |
+
+A `maxItems` or `pageSize` above `1000` is rejected with `400`. For the token pattern, see
+[Pagination](overview.md#pagination).
 
 ### Response
 

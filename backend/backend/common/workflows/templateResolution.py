@@ -15,11 +15,12 @@ Two tag layers share the {{tagName}} syntax:
     (common/workflows/templateRender) resolves per pipeline task against the manifest + execution
     context at launch. Left in place HERE.
 
-So resolution substitutes only the user tags and leaves system tags as {{...}} placeholders; an
-"unmatched" {{tag}} — one that is neither a filled user tag nor a reserved system tag — is an error
-(the Q1 contract: extra provided tags are ignored; an unmatched body tag errors). A {{tag}} using the
-reserved dynamic-metadata prefix (metadata_) is likewise an error: the prefix is reserved against
-user tag keys but no renderer resolves it, so it can never render.
+So resolution substitutes only the user tags and leaves system tags as {{...}} placeholders. A
+{{tag}} that is neither a filled user tag nor a reserved system tag is left in place as well: extra
+provided tags are ignored, and a body tag with nothing declared behind it has no value to substitute,
+so its literal text travels through the launch-time renderer to the pipeline that reads the body. A
+{{tag}} using the reserved dynamic-metadata prefix (metadata_) IS an error: the prefix is reserved
+against user tag keys, so a name under it makes a claim on a value the caller cannot own.
 """
 
 import json
@@ -93,7 +94,8 @@ def _json_override_errors(body, config_format, tag_schema_fields):
 def _substitute_user_tags(text, filled_tags, config_format="json"):
     """Replace {{tag}} occurrences of the provided/declared USER tags in text, leaving reserved
     system tags in place. Returns (rendered_text, errors). A {{tag}} that is neither a filled user
-    tag nor a reserved system tag is an unmatched-tag error.
+    tag nor a reserved system tag is left in place too: it has no value to substitute, and the
+    launch-time renderer delivers its literal text to the pipeline, which is the body's own reader.
 
     A string tag value is substituted escaped for `config_format` without surrounding quotes (so it
     sits inside the template's own quotes, using the same escaping the launch-time renderer applies to
@@ -125,16 +127,15 @@ def _substitute_user_tags(text, filled_tags, config_format="json"):
                 f"instead"
             )
             continue
-        if is_reserved_tag_key(name):
-            continue  # a system tag — resolved later by templateRender
-        errors.append(f"unmatched template tag '{{{{{name}}}}}' has no provided value")
+        # Anything else — a system tag, or a name with no declaration at all — is left for the
+        # launch-time renderer, which substitutes the former and passes the latter through literally.
     if errors:
         return text, errors
 
     def _replace(match):
         name = match.group(1)
         if name not in filled_tags:
-            return match.group(0)  # system tag: leave for the launch-time renderer
+            return match.group(0)  # system tag or undeclared name: left for the launch-time renderer
         value = filled_tags[name]
         if isinstance(value, str):
             return escape_scalar(value, config_format)  # scalar: escaped, quotes stripped

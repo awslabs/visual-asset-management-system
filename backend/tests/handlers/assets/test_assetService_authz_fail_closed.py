@@ -42,6 +42,7 @@ from tests.handlers.assets.test_assetService_tag_mutation_authz import (
 from tests.handlers.assets.test_assetService_update_tag_scope import (
     _existing_asset,
     _load_asset_service,
+    _written_attributes,
 )
 
 
@@ -218,7 +219,7 @@ class TestEmptyTokenListDenies:
         finally:
             undo()
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         m.asset_table.delete_item.assert_not_called()
 
 
@@ -246,7 +247,7 @@ class TestDenialSurfacesAs403NotAs500:
             f"{response}"
         )
         assert json.loads(response["body"])["message"] == "Not Authorized"
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         m.asset_table.delete_item.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -309,7 +310,7 @@ class TestPermittedCallerStillSucceeds:
             undo()
 
         assert response["statusCode"] == 200, response
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["tags"] == ["added"]
+        assert _written_attributes(m.asset_table)["tags"] == ["added"]
 
 
 @pytest.mark.unit
@@ -334,4 +335,4 @@ class TestTier1StillDeniesEmptyTokens:
         assert spy.constructions == [], (
             f"Tier 1 constructed an enforcer for an empty token list: {spy.constructions}"
         )
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()

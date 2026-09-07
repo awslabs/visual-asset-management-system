@@ -45,11 +45,14 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      */
     attemptDuration: cdk.Duration;
     /**
-     * Optional ECR repository to use instead of local Docker build.
-     * When provided, imageAssetPath is ignored and the image is
-     * pulled from this ECR repository (tagged "latest").
+     * Optional CodeBuild-produced ECR image to use instead of a local Docker build. When provided,
+     * imageAssetPath is ignored and the image is pulled from this repository at this tag.
+     *
+     * The tag travels with the repository in one prop rather than as a separate optional value: the
+     * tag the job definition names and the tag CodeBuild pushes have to be the same string, and a
+     * caller that supplies the repository alone would silently fall back to a mutable alias.
      */
-    ecrRepository?: ecr.IRepository;
+    ecrImage?: { repository: ecr.IRepository; tag: string };
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -81,8 +84,8 @@ export class BatchFargatePipelineConstruct extends Construct {
         );
 
         // Container image: use ECR repository if provided, otherwise build locally
-        const containerImage = props.ecrRepository
-            ? ecs.ContainerImage.fromEcrRepository(props.ecrRepository, "latest")
+        const containerImage = props.ecrImage
+            ? ecs.ContainerImage.fromEcrRepository(props.ecrImage.repository, props.ecrImage.tag)
             : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
                   platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
@@ -112,7 +115,9 @@ export class BatchFargatePipelineConstruct extends Construct {
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,
-                user: "root",
+                // No `user` override: the job runs as whatever the image's own USER declares. An
+                // override here replaces it, so a container that drops privileges in its Dockerfile
+                // would still run as uid 0.
             }),
         });
 

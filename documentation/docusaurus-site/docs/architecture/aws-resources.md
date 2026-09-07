@@ -256,9 +256,12 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 | **WorkflowTriggerDispatchQueue**       | Buffers file-upload trigger events fanned out to workflow executions                                                                                            |
 | **WorkflowTriggerDispatchDLQ**         | Dead-letter queue for trigger events that fail three delivery attempts                                                                                          |
 | **DeadlineCloudJobCallbackDLQ**        | Dead-letter queue for Deadline Cloud job-status events the callback Lambda could not process (conditional on `app.pipelines.deadlineCloudExecutionTypeEnabled`) |
-| **LargeFileProcessingQueue**           | Buffers large multi-part upload finalization work (5-day retention, no dead-letter queue)                                                                       |
+| **LargeFileProcessingQueue**           | Buffers large multi-part upload finalization work (5-day retention, redrives to LargeFileProcessingDLQ after 3 receives)                                        |
+| **LargeFileProcessingDLQ**             | Dead-letter queue for large-upload finalization work that fails three receives (14-day retention)                                                              |
 | **BucketSyncCreated** (per bucket)     | Processes S3 ObjectCreated events for bucket synchronization                                                                                                    |
+| **BucketSyncCreatedDLQ** (per bucket)  | Dead-letter queue for ObjectCreated records that fail three receives (14-day retention, one per bucket)                                                        |
 | **BucketSyncDeleted** (per bucket)     | Processes S3 ObjectRemoved events for bucket synchronization                                                                                                    |
+| **BucketSyncDeletedDLQ** (per bucket)  | Dead-letter queue for ObjectRemoved records that fail three receives (14-day retention, one per bucket)                                                        |
 | **File/Asset Indexer Queues**          | Buffer indexing events between Amazon SNS and indexer Lambdas                                                                                                   |
 | **File/Asset Indexer DLQs**            | One per indexer queue. Hold the indexing records the indexer Lambda still could not process after three deliveries                                              |
 | **Physna File/Asset Sync Queues**      | Buffer sync events for the Physna addon (conditional on `app.addons.usePhysnaSync`)                                                                             |
@@ -482,6 +485,38 @@ Deployed conditionally for each enabled pipeline:
 | **Job Queue**           | Per-pipeline job queue                                     |
 | **Job Definition**      | Container definitions with pipeline-specific configuration |
 | **Security Groups**     | Pipeline-specific security groups within VPC               |
+
+## Amazon Elastic Container Registry
+
+Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's
+container image from the source in the repository and pushes it to a private Amazon ECR repository, which
+the pipeline's AWS Batch job definition then references. Pipelines that do not set `useCodeBuild` build
+their image locally at synthesis time and use the CDK asset repository instead.
+
+| Resource                | Configuration                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| **Repository**          | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained         |
+| **CodeBuild project**   | One per repository, privileged mode for container builds, one-hour timeout                |
+| **Image tag**           | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed |
+
+All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
+images are removed when the stack is destroyed cleanly.
+
+Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. The
+**Coordinate Transform** repository is the exception: it carries an explicit name,
+`{config.name}-{app.baseStackName}-coordtransform`, and is redeploy-collision relevant. Delete any
+orphaned repository of that name left by a failed teardown before redeploying with the same configuration
+name and account.
+
+:::note[Why one repository is explicitly named]
+Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
+`\{account\}.dkr.ecr.\{region\}.amazonaws.com/\{repository\}:\{tag\}` string. An auto-generated repository
+name is derived from the nested-stack path, and the Coordinate Transform pipeline's path is deep enough
+that the resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
+job never starts, no container log or exit code is produced; the reason appears only in the job's
+`statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
+content-addressed tag.
+:::
 
 ## AWS CloudTrail
 

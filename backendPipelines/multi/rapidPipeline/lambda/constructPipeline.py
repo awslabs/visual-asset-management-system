@@ -7,9 +7,47 @@ import shlex
 import boto3
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ConstructPipelineRapidPipeline")
-s3 = boto3.client('s3')
+s3 = boto3.client('s3', config=retry_config)
+sfn_client = boto3.client('stepfunctions', config=retry_config)
+
+
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token so a failure here does not leave the
+    pipeline task waiting for its full taskTimeout.
+
+    This state is a `tasks.LambdaInvoke` in the pipeline's own state machine and it carries NO
+    `.addCatch`, so a raise here ends the state machine before `pipelineEnd` can run -- nothing
+    downstream reports on the token, and the user sees RUNNING for a job that failed immediately.
+    `construct_rapidPipeline_definition` reaches `manifestHelper.fetch_input_configuration`, which
+    RAISES `InputConfigurationError` when the rp_config body was fetched but is not a JSON object, so
+    the raising path is reachable from ordinary bad input rather than only from an outage.
+
+    Never raises: the caller re-raises the original error, which is the one worth reading. Wrapping is
+    correct HERE specifically because this is a state-machine state rather than a nested
+    `RequestResponse` invoke -- there is no calling lambda whose `FunctionError` would carry the
+    failure onward, and Step Functions fails the state directly on a raise.
+    """
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_failure(
+            taskToken=task_token,
+            error="RapidPipelineError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
 
 def lambda_handler(event, context):
     """
@@ -25,11 +63,20 @@ def lambda_handler(event, context):
     logger.info(f"Event: {event}")
     logger.info(f"Context: {context}")
 
-    # construct different pipeline definition
-    definition = construct_rapidPipeline_definition(event)
+    # The token is captured BEFORE the work, so a raise inside definition construction can still be
+    # reported. Reading it afterwards would leave the very failure path this exists for unreported.
+    external_task_token = event.get("externalSfnTaskToken", "")
+
+    try:
+        # construct different pipeline definition
+        definition = construct_rapidPipeline_definition(event)
+    except Exception as e:
+        logger.exception(f"Failed to construct pipeline definition: {e}")
+        abort_external_workflow(e, external_task_token)
+        raise
 
     logger.info(f"Definition: {definition}")
-    
+
     return {
         "jobName": event.get("jobName"),
         "commands": definition,
@@ -142,6 +189,20 @@ def output_object_prefix(output_s3_asset_files_key, relative_subdir):
     return f"{prefix}{subdir}/" if subdir else prefix
 
 
+def auxiliary_object_key(auxiliary_files_key, object_name):
+    """The key a temporary working object takes in the auxiliary bucket: the run's bucket-relative
+    auxiliary prefix followed by the object's own name.
+
+    The prefix is scoped per execution ('pipelines/{pipelineName}/{executionId}/'), so a working
+    object written under it sits inside the structure the cleanup and uninstall paths list rather
+    than at the bucket root. Exactly one separator joins the two parts, so a prefix that already
+    ends in '/' composes without an empty segment; an empty prefix — a direct invocation naming the
+    bucket root — yields the bare object name.
+    """
+    prefix = (auxiliary_files_key or "").strip("/")
+    return f"{prefix}/{object_name}" if prefix else object_name
+
+
 def construct_rapidPipeline_definition(event) -> dict:
     input_s3_asset_file_uri = event['inputS3AssetFilePath']
     output_s3_asset_files_uri = event['outputS3AssetFilesPath'] 
@@ -197,8 +258,11 @@ def construct_rapidPipeline_definition(event) -> dict:
         # Namespace the config object per execution so concurrent runs cannot read each other's
         # config (L13). jobName carries a millisecond stamp and a random suffix, so it stays distinct
         # for runs launched in the same second — one upload can fan out to several simultaneous runs
-        # of this pipeline.
-        config_key = f"rp_config_{event.get('jobName', 'default')}.json"
+        # of this pipeline. It is written under the run's auxiliary working prefix, which is where
+        # the cleanup and uninstall paths look for a pipeline's temporary objects.
+        config_key = auxiliary_object_key(
+            inputOutput_s3_assetAuxiliary_files_key,
+            f"rp_config_{event.get('jobName', 'default')}.json")
         # write config json file to S3
         s3.put_object(
             Body=json.dumps(config),

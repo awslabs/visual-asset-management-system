@@ -8,8 +8,11 @@ captured at $.errorInfo) before the terminal Fail state. It reconciles the execu
 tables to a failed terminal state so a failure never leaves stale RUNNING rows:
 
   - the sub-processes each in-flight pipeline registered (Step Functions sub-executions, AWS Batch
-    jobs) -> stopped, before their rows are stamped terminal (a terminal row is no longer a
-    candidate for the abort API, so anything left running here has no in-product remedy);
+    jobs, Deadline Cloud farm jobs) -> stopped, before their rows are stamped terminal (a terminal
+    row is no longer a candidate for the abort API, so anything left running here has no in-product
+    remedy). A DeadlineCloud pipeline whose farm job was never registered is found by the pipeline
+    execution id the job carries as a reserved parameter, because a job sitting queued with no
+    worker emits no status event to register from;
   - the V2 main row -> FAILED with a stop date, the specific executionError (from the caught
     Step Functions Error/Cause), and the full CloudWatch executionLog;
   - every non-terminal PipelineExecutions row -> FAILED with a stop date;
@@ -24,6 +27,7 @@ records ABORTED.
 import os
 import json
 import boto3
+from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
@@ -32,15 +36,28 @@ from common.workflows import executionOutputs as eo
 
 logger = safeLogger(service="HandleExecutionError")
 
-logs_client = boto3.client('logs')
-dynamodb = boto3.resource('dynamodb')
-sfn_client = boto3.client('stepfunctions')
-batch_client = boto3.client('batch')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+logs_client = boto3.client('logs', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+sfn_client = boto3.client('stepfunctions', config=retry_config)
+batch_client = boto3.client('batch', config=retry_config)
+# Used only to cancel a registered Deadline Cloud farm job while reconciling a failed run. Built
+# inside try/except and left None on failure: the execution type is accepted only in the commercial
+# partition, so a partition where the service does not resolve must not lose the whole reconciliation
+# to a client it never calls. A None client reports the job as left running rather than doing nothing.
+try:
+    deadline_client = boto3.client('deadline', config=retry_config)
+except Exception as e:
+    logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
+    deadline_client = None
 
 try:
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    # Read to resolve a DeadlineCloud pipeline's farm and queue, which live on the pipeline
+    # DEFINITION rather than on any execution row.
+    pipeline_table = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
@@ -118,6 +135,20 @@ def _get_pipeline_rows(execution_id):
     return items
 
 
+def get_pipeline_definition(pipeline_database_id, pipeline_id):
+    """A pipeline definition row, or {} when the pipeline cannot be found (e.g. deleted).
+
+    Supplied to `executionOutputs` so it can resolve a DeadlineCloud pipeline's farm and queue
+    without reading the pipeline table itself — that module is imported by lambdas holding no read
+    on it. Returning {} rather than raising keeps a deleted pipeline from failing the whole
+    reconciliation; the row is then reported as possibly still running."""
+    if not pipeline_database_id or not pipeline_id:
+        return {}
+    table = dynamodb.Table(pipeline_table)
+    resp = table.get_item(Key={'databaseId': pipeline_database_id, 'pipelineId': pipeline_id})
+    return resp.get('Item', {}) or {}
+
+
 def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
@@ -142,7 +173,8 @@ def reconcile_failed_execution(body, error_info):
         pipeline_rows = _get_pipeline_rows(execution_id)
         stop_failures = eo.mark_inflight_pipelines_terminal(
             dynamodb, pipeline_executions_table, pipeline_rows, FAILED_STATUS, now,
-            sfn_client=sfn_client, batch_client=batch_client)
+            sfn_client=sfn_client, batch_client=batch_client, deadline_client=deadline_client,
+            get_pipeline_definition=get_pipeline_definition)
         if stop_failures:
             logger.warning(f"Sub-processes left running for execution {execution_id}: "
                            f"{'; '.join(stop_failures)}")

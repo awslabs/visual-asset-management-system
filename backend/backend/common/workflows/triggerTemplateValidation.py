@@ -151,10 +151,13 @@ def validate_trigger_required_templates(default_template_ids, workflow_pipelines
 
 
 def triggers_referencing_template(triggers_table, pipeline_database_id, pipeline_id, template_id):
-    """Return the list of (workflowDatabaseId, workflowId, triggerType) tuples whose trigger picks
-    this template as a default for this pipeline. Queries TriggersByBaseTypeGSI once per trigger type
-    (paginated to exhaustion) rather than scanning the table. Best-effort: returns [] on a read
+    """Return the list of (workflowDatabaseId, workflowId, triggerType) tuples whose ENABLED trigger
+    picks this template as a default for this pipeline. Queries TriggersByBaseTypeGSI once per trigger
+    type (paginated to exhaustion) rather than scanning the table. Best-effort: returns [] on a read
     error.
+
+    Disabled triggers are excluded — see the comment at the filter for why that does not lose the
+    check.
 
     The index partitions on the BARE type: a workflow may carry several triggers of one type, whose sort
     keys are suffixed ("fileUpload#nightly"), and each is a separate row that may pick its own default
@@ -172,6 +175,22 @@ def triggers_referencing_template(triggers_table, pipeline_database_id, pipeline
             while True:
                 resp = triggers_table.query(**kwargs)
                 for row in resp.get("Items", []):
+                    # A DISABLED trigger cannot fire, so it cannot be broken by a required tag, and it
+                    # must not block a template change. Measured: a disabled fileUpload trigger created
+                    # weeks earlier held `isaaclab-evaluation-cartpole` as its default and refused a
+                    # correct edit to that template -- one making CHECKPOINT_PATH required, without which
+                    # a defaults-only evaluation renders an empty checkpoint path and the container exits
+                    # 1 after provisioning a GPU.
+                    #
+                    # The check is not lost by skipping it here: saving a trigger re-validates its chosen
+                    # default templates (`validate_trigger_default_templates` in workflowTriggerService),
+                    # so re-enabling one whose template has since gained a required tag is refused at that
+                    # point -- where the operator is acting on the trigger and can act on the message.
+                    #
+                    # A row with NO `enabled` key is treated as ENABLED: absent is not disabled, and the
+                    # conservative direction for a guard is to keep blocking.
+                    if row.get("enabled") is False:
+                        continue
                     default_ids = _trigger_default_template_ids(row)
                     if default_ids.get(composite) == template_id:
                         hits.append((

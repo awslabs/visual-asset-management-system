@@ -117,12 +117,21 @@ GET /database/{databaseId}/assets/{assetId}/asset-links
         "related": 0,
         "parents": 0,
         "children": 1
+    },
+    "unresolvedCounts": {
+        "related": 0,
+        "parents": 0,
+        "children": 0
     }
 }
 ```
 
 :::note[Unauthorized counts]
 The `unauthorizedCounts` field shows how many linked assets the current user does not have permission to view. This allows the UI to indicate that additional relationships exist without exposing unauthorized data.
+:::
+
+:::note[Unresolved counts]
+The `unresolvedCounts` field shows how many linked assets could not be read from the asset table — a partially throttled batch read, for example. Those assets are counted here rather than in `unauthorizedCounts`, so an incomplete read is not presented as a permissions problem. Repeating the request usually resolves them.
 :::
 
 ### Response (tree view)
@@ -149,9 +158,14 @@ When `childTreeView=true`, the `children` field contains a recursive tree struct
                 }
             ]
         }
-    ]
+    ],
+    "treeTruncated": false
 }
 ```
+
+:::note[Tree ceilings]
+One tree read walks at most 100 levels and returns at most 10,000 nodes. A hierarchy that reaches either ceiling comes back with the nodes gathered so far and `treeTruncated` set to `true`; walk the remainder by requesting the tree for an asset further down it. A walk that fails partway returns a `400` response rather than a partial tree, so a failed read is distinguishable from an asset that has no children.
+:::
 
 ---
 

@@ -36,7 +36,8 @@ backend/
 │   │   │                                           #   category group arrays, ALL_API_ROUTES.
 │   │   │                                           #   Handlers dispatch via ApiRoute.matches().
 │   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists
-│   │   ├── dynamodb.py                             # to_update_expr, get_asset_object_from_id
+│   │   ├── dynamodb.py                             # query_all_items, query_has_match,
+│   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
@@ -155,6 +156,20 @@ backend/
     versions beyond `N` (wrong archive status, truncated history). Existence-only checks
     (`MaxKeys=1`) are the allowed exception.
 
+    **`MaxKeys=1` is sufficient for an existence check only because of three
+    `ListObjectVersions` properties, and each one is load-bearing.** `max-keys` caps
+    ENTRIES rather than distinct keys and will truncate mid-key; keys come back
+    ascending, so a key precedes every longer sibling the same `Prefix` returns; and
+    within one key the newest version comes first. Together those make the single entry
+    the queried key's CURRENT version — which is why matching `entry['Key'] == key` (not
+    merely "the page is non-empty") is what makes the answer conclusive, and why a
+    sibling can only take the slot when the key itself has no entries, where a negative
+    answer is correct anyway. Two ways to void this without touching the `MaxKeys`:
+    passing a `Delimiter` (a `CommonPrefixes` entry can then occupy the slot), or passing
+    `EncodingType='url'` (the returned `Key` is percent-encoded, so the equality test
+    silently stops matching and **every** archived key reports not-archived). Neither is
+    passed today; add either and the predicate needs rewriting, not adjusting.
+
     **A DynamoDB `FilterExpression` is applied AFTER the page is read, so a single
     filtered call is not a lookup and not an existence check.** DynamoDB reads up to
     1 MB (or `Limit` items), then discards the non-matching ones. Empty `Items`
@@ -175,6 +190,12 @@ backend/
     server-side before `MaxKeys`, so `MaxKeys=1` genuinely answers "does this exist".
     DynamoDB's filter does not work that way. See the paging patterns under
     [DynamoDB Patterns](#pagination-patterns) for the two correct shapes.
+
+    What a `Prefix` + `MaxKeys=1` listing answers is "does anything under this prefix
+    exist" — not "does this exact key exist". `Prefix` is a prefix match, so the listing
+    also returns longer keys (`file.glb` matches `file.glb.previewFile.png`). Counting the
+    returned entries therefore attributes a sibling's state to the requested key; match
+    each entry's `Key` back to the key being asked about.
 
             **To check whether a single key or specific `versionId` is archived, do NOT list
             versions** — use `common.s3.is_object_version_archived(bucket, key, version_id,
@@ -335,17 +356,17 @@ Reference: `backend/models/assetsV3.py`
 Import `BaseModel` from `aws_lambda_powertools.utilities.parser`; declare `extra='ignore'` on the class; use `Field(...)` with `regex=` (loaded from `common.validators`); attach a `@root_validator` for cross-field logic that calls the `validate()` dispatcher.
 
 ```python
-from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, ValidationError
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
 from pydantic import Field
-from common.validators import validate, id_pattern, object_name_pattern
+from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):
     databaseId: str = Field(min_length=4, max_length=256, regex=id_pattern)
     itemName:   str = Field(min_length=1, max_length=256, regex=object_name_pattern)
     tags: Optional[list[str]] = []
 
-    class Config:
-        anystr_strip_whitespace = True      # `strip_whitespace=` on Field() does nothing
+    # Names and ids trim their surrounding whitespace; `strip_whitespace=` on Field() does nothing
+    _trim_names = validator('databaseId', 'itemName', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
@@ -374,9 +395,9 @@ Every model class must declare `extra='ignore'`.
 recognize into `FieldInfo.extra` instead of raising, so a v2 spelling like `pattern=` becomes an
 inert annotation that validates **nothing** — the model imports cleanly, tests pass, and the
 field is unconstrained. `regex=` is the v1 spelling. `strip_whitespace=` is likewise inert on
-`Field()` (it is a `class Config` / `constr` option, not a field constraint); a padded value is
-stored verbatim, which matters for the ABAC-visible name fields. To confirm a constraint is live,
-assert on the parsed field rather than reading the declaration:
+`Field()` (it is a `class Config` / `constr` option, not a field constraint), so a padded value
+reaches the length and regex checks — and storage — exactly as submitted. To confirm a constraint
+is live, assert on the parsed field rather than reading the declaration:
 
 ```python
 assert MyModel.__fields__['databaseId'].field_info.regex is not None   # live
@@ -389,7 +410,8 @@ assert not MyModel.__fields__['databaseId'].field_info.extra          # nothing 
 
 Common shapes:
 
--   String with regex: `Field(min_length=4, max_length=256, regex=id_pattern)` — to strip whitespace, set `anystr_strip_whitespace = True` on the model's `class Config`, not `strip_whitespace=` on the field
+-   String with regex: `Field(min_length=4, max_length=256, regex=id_pattern)`
+-   Name, id, or free text: wire `common.validators.trim_name` as a `pre=True` validator — `_trim_names = validator('itemName', pre=True, allow_reuse=True)(trim_name)`. It removes the surrounding whitespace run and preserves interior whitespace, and runs before the length and regex checks. On a field that also carries a control-character rule (`pipelineName`, `category`, `workflowName`, `templateName`), declare `models.pipelines.reject_control_characters` as a `pre=True` validator BEFORE the trim — `.strip()` removes a trailing newline, tab or NEL, so a trim declared first turns that rejection into a silent normalization. Never `strip_whitespace=` on the field (inert), and not `anystr_strip_whitespace = True` on the model's `class Config` either — that strips every string on the model, including S3 keys and asset-relative paths, where a trailing space is a legitimate part of the key. A `description` or `comment` on a REQUEST model trims through the same validator, declared separately as `_trim_text` so the source keeps signalling which fields are ids and which are prose; a response or record model does not, because trimming there rewrites a stored row on the way out. `tests/models/test_no_dead_field_kwargs.py` asserts that partition as a rule — a new free-text field must either trim or be named in its `NO_TRIM_FREE_TEXT` map with the reason it keeps its whitespace
 -   Optional with default: `Optional[list[str]] = []`, `Optional[str] = None`
 -   Numeric constraints: `Field(None, ge=0)`, `Field(None, ge=0, le=10000)`
 -   Nested models: `Optional[CurrentVersionModel] = None`
@@ -510,6 +532,17 @@ if not valid:
     return validation_error(body={'message': message}, event=event)  # In handler
 ```
 
+The `validator` name must be one the dispatcher implements. `validate()` resolves the check from
+`_VALIDATOR_DISPATCH` in `common/validators.py`, so **that mapping is the list of valid names** —
+there is no second set to keep in step with it. A name with no entry has no rule, so it raises, which
+surfaces as a `500`: it is a code defect, not caller input. Adding a validator means adding one entry
+to the mapping, and nothing else.
+
+The name is resolved **after** the empty/optional short-circuits, so an optional field left empty is
+skipped before its validator name is consulted — naming a validator is not required to say "there is
+nothing here to check". Each entry receives the field name and the whole spec, not just the value,
+because a few checks read another key off it (`ASSET_PATH` reads `isFolder`).
+
 ### Available Validator Types
 
 Scalar validators: `ID` (`^[-_a-zA-Z0-9]{3,63}$` — databaseId, pipelineId, etc.),
@@ -518,7 +551,7 @@ Scalar validators: `ID` (`^[-_a-zA-Z0-9]{3,63}$` — databaseId, pipelineId, etc
 `EMAIL`, `USERID` (`^[\w\-\.\+\@]{3,256}$`), `REGEX`, `NUMBER`, `BOOL`,
 `RELATIVE_FILE_PATH` (`^\/.*$`), `ASSET_PATH` (`^.+\/.+$`),
 `ASSET_PATH_PIPELINE` (`^pipelines\/.+\/.+\/output\/.+\/$`),
-`STRING_30`, `STRING_256`, `STRING_JSON`,
+`STRING_30`, `STRING_256`, `STRING_16384` (free-form caller text, e.g. `commentBody`), `STRING_JSON`,
 `FILE_EXTENSION` (`^[\\.]([a-zA-Z0-9]){1,7}$`).
 
 Partition-aware AWS-resource validators (used by pipeline sub-process registration):
@@ -529,6 +562,44 @@ plus `EVENTBRIDGE_BUS_ARN`, `EVENTBRIDGE_SOURCE`, `EVENTBRIDGE_DETAIL_TYPE`, `SQ
 Array validators (each element runs the scalar rule): `ID_ARRAY`, `UUID_ARRAY`,
 `STRING_256_ARRAY`, `EMAIL_ARRAY`, `USERID_ARRAY`, `OBJECT_NAME_ARRAY`,
 `RELATIVE_FILE_PATH_ARRAY`, `DOWNLOAD_KEY_ARRAY`.
+
+### User IDs Are Unicode, and Are Normalized Before Validation and Storage
+
+`USERID` keeps the Unicode-aware `\w` class, so an external IDP's non-Latin username is accepted.
+Call `normalize_userid()` (or `normalize_userid_array()`) from `common.validators` on a caller-supplied
+user id **before** validating it and before storing or looking it up: NFKC folds two compatibility
+spellings of one name together (a fullwidth character for its ASCII counterpart, a decomposed accent
+for a composed one), and normalizing on only some paths is worse than not normalizing at all — the
+mismatch makes a lookup miss a row that exists. `request_to_claims()` normalizes the caller's own
+identity, so a handler working from `claims_and_roles["tokens"]` needs no further call. A new route
+that accepts a user id normalizes it at the same point every existing one does;
+`tests/common/test_userid_identity_normalization.py` walks the tree and fails on one that does not.
+
+`confusable_skeleton()` / `find_confusable_userid()` compare how two ids **look** (Cyrillic `а` and
+Greek `ο` fold onto `a` and `o`) and belong at **user creation only** — `create_cognito_user` refuses
+an id that reads the same as one already in the pool. An id already stored keeps working, so the
+comparison never runs on a read. The mapping covers the Cyrillic and Greek lookalikes and is
+deliberately partial.
+
+### A `REGEX` Value Is Checked for Complexity, and Only on Save
+
+`validate_regex` rejects three things on top of the compile check: a repeating quantifier applied to a
+group that itself repeats or alternates (`(a+)+`, `(a|a)*`), a backreference, and more quantifier
+ambiguity than one evaluation can afford — the estimated worst-case backtracking search space against
+a 256-character subject must stay under `MAX_REGEX_SEARCH_SPACE`, which admits at most three unbounded
+quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three unbounded quantifiers
+separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A constraint criterion value
+becomes a Casbin `regexMatch(...)` pattern that `re.match` re-evaluates for every policy line on every
+authorization decision, so such a value hangs authorization for the affected role. General regex stays
+accepted — literals, character classes, anchors, `.*`, `|` and un-quantified groups.
+
+The check runs where a constraint is **saved**: `ConstraintCriteriaModel` (every request path), plus
+`validate_substituted_criteria_values()` in the template importer, which re-checks the value produced
+by variable substitution because that — not the submitted template body — is what gets stored. It
+deliberately does **not** run on read: `ConstraintResponseModel` uses
+`ConstraintCriteriaResponseModel`, which carries no criteria-value rules, because a constraint written
+by an earlier release was never checked and a failing response model degrades the listing to the raw
+DynamoDB item shape.
 
 ### Importing Regex Patterns for Pydantic Fields
 
@@ -582,7 +653,11 @@ either (Rule 14): DynamoDB caps one call at 1 MB and applies any `FilterExpressi
 what that call already read.
 
 **A. Read to exhaustion — the handler needs every row** (cycle checks, cascade deletes,
-existence tests, descendant walks). Loop on `LastEvaluatedKey`, feeding it back as
+existence tests, descendant walks). Two shared helpers in `common.dynamodb` already implement
+this loop and are the first choice for a `query`: `query_all_items(table, **query_kwargs)`
+returns every matching item, and `query_has_match(table, **query_kwargs)` answers an existence
+check, stopping at the first page that yields one. Hand-roll the loop only for a `scan`, or where
+the walk needs its own bound; the shape is: loop on `LastEvaluatedKey`, feeding it back as
 `ExclusiveStartKey`:
 
 ```python
@@ -722,7 +797,7 @@ except Exception as e:
 asset_table = dynamodb.Table(asset_table_name)
 ```
 
-**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy env-var overrides (e.g. `ASSET_STORAGE_TABLE_NAME`), then a 60-minute in-module cache, then fetches all resource-name parameters from SSM via one paginated `GetParametersByPath` call. Pytest and local utilities can inject names as env vars while deployed handlers use SSM. **Pipeline handlers** in `backendPipelines/` still use legacy env vars and do not call `get_table_name()`.
+**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy env-var overrides (e.g. `ASSET_STORAGE_TABLE_NAME`), then a 60-minute in-module cache, then a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call, then fetches all resource-name parameters from SSM via one paginated `GetParametersByPath` call. Pytest and local utilities can inject names as env vars while deployed handlers use SSM. **Pipeline handlers** in `backendPipelines/` still use legacy env vars and do not call `get_table_name()`.
 
 ### Common Environment Variables
 

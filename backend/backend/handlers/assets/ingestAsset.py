@@ -25,12 +25,14 @@ from models.assetsV3 import (
 
 # Configure AWS clients
 region = os.environ['AWS_REGION']
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'},
+                   retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3 = boto3.client('s3', region_name=region, config=s3_config)
 
-lambda_client = boto3.client('lambda')
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+lambda_client = boto3.client('lambda', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 logger = safeLogger(service_name="IngestAsset")
 
 # Load environment variables

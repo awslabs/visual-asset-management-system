@@ -87,14 +87,15 @@ def _message(result: Dict[str, Any]) -> Any:
 
 def _message_with_warnings(result: Dict[str, Any]) -> Any:
     """Unwrap the `message` envelope, carrying any top-level `warnings` array into the payload so
-    the array survives `--json-output`. Non-dict payloads are returned unchanged."""
+    the array survives `--json-output`. A plain-string message (a delete acknowledgement) becomes
+    {message, warnings}; a non-dict result is returned unchanged."""
     message = _message(result)
-    if not isinstance(result, dict) or not isinstance(message, dict):
+    if not isinstance(result, dict):
         return message
     warnings = result.get('warnings')
     if not warnings:
         return message
-    payload = dict(message)
+    payload = dict(message) if isinstance(message, dict) else {'message': message}
     payload['warnings'] = warnings
     return payload
 
@@ -613,7 +614,11 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
 
     --overrides narrows the pipeline's own systemConfig for runs that use this template, over the keys
     inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the same
-    boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes, databaseMetadata.
+    boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes, databaseMetadata. The
+    block is at most 65536 bytes serialized, the same budget as the pipeline's systemConfig.
+
+    --tag-schema takes a list of field definitions carrying only tagKey, type, required, default,
+    label, description and enumValues; any other key is rejected rather than ignored.
 
     Examples:
         vamscli pipeline template create -d my-db -p my-pipe -n "OBJ output" \\
@@ -770,7 +775,10 @@ def delete_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
     output_status(f"Deleting template '{template_id}'...", json_output)
     try:
         result = api_client.delete_pipeline_template(database_id, pipeline_id, template_id)
-        output_result(_message(result), json_output, success_message="✓ Template deleted.")
+        output_result(_message_with_warnings(result), json_output,
+                      success_message="✓ Template deleted.",
+                      cli_formatter=lambda _r: str(_message(result)))
+        _emit_warnings(result, json_output)
         return result
     except PipelineTemplateNotFoundError as e:
         output_error(e, json_output, error_type="Template Not Found")
@@ -834,6 +842,10 @@ def set_tag_schema(ctx: click.Context, database_id: str, pipeline_id: str, templ
     """Set (replace) a template's tag schema. Provide the fields list as JSON.
 
     The stored schema is replaced by the supplied list; pass an explicit empty list to clear it.
+
+    A field definition takes only tagKey, type, required, default, label, description and enumValues.
+    Any other key is rejected rather than ignored, so a misspelled 'requried' or a capitalised 'Type'
+    fails the request instead of leaving the tag optional or untyped.
 
     Examples:
         vamscli pipeline tag-schema set -d my-db -p my-pipe -t my-template \\

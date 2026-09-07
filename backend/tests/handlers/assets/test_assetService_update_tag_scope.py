@@ -125,6 +125,24 @@ def _wire_update(m, existing_asset):
     m.send_subscription_email = MagicMock()
 
 
+def _written_attributes(mock_asset_table):
+    """The attributes an edit actually wrote, recovered from its targeted update expression.
+
+    update_asset writes only the fields the request changed, so the written set is carried by
+    the UpdateExpression's name/value placeholders rather than by a whole-record Item.
+    """
+    kwargs = mock_asset_table.update_item.call_args.kwargs
+    names = kwargs["ExpressionAttributeNames"]
+    values = kwargs["ExpressionAttributeValues"]
+    expression = kwargs["UpdateExpression"]
+    assert expression.startswith("SET "), expression
+    written = {}
+    for assignment in expression[len("SET "):].split(", "):
+        name_ref, value_ref = [part.strip() for part in assignment.split(" = ")]
+        written[names[name_ref]] = values[value_ref]
+    return written
+
+
 def _existing_asset(db="db-a"):
     return {
         "databaseId": db, "assetId": "asset-1", "assetName": "N1",
@@ -159,8 +177,8 @@ class TestAssetUpdateTagScope:
                 {"tokens": ["u1"]},
             )
             assert result.success is True
-            m.asset_table.put_item.assert_called_once()
-            saved_item = m.asset_table.put_item.call_args.kwargs["Item"]
+            m.asset_table.update_item.assert_called_once()
+            saved_item = _written_attributes(m.asset_table)
             assert sorted(saved_item["tags"]) == ["priority", "reviewed"]
         finally:
             if saved is not None:
@@ -192,7 +210,7 @@ class TestAssetUpdateTagScope:
                     {"tokens": ["u1"]},
                 )
             assert type(rejected.value).__name__ == "VAMSGeneralErrorResponse"
-            m.asset_table.put_item.assert_not_called()
+            m.asset_table.update_item.assert_not_called()
         finally:
             if saved is not None:
                 sys.modules["handlers.assets.createAsset"] = saved
@@ -241,7 +259,7 @@ class TestUpdateKeepsDeletedTags:
             )
 
             assert result.success is True
-            saved_item = m.asset_table.put_item.call_args.kwargs["Item"]
+            saved_item = _written_attributes(m.asset_table)
             # The deleted tag is retained rather than silently dropped.
             assert sorted(saved_item["tags"]) == ["goneTag", "reviewed"]
         finally:
@@ -260,7 +278,7 @@ class TestUpdateKeepsDeletedTags:
             )
 
             assert result.success is True
-            saved_item = m.asset_table.put_item.call_args.kwargs["Item"]
+            saved_item = _written_attributes(m.asset_table)
             assert saved_item["tags"] == ["reviewed"]
         finally:
             if saved is not None:
@@ -283,7 +301,7 @@ class TestUpdateKeepsDeletedTags:
                     {"tokens": ["u1"]},
                 )
             assert type(rejected.value).__name__ == "VAMSGeneralErrorResponse"
-            m.asset_table.put_item.assert_not_called()
+            m.asset_table.update_item.assert_not_called()
         finally:
             if saved is not None:
                 sys.modules["handlers.assets.createAsset"] = saved

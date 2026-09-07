@@ -31,6 +31,9 @@ def rn(monkeypatch):
     resourceNames._cache = {}
     resourceNames._cache_fetched_at = 0.0
     resourceNames._ssm_client = None
+    # Reset alongside the positive cache: a negative record carries its own timestamp, so
+    # zeroing _cache_fetched_at alone would leave a recorded miss live in the next test.
+    resourceNames._missing_keys = {}
     return resourceNames
 
 
@@ -98,6 +101,106 @@ class TestSsmResolution:
         rn._cache_fetched_at = 0.0
         monkeypatch.setattr(rn, "_refresh_cache", lambda: (_ for _ in ()).throw(RuntimeError("ssm down")))
         assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "v1"
+
+
+@pytest.mark.unit
+@mock_aws
+class TestMissingKeyNegativeCache:
+    """A parameter absent from a completed sweep must not re-sweep on every call."""
+
+    def _region(self):
+        return os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+
+    def _counting_refresh(self, rn, monkeypatch):
+        """Wrap _refresh_cache so sweeps can be counted while still doing real work."""
+        real_refresh = rn._refresh_cache
+        sweeps = []
+
+        def counted():
+            sweeps.append(1)
+            real_refresh()
+
+        monkeypatch.setattr(rn, "_refresh_cache", counted)
+        return sweeps
+
+    def test_repeated_lookups_of_a_missing_key_sweep_ssm_once(self, rn, monkeypatch):
+        # No parameters published under the prefix, so every key is genuinely absent.
+        boto3.client("ssm", region_name=self._region())
+        sweeps = self._counting_refresh(rn, monkeypatch)
+
+        for _ in range(5):
+            with pytest.raises(KeyError):
+                rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+
+        assert len(sweeps) == 1
+        assert "dynamoTables/assetStorage" in rn._missing_keys
+
+    def test_second_missing_key_is_recorded_separately(self, rn, monkeypatch):
+        boto3.client("ssm", region_name=self._region())
+        sweeps = self._counting_refresh(rn, monkeypatch)
+
+        for key in (rn.ResourceKeys.ASSET_STORAGE_TABLE, rn.ResourceKeys.DATABASE_STORAGE_TABLE):
+            for _ in range(3):
+                with pytest.raises(KeyError):
+                    rn.get_table_name(key)
+
+        # One sweep per distinct missing key, not one per call: the second key was unknown
+        # to the negative record, so it re-checks SSM once and is then remembered too.
+        assert len(sweeps) == 2
+        assert {"dynamoTables/assetStorage", "dynamoTables/databaseStorage"} <= set(rn._missing_keys)
+
+    def test_present_key_still_resolves_after_a_sibling_miss(self, rn):
+        # Positive control: the negative record is per key and must not shadow a published one.
+        ssm = boto3.client("ssm", region_name=self._region())
+        _put(ssm, "dynamoTables/assetStorage", "ssm-asset-table")
+        with pytest.raises(KeyError):
+            rn.get_table_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
+        assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "ssm-asset-table"
+
+    def test_env_override_still_wins_after_a_recorded_miss(self, rn, monkeypatch):
+        # Positive control: the break-glass override is checked before any cache.
+        boto3.client("ssm", region_name=self._region())
+        with pytest.raises(KeyError):
+            rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+        monkeypatch.setenv("ASSET_STORAGE_TABLE_NAME", "break-glass")
+        assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "break-glass"
+
+    def test_late_published_parameter_resolves_once_the_record_expires(self, rn):
+        ssm = boto3.client("ssm", region_name=self._region())
+        with pytest.raises(KeyError):
+            rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+        _put(ssm, "dynamoTables/assetStorage", "published-late")
+        # Age the negative record past MISSING_KEY_TTL_SECONDS.
+        rn._missing_keys["dynamoTables/assetStorage"] = 0.0
+        assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "published-late"
+        assert "dynamoTables/assetStorage" not in rn._missing_keys
+
+    def test_ssm_failure_is_not_recorded_as_a_missing_key(self, rn, monkeypatch):
+        # A failed sweep says nothing about whether the parameter exists, so the next call
+        # must retry rather than serve a negative for the rest of the window.
+        ssm = boto3.client("ssm", region_name=self._region())
+        _put(ssm, "dynamoTables/assetStorage", "v1")
+        real_refresh = rn._refresh_cache
+        state = {"fail": True}
+
+        def flaky():
+            if state["fail"]:
+                state["fail"] = False
+                raise RuntimeError("ssm down")
+            real_refresh()
+
+        monkeypatch.setattr(rn, "_refresh_cache", flaky)
+        with pytest.raises(RuntimeError):
+            rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+        assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "v1"
+
+    def test_negative_record_raises_the_same_error_as_a_fresh_miss(self, rn):
+        boto3.client("ssm", region_name=self._region())
+        with pytest.raises(KeyError) as first:
+            rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+        with pytest.raises(KeyError) as cached:
+            rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+        assert str(cached.value) == str(first.value)
 
 
 # Canonical SSM key registry that ResourceKeys in common/resourceNames.py mirrors.

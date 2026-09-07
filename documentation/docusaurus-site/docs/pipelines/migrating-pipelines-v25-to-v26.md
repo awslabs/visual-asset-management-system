@@ -120,6 +120,13 @@ sfn.send_task_failure(taskToken=task_token, error="PipelineFailure", cause="See 
 :::danger[Always report failure]
 A pipeline that returns nothing does not fail the workflow — it hangs until the task timeout, which may
 be hours. Send `SendTaskFailure` on every error path, including the ones you consider impossible.
+
+The path most easily missed is a nested `RequestResponse` invoke: a function that raised still returns
+`StatusCode` 200, with the failure in `FunctionError`. If your entry point checks only the status, a failed
+launch reads as a successful one, so no path reports the token at all. Check both, and let a nested
+function's own failed callback propagate rather than catching it — that propagation is what tells the
+caller to report the token itself. See
+[Every failure route reports the token](custom-pipelines.md#every-failure-route-reports-the-token).
 :::
 
 Set `taskTimeout` to something your work can actually finish within, and use `taskHeartbeatTimeout` for
@@ -273,6 +280,7 @@ vamscli pipeline template list -d GLOBAL -p my-pipeline
 -   [ ] `assetId` taken from `resolved["assetId"]`, never off the payload or derived from S3 path segments
 -   [ ] Multi-file input either handled or excluded by declaring `inputFileArity: "one"`
 -   [ ] `SendTaskSuccess` on completion and `SendTaskFailure` on **every** error path
+-   [ ] Nested `RequestResponse` invokes checked for `FunctionError` as well as `StatusCode`
 -   [ ] `taskTimeout` realistic; `taskHeartbeatTimeout` set for long-running work
 -   [ ] Nested state machines, log groups, and self-submitted compute jobs registered
 -   [ ] For self-submitted AWS Batch jobs: registered as `resourceType: "batchJob"` so abort terminates them

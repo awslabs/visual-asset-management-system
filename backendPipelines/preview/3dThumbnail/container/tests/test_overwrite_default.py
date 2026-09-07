@@ -41,6 +41,11 @@ TEMPLATE_PATH = os.path.normpath(os.path.join(
 TAG_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 
 CONFIG_KEY = "overwriteExistingPreviewFiles"
+CONFIG_TAG_KEY = "OVERWRITE_EXISTING_PREVIEW_FILES"
+
+# The tag types whose value renders as a bare JSON literal rather than inside the quotes the body
+# already carries (common/workflows/templateRender.USER_TAG_TYPE_SHAPES).
+_JSON_LITERAL_TYPES = ("integer", "number", "boolean", "string-list")
 
 
 def _stage():
@@ -124,14 +129,38 @@ class TestShippedTemplateTag:
 
     def _tag_field(self, template):
         referenced = set(TAG_PATTERN.findall(template.get("configBody", "")))
-        assert referenced, (
-            f"configBody references no {{{{tag}}}}, so {CONFIG_KEY} is not operator-overridable")
-        fields = [f for f in (template.get("tagSchema") or []) if f.get("tagKey") in referenced]
-        assert len(fields) == 1, (
-            "expected exactly one declared tag that the configBody also references; "
-            f"declared={[f.get('tagKey') for f in (template.get('tagSchema') or [])]} "
-            f"referenced={sorted(referenced)}")
-        return fields[0]
+        declared = {f.get("tagKey"): f for f in (template.get("tagSchema") or [])
+                    if isinstance(f, dict)}
+        assert CONFIG_TAG_KEY in referenced, (
+            f"configBody does not reference {{{{{CONFIG_TAG_KEY}}}}}, so {CONFIG_KEY} is not "
+            "operator-overridable")
+        assert CONFIG_TAG_KEY in declared, (
+            f"{CONFIG_TAG_KEY} is referenced by the configBody but declared by no tagSchema entry, "
+            "so the execute form never asks for it")
+        # Every declared tag must also be referenced: a declared-but-unreferenced tag renders a
+        # field on the execute form whose value reaches no pipeline.
+        assert not set(declared) - referenced, (
+            f"declared but unreferenced: {sorted(set(declared) - referenced)}")
+        return declared[CONFIG_TAG_KEY]
+
+    def _render(self, template, values):
+        """The configBody with each declared tag substituted the way the backend renderer would: a
+        typed tag as a bare JSON literal, a string/enum tag as text inside the body's own quotes."""
+        types_by_key = {f.get("tagKey"): f.get("type")
+                        for f in (template.get("tagSchema") or []) if isinstance(f, dict)}
+
+        def _substitute(match):
+            key = match.group(1)
+            value = values[key]
+            if types_by_key.get(key) in _JSON_LITERAL_TYPES:
+                return json.dumps(value)
+            return str(value)
+
+        return TAG_PATTERN.sub(_substitute, template["configBody"])
+
+    def _defaults(self, template):
+        return {f["tagKey"]: f.get("default")
+                for f in (template.get("tagSchema") or []) if isinstance(f, dict)}
 
     def test_tag_is_declared_and_referenced(self):
         template = self._template()
@@ -148,15 +177,16 @@ class TestShippedTemplateTag:
         template = self._template()
         self._tag_field(template)
         for rendered_value in (True, False):
-            body = TAG_PATTERN.sub(json.dumps(rendered_value), template["configBody"])
+            values = dict(self._defaults(template), **{CONFIG_TAG_KEY: rendered_value})
+            body = self._render(template, values)
             assert json.loads(body)[CONFIG_KEY] is rendered_value
 
     def test_declared_default_regenerates_in_the_container(self):
         """The tag default and the container default agree: the body the shipped template renders
         with no operator input drives the same regeneration a bare run performs."""
         template = self._template()
-        field = self._tag_field(template)
-        body = TAG_PATTERN.sub(json.dumps(field["default"]), template["configBody"])
+        self._tag_field(template)
+        body = self._render(template, self._defaults(template))
         result, download = _run_with(json.loads(body))
         download.assert_called_once()
         assert result.status == PipelineStatus.FAILED

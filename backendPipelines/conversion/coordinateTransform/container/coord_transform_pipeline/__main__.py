@@ -5,6 +5,7 @@
 
 import json
 import logging
+import os
 import sys
 
 from .core import run
@@ -17,6 +18,11 @@ log.set_log_level(logging.INFO)
 def main():
     logger = log.get_logger()
     logger.info("Coordinate Transform Pipeline - Container Start")
+
+    # The uid the work actually runs under. The image declares a non-root USER and the Batch job
+    # definition sets no `user` override, and neither is readable from a run's outcome: a job that
+    # succeeds says nothing about which account it succeeded as.
+    logger.info("container.runtime_uid uid=%s euid=%s", os.getuid(), os.geteuid())
 
     if sys.argv[1] == "localTest":
         test_stage = sys.argv[2] if len(sys.argv) > 2 else "COORD_TRANSFORM"

@@ -146,6 +146,15 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
 
     def _fmt(data: Dict[str, Any]) -> str:
         def _rendered(lines) -> str:
+            # The date window the service actually applied — the caller's --filter-start-date, or
+            # the 90-day default it substitutes. Shown in text mode too, since an execution older
+            # than the window is absent by design and a listing that never names the bound reads
+            # as the complete history.
+            start = data.get('filterStartDate')
+            if start:
+                end = data.get('filterEndDate')
+                lines.append(f"\nStart date filter applied: {start}"
+                             + (f" (through {end})" if end else ""))
             # Every reason a page can be shorter than --page-size: the cap on distinct assets it
             # resolves for permission checks, and its per-request work budget. Rendered on the empty
             # page too, because that is the case a bare "No executions found." misreports as an
@@ -204,6 +213,10 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             # order) or a walk of 200 pages loses every bound that fired along the way and reads as a
             # complete listing.
             all_warnings = []
+            # Every page echoes the date window the service applied, and the aggregate below is
+            # rebuilt from the accumulated items — so the echo is carried across or the one mode
+            # whose purpose is a complete listing is the one that never states its own bounds.
+            applied_window: Dict[str, Any] = {}
             next_token = None
             page_count = 0
             while True:
@@ -217,6 +230,9 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 for warning in page.get('warnings') or []:
                     if warning not in all_warnings:
                         all_warnings.append(warning)
+                for key in ('filterStartDate', 'filterEndDate'):
+                    if key not in applied_window and page.get(key):
+                        applied_window[key] = page[key]
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')
@@ -225,6 +241,7 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count}
+            result.update(applied_window)
             if all_warnings:
                 result['warnings'] = all_warnings
             # Both stop conditions carry the outstanding token: it is the only way to continue, and

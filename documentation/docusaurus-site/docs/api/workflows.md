@@ -419,7 +419,7 @@ A trigger-launched execution runs as the reserved system identity rather than as
 
 ### List triggers
 
-Retrieves the triggers configured on a workflow.
+Retrieves one page of the triggers configured on a workflow. A workflow may carry several triggers of one base type, so the listing is paged: when more triggers remain the response carries `NextToken`, which is passed back as `startingToken` to continue.
 
 ```
 GET /database/{databaseId}/workflows/{workflowId}/triggers
@@ -431,6 +431,18 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers
 | ------------ | ------ | -------- | ------------------- |
 | `databaseId` | string | Yes      | Database identifier |
 | `workflowId` | string | Yes      | Workflow identifier |
+
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                                                     |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `100`   | Maximum number of triggers to return. Clamped to 500 — a larger request is served a 500-row page and the remainder as a token.   |
+| `pageSize`      | number | No       | `100`   | Number of triggers per page, clamped to `maxItems`.                                                                             |
+| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                                       |
+
+`NextToken` is present only while more triggers remain; page until it is absent. A page bounded by `pageSize` can hold no triggers and still carry a token, so an empty page is not the end of the listing.
+
+The single-workflow response ([Get a workflow](#get-a-workflow)) embeds the same triggers as an unpaged `triggers` array, which is the shape to read for a workflow whose trigger set is small.
 
 #### Response
 
@@ -457,7 +469,8 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers
                 "dateCreated": "2026-03-15T10:30:00Z",
                 "dateModified": "2026-03-15T10:30:00Z"
             }
-        ]
+        ],
+        "NextToken": "eyJ..."
     }
 }
 ```
@@ -655,10 +668,10 @@ A workflow may reference each pipeline at most once. Everything resolved per ste
 A `jobName` names the step in the workflow's AWS Step Functions state machine, and — for the workflow's **first** step — names the folder that holds the whole execution's output:
 
 ```
-pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
+{baseAssetsPrefix}pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
 ```
 
-`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name carrying a short generated prefix, assigned when the workflow's state machine is built. Every step of a run writes beneath these prefixes; the steps do not each get a folder of their own. Omitting `jobName` is the normal choice — the pipeline id already labels the step.
+`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name carrying a short generated prefix, assigned when the workflow's state machine is built. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under, and is empty for the bucket VAMS creates. Every step of a run writes beneath these prefixes; the steps do not each get a folder of their own. Omitting `jobName` is the normal choice — the pipeline id already labels the step.
 
 The value is 3–63 characters of letters, numbers, hyphens, and underscores, and each step in a workflow needs its own: two steps sharing a job name collapse into one state-machine state, leaving one of the two pipelines unrun. It is a fixed label rather than a template — `{{tag}}` placeholders are not substituted in a `jobName` and are rejected, because the name is written into the state machine when the workflow is deployed rather than resolved per execution.
 
@@ -1018,7 +1031,7 @@ GET /database/{databaseId}/assets/{assetId}/workflows/executions?workflowId={wor
 
 The two forms differ in how the workflow is matched. The path form takes its companion `workflowDatabaseId` from the request body and compares the two as a joined key, so it identifies exactly one workflow but requires both halves. The query form matches each parameter independently, so `workflowId` on its own lists that workflow's executions across every database. Prefer the query form from a browser: a `GET` request cannot carry a body.
 
-A workflow ID is unique only within its database, so pass both parameters to narrow to a single workflow when the same ID exists in more than one.
+A workflow ID is unique across every database including `GLOBAL`, so `workflowId` on its own names the workflow. `workflowDatabaseId` narrows the list further rather than disambiguating it, and a value that is not the workflow's own database returns an empty list rather than an error.
 
 ### Path parameters
 
@@ -1255,6 +1268,8 @@ Aborting an execution requires `GET` permission on the execution's workflow, `PO
 
 Reconstructs the execute request from an execution's stored records and launches a new execution (new `executionId`). The caller must be able to view the original execution; the re-launch re-validates permissions against every referenced asset, workflow, and pipeline.
 
+A re-run reproduces the original request exactly. When a configuration value was too large to record in full on the original run — a pipeline step's template tag values, or the custom configuration body of a template-less step — the reconstruction returns `400` rather than launching a run that differs from the original. Start a new execution supplying those values.
+
 ```
 POST /workflows/executions/{executionId}/rerun
 ```
@@ -1283,7 +1298,7 @@ A re-run requires that the caller can view the original execution (`GET` on its 
 
 | Status | Description                                                                                   |
 | ------ | --------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `executionId` or `executionGroupId`, or the reconstructed execution failed validation |
+| `400`  | Invalid `executionId` or `executionGroupId`, a stored configuration value too large to reproduce exactly, or the reconstructed execution failed validation |
 | `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)         |
 | `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone        |
 | `429`  | Throttling -- too many requests                                                               |
@@ -1561,7 +1576,9 @@ Both metadata collections are per pipeline, so their bounds are spent evenly acr
 :::note[Truncated configuration bodies]
 A pipeline entry's `renderedConfig` is the configuration body after the execution's own template-tag values were substituted, and before the system tags were. Template substitution runs in two stages: the values a caller supplies for a template's `tagSchema` are filled in when the execution is validated, while the system tags — `{{assetMetadataObject}}`, `{{jobName}}`, the output paths, and the rest of the reserved set — resolve per step at launch, once the step's manifest and execution context exist. `renderedConfig` therefore still shows the system tags as literal `{{tag}}` placeholders, which is expected rather than a sign that substitution failed.
 
-The fully substituted body — the one the pipeline actually read — is written to Amazon S3 per step, and `renderedConfigLocation` points at it. The two fields describe different stages of the same body: `renderedConfig` is pre-system-tag, `renderedConfigLocation` is post. Read the object when you need the exact values a step ran with.
+A third case also stays literal, at both stages: a `{{tag}}` that is neither a system tag nor declared in the template's `tagSchema` has no value to substitute, so its placeholder text is what the pipeline receives. A placeholder still present in the S3 object below is that case, and it names the tag whose declaration is missing.
+
+The body the pipeline actually read is written to Amazon S3 per step, and `renderedConfigLocation` points at it. The two fields describe different stages of the same body: `renderedConfig` is pre-system-tag, `renderedConfigLocation` is post. Read the object when you need the exact values a step ran with.
 
 The inline copy is bounded by the record's field limit, and again by the response's own share for the step section: a run whose steps together carry more configuration than that share has each step's inline copy shortened, or removed when what would remain is too short to read as configuration. `renderedConfigLocation` survives either bound, so the fully substituted body stays reachable.
 

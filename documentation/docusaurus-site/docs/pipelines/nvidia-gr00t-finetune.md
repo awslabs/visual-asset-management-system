@@ -271,6 +271,18 @@ This overrides pipeline defaults and enables LoRA fine-tuning with rank 32.
 | Checkpoint upload to S3             | 1-2 min        | 1-2 min              |
 | **Total (smoke test)**              | **~35-60 min** | **~20-35 min**       |
 
+:::warning[The Amazon S3 model cache bucket is RETAINED]
+Enabling this pipeline creates an Amazon S3 model cache bucket in addition to the Amazon EFS file system.
+It uses a `RETAIN` removal policy, so it and its contents **survive `cdk destroy`** and require a manual
+delete — unlike the EFS file system, which is removed with the stack. Cached weights make it one of the
+largest buckets in a deployment, and it occupies one of the account's Amazon S3 bucket slots (100 by
+default) until deleted.
+
+The bucket is auto-named, so a retained copy does **not** block a redeploy. See
+[AWS resources](../architecture/aws-resources.md#amazon-s3-buckets) for the full inventory and
+[Uninstall the solution](../deployment/uninstall.md#step-2-delete-s3-buckets) for the cleanup steps.
+:::
+
 ## Prerequisites
 
 :::warning[HuggingFace access and model license required]

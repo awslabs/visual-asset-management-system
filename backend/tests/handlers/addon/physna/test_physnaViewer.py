@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -354,5 +355,166 @@ class TestMintViewerToken:
         resp.data = json.dumps({"unexpected": "shape"}).encode("utf-8")
         client.request.return_value = resp
         assert _pv._mint_viewer_token(client) is None
+
+
+_VALID_RAW = {
+    "databaseId": "db-1",
+    "assetId": "asset-1.file",
+    "relativePath": "/part.step",
+}
+
+
+def _real_validation_error():
+    """A genuine pydantic ValidationError of the class the handler catches.
+
+    Built by running the real request model rather than hand-rolled, so the
+    instance is whatever ``_ValidationError()`` resolves to in this
+    environment."""
+    try:
+        _pv._parse_viewer_request(
+            {"databaseId": "db-1", "assetId": "asset-1.file", "relativePath": "x"}
+        )
+    except _pv._ValidationError() as v:
+        return v
+    raise AssertionError("the request model accepted an invalid relativePath")
+
+
+def _root_level_validation_error(authored):
+    """A ValidationError whose only error is model-level (``loc == __root__``).
+
+    The request model's ``@root_validator`` raises whatever the ``validate()``
+    dispatcher reports, so failing that dispatcher on an otherwise-valid
+    payload produces the model-level shape. The first parse doubles as the
+    control that the payload is accepted when the dispatcher passes, and
+    ``sys.modules`` is the module object the handler's own lazy import binds."""
+    _pv._parse_viewer_request(_VALID_RAW)
+    model_module = sys.modules["models.physnaViewer"]
+    with patch.object(model_module, "validate", return_value=(False, authored)):
+        try:
+            _pv._parse_viewer_request(_VALID_RAW)
+        except _pv._ValidationError() as v:
+            return v
+    raise AssertionError("the request model accepted a payload its validator rejects")
+
+
+@pytest.mark.unit
+class TestValidationErrorMessageIsSanitized:
+    """A rejected request must not carry pydantic's own rendering into the
+    response body (backend Rule 11). ``str(ValidationError)`` prefixes a header
+    naming the model class and appends the error taxonomy plus the constraint
+    limit; ``models.common.validation_error_message`` keeps the field name and
+    the human wording and drops the rest."""
+
+    # Covers both error shapes: a FIELD error (`relativePath="x"` fails
+    # min_length=2, so the model-level validator is skipped and pydantic words
+    # the message) and a MODEL-level error, whose `loc` is the internal
+    # `__root__` token.
+    _LEAKS = ("PhysnaViewerRequestModel", "validation error for", "type=value_error",
+              "limit_value", "__root__")
+
+    def test_invalid_query_params_return_400_invalid_request(self):
+        table = _fake_table_returning(_happy_asset_item())
+        enforcer = _mock_allow_all_enforcer()
+        with patch.object(_pv, "asset_storage_table", table), \
+            patch.object(_pv, "_CasbinEnforcer", return_value=enforcer), \
+            patch.object(_pv, "PhysnaClient") as client_cls:
+            client_cls.return_value = MagicMock()
+            response = _pv.lambda_handler(_event(relative_path="x"), MagicMock())
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"])["status"] == "invalid_request"
+
+    def test_invalid_query_params_do_not_leak_model_or_taxonomy(self):
+        table = _fake_table_returning(_happy_asset_item())
+        enforcer = _mock_allow_all_enforcer()
+        with patch.object(_pv, "asset_storage_table", table), \
+            patch.object(_pv, "_CasbinEnforcer", return_value=enforcer), \
+            patch.object(_pv, "PhysnaClient") as client_cls:
+            client_cls.return_value = MagicMock()
+            response = _pv.lambda_handler(_event(relative_path="x"), MagicMock())
+        for leak in self._LEAKS:
+            assert leak not in response["body"]
+
+    def test_invalid_query_params_still_name_the_failing_field(self):
+        """Sanitizing must not degrade the 400 to an opaque message — the
+        field name is published in the OpenAPI spec and is what makes the
+        error actionable."""
+        table = _fake_table_returning(_happy_asset_item())
+        enforcer = _mock_allow_all_enforcer()
+        with patch.object(_pv, "asset_storage_table", table), \
+            patch.object(_pv, "_CasbinEnforcer", return_value=enforcer), \
+            patch.object(_pv, "PhysnaClient") as client_cls:
+            client_cls.return_value = MagicMock()
+            response = _pv.lambda_handler(_event(relative_path="x"), MagicMock())
+        message = json.loads(response["body"])["message"]
+        assert "relativePath" in message
+        assert message != ""
+
+    def test_outer_handler_validation_error_is_also_sanitized(self):
+        """A ValidationError escaping past ``_handle_get`` is caught by
+        ``lambda_handler``'s own handler, which must sanitize identically."""
+        enforcer = _mock_allow_all_enforcer()
+        with patch.object(_pv, "_CasbinEnforcer", return_value=enforcer), \
+            patch.object(
+                _pv, "_handle_get", side_effect=_real_validation_error()
+            ):
+            response = _pv.lambda_handler(_event(), MagicMock())
+        assert response["statusCode"] == 400
+        body = json.loads(response["body"])
+        assert body["status"] == "invalid_request"
+        for leak in self._LEAKS:
+            assert leak not in response["body"]
+        assert "relativePath" in body["message"]
+
+    def test_model_level_validator_error_is_sanitized(self):
+        """A model-level failure renders ``__root__`` as the field path, which
+        is internal. The authored message it carries is what the caller needs,
+        so it survives on its own."""
+        authored = "databaseId is invalid. Must follow the documented format."
+        enforcer = _mock_allow_all_enforcer()
+        with patch.object(_pv, "_CasbinEnforcer", return_value=enforcer), \
+            patch.object(
+                _pv,
+                "_handle_get",
+                side_effect=_root_level_validation_error(authored),
+            ):
+            response = _pv.lambda_handler(_event(), MagicMock())
+        assert response["statusCode"] == 400
+        body = json.loads(response["body"])
+        assert body["status"] == "invalid_request"
+        for leak in self._LEAKS:
+            assert leak not in response["body"]
+        assert body["message"] == authored
+
+    def test_valid_query_params_are_unaffected(self):
+        """Positive control — a well-formed request still reaches the Physna
+        lookup rather than being rejected as invalid."""
+        table = _fake_table_returning(_happy_asset_item())
+        enforcer = _mock_allow_all_enforcer()
+        with patch.object(_pv, "asset_storage_table", table), \
+            patch.object(_pv, "_CasbinEnforcer", return_value=enforcer), \
+            patch.object(_pv, "lookup_physna_asset_id", return_value=None), \
+            patch.object(_pv, "PhysnaClient") as client_cls:
+            client_cls.return_value = MagicMock()
+            response = _pv.lambda_handler(_event(), MagicMock())
+        assert response["statusCode"] == 200
+        assert json.loads(response["body"])["status"] == "not_synced"
+
+    def test_vams_error_message_is_still_returned_verbatim(self):
+        """Positive control — only the pydantic rendering is sanitized.
+        ``VAMSGeneralErrorResponse`` messages are authored in this codebase
+        and still reach the caller."""
+        enforcer = _mock_allow_all_enforcer()
+        authored = "Asset storage table is not configured for the Physna Viewer lambda."
+        with patch.object(_pv, "_CasbinEnforcer", return_value=enforcer), \
+            patch.object(
+                _pv,
+                "_handle_get",
+                side_effect=_pv._VAMSGeneralErrorResponse()(authored),
+            ):
+            response = _pv.lambda_handler(_event(), MagicMock())
+        assert response["statusCode"] == 400
+        body = json.loads(response["body"])
+        assert body["status"] == "request_failed"
+        assert authored in body["message"]
 
 

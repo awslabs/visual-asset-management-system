@@ -2459,6 +2459,10 @@ export function storageResourcesBuilder(
 
     // Loop through each asset bucket and setup S3 event notifications sync
     let bucketSyncIndex = 0;
+    // Receives before a bucket-sync record is dead-lettered. Matches the indexer queues'
+    // `indexerQueueMaxReceiveCount` in searchBuilder, so a record that cannot be processed reaches a
+    // DLQ after the same number of attempts wherever it entered VAMS.
+    const bucketSyncQueueMaxReceiveCount = 3;
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     // A bucket instance can appear in multiple records (same bucket, different
     // prefixes). The sync-queue construct IDs are derived from the bucket instance,
@@ -2472,6 +2476,30 @@ export function storageResourcesBuilder(
         bucketSyncOccurrence.set(record.bucket, bucketOccurrence + 1);
         const bucketSyncIdSuffix = bucketOccurrence === 0 ? "" : `-${bucketOccurrence}`;
 
+        // Dead-letter queue for the created-events queue.
+        //
+        // Without one, a message the event source cannot land is retried until the 4-day retention
+        // expires, and nothing surfaces it: MEASURED on a live deployment, 15 messages cycled every
+        // 960 seconds for 14 hours with Errors and Throttles both zero and NOT ONE log line, because
+        // AWS Lambda's recursive-loop detection was dropping the invocations before the handler ran.
+        // A dropped invocation never deletes its message. The only signals were the
+        // RecursiveInvocationsDropped metric and the in-flight depth.
+        //
+        // One DLQ per source queue, and one pair per registered bucket, so a poison record stays
+        // attributable to the bucket and the direction (created vs deleted) it arrived on.
+        const onS3ObjectCreatedDlq = new sqs.Queue(
+            scope,
+            "bucketSyncCreatedDLQ--" + record.bucket + bucketSyncIdSuffix,
+            {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
+
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
@@ -2484,6 +2512,10 @@ export function storageResourcesBuilder(
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: kmsEncryptionKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: onS3ObjectCreatedDlq,
+                    maxReceiveCount: bucketSyncQueueMaxReceiveCount,
+                },
             }
         );
 
@@ -2540,6 +2572,20 @@ export function storageResourcesBuilder(
 
         bucketSyncIndex = bucketSyncIndex + 1;
 
+        // Dead-letter queue for the deleted-events queue. Same reasoning as the created side above.
+        const onS3ObjectDeletedDlq = new sqs.Queue(
+            scope,
+            "bucketSyncDeletedDLQ--" + record.bucket + bucketSyncIdSuffix,
+            {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
+
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(
             scope,
@@ -2552,6 +2598,10 @@ export function storageResourcesBuilder(
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: kmsEncryptionKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: onS3ObjectDeletedDlq,
+                    maxReceiveCount: bucketSyncQueueMaxReceiveCount,
+                },
             }
         );
 

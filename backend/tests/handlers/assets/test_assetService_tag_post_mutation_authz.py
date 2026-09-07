@@ -29,6 +29,7 @@ import pytest
 from tests.handlers.assets.test_assetService_update_tag_scope import (  # noqa: E402
     _load_asset_service,
     _existing_asset,
+    _written_attributes,
 )
 
 _DB = "db-a"
@@ -177,7 +178,7 @@ class TestTagAdditionIsAuthorizedAgainstPostState:
                 patch.object(m, "CasbinEnforcer", _enforcer(_deny_restricted_tag, record)):
             result = _attempt_update(m, {"tags": ["restricted"]}, {"tokens": ["u1"]})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
 
     def test_tag_removal_is_refused_on_the_pre_state_it_already_violates(self):
@@ -197,7 +198,7 @@ class TestTagAdditionIsAuthorizedAgainstPostState:
                 patch.object(m, "CasbinEnforcer", _enforcer(_deny_restricted_tag, record)):
             result = _attempt_update(m, {"tags": []}, {"tokens": ["u1"]})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
         evaluated_tag_sets = {tags for _, tags in _tag_evaluations(record)}
         assert evaluated_tag_sets == {("restricted",)}, (
@@ -218,7 +219,7 @@ class TestTagAdditionIsAuthorizedAgainstPostState:
                 patch.object(m, "CasbinEnforcer", _enforcer(_deny_restricted_tag, record)):
             result = _attempt_update(m, {"description": "edited"}, {"tokens": ["u1"]})
 
-        m.asset_table.put_item.assert_not_called()
+        m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
         # The stored tag list was evaluated and refused. Asserted on the state rather than on a
         # particular (action, state) pair: an implementation that requires an additional action
@@ -254,8 +255,8 @@ class TestPostStateObjectShape:
         assert getattr(result, "success", None) is True, (
             f"a databaseId-scoped ALLOW no longer permits a tag addition: {result}"
         )
-        m.asset_table.put_item.assert_called_once()
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["tags"] == ["ok"]
+        m.asset_table.update_item.assert_called_once()
+        assert _written_attributes(m.asset_table)["tags"] == ["ok"]
 
     def test_every_enforced_object_carries_the_scoped_fields(self):
         """Control: each enforce call must see databaseId and assetName populated.
@@ -312,7 +313,7 @@ class TestUnrelatedEditsStayUngated:
             f"a PUT with no `tags` key was refused: {result}; the post-mutation check must be "
             f"gated on 'tags' in update_data"
         )
-        m.asset_table.put_item.assert_called_once()
+        m.asset_table.update_item.assert_called_once()
         assert not _refusals(record, _deny_get_on_restricted_tag), (
             f"an evaluation of this asset was refused even though the request carries no tag "
             f"change: {_refusals(record, _deny_get_on_restricted_tag)}"
@@ -348,7 +349,7 @@ class TestUnrelatedEditsStayUngated:
         assert getattr(result, "success", None) is True, (
             f"a rename out of an assetName-scoped ALLOW is now refused: {result}"
         )
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["assetName"] == "OTHER"
+        assert _written_attributes(m.asset_table)["assetName"] == "OTHER"
 
     def test_identical_tag_list_resubmission_still_succeeds(self):
         """Control: re-submitting the same tags (what every full-object PUT does)."""
@@ -360,7 +361,7 @@ class TestUnrelatedEditsStayUngated:
             result = _attempt_update(m, {"tags": ["keepme"]}, {"tokens": ["u1"]})
 
         assert getattr(result, "success", None) is True
-        assert m.asset_table.put_item.call_args.kwargs["Item"]["tags"] == ["keepme"]
+        assert _written_attributes(m.asset_table)["tags"] == ["keepme"]
 
     def test_system_user_cross_call_still_writes(self):
         """Control: the post-check must stay inside the `len(tokens) > 0` guard.
@@ -375,4 +376,4 @@ class TestUnrelatedEditsStayUngated:
             result = _attempt_update(m, {"tags": ["ok"]}, {"tokens": ["SYSTEM_USER"]})
 
         assert getattr(result, "success", None) is True
-        m.asset_table.put_item.assert_called_once()
+        m.asset_table.update_item.assert_called_once()

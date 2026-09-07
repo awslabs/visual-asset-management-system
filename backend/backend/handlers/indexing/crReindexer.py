@@ -63,6 +63,7 @@ from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 
 from common.s3MetadataKeys import (
@@ -77,10 +78,11 @@ from customLogging.logger import safeLogger
 logger = safeLogger(service_name="CrReindexer")
 
 # Initialize AWS clients
-dynamodb_client = boto3.client('dynamodb')
-dynamodb_resource = boto3.resource('dynamodb')
-s3_client = boto3.client('s3')
-ssm_client = boto3.client('ssm')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
+dynamodb_resource = boto3.resource('dynamodb', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+ssm_client = boto3.client('ssm', config=retry_config)
 
 # HTTP client for CloudFormation responses
 http = urllib3.PoolManager()
@@ -1435,7 +1437,10 @@ def send_cfn_response(event: Dict, context: Any, status: str, data: Dict = None,
         )
         logger.info(f"CloudFormation response status: {response.status}")
     except Exception as e:
-        logger.error(f"Failed to send CloudFormation response: {e}")
+        # An HTTP failure names the request URI in its own message (urllib3 renders
+        # "Max retries exceeded with url: ..."), and for the ResponseURL that URI carries
+        # the presigned signature. Log the failure type, not the exception text.
+        logger.error(f"Failed to send CloudFormation response: {type(e).__name__}")
 
 
 def lambda_handler(event: Dict, context: Any) -> Dict:

@@ -11,8 +11,8 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **Dual-Index Architecture**: VAMS maintains two separate OpenSearch indexes -- one for assets and one for files. Search queries can target either or both indexes.
 -   **Entity Types**: Search results are categorized as either `asset` or `file`. You can filter by entity type.
 -   **AND Query Logic**: The `query`, `metadataQuery`, and `filters` parameters are combined using AND logic. Results must match ALL specified criteria. Within a `metadataQuery`, individual field conditions can use AND or OR (e.g., `"color:red AND size:large"` or `"color:red OR color:blue"`).
--   **Metadata Search**: Metadata fields are indexed alongside core fields, enabling search by metadata keys, values, or both.
--   **Field Prefixes**: OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array).
+-   **Metadata Search**: Metadata is indexed alongside the core fields, enabling search by metadata keys, values, or both. It is stored differently from a core field -- see [Metadata Fields](#metadata-fields).
+-   **Field Prefixes**: The core OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array). Metadata keys do not carry one.
 -   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database).
 
 ---
@@ -120,7 +120,8 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                     "list_tags": ["architecture", "building"],
                     "bool_isdistributable": true,
                     "date_lastmodified": "2024-06-15T10:30:00Z",
-                    "str_asset_version_id": "v1"
+                    "str_asset_version_id": "v1",
+                    "MD_": { "material": "concrete" }
                 },
                 "highlight": {
                     "str_assetname": ["<em>Building</em> <em>Model</em>"]
@@ -472,7 +473,11 @@ To filter search results by location, supply a `geoSearch` object on the request
 | `point.radiusMeters` | number | Optional radius around the point. When provided, the input is treated as a circle.                                                                     |
 | `bbox.topLeft`       | object | Northwest corner of the bounding box (`{lat, lon}`).                                                                                                   |
 | `bbox.bottomRight`   | object | Southeast corner of the bounding box.                                                                                                                  |
-| `geoJson`            | object | Arbitrary GeoJSON Geometry, Feature, or FeatureCollection.                                                                                             |
+| `geoJson`            | object | GeoJSON Geometry, Feature, or FeatureCollection. See the limits below.                                                                                 |
+
+:::note[GeoJSON Filter Limits]
+A submitted `geoJson` shape carries at most 100,000 coordinate positions and nests `GeometryCollection` members at most 32 levels deep. A shape exceeding either limit is rejected with a `400` naming it, so the whole search request fails rather than returning partial results. The nesting limit is the same one the `geojson` metadata value type enforces (see [Metadata](metadata.md)), which keeps the shapes a filter accepts and the shapes indexed in `geo_MD_location` aligned.
+:::
 
 :::note[Backward Compatibility]
 Documents indexed before the introduction of `geo_MD_location` will not match geospatial filters until reindexed. Map views in the web UI continue to render points and shapes from legacy `MD_.location` and `MD_.latitude` / `MD_.longitude` metadata as a fallback.
@@ -516,12 +521,37 @@ Documents indexed before the introduction of `geo_MD_location` will not match ge
 
 ### Metadata Fields
 
-Metadata fields are dynamically indexed using the same prefix convention:
+Metadata does not follow the prefix convention above. Both indexes store all of a record's metadata in one field, `MD_`, mapped as an OpenSearch `flat_object`, and the file index stores file attributes the same way in `AB_`. Keys appear inside those objects verbatim, with no type prefix, so metadata `{"product": "Training"}` reads back in a hit's `_source` as:
 
--   `str_meta_{key}` -- String metadata values
--   `num_meta_{key}` -- Numeric metadata values
--   `date_meta_{key}` -- Date metadata values
--   `bool_meta_{key}` -- Boolean metadata values
+```json
+"MD_": { "product": "Training" }
+```
+
+One field per index rather than one field per key is what keeps a deployment's metadata vocabulary from growing the index mapping without bound.
+
+| Field             | Type        | Description                                                               |
+| ----------------- | ----------- | ------------------------------------------------------------------------- |
+| `MD_`             | flat_object | All of the record's metadata, keys verbatim. Both indexes.                |
+| `AB_`             | flat_object | All of the file's attributes, keys verbatim. File index only.             |
+| `geo_MD_location` | geo_shape   | Shape derived from metadata. See [Geospatial Search](#geospatial-search). |
+
+Three separate things are worth keeping apart when reading the rest of this page:
+
+-   **What the index stores** — the `MD_` and `AB_` objects above.
+-   **What a query addresses internally** — one key as `MD_.{key}` or `AB_.{key}`, and a value-only search as `MD_._value` (plus `AB_._value` on the file index), the `flat_object` subfield holding every value in the object.
+-   **What a request may submit** — see below. The submitted spelling is normalized before the query is built, so it need not match either of the above.
+
+#### Metadata Key Spellings a Request May Use
+
+`metadataKey` and `metadataQuery` accept the metadata key in three spellings, all of which resolve to the same field:
+
+| Submitted        | Resolves to   | Notes                                                                  |
+| ---------------- | ------------- | ---------------------------------------------------------------------- |
+| `product`        | `MD_.product` | Canonical. A key with no prefix is read as metadata.                   |
+| `MD_product`     | `MD_.product` | Entity prefix. Use `AB_{key}` to address a file attribute instead.     |
+| `MD_str_product` | `MD_.product` | Type prefix (`str_`, `num_`, `bool_`, `date_`, `list_`, `gp_`, `gs_`). |
+
+Do not carry the dot of the internal query path into a request. `MD_.product` is not one of the accepted spellings — it resolves to `MD_..product`, which no document holds, so the search succeeds and returns nothing.
 
 ---
 

@@ -40,6 +40,17 @@ from models.assetsV3 import (
 # threads don't block waiting for a connection.
 MAX_PARALLEL_S3_WORKERS = 16
 
+# Attempts allowed when reserving the next asset version ID. Overlapping callers derive the same ID
+# from the asset's currentVersionId and all but one lose the conditional write, so the bound only has
+# to cover a burst of concurrent writers on a single asset.
+MAX_VERSION_ID_RESERVE_ATTEMPTS = 10
+
+# Pages of the per-asset file-version GSI a version listing will walk to tally every version's file
+# count in one read. That GSI spans every version's files, so on an asset carrying many files per
+# version it holds far more rows than the listed page needs; past this bound the tally is abandoned
+# and each listed version is counted on its own instead.
+FILE_COUNT_TALLY_MAX_PAGES = 5
+
 retry_config = Config(
     retries={
         'max_attempts': 5,
@@ -700,21 +711,75 @@ def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: 
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
 
-        response = asset_file_versions_table.query(
-            KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key),
-            Select='COUNT'
-        )
-        
-        # Return the count
-        return response.get('Count', 0)
-        
+        # A COUNT query is bounded by the same 1 MB scan limit as any other query, so page to
+        # exhaustion or a version holding many files reports a short count.
+        query_kwargs = {
+            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key),
+            'Select': 'COUNT'
+        }
+        count = 0
+        while True:
+            response = asset_file_versions_table.query(**query_kwargs)
+            count += response.get('Count', 0)
+
+            if 'LastEvaluatedKey' not in response:
+                return count
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
     except Exception as e:
         logger.exception(f"Error getting asset version file count: {e}")
         return 0
 
+def tally_asset_version_file_counts(databaseId: str, assetId: str) -> Optional[Dict[str, int]]:
+    """Count every version's files from one walk of the asset's file-version GSI
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+
+    Returns:
+        Mapping of assetVersionId to file count, or None when the walk exceeded
+        FILE_COUNT_TALLY_MAX_PAGES and the tally would be partial
+    """
+    composite_key = f"{databaseId}:{assetId}"
+    version_key_prefix = f"{composite_key}:"
+    counts: Dict[str, int] = {}
+
+    # Only the version each row belongs to is needed, which keeps the pages small enough to
+    # deserialize on an asset holding many files.
+    query_kwargs = {
+        'IndexName': 'databaseIdAssetIdIndex',
+        'KeyConditionExpression': Key('databaseId:assetId').eq(composite_key),
+        'ProjectionExpression': '#versionPk',
+        'ExpressionAttributeNames': {'#versionPk': 'databaseId:assetId:assetVersionId'}
+    }
+
+    try:
+        for _page in range(FILE_COUNT_TALLY_MAX_PAGES):
+            response = asset_file_versions_table.query(**query_kwargs)
+            for item in response.get('Items', []):
+                version_key = item.get('databaseId:assetId:assetVersionId') or ''
+                if version_key.startswith(version_key_prefix):
+                    version_id = version_key[len(version_key_prefix):]
+                    counts[version_id] = counts.get(version_id, 0) + 1
+
+            if 'LastEvaluatedKey' not in response:
+                return counts
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+        logger.info(
+            f"File-version tally for asset {assetId} exceeded {FILE_COUNT_TALLY_MAX_PAGES} pages, "
+            "counting each listed version on its own")
+        return None
+
+    except Exception as e:
+        logger.exception(f"Error tallying asset version file counts: {e}")
+        return None
+
 def save_asset_version_metadata(assetId: str, assetVersionId: str,
                                comment: str, description: str, created_by: str, isCurrent: bool,
-                               databaseId: str, versionAlias: str = '') -> bool:
+                               databaseId: str, versionAlias: str = '',
+                               require_new: bool = False) -> bool:
     """Save asset version metadata to the asset versions table
 
     Args:
@@ -726,9 +791,13 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
         isCurrent: Whether this is the current version
         databaseId: The database ID (for GSI lookups)
         versionAlias: Optional alias for the version
+        require_new: Write only when no record already holds this version ID
 
     Returns:
         True if successful, False otherwise
+
+    Raises:
+        ClientError: When require_new is set and the version ID is already taken
     """
     try:
         now = datetime.utcnow().isoformat()
@@ -748,11 +817,102 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
             'versionAlias': versionAlias or '',
         }
         # Save to asset versions table
-        asset_versions_table.put_item(Item=version_record)
+        put_kwargs = {'Item': version_record}
+        if require_new:
+            put_kwargs['ConditionExpression'] = 'attribute_not_exists(assetVersionId)'
+        asset_versions_table.put_item(**put_kwargs)
         return True
+    except ClientError as e:
+        # A taken version ID is the caller's to resolve, not a write failure.
+        if require_new and e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            raise
+        logger.exception(f"Error saving asset version metadata: {e}")
+        return False
     except Exception as e:
         logger.exception(f"Error saving asset version metadata: {e}")
         return False
+
+
+def reserve_next_asset_version(databaseId: str, assetId: str, asset: Dict, comment: Optional[str],
+                               created_by: str, versionAlias: str = '') -> str:
+    """Reserve the next asset version ID by writing its version record conditionally
+
+    The ID is derived from the asset's currentVersionId, so two overlapping callers derive the
+    same value. The write is conditional on no record holding that ID, so only one of them keeps
+    it and the other derives the next one — before either has written file or metadata snapshot
+    rows under it.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        asset: The asset dictionary, supplying the first candidate's currentVersionId
+        comment: Optional comment for the version
+        created_by: Username who created the version
+        versionAlias: Optional alias for the version
+
+    Returns:
+        The reserved asset version ID
+
+    Raises:
+        VAMSGeneralErrorResponse: If no version ID could be reserved
+    """
+    #strip out all letters from current version. If the stripped version cannot be converted to an integer, assume the currentVersionId is 0.
+    current_number = parse_asset_version_number(asset.get('currentVersionId', '0'))
+    if current_number < 0:
+        current_number = 0
+        logger.warning(f"Could not parse existing version number, setting current to: {current_number}")
+    logger.info(f"Current version: {current_number}")
+
+    for _attempt in range(MAX_VERSION_ID_RESERVE_ATTEMPTS):
+        candidate = f"{current_number + 1}"
+        try:
+            # isCurrentVersion is flipped by mark_assetVersion_as_current once the version's rows
+            # are written, so a version whose write does not complete never reads as the current one.
+            saved = save_asset_version_metadata(
+                assetId,
+                candidate,
+                comment if comment else f"Version {candidate}",
+                asset.get('description', ''),
+                created_by,
+                False,
+                databaseId=databaseId,
+                versionAlias=versionAlias,
+                require_new=True
+            )
+            if not saved:
+                raise VAMSGeneralErrorResponse("Failed to save version metadata")
+            logger.info(f"Reserved asset version {candidate} for asset {assetId}")
+            return candidate
+        except ClientError:
+            logger.info(f"Asset version {candidate} is already taken, deriving the next one")
+
+        # The taken candidate bounds the next one from below. The asset's counter and the highest
+        # ID already recorded can each jump further ahead — a concurrent winner having finished, or
+        # a version whose write never completed — but neither goes back behind an ID already taken,
+        # which is what keeps the walk moving forward.
+        refreshed = asset_table.get_item(
+            Key={'databaseId': databaseId, 'assetId': assetId}
+        ).get('Item') or {}
+        # The recorded ids only let the walk skip past a drifted counter, so a failed listing
+        # costs the hint and nothing more — the conditional write is what keeps the walk off
+        # an ID that already exists.
+        try:
+            recorded_numbers = [
+                parse_asset_version_number(version.get('assetVersionId'))
+                for version in get_all_asset_versions(databaseId, assetId)
+            ]
+        except Exception as e:
+            logger.warning(
+                f"Could not list recorded versions of asset {assetId} while reserving the next "
+                f"version ID: {e}")
+            recorded_numbers = []
+        current_number = max(
+            current_number + 1,
+            parse_asset_version_number(refreshed.get('currentVersionId', '0')),
+            max(recorded_numbers) if recorded_numbers else -1
+        )
+
+    raise VAMSGeneralErrorResponse("Could not reserve a new asset version. Retry the request.")
 
 def get_asset_version_metadata(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
     """Get asset version metadata from the asset versions table
@@ -779,6 +939,31 @@ def get_asset_version_metadata(databaseId: str, assetId: str, assetVersionId: st
         logger.exception(f"Error getting asset version metadata: {e}")
         return None
 
+def parse_asset_version_number(assetVersionId) -> int:
+    """Numeric value of an asset version ID, -1 when it is not a number
+
+    Args:
+        assetVersionId: The asset version ID (e.g. "3", "v3")
+
+    Returns:
+        The version number, or -1 when the ID does not parse as one after stripping 'v'
+    """
+    try:
+        return int(str(assetVersionId).replace('v', ''))
+    except (TypeError, ValueError):
+        return -1
+
+def asset_version_sort_key(version: Dict) -> int:
+    """Numeric ordering value for a version record, -1 for an ID that is not a number
+
+    Args:
+        version: The version record
+
+    Returns:
+        The version number, or -1 when the version ID does not parse as one
+    """
+    return parse_asset_version_number(version.get('assetVersionId', '0'))
+
 def get_all_asset_versions(databaseId: str, assetId: str) -> List[Dict]:
     """Get all versions for an asset from the asset versions table
 
@@ -787,25 +972,35 @@ def get_all_asset_versions(databaseId: str, assetId: str) -> List[Dict]:
         assetId: The asset ID
 
     Returns:
-        List of version dictionaries, sorted by version number descending
+        List of version dictionaries, sorted by version number descending. An empty list
+        means the asset has no versions.
+
+    Raises:
+        Exception: The read failed. A failure is distinct from an empty version set, so it
+            is raised rather than returned as one: callers use the listing to resolve an
+            alias, filter archived versions and set the current-version flag, and each of
+            those silently produces a wrong answer when a failed read reads as "no versions".
     """
     try:
         composite_key = f"{databaseId}:{assetId}"
-        response = asset_versions_table.query(
+        # Page to exhaustion: alias resolution, the archived-version filter and the
+        # current-version flag each read the complete set, and a truncated page reports a
+        # version that exists as absent.
+        versions = query_all_items(
+            asset_versions_table,
             KeyConditionExpression=Key('databaseId:assetId').eq(composite_key),
             ScanIndexForward=False  # Get newest first
         )
-        
-        versions = response.get('Items', [])
-        
-        # Sort by version number (descending)
-        versions.sort(key=lambda x: int(x.get('assetVersionId', '0').replace('v', '')), reverse=True)
-        
+
+        # Sort by version number (descending). A version ID that is not a number sorts last
+        # rather than raising, which would discard every version.
+        versions.sort(key=asset_version_sort_key, reverse=True)
+
         return versions
-        
+
     except Exception as e:
         logger.exception(f"Error getting all asset versions: {e}")
-        return []
+        raise
 
 def update_asset_current_version_reference(asset: Dict, new_assetVersionId: str) -> bool:
     """Update the asset's currentVersionId reference
@@ -848,14 +1043,18 @@ def mark_assetVersion_as_current(databaseId: str, assetId: str, new_assetVersion
     try:
         # Get all versions for the asset
         versions = get_all_asset_versions(databaseId, assetId)
-        
+
         # Update isCurrentVersion flag for all versions
+        marked_new_current = False
         for version in versions:
             version_id = version['assetVersionId']
             is_current = (version_id == new_assetVersionId)
+            if is_current:
+                marked_new_current = True
 
-            # Change only the records we need to
-            if is_current != version['isCurrentVersion']:
+            # Change only the records we need to. A record written without the flag reads as
+            # not current rather than raising.
+            if is_current != version.get('isCurrentVersion', False):
 
                 # Update the version record
                 asset_versions_table.update_item(
@@ -868,25 +1067,42 @@ def mark_assetVersion_as_current(databaseId: str, assetId: str, new_assetVersion
                         ':is_current': is_current
                     }
                 )
-        
+
+        if not marked_new_current:
+            logger.error(
+                f"Version {new_assetVersionId} is not among the listed versions of asset "
+                f"{assetId}, so previously current versions may still be flagged as current")
+
+            # The listing is eventually consistent, so a record written moments earlier can be
+            # absent from it. The new version's key is known, so flag it from that key rather
+            # than leaving the asset pointing at a version that reads as not current. The
+            # condition keeps this a flag update on an existing record rather than an upsert.
+            asset_versions_table.update_item(
+                Key={
+                    'databaseId:assetId': f"{databaseId}:{assetId}",
+                    'assetVersionId': new_assetVersionId
+                },
+                UpdateExpression='SET isCurrentVersion = :is_current',
+                ConditionExpression='attribute_exists(assetVersionId)',
+                ExpressionAttributeValues={
+                    ':is_current': True
+                }
+            )
+            return False
+
         return True
-        
+
     except Exception as e:
         logger.exception(f"Error marking version as current: {e}")
         return False
 
-def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment: Optional[str] = None,
-                                   created_by: str = 'SYSTEM_USER', databaseId: str = None,
-                                   versionAlias: str = '') -> Dict:
-    """Update asset's version tracking metadata using asset versions table
+def finalize_asset_version(asset: Dict, new_assetVersionId: str, databaseId: str = None) -> Dict:
+    """Make a reserved asset version the asset's current version
 
     Args:
         asset: The asset dictionary
-        new_assetVersionId: The new asset version number
-        comment: Optional comment for the version
-        created_by: Username who created the version
+        new_assetVersionId: The reserved asset version ID
         databaseId: The database ID (for GSI lookups)
-        versionAlias: Optional alias for the version
 
     Returns:
         Updated asset dictionary
@@ -894,21 +1110,11 @@ def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment:
     asset_id = asset['assetId']
     db_id = databaseId or asset.get('databaseId')
 
-    # Save new version metadata to asset versions table (which also sets current version)
-    success = save_asset_version_metadata(
-        asset_id,
-        new_assetVersionId,
-        comment if comment else f"Version {new_assetVersionId}",
-        asset.get('description', ''),
-        created_by,
-        True,
-        databaseId=db_id,
-        versionAlias=versionAlias
-    )
-
     # Mark previous current version as not current in asset versions table
-    mark_assetVersion_as_current(db_id, asset_id, new_assetVersionId)
-    
+    if not mark_assetVersion_as_current(db_id, asset_id, new_assetVersionId):
+        logger.error(
+            f"Could not flag version {new_assetVersionId} of asset {asset_id} as the current version")
+
     # Update asset's tables current version reference
     update_asset_current_version_reference(asset, new_assetVersionId)
 
@@ -1514,21 +1720,10 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     
     # Get asset location
     bucket, prefix = get_asset_s3_location(asset)
-    
-    # Determine next version number
-    current_version = asset.get('currentVersionId', '0')
 
-    #strip out all letters from current version. If the stripped version cannot be converted to an integer, assume the currentVersionId is 0.
-    try:
-        current_version = int(str(current_version).replace('v', ''))
-        logger.info(f"Current version: {current_version}")
-    except Exception as e:
-        current_version = 0
-        logger.warning(f"Could not parse existing version number, setting current to: {current_version}")
-    
-    new_version = current_version + 1
-    new_assetVersionId = f"{new_version}"
-    
+    #Get user of request
+    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+
     # Get files based on request
     files_to_version = []
     skipped_files = []
@@ -1576,8 +1771,15 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
                     invalid_files.append(file.relativeKey)
             
         skipped_files = invalid_files
-    
-    
+
+
+    # Reserve the next version number before any rows are written under it, so two overlapping
+    # callers cannot snapshot into the same version
+    new_assetVersionId = reserve_next_asset_version(
+        databaseId, assetId, asset, request_model.comment, username,
+        versionAlias=request_model.versionAlias or ''
+    )
+
     # Save file versions to DynamoDB
     if not save_asset_file_versions(databaseId, assetId, new_assetVersionId, files_to_version):
         raise VAMSGeneralErrorResponse("Failed to save file versions")
@@ -1587,11 +1789,8 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     if not metadata_saved:
         logger.warning(f"Failed to save metadata snapshot for version {new_assetVersionId}")
 
-    # Update asset version metadata (with databaseId for GSI)
-    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
-    updated_asset = update_asset_version_metadata(asset, new_assetVersionId, request_model.comment, username,
-                                                   databaseId=databaseId,
-                                                   versionAlias=request_model.versionAlias or '')
+    # Make the reserved version the asset's current version (with databaseId for GSI)
+    finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 
     #Send email for new version
     send_subscription_email(databaseId, assetId)
@@ -1600,7 +1799,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     now = datetime.utcnow().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
-        message=f"Successfully created version {new_version} with {len(files_to_version)} files",
+        message=f"Successfully created version {new_assetVersionId} with {len(files_to_version)} files",
         assetId=assetId,
         assetVersionId=new_assetVersionId,
         operation="create",
@@ -1642,20 +1841,21 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     current_files = list_s3_files_with_versions(bucket, prefix, include_archived=True)
     current_files_by_key = {file['relativeKey']: file for file in current_files}
     
-    # Determine next version number
-    current_version = asset.get('currentVersionId', '0')
+    #Get user of request
+    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
-    #strip out all letters from current version. If the stripped version cannot be converted to an integer, assume the currentVersionId is 0.
-    try:
-        current_version = int(str(current_version).replace('v', ''))
-        logger.info(f"Current version: {current_version}")
-    except Exception as e:
-        current_version = 0
-        logger.warning(f"Could not parse existing version number, setting current to: {current_version}")
-    
-    new_version = current_version + 1
-    new_assetVersionId = f"{new_version}"
-    
+    # Version comment carries the [REVERTED FROM Vx] prefix
+    if request_model.comment:
+        comment = f"[REVERTED FROM v{request_model.assetVersionId}] {request_model.comment}"
+    else:
+        comment = f"[REVERTED FROM v{request_model.assetVersionId}] Reverted to version {request_model.assetVersionId}"
+
+    # Reserve the next version number before any rows are written under it, so two overlapping
+    # callers cannot snapshot into the same version
+    new_assetVersionId = reserve_next_asset_version(
+        databaseId, assetId, asset, comment, username
+    )
+
     # Process files. Each file's revert (existence check + version copy + aux
     # cleanup) is an independent, order-independent set of S3 calls, so run them
     # in parallel to keep large reverts within the Lambda runtime. Per-file
@@ -1734,18 +1934,8 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     else:
         logger.info(f"Successfully saved metadata snapshot for reverted version {new_assetVersionId}")
     
-    #Get user of request
-    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
-
-    # Update asset version metadata with [REVERTED FROM Vx] prefix
-    if request_model.comment:
-        comment = f"[REVERTED FROM v{request_model.assetVersionId}] {request_model.comment}"
-    else:
-        comment = f"[REVERTED FROM v{request_model.assetVersionId}] Reverted to version {request_model.assetVersionId}"
-    
-    logger.info(f"Creating version metadata with comment: {comment}")
-    updated_asset = update_asset_version_metadata(asset, new_assetVersionId, comment, username,
-                                                   databaseId=databaseId)
+    # Make the reserved version the asset's current version
+    finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 
     #Send email for asset version change
     send_subscription_email(databaseId, assetId)
@@ -1808,9 +1998,16 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
     show_archived = query_params.get('showArchived', False)
 
     # Process items
+    items = response.get('Items', [])
+
+    # One tally of the asset's file-version GSI covers every version on the page. It returns None
+    # when the asset holds more file rows than the walk is bounded to read, in which case each
+    # version's count is queried on its own below.
+    file_counts = tally_asset_version_file_counts(databaseId, assetId) if items else {}
+
     authorized_versions = []
     deserializer = TypeDeserializer()
-    for item in response.get('Items', []):
+    for item in items:
         # Deserialize the item
         deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
 
@@ -1820,8 +2017,12 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
 
         try:
             # Get file count for this version
-            file_count = get_asset_version_file_count(databaseId, assetId, deserialized_item.get('assetVersionId'))
-            
+            version_id = deserialized_item.get('assetVersionId')
+            if file_counts is not None:
+                file_count = file_counts.get(version_id, 0)
+            else:
+                file_count = get_asset_version_file_count(databaseId, assetId, version_id)
+
             # Build version display comment with alias if present
             version_alias = deserialized_item.get('versionAlias', '') or ''
             version_comment = deserialized_item.get('comment', '')

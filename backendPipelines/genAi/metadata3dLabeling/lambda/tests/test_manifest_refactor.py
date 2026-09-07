@@ -36,7 +36,7 @@ for k, v in {
     "AWS_DEFAULT_REGION": "us-east-1",
     "AWS_REGION": "us-east-1",
     "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:GenAiMetadata3dLabeling",
-    "ALLOWED_INPUT_FILEEXTENSIONS": ".glb,.gltf,.obj,.stl,.fbx",
+    "ALLOWED_INPUT_FILEEXTENSIONS": ".glb,.fbx,.obj,.stl,.ply,.usd,.dae,.abc",
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/GenAiMetadata3dLabeling",
     "STATE_MACHINE_LOG_GROUP_ARN":

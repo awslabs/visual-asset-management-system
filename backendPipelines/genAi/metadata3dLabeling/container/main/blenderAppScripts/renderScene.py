@@ -154,13 +154,16 @@ elif importExtension.lower() == 'ply':
     bpy.ops.wm.ply_import(filepath=inputFilePath)
 elif importExtension.lower() == 'usd':
     # import usd to scene
-    bpy.ops.wm.bpy.ops.wm.usd_import(filepath=inputFilePath)
+    bpy.ops.wm.usd_import(filepath=inputFilePath)
 elif importExtension.lower() == 'dae':
     # import dae to scene
-    bpy.ops.wm.bpy.ops.wm.collada_import(filepath=inputFilePath)
+    bpy.ops.wm.collada_import(filepath=inputFilePath)
 elif importExtension.lower() == 'abc':
     # import abc to scene
-    bpy.ops.wm.bpy.ops.wm.alembic_import(filepath=inputFilePath)
+    bpy.ops.wm.alembic_import(filepath=inputFilePath)
+else:
+    # no importer for this extension: stop rather than render an empty scene
+    raise SystemExit(f"Unsupported import extension: {importExtension}")
 
 # cache list of imported objects
 importedMeshObjects = []

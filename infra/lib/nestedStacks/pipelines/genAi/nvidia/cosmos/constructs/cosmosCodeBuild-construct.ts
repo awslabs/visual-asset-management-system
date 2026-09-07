@@ -15,6 +15,7 @@ import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../../config/config";
+import { contentImageTag } from "../../../../../../helper/containerImageTag";
 
 export interface CosmosCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -88,6 +89,10 @@ export class CosmosCodeBuildConstruct extends Construct {
                 exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env"],
             });
 
+            // Content-addressed image tag, supplied to the build and consumed at the pull site from
+            // this one literal so the two sides cannot name different images.
+            const imageTag = contentImageTag(sourceAsset.assetHash);
+
             // CodeBuild Project — runs in the same private VPC/subnets as pipeline Batch compute.
             // Private subnets have NAT Gateway egress for pulling Docker base images and cloning repos.
             const project = new codebuild.Project(this, `CodeBuild-${pipelineKey}`, {
@@ -99,6 +104,9 @@ export class CosmosCodeBuildConstruct extends Construct {
                     environmentVariables: {
                         ECR_REPO_URI: {
                             value: repository.repositoryUri,
+                        },
+                        IMAGE_TAG: {
+                            value: imageTag,
                         },
                         AWS_ACCOUNT_ID: {
                             value: account,
@@ -186,8 +194,8 @@ def handler(event, context):
                 },
             });
 
-            // Image URI: latest tag
-            const imageUri = `${repository.repositoryUri}:latest`;
+            // Image URI at the content-addressed tag the build pushes.
+            const imageUri = `${repository.repositoryUri}:${imageTag}`;
 
             /**
              * CDK Nag Suppressions

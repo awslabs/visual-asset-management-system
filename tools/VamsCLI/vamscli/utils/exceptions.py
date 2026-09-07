@@ -666,6 +666,64 @@ class ApiKeyUpdateError(ApiKeyError):
     pass
 
 
+# Comment-related business logic exceptions
+class CommentError(BusinessLogicError):
+    """Base class for comment errors."""
+    pass
+
+
+class CommentNotFoundError(CommentError):
+    """Raised when a comment is not found."""
+    pass
+
+
+class InvalidCommentDataError(CommentError):
+    """Raised when comment data is invalid."""
+    pass
+
+
+# Subscription-related business logic exceptions
+class SubscriptionError(BusinessLogicError):
+    """Base class for subscription errors."""
+    pass
+
+
+class SubscriptionNotFoundError(SubscriptionError):
+    """Raised when a subscription is not found."""
+    pass
+
+
+class SubscriptionAlreadyExistsError(SubscriptionError):
+    """Raised when a subscription already exists for the given subscribers."""
+    pass
+
+
+class InvalidSubscriptionDataError(SubscriptionError):
+    """Raised when subscription data is invalid."""
+    pass
+
+
+# Metadata schema-related business logic exceptions
+class MetadataSchemaError(BusinessLogicError):
+    """Base class for metadata schema errors."""
+    pass
+
+
+class MetadataSchemaNotFoundError(MetadataSchemaError):
+    """Raised when a metadata schema is not found."""
+    pass
+
+
+class MetadataSchemaDeletionError(MetadataSchemaError):
+    """Raised when metadata schema deletion fails."""
+    pass
+
+
+class InvalidMetadataSchemaDataError(MetadataSchemaError):
+    """Raised when metadata schema data is invalid."""
+    pass
+
+
 # User role-related business logic exceptions
 class UserRoleError(BusinessLogicError):
     """Base class for user role-related errors."""

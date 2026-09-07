@@ -20,6 +20,7 @@
  */
 
 import { validateMetadataValue } from "./validationHelpers";
+import { MAX_GEOJSON_NESTING_DEPTH } from "../../../common/constants/geoSearch";
 import { MetadataValueType } from "../types/metadata.types";
 
 // The stored shape under test: a value the row does have, and no type. Cast because the interface
@@ -64,5 +65,58 @@ describe("validateMetadataValue with no recorded type", () => {
         // thing that provides it — the two are independent and both are relied on.
         expect(validateMetadataValue("", "number" as MetadataValueType).isValid).toBe(true);
         expect(validateMetadataValue("   ", noType).isValid).toBe(true);
+    });
+});
+
+/**
+ * The client-side half of the GeoJSON nesting bound the metadata API enforces.
+ *
+ * `validate_metadata_value_common` refuses a `geojson` value whose GeometryCollections nest past
+ * MAX_GEOJSON_NESTING_DEPTH, because the validator recurses once per level. The editor validates
+ * before it submits, so without the same check the operator gets a raw 400 back from a save instead
+ * of a message on the field.
+ */
+const nestedCollection = (levels: number): any => {
+    let geometry: any = { type: "Point", coordinates: [1, 2] };
+    for (let i = 1; i < levels; i += 1) {
+        geometry = { type: "GeometryCollection", geometries: [geometry] };
+    }
+    return geometry;
+};
+
+describe("validateMetadataValue for the geojson type", () => {
+    const geojson = "geojson" as MetadataValueType;
+
+    it("accepts nesting at the bound", () => {
+        const value = JSON.stringify(nestedCollection(MAX_GEOJSON_NESTING_DEPTH));
+        expect(validateMetadataValue(value, geojson).isValid).toBe(true);
+    });
+
+    it("rejects nesting one level past the bound, naming the limit", () => {
+        const value = JSON.stringify(nestedCollection(MAX_GEOJSON_NESTING_DEPTH + 1));
+        const result = validateMetadataValue(value, geojson);
+        expect(result.isValid).toBe(false);
+        expect(result.errors.join(" ")).toContain(String(MAX_GEOJSON_NESTING_DEPTH));
+    });
+
+    it("still accepts the ordinary shapes an operator pastes", () => {
+        // Without this the depth check is indistinguishable from a validator that rejects everything.
+        const polygon = JSON.stringify({
+            type: "Polygon",
+            coordinates: [
+                [
+                    [0, 0],
+                    [1, 0],
+                    [1, 1],
+                    [0, 0],
+                ],
+            ],
+        });
+        expect(validateMetadataValue(polygon, geojson).isValid).toBe(true);
+        const feature = JSON.stringify({
+            type: "Feature",
+            geometry: nestedCollection(2),
+        });
+        expect(validateMetadataValue(feature, geojson).isValid).toBe(true);
     });
 });

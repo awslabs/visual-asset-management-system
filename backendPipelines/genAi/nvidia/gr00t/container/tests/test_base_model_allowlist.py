@@ -148,13 +148,14 @@ class TestAssetConfigFileIsValidated:
         with pytest.raises(Exception):
             _resolve(tmp_path, asset_file_config={"baseModelPath": "attacker/evil-model"})
 
-    def test_a_malformed_asset_config_file_is_still_tolerated(self, tmp_path):
-        """Control for WHERE the check sits. The parse handlers are unchanged: unreadable JSON is still
-        a warning, not a failure. If this test raises, the check was put inside a handler — where a
-        rejection would be swallowed the same way."""
+    def test_a_malformed_asset_config_file_fails_with_its_own_error(self, tmp_path):
+        """Control for WHERE the allowlist check sits, by exception TYPE. An unreadable
+        gr00t_config.json fails the run as `AssetConfigurationError`, while a value the allowlist
+        rejects fails as the allowlist's own error — so the allowlist check is still reached on its own,
+        outside the parse, rather than being one of the things a parse failure hides."""
         (tmp_path / "gr00t_config.json").write_text("{not json", encoding="utf-8")
-        config = container.resolve_config({"gr00tConfig": "{}"}, tmp_path)
-        assert config["baseModelPath"] == container.DEFAULTS["baseModelPath"]
+        with pytest.raises(container.AssetConfigurationError, match="gr00t_config.json"):
+            container.resolve_config({"gr00tConfig": "{}"}, tmp_path)
 
 
 # ============================ rejection: lookalikes ============================
@@ -270,6 +271,15 @@ def _prepare_run(monkeypatch, tmp_path, asset_file_config=None, lambda_config=No
 
     calls = {"training": [], "uploads": []}
 
+    def _training(**kwargs):
+        # Writes a checkpoint, because that is what training does: the run refuses to upload an empty
+        # output folder, so a stub that records the call without producing anything would stand in for
+        # a training run that silently produced nothing.
+        checkpoint = container.OUTPUT_DIR / "checkpoint-10"
+        checkpoint.mkdir(parents=True, exist_ok=True)
+        (checkpoint / "model.safetensors").write_text("weights", encoding="utf-8")
+        calls["training"].append(kwargs)
+
     monkeypatch.setattr(container, "INPUT_DIR", input_dir)
     monkeypatch.setattr(container, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setenv("S3_MODEL_BUCKET", "model-cache-bucket")
@@ -287,8 +297,7 @@ def _prepare_run(monkeypatch, tmp_path, asset_file_config=None, lambda_config=No
     monkeypatch.setattr(container, "backup_cache_to_s3", lambda **kwargs: None)
     monkeypatch.setattr(container.manifest_io, "fetch_input_configuration",
                         lambda *args, **kwargs: {})
-    monkeypatch.setattr(container, "run_training",
-                        lambda **kwargs: calls["training"].append(kwargs))
+    monkeypatch.setattr(container, "run_training", _training)
     monkeypatch.setattr(container, "upload_output_to_s3",
                         lambda *args, **kwargs: calls["uploads"].append(args) or "s3://out/")
     return calls

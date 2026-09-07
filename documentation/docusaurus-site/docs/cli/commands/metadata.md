@@ -63,14 +63,14 @@ List all metadata for an asset.
 vamscli metadata asset list [OPTIONS]
 ```
 
-| Option                | Type    | Required | Description                                 |
-| --------------------- | ------- | -------- | ------------------------------------------- |
-| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                 |
-| `-a`, `--asset-id`    | TEXT    | Yes      | Asset ID                                    |
-| `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version |
-| `--page-size`         | INTEGER | No       | Page size for pagination (default: 3000)    |
-| `--starting-token`    | TEXT    | No       | Token for manual single-page pagination     |
-| `--json-output`       | FLAG    | No       | Output raw JSON response                    |
+| Option                | Type    | Required | Description                                           |
+| --------------------- | ------- | -------- | ----------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                           |
+| `-a`, `--asset-id`    | TEXT    | Yes      | Asset ID                                              |
+| `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
+| `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
+| `--json-output`       | FLAG    | No       | Output raw JSON response                              |
 
 ```bash
 vamscli metadata asset list -d my-db -a my-asset
@@ -138,16 +138,16 @@ List metadata or attributes for a specific file within an asset.
 vamscli metadata file list [OPTIONS]
 ```
 
-| Option                | Type    | Required | Description                                 |
-| --------------------- | ------- | -------- | ------------------------------------------- |
-| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                 |
-| `-a`, `--asset-id`    | TEXT    | Yes      | Asset ID                                    |
-| `--file-path`         | TEXT    | Yes      | Relative file path                          |
-| `--type`              | CHOICE  | Yes      | `metadata` or `attribute`                   |
-| `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version |
-| `--page-size`         | INTEGER | No       | Page size for pagination (default: 3000)    |
-| `--starting-token`    | TEXT    | No       | Token for manual single-page pagination     |
-| `--json-output`       | FLAG    | No       | Output raw JSON response                    |
+| Option                | Type    | Required | Description                                           |
+| --------------------- | ------- | -------- | ----------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                           |
+| `-a`, `--asset-id`    | TEXT    | Yes      | Asset ID                                              |
+| `--file-path`         | TEXT    | Yes      | Relative file path                                    |
+| `--type`              | CHOICE  | Yes      | `metadata` or `attribute`                             |
+| `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
+| `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
+| `--json-output`       | FLAG    | No       | Output raw JSON response                              |
 
 ```bash
 vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type metadata
@@ -218,12 +218,12 @@ List all metadata for an asset link.
 vamscli metadata asset-link list [OPTIONS]
 ```
 
-| Option             | Type    | Required | Description                              |
-| ------------------ | ------- | -------- | ---------------------------------------- |
-| `--asset-link-id`  | TEXT    | Yes      | Asset link ID                            |
-| `--page-size`      | INTEGER | No       | Page size for pagination (default: 3000) |
-| `--starting-token` | TEXT    | No       | Token for manual single-page pagination  |
-| `--json-output`    | FLAG    | No       | Output raw JSON response                 |
+| Option             | Type    | Required | Description                                           |
+| ------------------ | ------- | -------- | ----------------------------------------------------- |
+| `--asset-link-id`  | TEXT    | Yes      | Asset link ID                                         |
+| `--page-size`      | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
+| `--starting-token` | TEXT    | No       | Token for manual single-page pagination               |
+| `--json-output`    | FLAG    | No       | Output raw JSON response                              |
 
 ```bash
 vamscli metadata asset-link list --asset-link-id link-uuid
@@ -282,12 +282,12 @@ List all metadata for a database.
 vamscli metadata database list [OPTIONS]
 ```
 
-| Option                | Type    | Required | Description                              |
-| --------------------- | ------- | -------- | ---------------------------------------- |
-| `-d`, `--database-id` | TEXT    | Yes      | Database ID                              |
-| `--page-size`         | INTEGER | No       | Page size for pagination (default: 3000) |
-| `--starting-token`    | TEXT    | No       | Token for manual single-page pagination  |
-| `--json-output`       | FLAG    | No       | Output raw JSON response                 |
+| Option                | Type    | Required | Description                                           |
+| --------------------- | ------- | -------- | ----------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                           |
+| `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
+| `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
+| `--json-output`       | FLAG    | No       | Output raw JSON response                              |
 
 ```bash
 vamscli metadata database list -d my-db
@@ -411,6 +411,89 @@ The output reports the schema name, entity type, enabled status, file restrictio
 
 ---
 
+## metadata-schema create
+
+Create a metadata schema for one entity type in a database. The schema defines the fields that metadata of that type may carry and the validation rules applied when metadata is written.
+
+```bash
+vamscli metadata-schema create [OPTIONS]
+```
+
+| Option                        | Type   | Required | Description                                                                     |
+| ----------------------------- | ------ | -------- | ------------------------------------------------------------------------------- |
+| `-d`, `--database-id`         | TEXT   | Yes      | Database the schema belongs to                                                  |
+| `-e`, `--entity-type`         | CHOICE | Yes      | Entity type: `databaseMetadata`, `assetMetadata`, `fileMetadata`, `fileAttribute`, `assetLinkMetadata` |
+| `-n`, `--schema-name`         | TEXT   | Yes      | Name of the schema                                                              |
+| `-f`, `--fields`              | TEXT   | Yes      | Field definitions as a JSON string or a path to a JSON file                     |
+| `--file-key-type-restriction` | TEXT   | No       | Comma-delimited file extensions the schema applies to, for example `.glb,.usd`    |
+| `--enabled` / `--disabled`    | FLAG   | No       | Whether the schema validates on write (default: `--enabled`)                     |
+| `--json-output`               | FLAG   | No       | Output raw JSON response                                                        |
+
+```bash
+vamscli metadata-schema create -d my-database -e assetMetadata -n "Asset core fields" -f '[{"name":"projectCode","type":"string","required":true}]'
+vamscli metadata-schema create -d my-database -e fileMetadata -n "File fields" -f ./file-fields.json --disabled
+```
+
+:::note[File type restriction]
+`--file-key-type-restriction` accepts extensions with a leading dot (`.glb,.usd`) and is available for `fileMetadata` and `fileAttribute` schemas only. The extension is read from the file's name, so a dot in a folder name is not an extension and a file with no extension is matched by every enabled schema for its entity type. See [File type restriction matching](../../user-guide/metadata-management.md#file-type-restriction-matching).
+:::
+
+---
+
+## metadata-schema update
+
+Update a metadata schema in place. Only the options supplied are changed, so a call naming just `--disabled` turns validation off and leaves the field definitions as they are. Supplying `--fields` replaces the whole field list rather than merging into it.
+
+```bash
+vamscli metadata-schema update [OPTIONS]
+```
+
+| Option                        | Type | Required | Description                                                  |
+| ----------------------------- | ---- | -------- | ------------------------------------------------------------ |
+| `-s`, `--schema-id`           | TEXT | Yes      | Metadata schema ID                                           |
+| `-n`, `--schema-name`         | TEXT | No       | New name for the schema                                      |
+| `-f`, `--fields`              | TEXT | No       | Replacement field definitions, as JSON or a path to a file    |
+| `--file-key-type-restriction` | TEXT | No       | Replacement comma-delimited file extension list              |
+| `--enabled` / `--disabled`    | FLAG | No       | Whether the schema validates on write                        |
+| `--json-output`               | FLAG | No       | Output raw JSON response                                     |
+
+```bash
+vamscli metadata-schema update -s schema-abc123 -n "Asset core fields v2"
+vamscli metadata-schema update -s schema-abc123 -f ./asset-fields.json
+vamscli metadata-schema update -s schema-abc123 --disabled
+```
+
+:::note[No database ID]
+Unlike `metadata-schema create`, `get`, and `delete`, this command takes no `-d`, `--database-id`. The schema ID identifies the schema on its own, and the database it belongs to cannot be changed by an update.
+:::
+
+---
+
+## metadata-schema delete
+
+Delete a metadata schema. Metadata already stored against the schema is left exactly as it is -- deleting the schema stops the fields being validated on subsequent writes, and removes nothing.
+
+```bash
+vamscli metadata-schema delete [OPTIONS]
+```
+
+| Option                | Type | Required | Description                          |
+| --------------------- | ---- | -------- | ------------------------------------ |
+| `-d`, `--database-id` | TEXT | Yes      | Database the schema belongs to       |
+| `-s`, `--schema-id`   | TEXT | Yes      | Metadata schema ID                   |
+| `--confirm`           | FLAG | Yes      | Confirm the deletion                 |
+| `--json-output`       | FLAG | No       | Output raw JSON response             |
+
+```bash
+vamscli metadata-schema delete -d my-database -s schema-abc123 --confirm
+vamscli metadata-schema delete -d my-database -s schema-abc123 --confirm --json-output
+```
+
+:::warning[Stored metadata keeps its values]
+Existing metadata is untouched by a schema delete, so values that the schema previously required or constrained remain readable and editable afterwards. A field that was validated becomes a free-form value rather than disappearing. Recreating the schema resumes validation on the next write, and does not retroactively validate what is already stored.
+:::
+
+---
 ## Workflow Examples
 
 ### Asset metadata lifecycle

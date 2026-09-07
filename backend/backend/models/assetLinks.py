@@ -156,11 +156,19 @@ class UnauthorizedCountsModel(BaseModel, extra='ignore'):
     parents: int = Field(default=0, description="Count of unauthorized parent assets")
     children: int = Field(default=0, description="Count of unauthorized child assets")
 
+# A linked asset the read could not retrieve is not the same thing as one the caller may not
+# see, so the two are counted separately.
+class UnresolvedCountsModel(BaseModel, extra='ignore'):
+    related: int = Field(default=0, description="Count of related assets that could not be retrieved")
+    parents: int = Field(default=0, description="Count of parent assets that could not be retrieved")
+    children: int = Field(default=0, description="Count of child assets that could not be retrieved")
+
 class GetAssetLinksResponseModel(BaseModel, extra='ignore'):
     related: List[AssetNodeModel] = Field(default=[], description="Related assets")
     parents: List[AssetNodeModel] = Field(default=[], description="Parent assets")
     children: List[AssetNodeModel] = Field(default=[], description="Child assets (flat list)")
     unauthorizedCounts: UnauthorizedCountsModel = Field(default_factory=UnauthorizedCountsModel, description="Counts of unauthorized assets")
+    unresolvedCounts: UnresolvedCountsModel = Field(default_factory=UnresolvedCountsModel, description="Counts of linked assets that could not be retrieved")
     message: str = Field(default="Success", description="Response message")
 
 class GetAssetLinksTreeViewResponseModel(BaseModel, extra='ignore'):
@@ -168,4 +176,6 @@ class GetAssetLinksTreeViewResponseModel(BaseModel, extra='ignore'):
     parents: List[AssetNodeModel] = Field(default=[], description="Parent assets")
     children: List[AssetTreeNodeModel] = Field(default=[], description="Child assets (tree structure)")
     unauthorizedCounts: UnauthorizedCountsModel = Field(default_factory=UnauthorizedCountsModel, description="Counts of unauthorized assets")
+    unresolvedCounts: UnresolvedCountsModel = Field(default_factory=UnresolvedCountsModel, description="Counts of linked assets that could not be retrieved")
+    treeTruncated: bool = Field(default=False, description="Whether the child tree stopped at the depth or node ceiling")
     message: str = Field(default="Success", description="Response message")

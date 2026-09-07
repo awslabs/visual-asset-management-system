@@ -137,6 +137,16 @@ Each schema targets one entity type:
 
 ![Metadata schema editor showing field definitions and value types](/img/edit_schema_management_20260323_v2.5.png)
 
+### File type restriction matching
+
+A **File Type Restriction** is compared against the extension of the file's name:
+
+-   Extensions are written with a leading dot (`.glb`). An entry without one matches no file.
+-   The extension is read from the file's name, not from the whole path. A dot in a folder name is not an extension, so `folder.v2/part.glb` matches a schema restricted to `.glb`.
+-   Matching is case-insensitive, and the last dot in the name decides the extension. `archive.tar.gz` matches `.gz`.
+-   A file whose name carries no extension -- `LICENSE`, `Dockerfile`, `README` -- is matched by every enabled schema for its entity type, restricted schemas included. This is the same for a file at the root of an asset and for one under a folder whose name contains a dot.
+-   `.all` in the list applies the schema to all file types, as does leaving the restriction empty.
+
 ### Schema field definitions
 
 Each field in a schema has the following properties:

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from vams_mcp.config import Config, ConfigError
+from vams_mcp.config import MAX_PAGE_SIZE, Config, ConfigError
 
 
 def _clear_env(monkeypatch):
@@ -55,9 +55,14 @@ def test_profile_passthrough(monkeypatch):
 
 
 def test_page_size_clamped(monkeypatch):
+    # The clamp is the metadata GETs' own ceiling: those routes refuse a larger pageSize with a 400
+    # instead of reducing it, and this value is what every paged read sends.
     _clear_env(monkeypatch)
     monkeypatch.setenv("VAMS_PAGE_SIZE", "999999")
-    assert Config.from_env().page_size == 2000
+    assert Config.from_env().page_size == MAX_PAGE_SIZE == 1000
+
+    monkeypatch.setenv("VAMS_PAGE_SIZE", "1000")
+    assert Config.from_env().page_size == 1000
 
 
 def test_bad_integers_raise(monkeypatch):

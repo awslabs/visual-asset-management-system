@@ -67,6 +67,25 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
 :::
 
+### Gaussian Splat Toolbox Pipeline Model Notice
+
+The Gaussian Splat Toolbox container image ships the segmentation model weights its optional
+background-removal and object-removal steps load, so a job does not download them while it runs. The
+image carries the U^2-Net weights (`u2net`, `u2netp`, `u2net_human_seg`) as redistributed by
+[backgroundremover](https://github.com/nadermx/backgroundremover) (MIT) under the
+[U^2-Net](https://github.com/xuebinqin/U-2-Net) Apache-2.0 license, their ONNX forms plus
+[BiRefNet](https://github.com/ZhengPeng7/BiRefNet) portrait matting (MIT) resolved through
+[rembg](https://github.com/danielgatis/rembg) (MIT), the SAM 2.1 hiera-large checkpoint
+([SAM 2](https://github.com/facebookresearch/sam2), Apache-2.0), and four torchvision checkpoints
+(BSD-3-Clause) that `torch.hub` loads by content-hashed filename.
+
+:::note
+Stable Diffusion XL is **not** shipped in the image. The default object-removal action (`erase`) fetches
+it at run time, so that action requires internet egress from the pipeline's subnets. `REMOVE_OBJECT`
+with `OBJECT_REMOVAL_ACTION=remove` uses only the shipped weights. The opt-in dn-splatter model
+variants likewise fetch LPIPS and ZoeDepth weights at run time.
+:::
+
 ### Commercial Licensed Components
 
 Some viewer plugins and processing pipelines require separate commercial licenses:

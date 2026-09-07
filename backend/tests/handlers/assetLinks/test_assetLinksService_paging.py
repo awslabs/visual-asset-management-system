@@ -54,7 +54,7 @@ def links_table():
         stack.enter_context(patch(f"{MOD}.check_asset_permission", return_value=True))
         stack.enter_context(patch(
             f"{MOD}.batch_get_asset_details",
-            side_effect=lambda keys: {f"{d}:{a}": _asset(a) for d, a in keys}))
+            side_effect=lambda keys: ({f"{d}:{a}": _asset(a) for d, a in keys}, [])))
         yield table
 
 

@@ -10,9 +10,16 @@ Called by the internal Step Function's catch block.
 import json
 import boto3
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="HandleErrorIsaacLab")
-sfn = boto3.client("stepfunctions")
+sfn = boto3.client("stepfunctions", config=retry_config)
 
 
 def lambda_handler(event, context):

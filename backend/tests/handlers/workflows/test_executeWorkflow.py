@@ -2057,8 +2057,13 @@ class TestUnescapeRenderedPath:
 
 @pytest.mark.unit
 class TestMissingTemplateTagIsCallerError:
-    """render_config raises MissingTemplateTagError when a stored config body uses an undefined tag.
-    That is a caller/authoring error, so it answers 400 rather than a generic 500."""
+    """A strict render that raises MissingTemplateTagError answers 400, and nothing is launched.
+
+    The renderer is strict by default, and the launch path renders the output base path extension
+    under that default — a literal {{tag}} there would become part of every output object key. The
+    handler's arm is what turns the raise into a caller error instead of a generic 500, and the
+    side effect is injected on render_config so the arm is exercised whichever strict render trips it.
+    """
 
     def test_unknown_tag_in_pipeline_config_returns_400(self):
         p = TestExecuteOrchestration()._patches()

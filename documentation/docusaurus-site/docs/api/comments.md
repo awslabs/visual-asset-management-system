@@ -164,9 +164,9 @@ Adds a comment to a version of an asset. The caller supplies the comment ID as t
 
 **Request Body:**
 
-| Field         | Type   | Required | Description   |
-| ------------- | ------ | -------- | ------------- |
-| `commentBody` | string | Yes      | Comment text. |
+| Field         | Type   | Required | Description                              |
+| ------------- | ------ | -------- | ---------------------------------------- |
+| `commentBody` | string | Yes      | Comment text, up to 16,384 characters.   |
 
 ```json
 {
@@ -186,7 +186,7 @@ Adds a comment to a version of an asset. The caller supplies the comment ID as t
 
 | Status | Description                                                                                          |
 | ------ | ---------------------------------------------------------------------------------------------------- |
-| `400`  | Missing or invalid path parameters, a missing `commentBody`, a comment that already exists, or an `assetId` that resolves to more than one live asset. |
+| `400`  | Missing or invalid path parameters, a missing or over-length `commentBody`, a comment that already exists, or an `assetId` that resolves to more than one live asset. |
 | `403`  | Not authorized to write this asset.                                                                  |
 | `404`  | Asset not found.                                                                                     |
 | `500`  | Internal server error.                                                                               |
@@ -208,9 +208,9 @@ Replaces a comment's text and records a `dateEdited` timestamp. Only the comment
 
 **Request Body:**
 
-| Field         | Type   | Required | Description           |
-| ------------- | ------ | -------- | --------------------- |
-| `commentBody` | string | Yes      | Replacement comment text. |
+| Field         | Type   | Required | Description                                       |
+| ------------- | ------ | -------- | ------------------------------------------------- |
+| `commentBody` | string | Yes      | Replacement comment text, up to 16,384 characters. |
 
 **Response:**
 
@@ -224,7 +224,7 @@ Replaces a comment's text and records a `dateEdited` timestamp. Only the comment
 
 | Status | Description                                                                     |
 | ------ | ------------------------------------------------------------------------------- |
-| `400`  | Missing or invalid path parameters, or a missing `commentBody`.                  |
+| `400`  | Missing or invalid path parameters, or a missing or over-length `commentBody`.    |
 | `403`  | Not authorized to write this asset, or the caller does not own the comment.      |
 | `404`  | Asset not found, or the comment does not exist.                                 |
 | `500`  | Internal server error.                                                          |

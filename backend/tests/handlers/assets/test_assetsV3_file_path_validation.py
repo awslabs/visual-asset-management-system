@@ -76,8 +76,8 @@ class TestCreateFolderRelativeKey:
     def test_no_v2_constraint_spelling_was_swallowed(self):
         # A v2 spelling lands in field_info.extra and validates nothing, so the
         # constraint is asserted through field_info rather than the declaration.
-        # (strip_whitespace= is the repo's known inert baseline, pinned by
-        # tests/models/test_no_dead_field_kwargs.py, and stays out of scope here.)
+        # tests/models/test_no_dead_field_kwargs.py enforces the same rule across every
+        # model; this asserts it on the field the rest of the file is about.
         field_info = CreateFolderRequestModel.__fields__['relativeKey'].field_info
         assert "pattern" not in (field_info.extra or {})
         assert "max_length" not in (field_info.extra or {})

@@ -868,7 +868,12 @@ export class RapidPipelineEKSConstruct extends Construct {
         const timeoutJobState = new sfn.Pass(this, "Timeout Job", {
             parameters: {
                 "jobName.$": "$.jobName",
-                k8sJobName: "failure-before-creation", // Job name placeholder for timeout errors
+                // The Kubernetes job reached here still exists -- the poll gave up on it rather than
+                // observing it end -- and PipelineEnd's cleanup is keyed off this field, so the real
+                // name is what lets the pod be deleted instead of a name that never existed. Every
+                // state on the path to here (InitializeCounter, IncrementCounter, RecordJobStatus)
+                // re-emits it. Contrast HandleRunJobError below, where no job was created.
+                "k8sJobName.$": "$.k8sJobName",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "FAILED",
                 error: {

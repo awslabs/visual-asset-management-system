@@ -4,17 +4,26 @@
 import json
 import boto3
 import os
+import shutil
+import tempfile
 import threading
 from typing import Dict, Any
 from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
 from metadata_extractors import extract_cad_metadata, extract_mesh_metadata, get_handler_for_format
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="cadMetadataExtractionPipeline")
 
-s3_client = boto3.client('s3')
-s3 = boto3.resource('s3')
+s3_client = boto3.client('s3', config=retry_config)
+s3 = boto3.resource('s3', config=retry_config)
 
 
 def download(bucket_name, object_key, file_path):
@@ -109,21 +118,42 @@ def transform_to_attribute_format(metadata_dict):
     }
 
 
-def _fetch_json_from_s3(s3_location):
-    """Fetch + parse a JSON object from an s3:// location. Best-effort: returns {} for a
-    missing/empty location or any S3/parse failure."""
-    if not s3_location or not s3_location.startswith("s3://"):
-        return {}
-    bucket, _, key = s3_location[len("s3://"):].partition("/")
+class ManifestReadError(RuntimeError):
+    """Raised when a referenced workflow input manifest cannot be read or is not a JSON object."""
+
+
+def fetch_manifest(manifest_s3_location):
+    """Fetch + parse the workflow input manifest from its S3 location.
+
+    ``None`` when no location was supplied, so a legacy payload carrying its fields inline still
+    resolves. A location that IS supplied but is malformed, unreadable, or does not parse to a JSON
+    object raises ``ManifestReadError``.
+
+    Mirrors ``manifestHelper.fetch_manifest``, which the pipelines with a ``lambda/`` code asset
+    vendor: the manifest is the only carrier of the input file's asset identity and of the run's
+    output paths, so answering a read failure with an empty manifest downgrades the run to the
+    legacy body fields — naming the attribute file after a path that is not the file's path within
+    its asset, which the write-back step then cannot match to any asset file.
+    """
+    if not manifest_s3_location:
+        return None
+    if not manifest_s3_location.startswith("s3://"):
+        raise ManifestReadError(
+            f"The workflow supplied a malformed input manifest location: {manifest_s3_location}")
+    bucket, _, key = manifest_s3_location[len("s3://"):].partition("/")
     if not bucket or not key:
-        return {}
+        raise ManifestReadError(
+            f"The workflow supplied a malformed input manifest location: {manifest_s3_location}")
     try:
-        resp = s3_client.get_object(Bucket=bucket, Key=key)
-        body = resp["Body"].read().decode("utf-8")
-        return json.loads(body) if body else {}
+        body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+        manifest = json.loads(body)
     except Exception as e:
-        logger.warning(f"Could not read {s3_location}: {e}")
-        return {}
+        raise ManifestReadError(
+            f"Could not read the workflow input manifest at {manifest_s3_location}: {e}")
+    if not isinstance(manifest, dict):
+        raise ManifestReadError(
+            f"The workflow input manifest at {manifest_s3_location} is not a JSON object")
+    return manifest
 
 
 def asset_relative_path(relative_path, object_key, asset_root_s3_key=""):
@@ -154,7 +184,7 @@ def resolve_inputs_from_manifest(data):
     Mirrors ``manifestHelper.resolve_inputs`` + ``enforce_single_input_file``, which the pipelines
     with a ``lambda/`` code asset vendor; this pipeline is a container image, so it reads the same
     envelope fields directly. Any change to the envelope applies to both."""
-    manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
+    manifest = fetch_manifest(data.get("inputManifestS3Location", ""))
     input_files = (manifest or {}).get("inputFiles") or []
     # The pipeline is registered with inputFileArity 'one' and extracts attributes for a single
     # file per execution; more than one resolved input would be silently dropped.
@@ -216,27 +246,40 @@ def extract_metadata(input_asset_relative_path, input_path, output_path):
     if not handler_type:
         raise ValueError(f"Unsupported file format: {file_extension}")
     
-    # Download input file from S3
-    temp_file = f'/tmp/input{file_extension}'
-    download(input_bucket, input_key, temp_file)
-    
-    # Extract metadata based on file type
+    # Download and extract inside a working directory of this invocation's own, removed before
+    # returning either way. The Lambda execution environment is reused between invocations and its
+    # /tmp is a fixed budget set by the function's ephemeralStorageSize (see
+    # conversionMeshCadMetadataExtractionFunctions.ts), so files left behind reduce what the next
+    # extraction has to work with until one fails on space rather than on its own content.
+    work_dir = tempfile.mkdtemp()
     try:
+        # Download input file from S3
+        temp_file = os.path.join(work_dir, f'input{file_extension}')
+        download(input_bucket, input_key, temp_file)
+
+        # Extract metadata based on file type
         if handler_type == 'cad':
             metadata = extract_cad_metadata(temp_file)
         elif handler_type == 'mesh':
             metadata = extract_mesh_metadata(temp_file)
         else:
             raise ValueError(f"Unknown handler type: {handler_type}")
-        
+
         # Transform to new attribute format
         attribute_data = transform_to_attribute_format(metadata)
-        
+
+        # Both extractors derive geometry from every model they load, so an empty attribute set means
+        # nothing was read rather than a file that carries no attributes. Uploading it would apply an
+        # empty update and report the extraction successful.
+        if not attribute_data['metadata']:
+            raise ValueError(
+                f"No attributes could be extracted from {input_asset_relative_path}")
+
         # Save attribute data to JSON file
-        metadata_file = '/tmp/metadata.json'
+        metadata_file = os.path.join(work_dir, 'metadata.json')
         with open(metadata_file, 'w') as f:
             json.dump(attribute_data, f, indent=2)
-        
+
         # Upload attributes to S3 as file-level attributes. The attribute file is named after the
         # input file's path WITHIN THE ASSET so the write-back step applies the attributes to that
         # asset file; the input object key is not usable here because a shadowed input sits in the
@@ -245,9 +288,9 @@ def extract_metadata(input_asset_relative_path, input_path, output_path):
             output_key += "/"
         output_relative_key = f"{output_key}{input_asset_relative_path}.attribute.json"
         upload(output_bucket, output_relative_key, metadata_file)
-        
+
         logger.info("Attribute extraction complete")
-        
+
         return {
             'statusCode': 200,
             'body': {
@@ -255,10 +298,12 @@ def extract_metadata(input_asset_relative_path, input_path, output_path):
                 'metadata_location': f"s3://{output_bucket}/{output_key}"
             }
         }
-    
+
     except Exception as e:
         logger.exception(f"Error extracting attributes: {str(e)}")
         raise Exception(f"Attribute extraction failed: {str(e)}")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def lambda_handler(event, context):

@@ -44,10 +44,11 @@ test.describe("Executions board", () => {
     });
 
     test("offers the workflow and workflow-database filters in global scope", async ({ page }) => {
-        // The global board pins nothing, so both halves of the workflow identity are separately
-        // selectable here. The asset tab replaces them with ONE composite-valued control (a workflow
-        // id is unique only within its database, and that board has no database dropdown to pair
-        // with); the workflow-scoped board offers neither, being already pinned to one workflow.
+        // The global board pins nothing, so both filters are separately selectable here. The asset
+        // tab replaces them with ONE composite-valued control, because that board has no
+        // workflow-database dropdown to pair with; the workflow-scoped board offers neither, being
+        // already pinned to one workflow. A workflow id is unique across every database, so the
+        // workflow-database filter narrows rather than disambiguates.
         // Asserted on the controls' presence only, so it holds on an empty environment.
         await expect(facet(page, "Filter by workflow")).toBeVisible();
         await expect(facet(page, "Filter by workflow database")).toBeVisible();

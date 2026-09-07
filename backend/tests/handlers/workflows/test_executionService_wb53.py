@@ -356,6 +356,60 @@ class TestRerunReconstruction:
         assert params["templateId"] == "t1"
         assert "customTemplateOverride" not in params
 
+    def test_truncated_template_tags_fail_rerun_even_with_a_template(self):
+        # The tags are the caller's input, so a templateId does not make a trimmed list recoverable:
+        # unlike the override guard, this one has no template escape hatch.
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": [{"key": "k", "value": "v"}],
+                  "templateTagsTruncated": True}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            with pytest.raises(le.VAMSGeneralErrorResponse):
+                le._reconstruct_execute_request(
+                    "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                    {"outputAssetId": "a1", "outputDatabaseId": "db"})
+
+    def test_template_tags_trimmed_to_empty_still_fails_rerun(self):
+        # The worst case: trimmed to nothing. A guard placed after the truthiness test would replay
+        # this as "no tags" and launch a divergent run silently.
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": [], "templateTagsTruncated": True}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            with pytest.raises(le.VAMSGeneralErrorResponse):
+                le._reconstruct_execute_request(
+                    "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                    {"outputAssetId": "a1", "outputDatabaseId": "db"})
+
+    def test_untruncated_template_tags_replay_verbatim(self):
+        # Positive control, flag present and False: the tag list still reaches the rebuilt body.
+        tags = [{"key": "k", "value": "v"}, {"key": "k2", "value": "v2"}]
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": tags, "templateTagsTruncated": False}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            body = le._reconstruct_execute_request(
+                "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                {"outputAssetId": "a1", "outputDatabaseId": "db"})
+        assert body["pipelineExecutionParameters"]["p1"]["templateTags"] == tags
+
+    def test_absent_truncation_flag_replays_template_tags(self):
+        # Positive control for rows written before the flag existed: the key is absent, not False, so
+        # the guard must not brick an ordinary re-run.
+        tags = [{"key": "k", "value": "v"}]
+        with patch(f"{MOD}._query_all", side_effect=[
+                [{"databaseId": "db", "assetId": "a1", "inputAssetFileKey": "/x.glb", "assetRootS3Key": ""}],
+                [{"templateId": "t1", "templateTags": tags}]]), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[
+                {"pipelineExecutionId": "pe1", "pipelineId": "p1"}]):
+            body = le._reconstruct_execute_request(
+                "e1000000000000000000000000000001", {"workflowId": "wf", "workflowDatabaseId": "db"},
+                {"outputAssetId": "a1", "outputDatabaseId": "db"})
+        assert body["pipelineExecutionParameters"]["p1"]["templateTags"] == tags
+
 
 @pytest.mark.unit
 class TestRerunMfaPropagation:

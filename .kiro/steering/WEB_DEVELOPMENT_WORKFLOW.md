@@ -804,6 +804,24 @@ npm test              # Run tests with coverage (Jest 30 + @testing-library/reac
 npx jest              # Run tests without coverage (faster)
 ```
 
+**Label a temporary test with a `TEMPORARY-TEST` comment.** Jest has no marker system, so a test written to
+prove one specific change landed — a removed prop, a deleted branch, a reworded string — carries a
+`TEMPORARY-TEST` token in a comment directly above its `it(...)`, naming what it pins:
+
+```ts
+// TEMPORARY-TEST: pins the removal of the duplicate upload summary branch; drop once released.
+it("no longer renders the second summary", () => {
+```
+
+Release cleanup finds them with `grep -rn "TEMPORARY-TEST" web/src web/e2e`. The token is needed because a
+temporary test and a durable guardrail read identically afterwards — both may assert an absence and both
+explain themselves.
+
+Do **not** label a test whose forbidden construct is still writable: a CSP that must not gain
+`'unsafe-inline'`, a component that must not import `apiClient` directly, a div that must not be named after
+a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
+counterpart: `web/CLAUDE.md` section 11.4.1.
+
 **Lint and format (from project root):**
 
 ```bash

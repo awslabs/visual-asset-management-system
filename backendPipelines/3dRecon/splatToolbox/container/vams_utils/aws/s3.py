@@ -7,12 +7,18 @@ import threading
 from botocore.exceptions import ClientError
 from vams_utils.logging import log
 from boto3.s3.transfer import TransferConfig
-from vams_utils.pipeline.extensions import split_large_file
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = log.get_logger()
 
-client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-s3 = boto3.resource('s3', region_name=os.getenv("AWS_REGION", "us-east-1"))
+client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
+s3 = boto3.resource('s3', region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
 
 
 def download(bucket_name, object_key, file_path):
@@ -51,69 +57,6 @@ def uploadV2(bucket_name, object_key, file_path):
         logger.exception(e)
         return None
     return object_key
-
-
-def upload(bucket_name, object_key, file_path):
-    logger.info(
-        f"Uploading Object to S3 Bucket.\nBucket:{bucket_name}.\n:Object: {object_key}"
-    )
-
-    # Check if our file is larger than 1GB; If so, split it up and upload each part otherwise upload as is
-    if os.path.getsize(file_path) > 1000000000:
-        logger.info(
-            f"Splitting Large File to S3 Multi-part upload: {file_path}")
-        split_large_file(file_path)
-
-        try:
-            # Create Multipart Upload
-            multipart_upload = client.create_multipart_upload(
-                Bucket=bucket_name,
-                Key=object_key,
-            )
-
-            # Upload each part of the file
-            uploadedS3Parts = []
-            part_number = 1
-            for part in split_large_file(file_path):
-                logger.info(f"Uploading Multi-part Split File: {part}")
-
-                uploadPart = client.MultipartUploadPart(
-                    bucket_name, object_key, multipart_upload['UploadId'], part_number
-                )
-
-                uploadPartResponse = uploadPart.upload(
-                    Body=part,
-                )
-
-                uploadedS3Parts.append({
-                    'PartNumber': part_number,
-                    'ETag': uploadPartResponse['ETag']
-                })
-
-                part_number = part_number + 1
-
-            # Complete Multipart Upload
-            completeResult = client.complete_multipart_upload(
-                Bucket=bucket_name,
-                Key=object_key,
-                MultipartUpload={
-                    'Parts': uploadedS3Parts
-                },
-                UploadId=multipart_upload['UploadId'],
-            )
-        except ClientError as e:
-            logger.exception(e)
-            return None
-        return object_key
-
-    else:
-        try:
-            with open(file_path, "rb") as data:
-                client.upload_fileobj(data, bucket_name, object_key)
-        except ClientError as e:
-            logger.exception(e)
-            return None
-        return object_key
 
 
 def exists(bucket_name, object_key):

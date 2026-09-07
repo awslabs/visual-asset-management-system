@@ -205,10 +205,11 @@ class TestConstructPipelineReadsConfigFromS3:
         assert out["inputConfigurationS3Location"] == "s3://abkt/.../config.json"
         assert "inputParameters" not in out
         # The config read from S3 is written to a per-execution rp_config object (config travels
-        # S3->S3, not inline). The key is namespaced by jobName so concurrent runs can't clobber
-        # each other's config, then downloaded to rp_config.json inside the container command.
+        # S3->S3, not inline), under the run's auxiliary working prefix. The name is namespaced by
+        # jobName so concurrent runs can't clobber each other's config, then downloaded to
+        # rp_config.json inside the container command.
         put_object.assert_called_once()
-        assert put_object.call_args.kwargs["Key"] == "rp_config_PipelineJob_x.json"
+        assert put_object.call_args.kwargs["Key"] == "auxbkt/rapidPipeline/rp_config_PipelineJob_x.json"
         assert json.loads(put_object.call_args.kwargs["Body"]) == config
         # The command uses the with-config variant.
         cmd = out["commands"]

@@ -23,7 +23,17 @@ The log file location depends on your operating system:
 | macOS    | `~/Library/Application Support/vamscli/logs/vamscli.log` |
 | Linux    | `~/.config/vamscli/logs/vamscli.log`                     |
 
-Logs rotate at 10 MB with up to five backups (`vamscli.log`, `vamscli.log.1`, and so on).
+Logs rotate at 10 MB with up to five backups (`vamscli.log`, `vamscli.log.1`, and so on). The log file and each rotated backup are created readable only by their owner, on platforms whose filesystem honors that mode.
+
+### What Redaction Covers
+
+Redaction works two ways on every command argument list, request header set, request body, and response body written to the log. Fields whose name identifies a credential are replaced with `***REDACTED***`, matched on the normalized name so variants such as `new_password`, `access_token`, and `client-secret` are covered. Credential-shaped values are then replaced wherever they appear in already-rendered text, which catches VAMS API keys, JSON Web Tokens, `Bearer` header values, and the `X-Amz-Signature` and `X-Amz-Security-Token` parameters of a presigned URL.
+
+Two categories are left in the clear on purpose, because they carry diagnostic value and no credential: pagination cursors (`startingToken`, `NextToken`), and fields that describe a credential rather than contain one (`apiKeyId`, `apiKeyName`, `tokenType`, `credentialsSecretArn`).
+
+:::note
+Redaction is name-based and shape-based, not exhaustive. A secret that sits under a field name VAMS does not recognize as credential-bearing, and does not match one of the credential value shapes — a password pasted into a free-form description, for example — is written to the log as given.
+:::
 
 ### Verbose Output
 

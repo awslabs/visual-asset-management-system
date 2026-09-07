@@ -4,7 +4,7 @@ VAMS Cosmos Reason 2 Container Wrapper
 Orchestrates the full pipeline:
 1. Load pipeline definition
 2. Ensure models are cached (HF_HOME on EFS, with S3 backup)
-3. Download input file (video or image)
+3. Download input file (video)
 4. Run inference via cosmos-reason2-inference CLI
 5. Upload TEXT output (JSON) to S3 at outputS3AssetMetadataPath
 6. Send Step Functions task success/failure callback

@@ -156,12 +156,26 @@ class TestTemplateResolution:
         errs, res = tr.resolve_pipeline_config({"requireTemplate": True}, None, None, {})
         assert res is None and any("requires a template" in e for e in errs)
 
-    def test_unmatched_user_tag_errors(self):
+    def test_undeclared_user_tag_survives_literally(self):
+        # A body tag with no schema entry has no value to substitute, so it is left in place and the
+        # pipeline receives its literal text. Resolution succeeds.
         errs, res = tr.resolve_pipeline_config(
             {"requireTemplate": False},
             {"templateId": "t1", "configBody": "{{missingUserTag}}", "configFormat": "raw"},
             [], {"templateId": "t1"})
-        assert res is None and any("unmatched" in e for e in errs)
+        assert errs == [] and res["renderedConfig"] == "{{missingUserTag}}"
+
+    def test_declared_tag_still_substitutes_beside_an_undeclared_one(self):
+        # The paired arm: a renderer that stopped substituting anything would also leave
+        # {{missingUserTag}} literal and pass the assertion above.
+        errs, res = tr.resolve_pipeline_config(
+            {"requireTemplate": False},
+            {"templateId": "t1", "configBody": '{"e":"{{envName}}","p":"{{PROMT}}"}',
+             "configFormat": "json"},
+            [{"tagKey": "envName", "type": "string", "required": True}],
+            {"templateId": "t1", "templateTags": [{"key": "envName", "value": "production-west"}]})
+        assert errs == []
+        assert res["renderedConfig"] == '{"e":"production-west","p":"{{PROMT}}"}'
 
     def test_missing_template_row_errors(self):
         errs, res = tr.resolve_pipeline_config(

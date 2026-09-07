@@ -30,6 +30,9 @@ import InfoTooltip from "../components/InfoTooltip";
  * name AND the `{jobName}` segment of every output path this step writes, defaulting to the pipeline
  * id when left blank. It is validated with the shared id validator, so it takes a literal value only —
  * NOT template tags (see SpecifiedPipelineInput.validate_ids).
+ *
+ * The path shown is relative to the default asset bucket's baseAssetsPrefix, which run I/O is written
+ * inside of (executionRecords.run_bucket_key); it is empty for the bucket VAMS creates.
  */
 const JOB_NAME_HELP = (
     <>
@@ -38,8 +41,13 @@ const JOB_NAME_HELP = (
             becomes a folder in the output path:
         </p>
         <p className="mb-1 font-mono text-[11px] break-all">
-            pipelines/&#123;pipeline&#125;/<span className="underline">&#123;jobName&#125;</span>
+            &#123;baseAssetsPrefix&#125;pipelines/&#123;pipeline&#125;/
+            <span className="underline">&#123;jobName&#125;</span>
             /output/&#123;executionId&#125;/files/
+        </p>
+        <p className="mb-1 text-[11px]">
+            &#123;baseAssetsPrefix&#125; is the prefix the deployment&apos;s default asset bucket is
+            registered under, and is empty for the bucket VAMS creates.
         </p>
         <p className="mb-1">
             <strong>Leave this blank unless you need it.</strong> Blank uses the pipeline&apos;s own

@@ -8,16 +8,25 @@ import datetime
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenPipeline")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 events_client = boto3.client(
     'events',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
@@ -119,8 +128,13 @@ def lambda_handler(event, context):
     file_root, extension = os.path.splitext(input_s3_asset_files_uri)
 
     logger.info(f"Checking for valid file")
-    # Check to make sure we are working with the right file types (if not, exit)
-    if (not extension or extension == '' or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+    # Validate the extension against exact members of the comma-separated allow list. A containment
+    # test against the joined string accepts any prefix of a listed extension ('.st' against
+    # '.stl,.step'), which admits a file the container cannot read.
+    allowed_extensions = [ext.strip().lower() for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(',')
+                          if ext.strip()]
+
+    if (not extension or extension.lower() not in allowed_extensions):
         abort_external_workflow("Pipeline cannot process file type provided", external_sfn_task_token)
         return {
             'statusCode': 400,

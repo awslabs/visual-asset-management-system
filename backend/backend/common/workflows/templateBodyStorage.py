@@ -17,16 +17,22 @@ Size budget (UTF-8 bytes):
   - ABSOLUTE_CAP_BYTES: hard ceiling on the combined body; beyond this the request is rejected.
     The gap between the cap and the 6 MiB sync-invoke payload limit reserves headroom for the other
     row fields (ids, timestamps) and the separately-stored tag schema.
+  - MAX_ITEM_BYTES: DynamoDB's per-item ceiling. `assert_row_within_item_limit` measures the
+    assembled row against it, so an over-limit item is a 400 from the handler rather than a
+    ValidationException from put_item.
 """
 
 import hashlib
+from decimal import Decimal
 
-# Keep bodies inline at or under this combined size, then offload to S3. Set well under DynamoDB's
-# 400 KB per-item limit (which counts attribute names + values), reserving ~64 KB of headroom for
-# the OTHER fields that live on the same template item — inputInstructions, overrides, names,
-# hashes, and the long composite-key attribute names — so an at-threshold inline body plus those
-# co-resident fields still fits comfortably under 400 KB.
-INLINE_THRESHOLD_BYTES = 320 * 1024
+# Keep bodies inline at or under this combined size, then offload to S3. Set under DynamoDB's 400 KB
+# per-item limit (which counts attribute names + values) with room for the OTHER fields that live on
+# the same template item: overrides at MAX_CONFIG_BLOCK_BYTES (64 KB), the four bounded free-text
+# fields at their declared maxima counted as UTF-8 rather than code points (templateId 64 +
+# templateName 256 + description 1024 + inputInstructions 4096 code points, up to 4 bytes each =
+# ~21 KB), the two sha256 hex hashes, the composite key, createdBy/modifiedBy, and the attribute
+# names. Those sum to ~91 KB, so an at-threshold inline body leaves ~11 KB of margin under 400 KB.
+INLINE_THRESHOLD_BYTES = 300 * 1024
 
 # ~5 MB absolute combined ceiling for configBody + webFormJson, enforced at the API and at CDK
 # ingestion. Set below the 6 MiB Lambda sync-invoke / API Gateway payload limits, leaving over 1 MiB
@@ -36,6 +42,11 @@ INLINE_THRESHOLD_BYTES = 320 * 1024
 # flow.
 ABSOLUTE_CAP_BYTES = 5 * 1024 * 1024
 
+# DynamoDB rejects an item larger than 400 KB, counting attribute names plus values. The reserve
+# absorbs the difference between the estimate below and the service's own accounting.
+MAX_ITEM_BYTES = 400 * 1024
+ITEM_SIZE_RESERVE_BYTES = 4 * 1024
+
 BODY_STORAGE_INLINE = "inline"
 BODY_STORAGE_S3 = "s3"
 
@@ -44,11 +55,60 @@ class TemplateBodyTooLargeError(Exception):
     """Raised when the combined body exceeds the absolute cap."""
 
 
+class TemplateRowTooLargeError(Exception):
+    """Raised when an assembled template row exceeds DynamoDB's per-item limit."""
+
+
 def _utf8_len(text) -> int:
     """UTF-8 byte length of a string (None/empty -> 0)."""
     if not text:
         return 0
     return len(text.encode("utf-8"))
+
+
+def _attribute_bytes(value) -> int:
+    """Size of one attribute VALUE under DynamoDB's accounting.
+
+    Strings and binary count their raw length; a number counts its documented 21-byte upper bound; a
+    map or list counts 3 bytes plus its entries, each entry costing 1 byte plus the key name and the
+    nested value."""
+    if isinstance(value, bool):
+        return 1
+    if isinstance(value, str):
+        return _utf8_len(value)
+    if isinstance(value, (bytes, bytearray)):
+        return len(value)
+    if isinstance(value, (int, float, Decimal)):
+        return 21
+    if value is None:
+        return 1
+    if isinstance(value, dict):
+        return 3 + sum(_utf8_len(str(key)) + _attribute_bytes(item) + 1
+                       for key, item in value.items())
+    if isinstance(value, (list, tuple, set)):
+        return 3 + sum(_attribute_bytes(item) + 1 for item in value)
+    return _utf8_len(str(value))
+
+
+def item_bytes(item) -> int:
+    """Estimated stored size of a DynamoDB item: every attribute name plus its value."""
+    return sum(_utf8_len(str(name)) + _attribute_bytes(value) for name, value in item.items())
+
+
+def assert_row_within_item_limit(
+        row, max_bytes: int = MAX_ITEM_BYTES - ITEM_SIZE_RESERVE_BYTES) -> int:
+    """Raise TemplateRowTooLargeError when an assembled row exceeds the per-item limit.
+
+    The inline threshold reserves headroom for the fields that share the row rather than measuring
+    them, and the update path grows those fields one request at a time, so the assembled row is
+    measured before the write. Returns the measured size."""
+    size = item_bytes(row)
+    if size > max_bytes:
+        raise TemplateRowTooLargeError(
+            f"The template record is {size} bytes, over the {max_bytes} byte storage limit. Reduce "
+            f"the configuration body, the input instructions, or the overrides block."
+        )
+    return size
 
 
 def combined_body_bytes(config_body, web_form_json) -> int:
@@ -127,20 +187,23 @@ def read_body_from_s3(s3_client, bucket: str, key: str) -> str:
     return response["Body"].read().decode("utf-8")
 
 
-def rehydrate_template_bodies(s3_client, bucket: str, row: dict) -> dict:
+def rehydrate_template_bodies(s3_client, bucket: str, row: dict, key_fn=None) -> dict:
     """Return {configBody, webFormJson} for a template row, reading from S3 when offloaded.
 
     Transparent to clients: an inline row returns its inline fields; an s3 row fetches both bodies
     from the default bucket. `row` is the stored template item; `bucket` is the default asset bucket
-    name.
+    name. The row's keys are relative to the area VAMS owns inside that bucket, so `key_fn` maps a
+    stored key to the full bucket key (defaultBucket.default_bucket_key bound to the resolved default
+    bucket); it is called only for a row that actually carries an offloaded body.
     """
     if row.get("bodyStorage") == BODY_STORAGE_S3:
+        resolve_key = key_fn or (lambda key: key)
         config_body = ""
         web_form_json = ""
         if row.get("configBodyS3Key"):
-            config_body = read_body_from_s3(s3_client, bucket, row["configBodyS3Key"])
+            config_body = read_body_from_s3(s3_client, bucket, resolve_key(row["configBodyS3Key"]))
         if row.get("webFormS3Key"):
-            web_form_json = read_body_from_s3(s3_client, bucket, row["webFormS3Key"])
+            web_form_json = read_body_from_s3(s3_client, bucket, resolve_key(row["webFormS3Key"]))
         return {"configBody": config_body, "webFormJson": web_form_json}
     return {
         "configBody": row.get("configBody", ""),

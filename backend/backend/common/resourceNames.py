@@ -13,6 +13,10 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 CACHE_TTL_SECONDS = 3600
 
+# Held far shorter than CACHE_TTL_SECONDS: a parameter published after the miss was
+# recorded is picked up within this window instead of at the next full refresh.
+MISSING_KEY_TTL_SECONDS = 300
+
 
 class ResourceParamKey:
     """A fixed-name deployment resource: SSM parameter key suffix (relative to the
@@ -94,6 +98,7 @@ class ResourceKeys:
 _ssm_client = None
 _cache = {}
 _cache_fetched_at = 0.0
+_missing_keys = {}
 
 
 def _get_ssm_client():
@@ -106,7 +111,7 @@ def _get_ssm_client():
 def _refresh_cache():
     """Fetch every resource-name parameter under the deployment prefix in one
     paginated GetParametersByPath sweep and replace the module cache."""
-    global _cache, _cache_fetched_at
+    global _cache, _cache_fetched_at, _missing_keys
     prefix = os.environ["VAMS_RESOURCE_PARAM_PREFIX"].rstrip("/")
     new_cache = {}
     paginator = _get_ssm_client().get_paginator('get_parameters_by_path')
@@ -116,12 +121,17 @@ def _refresh_cache():
             new_cache[key] = param['Value']
     _cache = new_cache
     _cache_fetched_at = time.time()
+    # The sweep covers the whole prefix, so it is authoritative for absence too: keys it
+    # now carries are no longer missing, and the rest are re-confirmed at this timestamp.
+    _missing_keys = {k: _cache_fetched_at for k in _missing_keys if k not in _cache}
     logger.info(f"Refreshed {len(_cache)} resource name parameters from SSM")
 
 
 def get_resource_name(key: ResourceParamKey) -> str:
     """Resolve a resource name: env var override first, then the cached SSM map
-    (refreshed at most once per CACHE_TTL_SECONDS per container)."""
+    (refreshed at most once per CACHE_TTL_SECONDS per container). A key a completed
+    sweep did not carry is remembered as missing for MISSING_KEY_TTL_SECONDS, so an
+    unpublished parameter costs one sweep per window rather than one per call."""
     for env_name in key.env_var_names:
         value = os.environ.get(env_name)
         if value:
@@ -129,6 +139,11 @@ def get_resource_name(key: ResourceParamKey) -> str:
 
     if key.param_key in _cache and (time.time() - _cache_fetched_at) < CACHE_TTL_SECONDS:
         return _cache[key.param_key]
+
+    recorded_at = _missing_keys.get(key.param_key)
+    if recorded_at is not None and (time.time() - recorded_at) < MISSING_KEY_TTL_SECONDS:
+        # Same error as a fresh miss, so a cached negative is indistinguishable to callers.
+        raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
 
     try:
         _refresh_cache()
@@ -140,6 +155,8 @@ def get_resource_name(key: ResourceParamKey) -> str:
         raise
 
     if key.param_key not in _cache:
+        _missing_keys[key.param_key] = _cache_fetched_at
+        logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
         raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
     return _cache[key.param_key]
 

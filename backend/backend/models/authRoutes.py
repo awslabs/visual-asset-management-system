@@ -20,8 +20,8 @@ ALLOWED_WEB_ROUTE_METHODS = ('GET', 'PUT', 'POST', 'DELETE')
 
 class WebRouteCheckItemModel(BaseModel, extra='ignore'):
     """A single web route to check access for"""
-    method: str = Field(min_length=1, max_length=10, strip_whitespace=True)
-    route__path: str = Field(min_length=1, max_length=512, strip_whitespace=True)
+    method: str = Field(min_length=1, max_length=10)
+    route__path: str = Field(min_length=1, max_length=512)
 
     @root_validator
     def validate_fields(cls, values):

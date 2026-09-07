@@ -109,6 +109,15 @@ def _wire(tokens=("tester",), denied_actions=()):
         patch.object(createRole, "CasbinEnforcer", spy.factory),
         patch.object(createRole, "roles_table", roles_table),
         patch.object(createRole, "log_auth_changes", MagicMock()),
+        # `common.dynamodb` is a MagicMock under this harness, so the name the handler bound
+        # at import time returns a mock that cannot be unpacked into the three-tuple the
+        # update path expects. What the expression contains is asserted in
+        # test_createRole_partial_update.py; here it only has to be well formed.
+        patch.object(
+            createRole,
+            "to_update_expr",
+            MagicMock(return_value=({"#f0": "description"}, {":v0": "d"}, "SET #f0 = :v0")),
+        ),
     ]
     for p in patches:
         p.start()

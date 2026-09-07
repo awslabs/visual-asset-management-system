@@ -125,10 +125,15 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
     first_pipeline_name = pipelines[0]['name']
     first_job_name = job_names[0]
 
-    # Asset-bucket-RELATIVE output prefixes (no s3:// scheme, no bucket) for each output kind. The
-    # next pipeline's manifest carries these plus the output bucket separately; downstream
-    # reconstructs s3://{bucket}/{prefix} as needed. The output bucket is the workflow-execution
-    # I/O bucket ($.workflowExecutionS3InputOutputBucket), threaded to the interim lambda.
+    # Output prefixes for each output kind, RELATIVE to the VAMS-owned area of the run I/O bucket (no
+    # s3:// scheme, no bucket, no baseAssetsPrefix). The next pipeline's manifest carries these plus
+    # the output bucket separately; downstream reconstructs s3://{bucket}/{basePrefix}{prefix} as
+    # needed. The output bucket is the workflow-execution I/O bucket
+    # ($.workflowExecutionS3InputOutputBucket) and the area within it is
+    # $.workflowExecutionS3InputOutputBasePrefix, both threaded to the interim and process-output
+    # lambdas, which join them. Keeping the templates relative is what lets the base prefix be a
+    # per-execution value instead of one baked in when the definition was created — and it keeps
+    # the process-output path keys in the shape ASSET_PATH_PIPELINE validates.
     output_files_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}"
     output_previews_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}"
     output_metadata_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}"
@@ -138,16 +143,24 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
     output_metadata_prefix_uri = f"States.Format('{output_metadata_prefix_template}', $$.Execution.Name)"
     output_results_prefix_uri = f"States.Format('{output_results_prefix_template}', $$.Execution.Name)"
 
-    # Per-execution input-definition folder (asset bucket), keyed only on the execution id so
-    # it matches er.execution_input_prefix(executionId) and the keys executeWorkflow writes.
+    # Per-execution input-definition folder, relative to the run bucket's VAMS-owned area and keyed
+    # only on the execution id so it matches er.execution_input_prefix(executionId) and the keys
+    # executeWorkflow writes.
     input_folder_template = f"{PIPELINES_PREFIX}workflowExecutionInputs/{{}}/"
 
+    # These two mint FULL s3:// URIs a pipeline reads directly, so they carry the run bucket's
+    # VAMS-owned area between the bucket and the relative key. The base prefix arrives already
+    # normalized ("" for the bucket root, otherwise exactly one trailing slash), so the same template
+    # yields a bucket-root URI on a deployment whose default bucket declares no prefix.
     def _pipeline_input_uri(pipeline_index, filename):
-        return (f"States.Format('s3://{{}}/{input_folder_template}pipeline{pipeline_index}/{filename}', "
-                f"$.workflowExecutionS3InputOutputBucket, $$.Execution.Name)")
+        return (f"States.Format('s3://{{}}/{{}}{input_folder_template}"
+                f"pipeline{pipeline_index}/{filename}', "
+                f"$.workflowExecutionS3InputOutputBucket, "
+                f"$.workflowExecutionS3InputOutputBasePrefix, $$.Execution.Name)")
 
-    input_metadata_uri = (f"States.Format('s3://{{}}/{input_folder_template}metadata.json', "
-                          f"$.workflowExecutionS3InputOutputBucket, $$.Execution.Name)")
+    input_metadata_uri = (f"States.Format('s3://{{}}/{{}}{input_folder_template}metadata.json', "
+                          f"$.workflowExecutionS3InputOutputBucket, "
+                          f"$.workflowExecutionS3InputOutputBasePrefix, $$.Execution.Name)")
 
     # Build list of pipeline states, inserting an interim-tracking state between each pair
     states = []
@@ -200,29 +213,25 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             # Bucket-relative, execution-scoped aux temp working prefix for the NEXT pipeline
             # (pipelines/{nextName}/{executionId}/). The next pipeline's per-input-file aux preview
             # prefix is built inside the interim lambda from the input rows, not here.
+            # This one carries NO base prefix: it addresses the VAMS-created auxiliary bucket, which
+            # has no baseAssetsPrefix, so joining the run bucket's area would misplace it.
             next_pipeline = pipelines[i + 1]
             next_aux_temp_prefix_uri = (
                 f"States.Format('{PIPELINES_PREFIX}{next_pipeline['name']}/{{}}/', "
                 f"$$.Execution.Name)")
-            # The NEXT pipeline's configured viewer subfolder, flattened onto the pipeline dict by
-            # workflowAsl.to_asl_pipeline_dict from its systemConfig. Its manifest must carry the
-            # same value the execute handler supplies for step 1, or the same pipeline writes its
-            # viewer data to a different aux location purely because of its position in the
-            # workflow. A raw pipeline record is also accepted, for a caller that skips the
-            # adapter; absent means no subfolder.
-            next_aux_preview_suffix = (
-                next_pipeline.get('auxPreviewPipelineSuffix')
-                or (next_pipeline.get('systemConfig') or {}).get('auxPreviewPipelineSuffix', '')
-                or "")
             interim_payload = {
                 "body": {
                     # --- Workflow-execution identity + I/O bucket (the aux bucket is resolved by
                     #     the interim lambda itself, not threaded through the SFN input) ---
                     "workflowExecutionId.$": "$.workflowExecutionId",
                     "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
+                    # The VAMS-owned area within that bucket, which every relative key below is
+                    # joined to before it reaches S3. Per-execution, so a definition created before
+                    # the bucket's prefix changed still writes to the area in force for the run.
+                    "workflowExecutionS3InputOutputBasePrefix.$": "$.workflowExecutionS3InputOutputBasePrefix",
 
                     # --- Just-finished pipeline: output diff (list its output files, attribute,
-                    #     and record them). outputFilesPrefix is the asset-bucket-RELATIVE listing
+                    #     and record them). outputFilesPrefix is the VAMS-area-RELATIVE listing
                     #     prefix, reused below as the next manifest's relative output FILES prefix.
                     "fromPipelineExecutionId.$": f"$.pipelineExecutionIds[{i}]",
                     "priorPipelineExecutionIds.$": "$.pipelineExecutionIds",
@@ -237,7 +246,12 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                         f"States.Format('{input_folder_template}pipeline{i + 2}/config.json', "
                         f"$$.Execution.Name)"),
                     "nextPipelineAuxTempPrefix.$": next_aux_temp_prefix_uri,
-                    "nextPipelineAuxPreviewSuffix": next_aux_preview_suffix,
+                    # The NEXT step's configured viewer subfolder. Its manifest must carry the same
+                    # value the execute handler supplies for step 1, or the same pipeline writes its
+                    # viewer data to a different aux location purely because of its position in the
+                    # workflow. Resolved per execution off the pipeline record, so only the index is
+                    # static here — same reason as the metadata key and the input gates below.
+                    "nextPipelineAuxPreviewSuffix.$": f"$.stepAuxPreviewSuffixes[{i + 1}]",
                     # The NEXT step's own narrowed input-metadata key, or "" when that step reads the
                     # shared per-execution envelope. Resolved per execution (templates are chosen at
                     # execute time, the ASL is baked at save time), so only the index is static here.
@@ -262,8 +276,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                     "executingUserName.$": "$.executingUserName",
 
                     # --- Envelope context written into the NEXT pipeline's manifest. Output
-                    #     prefixes are asset-bucket-RELATIVE (no s3://); the output bucket is the
-                    #     workflow-execution I/O bucket, threaded separately. ---
+                    #     prefixes are VAMS-area-RELATIVE (no s3://, no base prefix); the output
+                    #     bucket and the area within it are threaded separately above, and the
+                    #     interim lambda joins them before writing the manifest. ---
                     "outputFilesPrefixRelative.$": output_files_prefix_uri,
                     "outputPreviewsPrefixRelative.$": output_previews_prefix_uri,
                     "outputMetadataPrefixRelative.$": output_metadata_prefix_uri,
@@ -299,7 +314,11 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             # All pipeline-execution ids for the end-state output diff baseline.
             "priorPipelineExecutionIds.$": "$.pipelineExecutionIds",
 
-            # --- Shared output-folder prefixes the end-state lambda lists for produced files ---
+            # --- Shared output-folder prefixes the end-state lambda lists for produced files.
+            #     VAMS-area-RELATIVE: the end-state lambda validates them against
+            #     ASSET_PATH_PIPELINE (anchored at 'pipelines/') and joins the base prefix below
+            #     afterwards, so a prefixed deployment's outputs are still validated and then read
+            #     from the right place. ---
             "filesPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $$.Execution.Name)",
             "metadataPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $$.Execution.Name)",
             "previewPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $$.Execution.Name)",
@@ -311,6 +330,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             #     bucket. Without this it would list from the output asset's bucket and find nothing
             #     when the run bucket differs (multi-bucket deployments).
             "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
+            # The VAMS-owned area within the run bucket, joined onto the four path keys above after
+            # they are validated. Per-execution, for the same reason as in the interim payload.
+            "workflowExecutionS3InputOutputBasePrefix.$": "$.workflowExecutionS3InputOutputBasePrefix",
 
             # --- Output target identity (where outputs are written; == the input asset today). The
             #     end-state lambda writes outputs to this asset; it does not receive the input asset.

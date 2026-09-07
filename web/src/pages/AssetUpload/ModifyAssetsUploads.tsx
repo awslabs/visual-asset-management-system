@@ -28,7 +28,12 @@ import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
 import { safeGetFile } from "../../utils/fileHandleCompat";
 import { fetchAsset, fetchDatabase } from "../../services/APIService";
-import { validateFiles, ValidationResult } from "../../utils/fileExtensionValidation";
+import {
+    validateFiles,
+    getPreviewFileExtension,
+    isPreviewExtensionAllowed,
+    ValidationResult,
+} from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 // Constants
@@ -377,11 +382,21 @@ export default function ModifyAssetsUploadsPage() {
         return fileItems.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [fileItems]);
 
-    // Handle preview file selection with size validation
+    // Handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
         if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
             setPreviewFileError("Preview file exceeds maximum allowed size of 5MB");
             // Don't update the state with the oversized file
+            return;
+        }
+
+        if (file && !isPreviewExtensionAllowed(file.name)) {
+            setPreviewFileError(
+                `Extension ${getPreviewFileExtension(
+                    file.name
+                )} is not allowed. Preview files must be one of: ${previewFileFormatsStr}`
+            );
+            // Don't update the state with the unsupported file
             return;
         }
 
@@ -531,7 +546,8 @@ export default function ModifyAssetsUploadsPage() {
                                                     <em>
                                                         Note: Preview files (containing{" "}
                                                         {PREVIEW_FILE_PATTERN} in the filename) are
-                                                        exempt from these restrictions.
+                                                        exempt from these restrictions, but must
+                                                        still be one of {previewFileFormatsStr}.
                                                     </em>
                                                 </div>
                                             </SpaceBetween>
@@ -544,24 +560,26 @@ export default function ModifyAssetsUploadsPage() {
                                 <Container>
                                     <Alert header="Invalid Files Selected" type="error">
                                         <SpaceBetween direction="vertical" size="xs">
-                                            <div>
-                                                The following files cannot be uploaded because their
-                                                {`extensions are not allowed for this ${Synonyms.database}:`}
-                                            </div>
+                                            <div>The following files cannot be uploaded:</div>
                                             <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
                                                 {fileValidationResult.invalidFiles.map(
                                                     (file, index) => (
                                                         <li key={index}>
-                                                            <strong>{file.fileName}</strong> -
-                                                            Extension {file.extension} not allowed
+                                                            <strong>{file.fileName}</strong> -{" "}
+                                                            {file.errorMessage ||
+                                                                `Extension ${file.extension} not allowed`}
                                                         </li>
                                                     )
                                                 )}
                                             </ul>
-                                            <div>
-                                                <strong>Allowed extensions:</strong>{" "}
-                                                {fileValidationResult.allowedExtensions?.join(", ")}
-                                            </div>
+                                            {fileValidationResult.allowedExtensions !== null && (
+                                                <div>
+                                                    <strong>Allowed extensions:</strong>{" "}
+                                                    {fileValidationResult.allowedExtensions.join(
+                                                        ", "
+                                                    )}
+                                                </div>
+                                            )}
                                         </SpaceBetween>
                                     </Alert>
                                 </Container>

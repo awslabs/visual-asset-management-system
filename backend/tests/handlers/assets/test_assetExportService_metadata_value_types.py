@@ -129,7 +129,8 @@ def _run_batch(*, asset_metadata=None, file_metadata=None, file_attributes=None,
         patch.object(m, "get_asset_metadata",
                      MagicMock(return_value=asset_metadata or {})),
         patch.object(m, "list_s3_files", MagicMock(return_value=file_rows)),
-        patch.object(m, "apply_file_filters", MagicMock(side_effect=lambda f, _r: f)),
+        # Called twice per asset -- once deferring the primaryType filter, once applying it.
+        patch.object(m, "apply_file_filters", MagicMock(side_effect=lambda f, _r, **_kw: f)),
         patch.object(m, "get_asset_file_versions", MagicMock(return_value=None)),
         patch.object(m, "get_file_metadata",
                      MagicMock(return_value=file_metadata or {})),
@@ -140,7 +141,8 @@ def _run_batch(*, asset_metadata=None, file_metadata=None, file_attributes=None,
     for p in patches:
         p.start()
     try:
-        result = m.process_asset_batch(
+        # process_asset_batch returns (assets, page state); only the assets are asserted here.
+        result, _page_state = m.process_asset_batch(
             [{"databaseId": _DB, "assetId": _ASSET, "isRoot": True}],
             _request_model(m),
             {"tokens": ["user@example.com"], "roles": [], "mfaEnabled": False},

@@ -33,6 +33,22 @@ CONTROL_TYPE_MAP = {
 }
 
 
+def resolve_control_type(control_type: str) -> str:
+    """The cosmos-transfer2.5 config key and model flag for a VAMS control type.
+
+    An unrecognised value is rejected rather than substituted. Falling back would run the edge model
+    for a control signal the operator did not ask for, name the output file after the type they DID
+    ask for, and report success -- so nothing about the run would prompt a re-check.
+    """
+    key = control_type.strip().lower() if isinstance(control_type, str) else control_type
+    if key not in CONTROL_TYPE_MAP:
+        raise ValueError(
+            f"Unsupported controlType '{control_type}'. Supported control types: "
+            f"{', '.join(sorted(CONTROL_TYPE_MAP))}"
+        )
+    return CONTROL_TYPE_MAP[key]
+
+
 def build_transfer_config(
     control_type: str,
     prompt: str,
@@ -54,7 +70,7 @@ def build_transfer_config(
         Config dict ready for JSON serialization
     """
     # Map to cosmos-transfer2.5 control type key
-    cosmos_control_type = CONTROL_TYPE_MAP.get(control_type.lower(), "edge")
+    cosmos_control_type = resolve_control_type(control_type)
 
     config = {
         "name": "vams_transfer",
@@ -165,7 +181,7 @@ def run_inference(
         Path to output directory
 
     Raises:
-        ValueError: If required inputs are missing
+        ValueError: If required inputs are missing or control_type is not a supported signal
         RuntimeError: If inference fails
     """
     # Validate inputs
@@ -173,7 +189,7 @@ def run_inference(
         raise ValueError("Transfer requires source_video_path")
 
     # Map control type to cosmos model flag
-    cosmos_control_type = CONTROL_TYPE_MAP.get(control_type.lower(), "edge")
+    cosmos_control_type = resolve_control_type(control_type)
 
     # Build transfer config
     transfer_config = build_transfer_config(

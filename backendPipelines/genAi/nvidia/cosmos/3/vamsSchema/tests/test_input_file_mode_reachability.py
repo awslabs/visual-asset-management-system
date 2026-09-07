@@ -27,6 +27,7 @@ video2video) made unreachable by the declared arity, so every such run is reject
 import glob
 import json
 import os
+import re
 
 import pytest
 
@@ -63,9 +64,24 @@ def _bundles():
     return found
 
 
+_BARE_PLACEHOLDER = re.compile(r'(?<!")\{\{\w+\}\}(?!")')
+
+
 def _body(template):
-    """The template's configBody parsed with its tag placeholders neutralized to a literal."""
-    return json.loads((template.get("configBody") or "{}").replace("{{DISABLE_GUARDRAILS}}", "true"))
+    """The template's configBody parsed with its tag placeholders neutralized to a literal.
+
+    A placeholder for an `integer`/`number`/`boolean`/`string-list` tag sits in BARE VALUE position
+    (`"NUM_FRAMES": {{NUM_FRAMES}}`) because quoting a typed tag is rejected on save -- so a body
+    carrying one is not valid JSON until the placeholder is replaced. Every cosmos3 body has at least
+    one, which is why this substitution is general rather than a list of tag names: naming them
+    individually is how this helper came to neutralize only `{{DISABLE_GUARDRAILS}}` and raise
+    `JSONDecodeError` on all nine bundles.
+
+    A QUOTED placeholder (`"PROMPT": "{{PROMPT}}"`) is already a valid JSON string and is left alone.
+    The assertions here read only `TASK_MODE` and `MODEL_VARIANT`, both string-typed and therefore
+    quoted, so substituting a neutral literal for the typed values cannot affect an outcome.
+    """
+    return json.loads(_BARE_PLACEHOLDER.sub("0", template.get("configBody") or "{}"))
 
 
 def _consumes_an_input_file(template):

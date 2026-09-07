@@ -148,9 +148,10 @@ Registration is optional and additive — it does not replace the task-token cal
 uses — but it is what makes two capabilities work:
 
 -   **Abort reaches inside a pipeline.** `abort_execution` stops each still-running step's registered
-    sub-processes before stopping the outer state machine. Each entry is typed by `resourceType`; Step
-    Functions executions are stopped, and any other type is registered but returns a non-fatal warning so
-    the caller knows the sub-process was left running.
+    sub-processes before stopping the outer state machine, and the error handler does the same for the
+    in-flight steps of a run that fails. Each entry is typed by `resourceType`; Step Functions executions,
+    AWS Batch jobs and AWS Deadline Cloud farm jobs are stopped, and any other type is registered but
+    returns a non-fatal warning so the caller knows the sub-process was left running.
 -   **Full-mode log retrieval finds the right log group.** Each `registeredLogs` entry carries
     `logGroupArn`, `logGroupName`, `logStreamName` and `logStreamPrefix`, so a full-mode log read pulls from
     the pipeline's own CloudWatch location rather than only the workflow log group.

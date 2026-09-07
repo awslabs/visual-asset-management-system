@@ -14,6 +14,7 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
+from common.dynamodb import to_update_expr
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -362,17 +363,17 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
         asset_base_key = asset.get('assetLocation', {}).get('Key', f"{asset_id}/")
         asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {asset_id}: {asset_type}")
-        
+
         # Update asset type - ensure we're not overriding with None
         if asset_type:
             asset['assetType'] = asset_type
         elif 'assetType' not in asset or not asset.get('assetType'):
             asset['assetType'] = 'none'
         # If asset already has a type and asset_type is None, keep the existing type
-        
+
         # Save updated asset
-        save_asset_details(asset)
-        
+        update_asset_attributes(database_id, asset_id, {'assetType': asset['assetType']})
+
         # Send notification to subscribers
         send_subscription_email(database_id, asset_id)
         
@@ -398,13 +399,12 @@ def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key:
             return
         
         # Update asset with preview location
-        asset['previewLocation'] = {
-            'Key': final_s3_key
-        }
-        
-        # Save updated asset
-        save_asset_details(asset)
-        
+        update_asset_attributes(database_id, asset_id, {
+            'previewLocation': {
+                'Key': final_s3_key
+            }
+        })
+
         logger.info(f"Updated asset {asset_id} with preview location: {final_s3_key}")
         
     except Exception as e:
@@ -434,17 +434,37 @@ def get_asset_details(database_id: str, asset_id: str) -> Dict[str, Any]:
         logger.exception(f"Error getting asset details: {e}")
         return None
 
-def save_asset_details(asset_data: Dict[str, Any]):
-    """
-    Save asset details to DynamoDB.
-    Ported from uploadFile.py.
-    
+def update_asset_attributes(database_id: str, asset_id: str, updates: Dict[str, Any]):
+    """Update the named attributes of an existing asset record in DynamoDB.
+
+    Only the supplied attributes are written, so a field another writer changed while
+    the large file was being processed is not reverted. Conditional on the record still
+    existing so an asset removed during processing is not recreated.
+
     Args:
-        asset_data: The asset data to save
+        database_id: The database ID
+        asset_id: The asset ID
+        updates: Map of attribute name to value to write
     """
+    keys_map, values_map, expr = to_update_expr(updates)
     try:
-        asset_table.put_item(Item=asset_data)
-        logger.info(f"Saved asset details for {asset_data.get('assetId')}")
+        asset_table.update_item(
+            Key={
+                'databaseId': database_id,
+                'assetId': asset_id
+            },
+            UpdateExpression=expr,
+            ExpressionAttributeNames=keys_map,
+            ExpressionAttributeValues=values_map,
+            ConditionExpression='attribute_exists(databaseId) AND attribute_exists(assetId)'
+        )
+        logger.info(f"Saved asset details for {asset_id}")
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {asset_id} in database {database_id} no longer exists, asset record not updated")
+            raise VAMSGeneralErrorResponse(f"Error saving asset.")
+        logger.exception(f"Error saving asset details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error saving asset.")
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
@@ -1059,22 +1079,21 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
                 success_count += 1
                 
                 # AUDIT LOG: Large file upload completed asynchronously
-                # Create a mock event for audit logging since this is SQS-triggered
+                # SQS-triggered, so the actor is supplied as an internal cross-call identity:
+                # the initiating user the queuing handler recorded on the message, falling back
+                # to SYSTEM_USER. This is the same identity the change provenance is stamped
+                # with, so the audit entry correlates with the synchronous completion entry.
+                # The queued message carries no MFA state, so an end-user actor is recorded as
+                # not MFA-satisfied rather than taking the system cross-call default.
                 try:
-                    mock_event = {
-                        'requestContext': {
-                            'authorizer': {
-                                'jwt': {
-                                    'claims': {
-                                        'sub': 'SYSTEM_ASYNC_PROCESSOR'
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
+                    audit_user_id = file_info.get('changeUserId') or 'SYSTEM_USER'
+                    cross_call = {'userName': audit_user_id}
+                    if audit_user_id != 'SYSTEM_USER':
+                        cross_call['mfaEnabled'] = False
+                    audit_event = {'lambdaCrossCall': cross_call}
+
                     log_file_upload(
-                        mock_event,
+                        audit_event,
                         file_info.get('databaseId'),
                         file_info.get('assetId'),
                         file_info.get('relativeKey'),

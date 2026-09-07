@@ -94,18 +94,23 @@ class _InputsTable:
     Pages are served from an explicit row list per partition and the last page carries no
     LastEvaluatedKey, so the generator's `while True` terminates. Queries are counted and capped:
     a walk that fails to terminate fails the test instead of hanging the suite.
+
+    `query_cap` has to sit ABOVE any read bound a test asserts against, or the stub trips first and the
+    assertion can never fail - a vacuous bound wearing a bound's clothing. The default is tight; the
+    tests that assert the page bound raise it.
     """
 
     PAGE = 100
 
-    def __init__(self, rows_by_partition):
+    def __init__(self, rows_by_partition, query_cap=100):
         self.rows_by_partition = rows_by_partition
         self.partitions_queried = []
         self.queries = 0
+        self.query_cap = query_cap
 
     def query(self, **kwargs):
         self.queries += 1
-        assert self.queries < 100, "the candidate walk did not terminate"
+        assert self.queries < self.query_cap, "the candidate walk did not terminate"
         partition = next(v for v in _condition_values(kwargs["KeyConditionExpression"]) if ":" in v)
         self.partitions_queried.append(partition)
         rows = self.rows_by_partition.get(partition, [])
@@ -152,9 +157,13 @@ def _running_main_row(execution_id):
             "workflow_execution_arn": "arn:ex", "executionStopDate": ""}
 
 
-def _guard(rows_by_partition, main_rows, restriction="perAsset", selected=None):
-    """Run _running_execution_exists over the fakes; returns (result_or_raise, inputs, main)."""
-    inputs_table = _InputsTable(rows_by_partition)
+def _guard(rows_by_partition, main_rows, restriction="perAsset", selected=None, notices=None,
+           query_cap=100):
+    """Run _running_execution_exists over the fakes; returns (result_or_raise, inputs, main).
+
+    `notices` is the caller's own list, so a test can assert what the guard reported about its own
+    completeness alongside the answer it returned."""
+    inputs_table = _InputsTable(rows_by_partition, query_cap=query_cap)
     main_table = _MainTable(main_rows)
     selected_inputs = selected if selected is not None else [
         {"databaseId": p.split(":")[0], "assetId": p.split(":")[1], "relativeFileKey": "/f.glb"}
@@ -171,7 +180,7 @@ def _guard(rows_by_partition, main_rows, restriction="perAsset", selected=None):
         # No stopDate in the describe response == still running.
         sfn.describe_execution.return_value = {"status": "RUNNING"}
         result = ewv2._running_execution_exists(
-            WF_DB, WF_ID, selected_inputs, asset_records, restriction)
+            WF_DB, WF_ID, selected_inputs, asset_records, restriction, notices=notices)
     return result, inputs_table, main_table
 
 
@@ -269,6 +278,24 @@ class TestConcurrencyCandidatesAreThisWorkflowsOnly:
         # And the unrelated rows cost no main-row read at all.
         assert main.reads == [mine["workflowExecutionId"]]
 
+    def test_an_asset_whose_history_is_all_other_workflows_answers_definitively(self):
+        # The end state of the filter, which the fixture above cannot show because its own row sits at
+        # the end of the walk and so leaves the walker unexhausted. Here EVERY row belongs to another
+        # workflow, so the walk runs to exhaustion and the guard knows there is no conflict:
+        #   - no candidate is confirmed at all (an unrelated row costs neither a main-row read nor a
+        #     Step Functions describe, which is what stopped the budget being spent on them), and
+        #   - no notice is attached. A caveat here would tell every caller on a busy asset that the
+        #     limit could not be confirmed on a request where it fully was.
+        rows = [_input_row(i, "db1:a1", composite=OTHER_COMPOSITE)
+                for i in range(25 * ewv2.MAX_CONCURRENCY_CANDIDATES_INSPECTED)]
+        notices = []
+        result, _inputs, main = _guard({"db1:a1": rows}, {}, notices=notices)
+        assert result is False
+        assert main.reads == [], (
+            "another workflow's executions were confirmed one by one, which is how the budget was "
+            "spent before a conflicting run of this workflow could be reached")
+        assert notices == [], "an exhausted walk knows the answer and states no caveat"
+
     def test_a_row_without_workflow_ids_is_still_a_candidate(self):
         # A row written before the workflow ids were stored cannot be judged from the index, so it
         # keeps its main-row read: an unlabelled row costs a read rather than a missed conflict.
@@ -302,6 +329,77 @@ class TestConcurrencyCandidatesAreThisWorkflowsOnly:
         assert result is True
         assert main_table.reads == [rows[1]["workflowExecutionId"]], (
             "a row for an unselected file must not be inspected under perInputFile")
+
+
+@pytest.mark.unit
+class TestConcurrencyWalkIsBoundedByPages:
+    """The other side of filtering candidates to this workflow: a discarded row costs nothing against
+    the candidate budget, so that budget no longer bounds the WALK. Without a page bound the guard
+    reads the asset's whole by-asset history one round trip at a time, in the request that still has to
+    start the state machine — and the caller's API Gateway integration times out long before the
+    Lambda does, so the launch it was checking starts anyway while the caller is told it failed."""
+
+    # Deeper than the page bound so the walk must be cut short, in a partition of rows this workflow
+    # never ran: the case where the candidate budget stays entirely unspent.
+    DEEPER_THAN_THE_BOUND = (ewv2.MAX_CONCURRENCY_PAGES_INSPECTED + 50) * _InputsTable.PAGE
+    # Above the bound, so the assertion on the read count is the thing that fails, not the stub.
+    CAP = 4 * ewv2.MAX_CONCURRENCY_PAGES_INSPECTED
+
+    def test_a_foreign_history_deeper_than_the_bound_stops_paging(self):
+        rows = [_input_row(i, "db1:a1", composite=OTHER_COMPOSITE)
+                for i in range(self.DEEPER_THAN_THE_BOUND)]
+        notices = []
+        result, inputs, main = _guard(
+            {"db1:a1": rows}, {}, notices=notices, query_cap=self.CAP)
+        assert inputs.queries <= ewv2.MAX_CONCURRENCY_PAGES_INSPECTED, (
+            "the walk paged the whole partition: the candidate budget does not bound it, because a "
+            "row filtered out by workflow is never confirmed and so never charged")
+        # Cut short is not the same answer as exhausted. It may not claim the restriction held.
+        assert result is False
+        assert notices, "a walk stopped by the page bound must say the limit was not confirmed"
+        assert "could not be fully confirmed" in " ".join(notices)
+        assert main.reads == [], "no candidate of this workflow existed to confirm"
+
+    def test_a_walk_that_finishes_inside_the_bound_states_no_caveat(self):
+        # Positive control on the bound: it must not fire on an ordinary deep-ish asset, or every
+        # caller on a busy asset is told the limit could not be confirmed when it fully was. Sized just
+        # under the bound from the constant, so retuning the bound keeps this meaningful.
+        pages = ewv2.MAX_CONCURRENCY_PAGES_INSPECTED - 10
+        rows = [_input_row(i, "db1:a1", composite=OTHER_COMPOSITE)
+                for i in range(pages * _InputsTable.PAGE)]
+        notices = []
+        result, inputs, _main = _guard(
+            {"db1:a1": rows}, {}, notices=notices, query_cap=self.CAP)
+        assert result is False
+        assert inputs.queries == pages, "the fixture did not page as far as it was built to"
+        assert notices == [], "an exhausted walk knows the answer and states no caveat"
+
+    def test_a_conflict_reachable_inside_the_bound_is_still_a_conflict(self):
+        # The bound may not weaken the case the guard exists for: a running execution of this workflow
+        # sitting behind a deep-but-bounded stretch of another workflow's rows is still found.
+        other = [_input_row(i, "db1:a1", composite=OTHER_COMPOSITE)
+                 for i in range((ewv2.MAX_CONCURRENCY_PAGES_INSPECTED - 10) * _InputsTable.PAGE)]
+        mine = _input_row(10 ** 6, "db1:a1")
+        notices = []
+        result, _inputs, main = _guard(
+            {"db1:a1": other + [mine]},
+            {mine["workflowExecutionId"]: _running_main_row(mine["workflowExecutionId"])},
+            notices=notices, query_cap=self.CAP)
+        assert result is True
+        assert main.reads == [mine["workflowExecutionId"]]
+        assert notices == [], "a decided conflict is not an unconfirmed limit"
+
+    def test_no_selected_asset_goes_unexamined_when_the_selection_is_wider_than_the_bound(self):
+        # The page bound carries the same one-per-asset floor the candidate budget does. A flat bound
+        # would hand the first assets every page and leave the rest of the selection unqueried, which
+        # is the starvation the round-robin walk was built to remove, reintroduced one layer down.
+        count = ewv2.MAX_CONCURRENCY_PAGES_INSPECTED + 5
+        partitions = {f"db1:a{n:04d}": [_input_row(n, f"db1:a{n:04d}")] for n in range(count)}
+        result, inputs, main = _guard(partitions, {}, query_cap=self.CAP)
+        assert result is False
+        assert set(inputs.partitions_queried) == set(partitions), (
+            "assets past the page bound were never queried")
+        assert {rows[0]["workflowExecutionId"] for rows in partitions.values()} <= set(main.reads)
 
 
 @pytest.mark.unit
@@ -340,6 +438,27 @@ class TestRenderedConfigTooLargeIsACallerError:
             with pytest.raises(VAMSGeneralErrorResponse) as raised:
                 ewv2._render_output_path_extension("{{inputMetadataObject}}", {}, {})
         assert str(tr.MAX_RENDERED_CONFIG_LENGTH) in str(raised.value)
+
+    def test_the_extensions_client_error_reaches_the_response_as_400(self):
+        # The raise above is only half the path: what the finding was about is the STATUS the caller
+        # gets. The extension arm converts to VAMSGeneralErrorResponse, which the handler answers with
+        # general_error — so the code is asserted through the handler rather than inferred from the
+        # exception type. Driven through the real helper, so removing either arm fails this.
+        def _raise_from_the_extension(event):
+            with patch.object(tr, "render_config", side_effect=tr.RenderedConfigTooLargeError()):
+                return ewv2._render_output_path_extension("{{inputMetadataObject}}", {}, {})
+
+        resp = self._run(_raise_from_the_extension)
+        assert resp["statusCode"] == 400
+        assert str(tr.MAX_RENDERED_CONFIG_LENGTH) in json.loads(resp["body"])["message"]
+
+    def test_an_undefined_tag_keeps_its_own_message(self):
+        # Control on the arm ORDER: the oversize arm sits beside the undefined-tag one, and both are
+        # caller errors answering 400. They must stay distinguishable — a caller told to shorten a
+        # body cannot act on a body whose tag name is simply wrong.
+        message = json.loads(self._run(tr.MissingTemplateTagError({"nope"}))["body"])["message"]
+        assert "undefined template tags" in message
+        assert str(tr.MAX_RENDERED_CONFIG_LENGTH) not in message
 
 
 @pytest.mark.unit
@@ -393,3 +512,69 @@ class TestLaunchRendersUnderTheDeclaredConfigFormat:
         body = self._launch("json")
         assert "&amp;" not in body
         assert "gear&pinion" in body
+
+    def _run_steps(self, formats, tables=None):
+        """Launch a run of one pipeline per entry in `formats`, the nth declaring formats[n].
+
+        Returns (executionId, {stepIndex: bodyText}). The record writes are NOT stubbed out here (the
+        single-step helper above stubs them): `tables` receives the table-name -> mock map, so what the
+        launch PERSISTED per step can be asserted alongside what it wrote to S3.
+        """
+        pipelines = [{"pipelineId": f"p{n}", "databaseId": "GLOBAL", "_jobName": f"p{n}",
+                      "systemConfig": {"inputFileArity": "one"},
+                      "executionConfig": {"executionType": "Lambda", "waitForCallback": "Disabled"}}
+                     for n in range(1, len(formats) + 1)]
+        workflow = {
+            "workflowId": WF_ID, "databaseId": WF_DB,
+            "workflow_arn": "arn:aws:states:us-east-1:1:stateMachine:wf1",
+            "jobNames": [f"uuid-{p['pipelineId']}" for p in pipelines],
+            "systemConfig": {"metadataInputs": {}},
+        }
+        selected_inputs = [{"databaseId": "db1", "assetId": "a1",
+                            "relativeFileKey": self.FILE_KEY, "versionId": ""}]
+        asset_records = {("db1", "a1"): {
+            "databaseId": "db1", "assetId": "a1",
+            "assetLocation": {"Key": "a1/"}, "bucketId": "b1"}}
+        resolved = {f"GLOBAL:{p['pipelineId']}": {"renderedConfig": self.BODY, "configFormat": fmt}
+                    for p, fmt in zip(pipelines, formats)}
+        written = {} if tables is None else tables
+        with patch(f"{MOD}.s3c") as s3, \
+                patch(f"{MOD}.sfn_client") as sfn, \
+                patch(f"{MOD}._asset_bucket_details", return_value={"bucketName": "asset-bucket"}), \
+                patch(f"{MOD}.dynamodb") as dynamo:
+            sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            dynamo.Table.side_effect = lambda name: written.setdefault(name, MagicMock())
+            execution_id = ewv2._launch_workflow(
+                workflow, pipelines, resolved, selected_inputs, asset_records,
+                None, "db1", "a1", "run-bucket", {}, "Manual", "", "user@example.com", "")
+            puts = {c.kwargs["Key"]: c.kwargs["Body"] for c in s3.put_object.call_args_list}
+        return execution_id, {
+            step: puts[er.pipeline_input_config_key(execution_id, step)].decode("utf-8")
+            for step in range(1, len(formats) + 1)}
+
+    def test_a_later_steps_body_is_written_with_its_system_tags_unsubstituted(self):
+        # The boundary the format threading has to respect. Only step 1 is rendered at launch, against
+        # its own manifest; steps 2+ carry their tags to the interim lambda, which renders each against
+        # the manifest of ITS task — the prior step's OUTPUT files, not the run's input files.
+        #
+        # Threading the format by rendering every step here would look like a fix and would substitute
+        # step 1's input file into step 2's configuration, which no assertion on step 1 alone can see.
+        _execution_id, bodies = self._run_steps(["xml", "xml"])
+        assert "{{firstAssetFileKey}}" in bodies[2]
+        assert "gear" not in bodies[2], (
+            "a later step's configuration was rendered against step 1's manifest")
+        # Discriminator: step 1 really was rendered, so step 2's intact tag is the boundary and not a
+        # fixture in which nothing rendered at all.
+        assert "{{firstAssetFileKey}}" not in bodies[1]
+        assert "&amp;" in bodies[1]
+
+    def test_every_steps_declared_format_is_recorded_on_its_own_configuration_row(self):
+        # Steps 2+ are rendered by the interim lambda, whose SFN body carries no configFormat, so the
+        # step's persisted configuration row is where the declared format is recoverable from. It is
+        # written per step and from that step's own resolved entry: taking step 1's would hand every
+        # later step the wrong escape, which is the same defect one hop downstream.
+        tables = {}
+        _execution_id, _bodies = self._run_steps(["xml", "yaml"], tables=tables)
+        rows = [c.kwargs["Item"] for c in
+                tables[ewv2.pipeline_execution_input_configuration_table].put_item.call_args_list]
+        assert [r["configFormat"] for r in rows] == ["xml", "yaml"]

@@ -303,8 +303,13 @@ _retry_config = BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"})
 _secretsmanager = None
 _http = None
 _cached_secret: Optional[Dict[str, str]] = None
+_cached_secret_fetched_at: float = 0.0
 _cached_token: Optional[str] = None
 _token_expiry: Optional[datetime] = None
+
+# How long a credential read from Secrets Manager is reused before it is fetched
+# again, so a rotated credential is picked up within the window.
+_SECRET_CACHE_TTL_SECONDS = 3600
 
 # Module-level config — read once at cold start.
 try:
@@ -354,9 +359,16 @@ def _get_secretsmanager_client():
 
 
 def _load_physna_credentials() -> Dict[str, str]:
-    """Fetch the Physna credentials secret from Secrets Manager (cached)."""
-    global _cached_secret
-    if _cached_secret is not None:
+    """Fetch the Physna credentials secret from Secrets Manager.
+
+    Cached for ``_SECRET_CACHE_TTL_SECONDS``, after which the secret is read
+    again.
+    """
+    global _cached_secret, _cached_secret_fetched_at
+    if (
+        _cached_secret is not None
+        and (time.time() - _cached_secret_fetched_at) < _SECRET_CACHE_TTL_SECONDS
+    ):
         return _cached_secret
     sm = _get_secretsmanager_client()
     response = sm.get_secret_value(SecretId=PHYSNA_CREDS_SECRET_ARN)
@@ -365,7 +377,14 @@ def _load_physna_credentials() -> Dict[str, str]:
         "clientId": payload["clientId"],
         "clientSecret": payload["clientSecret"],
     }
+    _cached_secret_fetched_at = time.time()
     return _cached_secret
+
+
+def _invalidate_secret_cache() -> None:
+    """Drop the cached credential so the next load re-reads Secrets Manager."""
+    global _cached_secret
+    _cached_secret = None
 
 
 def _http_post_token(client_id: str, client_secret: str):
@@ -392,8 +411,9 @@ def _http_request(method: str, url: str, **kwargs):
 
 def _reset_client_state_for_tests() -> None:
     """Test hook: clear module-level caches."""
-    global _cached_secret, _cached_token, _token_expiry
+    global _cached_secret, _cached_secret_fetched_at, _cached_token, _token_expiry
     _cached_secret = None
+    _cached_secret_fetched_at = 0.0
     _cached_token = None
     _token_expiry = None
 
@@ -424,6 +444,10 @@ class PhysnaClient:
         ):
             return _cached_token
 
+        if force_refresh:
+            # A 401 can mean the credential itself was rotated, so re-read the
+            # secret instead of re-presenting the cached copy.
+            _invalidate_secret_cache()
         creds = _load_physna_credentials()
         response = _http_post_token(creds["clientId"], creds["clientSecret"])
         if response.status != 200:
@@ -451,10 +475,13 @@ class PhysnaClient:
 
         last_error: Optional[Exception] = None
         attempted_refresh = False
+        # Held outside the loop so every attempt — including a retry — carries the
+        # caller's own headers, and the auth header is rebuilt from the current token.
+        caller_headers = dict(kwargs.pop("headers", {}) or {})
         for attempt in range(self._MAX_TOTAL_RETRIES):
             token = self._ensure_token()
-            headers = dict(kwargs.pop("headers", {}) or {})
-            headers.setdefault("Authorization", f"Bearer {token}")
+            headers = dict(caller_headers)
+            headers["Authorization"] = f"Bearer {token}"
             headers.setdefault("Accept", "application/json")
 
             try:
@@ -464,6 +491,9 @@ class PhysnaClient:
                 logger.warning(
                     f"Physna request {method} {url} failed (attempt {attempt + 1}): {e}"
                 )
+                # Exponential backoff between Physna request retries, capped at 10s. Must be the last
+                # comment line before the call -- semgrep attaches `nosemgrep` to the next line only.
+                # nosemgrep: arbitrary-sleep
                 time.sleep(min(2 ** attempt, 10))
                 continue
 
@@ -475,8 +505,6 @@ class PhysnaClient:
                 logger.warning(f"Physna returned 401 for {method} {url}; refreshing token")
                 self._ensure_token(force_refresh=True)
                 attempted_refresh = True
-                # Re-inject kwargs for the next iteration
-                kwargs["headers"] = headers
                 continue
 
             if 500 <= response.status < 600:
@@ -484,6 +512,9 @@ class PhysnaClient:
                     f"Physna returned {response.status} for {method} {url} "
                     f"(attempt {attempt + 1}); retrying"
                 )
+                # Exponential backoff between Physna request retries, capped at 10s. Must be the last
+                # comment line before the call -- semgrep attaches `nosemgrep` to the next line only.
+                # nosemgrep: arbitrary-sleep
                 time.sleep(min(2 ** attempt, 10))
                 continue
 
@@ -521,7 +552,9 @@ def list_physna_assets_under(
     There is no server-side exact-path filter, so we narrow via the
     ``folders`` param to the parent folder of ``path_prefix`` when possible,
     then filter the results client-side to keep only items whose ``path``
-    starts with ``path_prefix``.
+    starts with ``path_prefix``. A prefix naming no folder level (no ``/``)
+    has no parent to narrow on, so such a call pages the tenant's entire
+    asset list; callers pass a prefix that names at least one folder.
 
     Set ``client_side_filter=False`` to disable the prefix filter — useful if
     callers only want items inside a specific folder regardless of exact
@@ -564,11 +597,6 @@ def list_physna_assets_under(
         if current_page >= last_page:
             return
         page = current_page + 1
-
-
-def _folder_delete_stub_callback(client: "PhysnaClient", tenant_id: str, folder: str) -> None:
-    """Test seam for delete_folder_if_empty. Production no-op."""
-    return None
 
 
 def physna_asset_exists(client: "PhysnaClient", tenant_id: str, full_path: str) -> bool:
@@ -883,41 +911,14 @@ def ensure_metadata_fields_registered(
 def delete_folder_if_empty(
     client: "PhysnaClient", tenant_id: str, folder: str
 ) -> bool:
-    """Delete a Physna folder if it contains no assets.
+    """Folder cleanup is outside the scope of the Physna integration.
 
-    Returns True if the folder was (or would have been) deleted. Returns
-    False if the folder still has assets.
-
-    NOTE: The Physna folder-delete endpoint could not be conclusively
-    identified from the public API docs at implementation time. The list+
-    empty-check logic is fully wired. The single HTTP call is stubbed below
-    with a mock URL/payload and left commented out — uncomment and fix the
-    endpoint / request shape once verified with Physna.
+    Always returns False, having issued no request: an emptied Physna folder is
+    left in the tenant. Callers invoke this after a delete and none of them act
+    on the result.
     """
-    # Empty-check via the same listing helper
-    has_any = False
-    for _item in list_physna_assets_under(client, tenant_id, folder):
-        has_any = True
-        break
-    if has_any:
-        logger.info(f"Skipping folder delete; still has assets: {folder}")
-        return False
-
-    logger.info(f"Folder empty, would delete: {folder}")
-    _folder_delete_stub_callback(client, tenant_id, folder)
-
-    # TODO: verify with Physna — fill in real endpoint + params.
-    # Once confirmed, uncomment the block below and delete this TODO.
-    # Example based on a plausible REST shape:
-    #
-    # path = f"/tenants/{tenant_id}/folders?path={folder}"
-    # response = client.request("DELETE", path)
-    # if response.status not in (200, 204, 404):
-    #     raise PhysnaApiError(
-    #         f"Folder delete failed for {folder}: status={response.status}"
-    #     )
-
-    return True
+    logger.info(f"Physna folder cleanup is not performed; leaving in place: {folder}")
+    return False
 
 
 from boto3.dynamodb.conditions import Key
@@ -928,51 +929,19 @@ _s3_client = boto3.client("s3", config=_retry_config)
 
 try:
     _ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-except Exception as e:
-    logger.warning(f"Failed resolving asset storage table name (OK for tests): {e}")
-    _ASSET_STORAGE_TABLE_NAME = None
-
-try:
     _DATABASE_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
-except Exception as e:
-    logger.warning(f"Failed resolving database storage table name (OK for tests): {e}")
-    _DATABASE_STORAGE_TABLE_NAME = None
-
-try:
     _ASSET_FILE_METADATA_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.warning(f"Failed resolving asset file metadata table name (OK for tests): {e}")
-    _ASSET_FILE_METADATA_STORAGE_TABLE_NAME = None
-
-try:
     _FILE_ATTRIBUTE_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
-except Exception as e:
-    logger.warning(f"Failed resolving file attribute table name (OK for tests): {e}")
-    _FILE_ATTRIBUTE_STORAGE_TABLE_NAME = None
-
-try:
     _S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
 except Exception as e:
-    logger.warning(f"Failed resolving S3 asset buckets table name (OK for tests): {e}")
-    _S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = None
+    logger.exception("Failed loading resource names")
+    raise e
 
-asset_storage_table = _dynamodb.Table(_ASSET_STORAGE_TABLE_NAME) if _ASSET_STORAGE_TABLE_NAME else None
-database_storage_table = _dynamodb.Table(_DATABASE_STORAGE_TABLE_NAME) if _DATABASE_STORAGE_TABLE_NAME else None
-asset_file_metadata_table = (
-    _dynamodb.Table(_ASSET_FILE_METADATA_STORAGE_TABLE_NAME)
-    if _ASSET_FILE_METADATA_STORAGE_TABLE_NAME
-    else None
-)
-file_attribute_table = (
-    _dynamodb.Table(_FILE_ATTRIBUTE_STORAGE_TABLE_NAME)
-    if _FILE_ATTRIBUTE_STORAGE_TABLE_NAME
-    else None
-)
-s3_asset_buckets_table = (
-    _dynamodb.Table(_S3_ASSET_BUCKETS_STORAGE_TABLE_NAME)
-    if _S3_ASSET_BUCKETS_STORAGE_TABLE_NAME
-    else None
-)
+asset_storage_table = _dynamodb.Table(_ASSET_STORAGE_TABLE_NAME)
+database_storage_table = _dynamodb.Table(_DATABASE_STORAGE_TABLE_NAME)
+asset_file_metadata_table = _dynamodb.Table(_ASSET_FILE_METADATA_STORAGE_TABLE_NAME)
+file_attribute_table = _dynamodb.Table(_FILE_ATTRIBUTE_STORAGE_TABLE_NAME)
+s3_asset_buckets_table = _dynamodb.Table(_S3_ASSET_BUCKETS_STORAGE_TABLE_NAME)
 
 
 # Safety cap on the number of DynamoDB pages a single metadata read will pull. A
@@ -1108,7 +1077,7 @@ def get_bucket_details_by_name(bucket_name: str) -> Optional[Dict[str, Any]]:
     the bucket registry via the ``bucketNameGSI`` so the metadata-free
     delete-resolver can still reconstruct the asset path.
     """
-    if not bucket_name or s3_asset_buckets_table is None:
+    if not bucket_name:
         return None
     response = s3_asset_buckets_table.query(
         IndexName="bucketNameGSI",
@@ -1142,17 +1111,18 @@ def get_database_id_for_asset_id(
     an assetId (extracted from the key) but no databaseId, and reading the
     deleted object's S3 user-metadata is no longer possible.
 
-    When a single assetId appears in more than one database (e.g. the same
-    ID has been assigned in two separate databases because the tables are
-    not cross-database-unique), we need to disambiguate. Passing
-    ``bucket_name`` and ``base_assets_prefix`` lets us filter to the one
-    match whose asset record points at the same physical bucket+prefix
-    the event came from. If disambiguation still leaves zero or multiple
+    An assetId appears in more than one database when the same ID has been
+    assigned in two separate databases, because the tables are not
+    cross-database-unique. Passing ``bucket_name`` and ``base_assets_prefix``
+    filters to the match whose asset record points at the same physical
+    bucket+prefix the event came from — including when the GSI returns a
+    single item, which on its own says nothing about which database the
+    event's object sat in. If disambiguation leaves zero or multiple
     matches, we return ``None`` — guessing would risk deleting the wrong
     Physna asset. This mirrors the approach in
     ``fileIndexer.lookup_database_id_for_permanent_delete``.
     """
-    if not asset_id or asset_storage_table is None:
+    if not asset_id:
         return None
 
     response = asset_storage_table.query(
@@ -1162,12 +1132,8 @@ def get_database_id_for_asset_id(
     items = response.get("Items", [])
     if not items:
         return None
-    if len(items) == 1:
-        db = items[0].get("databaseId")
-        return str(db) if db else None
 
-    # Multiple matches — try to narrow by bucket. Without bucket context
-    # we must refuse to pick arbitrarily.
+    # Narrow by bucket. Without bucket context we must refuse to pick arbitrarily.
     if not bucket_name:
         logger.warning(
             f"assetIdGSI returned {len(items)} matches for assetId={asset_id} "

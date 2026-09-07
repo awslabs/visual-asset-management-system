@@ -287,6 +287,44 @@ class TestPipelineTemplate:
                 'pipeline', 'template', 'delete', '-d', 'my-db', '-p', 'p1', '-t', 't1', '--yes'])
             assert result.exit_code == 0
 
+    def test_template_delete_shows_trigger_reference_warnings(self, cli_runner,
+                                                              generic_command_mocks):
+        warning = ("this template was chosen as a default template by the trigger(s) of "
+                   "auto-triggered workflow(s) 'db1:wf1' (trigger 'fileUpload').")
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].delete_pipeline_template.return_value = {
+                'message': 'Template deleted', 'warnings': [warning]}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'delete', '-d', 'my-db', '-p', 'p1', '-t', 't1', '--yes'])
+            assert result.exit_code == 0
+            assert 'Template deleted' in result.output
+            assert "'db1:wf1'" in result.output
+
+    def test_template_delete_warnings_carried_into_json(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].delete_pipeline_template.return_value = {
+                'message': 'Template deleted', 'warnings': ['some warning']}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'delete', '-d', 'my-db', '-p', 'p1', '-t', 't1',
+                '--yes', '--json-output'])
+            assert result.exit_code == 0
+            # A string message is wrapped so the warnings array survives --json-output.
+            data = json.loads(result.output)
+            assert data['message'] == 'Template deleted'
+            assert data['warnings'] == ['some warning']
+
+    def test_template_delete_without_warnings_emits_the_bare_message(self, cli_runner,
+                                                                    generic_command_mocks):
+        # The positive control: a clean delete's JSON payload is the unwrapped message, unchanged.
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].delete_pipeline_template.return_value = {
+                'message': 'Template deleted'}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'delete', '-d', 'my-db', '-p', 'p1', '-t', 't1',
+                '--yes', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == 'Template deleted'
+
     def test_template_delete_requires_confirmation(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('pipeline') as mocks:
             result = cli_runner.invoke(cli, [

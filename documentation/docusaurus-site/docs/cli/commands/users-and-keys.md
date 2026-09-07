@@ -171,17 +171,44 @@ List all API keys in the VAMS system. Returns metadata only -- key values are ne
 vamscli api-key list [OPTIONS]
 ```
 
-| Option          | Type | Required | Description              |
-| --------------- | ---- | -------- | ------------------------ |
-| `--json-output` | Flag | No       | Output raw JSON response |
+| Option             | Type    | Required | Description                                                                             |
+| ------------------ | ------- | -------- | --------------------------------------------------------------------------------------- |
+| `--page-size`      | INTEGER | No       | API keys read per page (deployment default: 1000)                                        |
+| `--max-items`      | INTEGER | No       | Maximum keys in one response, or in total with `--auto-paginate` (default and cap: 3000) |
+| `--starting-token` | TEXT    | No       | Pagination token from a previous response's `NextToken`                                  |
+| `--auto-paginate`  | Flag    | No       | Follow `NextToken` until every API key has been fetched                                  |
+| `--json-output`    | Flag    | No       | Output raw JSON response                                                                 |
+
+A response carries at most 3000 keys. When more remain it reports a `NextToken` and `truncated`, and the human output prints the token with the option to follow it. `--auto-paginate` cannot be combined with `--starting-token`.
 
 ```bash
 vamscli api-key list
-vamscli api-key list --json-output > api-keys-audit.json
+vamscli api-key list --page-size 100
+vamscli api-key list --starting-token "eyJ..." --page-size 100
+vamscli api-key list --auto-paginate --json-output > api-keys-audit.json
 ```
 
 ---
 
+## api-key get
+
+Get a single API key by ID. Returns metadata only: the key value is never stored in retrievable form, so no read operation can return it.
+
+```bash
+vamscli api-key get [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--api-key-id`  | TEXT | Yes      | ID of the API key to get |
+| `--json-output` | Flag | No       | Output raw JSON response |
+
+```bash
+vamscli api-key get --api-key-id 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed
+vamscli api-key get --api-key-id 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed --json-output
+```
+
+---
 ## api-key create
 
 Create a new API key. The key value is displayed only once -- save it immediately.
@@ -272,17 +299,46 @@ List your own API keys. Returns metadata only.
 vamscli api-key user list [OPTIONS]
 ```
 
-| Option          | Type | Required | Description              |
-| --------------- | ---- | -------- | ------------------------ |
-| `--json-output` | Flag | No       | Output raw JSON response |
+| Option             | Type    | Required | Description                                                                             |
+| ------------------ | ------- | -------- | --------------------------------------------------------------------------------------- |
+| `--page-size`      | INTEGER | No       | API keys read per page (deployment default: 1000)                                        |
+| `--max-items`      | INTEGER | No       | Maximum keys in one response, or in total with `--auto-paginate` (default and cap: 3000) |
+| `--starting-token` | TEXT    | No       | Pagination token from a previous response's `NextToken`                                  |
+| `--auto-paginate`  | Flag    | No       | Follow `NextToken` until every API key has been fetched                                  |
+| `--json-output`    | Flag    | No       | Output raw JSON response                                                                 |
+
+Paging works exactly as it does for [`api-key list`](#api-key-list).
 
 ```bash
 vamscli api-key user list
-vamscli api-key user list --json-output
+vamscli api-key user list --page-size 100
+vamscli api-key user list --auto-paginate --json-output
 ```
 
 ---
 
+## api-key user get
+
+Get one of your own API keys by ID. Returns metadata only.
+
+```bash
+vamscli api-key user get [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--api-key-id`  | TEXT | Yes      | ID of your API key       |
+| `--json-output` | Flag | No       | Output raw JSON response |
+
+```bash
+vamscli api-key user get --api-key-id 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed
+```
+
+:::note[Another user's key reads as absent]
+A key ID that belongs to a different user is reported as `API key not found`, the same answer given for an ID that does not exist. The two cases are deliberately indistinguishable, so this command cannot be used to discover whether another user holds a given key. Use `vamscli api-key get` with administrative access to read a key belonging to someone else.
+:::
+
+---
 ## api-key user create
 
 Create a new API key tied to your own user. The key value is displayed only once -- save it immediately.

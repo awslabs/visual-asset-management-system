@@ -347,9 +347,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         except:
             request_headers = ""
 
-        # Get the "Range" header from the request headers
+        # Get the "Range" header from the request headers. Header keys arrive with the casing
+        # the client sent, so fold them to lowercase before matching.
         try:
-            range_header = request_headers.get('range')
+            lower_headers = {k.lower(): v for k, v in request_headers.items() if isinstance(k, str)}
+            range_header = lower_headers.get('range')
         except:
             range_header = ""
 

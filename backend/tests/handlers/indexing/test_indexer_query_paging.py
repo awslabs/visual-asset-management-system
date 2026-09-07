@@ -269,9 +269,11 @@ class TestFileMetadataPaging:
 @pytest.mark.unit
 class TestPermanentDeleteLookupPaging:
     def test_second_page_match_prevents_the_single_match_shortcut(self, file_indexer):
-        """Step 1 short-circuits on `len(items) == 1` with no bucket check. When
-        the second same-assetId asset is on page 2, a first-page-only read takes
-        that shortcut and resolves to the WRONG database."""
+        """Step 1 short-circuits on `len(items) == 1`. When the second
+        same-assetId asset is on page 2, a first-page-only read takes that
+        shortcut on page 1's record -- whose bucket is NOT the event's -- and so
+        resolves nothing at all. Only a read that reaches page 2 finds the record
+        the event belongs to."""
         m = file_indexer
         table = _PagedTable({
             ("assetIdGSI", None): _pages(
@@ -294,15 +296,23 @@ class TestPermanentDeleteLookupPaging:
 
     def test_single_asset_still_resolves(self, file_indexer):
         """Positive control: the paging change must not break the ordinary
-        single-match case."""
+        single-match case. The one record is registered in the event's bucket at
+        its root prefix, which the event spells `/` and the registration `''`."""
         m = file_indexer
         table = _PagedTable({
             ("assetIdGSI", None): _pages(
                 [{"assetId": "a1", "databaseId": "dbA", "bucketId": "bA"}])
         })
-        with patch.object(m, "asset_storage_table", table):
+        details = MagicMock(return_value={
+            "bucketId": "bA", "bucketName": "bucket", "baseAssetsPrefix": ""})
+        with patch.object(m, "asset_storage_table", table), \
+                patch.object(m, "get_bucket_details", details):
             assert m.lookup_database_id_for_permanent_delete(
                 "a1", "bucket", "/") == ("dbA", True)
+        assert details.called, "it was never called at all"
+        assert details.call_count <= 1, (
+            "the single-match branch never consulted the bucket registration, so its "
+            "agreement with the event's bucket was never checked")
 
 
 # ---------------------------------------------------------------------------

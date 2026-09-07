@@ -10,6 +10,7 @@ This module provides functions for:
 """
 
 import json
+import os
 import time
 from typing import Dict, List, Optional, Tuple, Any
 from boto3.dynamodb.types import TypeDeserializer
@@ -85,18 +86,32 @@ def _set_in_cache(cache_key: str, data: Dict):
 
 def extract_file_extension(file_path: str) -> Optional[str]:
     """Extract file extension from file path
-    
+
+    Read from the basename, so a dot in a parent folder name ("folder.v2/LICENSE") is not
+    mistaken for an extension. A file with no extension has none, and neither does a
+    trailing-slash folder key.
+
+    The returned form is DOTTED because it is compared against `fileKeyTypeRestriction`
+    entries, which the schema editor and the CLI both specify dotted (".glb,.usd"). The
+    same-named helpers in fileIndexer and garnetDataIndexFile return the undotted form
+    ("glb") for the search index's str_fileext field -- the two forms are not
+    interchangeable.
+
     Args:
         file_path: File path (e.g., "folder/file.pdf")
-        
+
     Returns:
         File extension with dot (e.g., ".pdf") or None if no extension
     """
-    if not file_path or '.' not in file_path:
+    if not file_path or file_path.endswith('/'):
         return None
-    
+
+    basename = os.path.basename(file_path)
+    if '.' not in basename:
+        return None
+
     # Get the last part after the last dot
-    extension = '.' + file_path.rsplit('.', 1)[-1].lower()
+    extension = '.' + basename.split('.')[-1].lower()
     return extension
 
 

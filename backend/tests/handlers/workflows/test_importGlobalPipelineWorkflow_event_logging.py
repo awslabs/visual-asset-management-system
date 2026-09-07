@@ -14,6 +14,13 @@ the REAL ``mask_sensitive_data`` over it leaves no template content. That holds 
 finding offers -- logging the event object so the key walk applies, or logging only identifiers -- and
 fails for the rendered string it replaced, which is exercised as a positive control so the assertion
 cannot be passing merely because the redaction would strip the value from any input.
+
+The same property has to hold for a bundle delivered as a JSON STRING, which is the shape a
+CloudFormation property naturally takes (the CDK construct already stringifies ``bundleS3Keys``) and
+the shape ``assemble_bundle`` explicitly accepts. A string is one opaque value to the key walk, so
+logging the event object is not on its own sufficient -- the bundle has to be walkable. The
+registration path must keep receiving the event verbatim, so the log view may not be built by mutating
+it.
 """
 
 import json
@@ -61,15 +68,36 @@ def _event():
     }
 
 
-def _logged_first_argument(event):
-    """Invoke the handler and return the first positional argument it gave logger.info."""
+def _string_bundle_event(holder="ResourceProperties"):
+    """The same event with the bundle delivered as a JSON string under the named property holder."""
+    bundle = _event()["ResourceProperties"]["inlineBundle"]
+    return {"RequestType": "Create" if holder == "ResourceProperties" else "Update",
+            holder: {"inlineBundle": json.dumps(bundle)}}
+
+
+def _invoke_handler(event):
+    """Invoke the handler with the logger and the registration recorded. Returns (logger, register)."""
     recorder = MagicMock()
+    register = MagicMock(return_value={"ids": {}, "applied": []})
     with patch.object(imp, "logger", recorder), \
-         patch.object(imp, "register_bundle", return_value={"ids": {}, "applied": []}), \
+         patch.object(imp, "register_bundle", register), \
+         patch.object(imp, "archive_bundle", return_value={"ids": {}, "warnings": []}), \
+         patch.object(imp, "archive_superseded_ids", return_value=[]), \
          patch.object(imp, "_physical_id", return_value="pid"):
         imp.lambda_handler(event, MagicMock(log_stream_name="stream"))
+    return recorder, register
+
+
+def _logged_first_argument(event):
+    """Invoke the handler and return the first positional argument it gave logger.info."""
+    recorder, _ = _invoke_handler(event)
     assert recorder.info.call_args_list, "the handler must log the event it received"
     return recorder.info.call_args_list[0].args[0]
+
+
+def _masked(event):
+    """The handler's log argument for this event, redacted and serialized as CloudWatch would see it."""
+    return json.dumps(mask_sensitive_data(_logged_first_argument(event)))
 
 
 @pytest.mark.unit
@@ -113,3 +141,85 @@ class TestImportEventLogging:
         event = {"inlineBundle": {"templates": [{"configBody": SECRET_PROMPT}]}}
         logged = _logged_first_argument(event)
         assert SECRET_PROMPT not in json.dumps(mask_sensitive_data(logged))
+
+
+@pytest.mark.unit
+class TestImportEventLoggingStringDeliveredBundle:
+    """A bundle delivered as a JSON string is the shape CloudFormation produces for a structured
+    property and the shape ``assemble_bundle`` accepts, so it must redact the same as the object form."""
+
+    def test_a_json_string_bundle_leaks_no_template_content(self):
+        masked = _masked(_string_bundle_event())
+        assert SECRET_PROMPT not in masked
+        assert SECRET_FORM not in masked
+        assert SECRET_INSTRUCTIONS not in masked
+
+    def test_an_update_leaks_no_content_from_the_prior_string_bundle(self):
+        """An Update carries the previous revision's properties as OldResourceProperties, which holds a
+        second copy of the bundle."""
+        event = _string_bundle_event("OldResourceProperties")
+        event["ResourceProperties"] = {}
+        assert SECRET_PROMPT not in _masked(event)
+
+    def test_a_direct_invoke_json_string_bundle_leaks_no_content(self):
+        """On the self-registration path the bundle sits at the top level of the event, not under
+        ResourceProperties."""
+        bundle = _event()["ResourceProperties"]["inlineBundle"]
+        assert SECRET_PROMPT not in _masked({"inlineBundle": json.dumps(bundle)})
+
+    def test_a_string_bundle_that_does_not_parse_is_not_logged_verbatim(self):
+        """A truncated bundle still carries the content keys, and nothing can walk it -- registration
+        fails on it later, but the log line is written first."""
+        truncated = '{"templates": [{"configBody": "' + SECRET_PROMPT + '"}'
+        assert SECRET_PROMPT not in _masked({"ResourceProperties": {"inlineBundle": truncated}})
+
+    def test_a_delete_is_never_blocked_by_a_bundle_the_log_view_cannot_parse(self):
+        """A Delete archives best-effort so teardown is never blocked, and the log line is written
+        before that safety net. ``json.loads`` raises past ValueError -- a value nested deeper than the
+        interpreter's recursion limit raises RecursionError -- so a parse failure while building the
+        log view must not become the exception that fails the stack delete."""
+        depth = sys.getrecursionlimit() * 20
+        event = {"RequestType": "Delete",
+                 "ResourceProperties": {"inlineBundle": "[" * depth + "]" * depth}}
+        recorder = MagicMock()
+        with patch.object(imp, "logger", recorder), \
+             patch.object(imp, "archive_bundle", return_value={"ids": {}, "warnings": []}):
+            response = imp.lambda_handler(event, MagicMock(log_stream_name="stream"))
+        assert "Data" in response
+        logged = json.dumps(mask_sensitive_data(recorder.info.call_args_list[0].args[0]))
+        assert "inlineBundle" in logged, "the record must still show a bundle was submitted"
+
+    def test_the_key_walk_alone_does_not_redact_a_string_bundle(self):
+        """Positive control on the mechanism: the redaction is key-driven, so ``inlineBundle`` holding a
+        JSON string is opaque to it. Without this the assertions above could be passing because
+        mask_sensitive_data strips the value from any input at all."""
+        raw = _string_bundle_event()
+        assert SECRET_PROMPT in json.dumps(mask_sensitive_data(raw))
+
+    def test_the_ids_inside_a_string_bundle_are_still_logged(self):
+        """Control against over-redaction: redacting the whole inlineBundle would also pass the
+        assertions above, and would leave a deployment failure with nothing to identify it by."""
+        masked = _masked(_string_bundle_event())
+        assert "genai" in masked
+        assert "t1" in masked
+        assert REDACTED in masked
+
+    def test_the_registration_still_receives_the_string_bundle_verbatim(self):
+        """Blast radius: assemble_bundle parses a string inlineBundle itself, so the log view must be a
+        copy -- rewriting the event in place would change what registration is handed."""
+        event = _string_bundle_event()
+        original = json.loads(json.dumps(event))
+        _, register = _invoke_handler(event)
+        assert event == original, "the handler must not mutate the event it was given"
+        assert register.call_args.args[0]["inlineBundle"] == original[
+            "ResourceProperties"]["inlineBundle"]
+        assert isinstance(register.call_args.args[0]["inlineBundle"], str)
+
+    def test_an_s3_key_delivered_bundle_still_logs_its_keys(self):
+        """Positive control for the deploy path CDK actually uses: bundleS3Keys carries no content
+        keys, so it must reach the log intact."""
+        event = {"RequestType": "Create",
+                 "ResourceProperties": {"bundleS3Keys": json.dumps(
+                     {"pipeline": "vamsSchema/genai/pipeline.json"})}}
+        masked = _masked(event)
+        assert "vamsSchema/genai/pipeline.json" in masked

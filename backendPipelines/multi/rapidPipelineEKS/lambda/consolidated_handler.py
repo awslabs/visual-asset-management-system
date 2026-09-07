@@ -16,8 +16,16 @@ import time
 import sys
 from botocore.exceptions import ClientError
 
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+
 # Initialize Step Functions client for task token callbacks
-sfn = boto3.client('stepfunctions')
+sfn = boto3.client('stepfunctions', config=retry_config)
 
 # Import custom logging utilities
 from customLogging.logger import safeLogger
@@ -34,10 +42,9 @@ from kubernetes_utils import (
     delete_job,
     with_retries
 )
-
 # Initialize AWS clients
-s3 = boto3.client('s3')
-sfn = boto3.client('stepfunctions')
+s3 = boto3.client('s3', config=retry_config)
+sfn = boto3.client('stepfunctions', config=retry_config)
 
 # Get environment variables with defaults
 CLUSTER_NAME = os.environ.get('EKS_CLUSTER_NAME')
@@ -785,6 +792,47 @@ def handle_run_job(event):
             }
         }
 
+
+# The bound kept on a pod log that is carried in a payload rather than only written to the log
+# stream: the last lines, each itself capped, then the joined text capped again.
+POD_LOG_TAIL_LINES = 80
+POD_LOG_TAIL_LINE_CHARS = 2000
+POD_LOG_TAIL_MAX_CHARS = 24000
+POD_LOG_TRUNCATION_MARKER = "[earlier log output omitted]\n"
+
+
+def bounded_log_tail(log_text):
+    """The end of a pod log, bounded so it fits every payload it is placed in.
+
+    The text is a job's whole pod log: `get_pod_logs_for_job` concatenates up to 1000 lines per
+    container across every pod the job produced (a `backoffLimit` of 2 allows three, each with its
+    current and previous logs), and `check_job_status` embeds that same text in the error string it
+    returns. Nothing bounds its byte size.
+
+    Unbounded, it exceeds the 32768-character SendTaskFailure cause and the 262144-byte
+    SendTaskSuccess output, and Step Functions rejects the call. The rejection is raised inside the
+    callback's own `except`, which logs and returns, so the parent workflow's task token is never
+    released and a finished job reads RUNNING until its taskTimeout expires - hours later.
+
+    The end is kept because that is where a conversion reports what went wrong; a marker replaces
+    what was dropped so the record does not read as a complete log.
+    """
+    if not log_text:
+        return log_text
+
+    raw_lines = str(log_text).splitlines()
+    lines = [line[:POD_LOG_TAIL_LINE_CHARS] for line in raw_lines]
+    dropped = len(raw_lines) > POD_LOG_TAIL_LINES or any(
+        len(line) > POD_LOG_TAIL_LINE_CHARS for line in raw_lines)
+
+    tail = "\n".join(lines[-POD_LOG_TAIL_LINES:])
+    if len(tail) > POD_LOG_TAIL_MAX_CHARS:
+        tail = tail[-POD_LOG_TAIL_MAX_CHARS:]
+        dropped = True
+
+    return POD_LOG_TRUNCATION_MARKER + tail if dropped else tail
+
+
 def handle_check_job(event):
     """
     Handler for monitoring a Kubernetes job
@@ -825,13 +873,18 @@ def handle_check_job(event):
         if status == "SUCCEEDED":
             logger.info(f"Job {k8s_job_name} completed successfully after {counter + 1} checks")
 
-            # Get success logs for debugging
-            success_logs = ""
+            # The pod log goes to this function's own log stream and nowhere else. On a success it has
+            # no diagnostic value in the execution record - the run worked - and it is third-party rpdx
+            # output, so carrying it in the payloads below would copy it into a durable, broadly
+            # readable place. It is still FETCHED, which is what exercises the `pods/log` RBAC verb and
+            # what leaves an operator a tail to read.
             try:
-                success_logs = get_pod_logs_for_job(k8s_job_name, NAMESPACE)
+                logger.info(
+                    f"Pod log tail for {k8s_job_name}:\n"
+                    f"{bounded_log_tail(get_pod_logs_for_job(k8s_job_name, NAMESPACE))}"
+                )
             except Exception as log_error:
                 logger.warning(f"Could not retrieve success logs: {log_error}")
-                success_logs = "Logs not available"
 
             # If we have an external task token, call back to Step Functions
             if external_task_token:
@@ -844,7 +897,6 @@ def handle_check_job(event):
                         "counter": counter,
                         "maxAttempts": max_attempts,
                         "startTime": start_time,
-                        "logs": success_logs,
                         "message": f"Job completed successfully after {counter + 1} status checks"
                     }
 
@@ -866,7 +918,6 @@ def handle_check_job(event):
                     "counter": counter,
                     "maxAttempts": max_attempts,
                     "startTime": start_time,
-                    "logs": success_logs,
                     "message": f"Job completed successfully after {counter + 1} status checks"
                 }
             }
@@ -874,13 +925,14 @@ def handle_check_job(event):
         elif status == "FAILED":
             logger.error(f"Job {k8s_job_name} failed after {counter + 1} checks")
 
-            # Enhanced error information
-            detailed_error_logs = error_logs or "No error logs available"
+            # Enhanced error information. check_job_status already embeds the pod log in the error it
+            # returns, so both sources are bounded.
+            detailed_error_logs = bounded_log_tail(error_logs) or "No error logs available"
             try:
                 # Try to get more detailed logs
                 pod_logs = get_pod_logs_for_job(k8s_job_name, NAMESPACE)
                 if pod_logs and pod_logs != "No pods found for job":
-                    detailed_error_logs = pod_logs
+                    detailed_error_logs = bounded_log_tail(pod_logs)
             except Exception as log_error:
                 logger.warning(f"Could not retrieve detailed error logs: {log_error}")
 
@@ -933,6 +985,7 @@ def handle_check_job(event):
 
         elif status == "UNKNOWN":
             logger.warning(f"Job {k8s_job_name} status is unknown - check {counter + 1}/{max_attempts}")
+            error_logs = bounded_log_tail(error_logs)
             return {
                 'statusCode': 500,
                 'body': {

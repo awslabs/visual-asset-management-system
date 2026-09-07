@@ -1,15 +1,22 @@
 # Coordinate Transform Pipeline
 
-The Coordinate Transform pipeline reprojects point cloud files between coordinate reference systems (CRS). It supports E57, LAS, LAZ, and PLY input formats and can output to LAZ, LAS, E57, or PLY. The pipeline runs as an AWS Batch Fargate container with PDAL-based transformation and supports per-asset CRS configuration through VAMS metadata.
+The Coordinate Transform pipeline reprojects point cloud files between coordinate reference systems (CRS). It accepts E57, LAS, and LAZ input files and can output to LAZ, LAS, E57, or PLY. The pipeline runs as an AWS Batch Fargate container with PDAL-based transformation and supports per-asset CRS configuration through VAMS metadata.
 
 ## Supported Formats
 
-| Format | Extension | Notes                                     |
-| :----- | :-------- | :---------------------------------------- |
-| E57    | `.e57`    | ASTM standard for 3D imaging data         |
-| LAS    | `.las`    | ASPRS LiDAR data exchange format          |
-| LAZ    | `.laz`    | Compressed LAS format                     |
-| PLY    | `.ply`    | Polygon File Format (point cloud variant) |
+| Format | Extension | Notes                                                                    |
+| :----- | :-------- | :----------------------------------------------------------------------- |
+| E57    | `.e57`    | ASTM standard for 3D imaging data                                        |
+| LAS    | `.las`    | ASPRS LiDAR data exchange format                                         |
+| LAZ    | `.laz`    | Compressed LAS format                                                    |
+| PLY    | `.ply`    | Polygon File Format (point cloud variant). Output only -- see note below |
+
+The pipeline's accepted-input list is `*.e57`, `*.las`, and `*.laz`, so a PLY file is not offered as an
+input in the execute wizard and does not fire the file-upload trigger. PLY records no CRS of its own, and
+the pipeline's built-in template enforces a source CRS, so a PLY input would be refused at validation
+rather than transformed. To reproject PLY deliberately, register a custom template that overrides
+`inputFileFilters` to add `*.ply` and sets `enforceSourceCrs` to `false`, which accepts the file and
+assumes the configured `sourceCrs`. PLY remains available as an output format for every accepted input.
 
 ## Architecture
 
@@ -76,7 +83,7 @@ Enable this pipeline in `infra/config/config.json`:
 | `enabled`                             | `false` | Deploy the coordinate transform pipeline infrastructure. Enables the global VPC.                                                        |
 | `useCodeBuild`                        | `false` | Build the container image via AWS CodeBuild during deployment. When enabled, CodeBuild runs outside the VPC to pull public base images. |
 | `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow in the global VAMS database during CDK deployment.                                     |
-| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when E57, LAS, LAZ, or PLY files are uploaded. Requires `autoRegisterWithVAMS` to be enabled.        |
+| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when E57, LAS, or LAZ files are uploaded. Requires `autoRegisterWithVAMS` to be enabled.             |
 
 ## Input Parameters
 
@@ -96,10 +103,22 @@ The pipeline accepts transform parameters that control the coordinate reprojecti
 | `targetScaleFactor`    | number  | No       | `1.0`   | Scale factor for target grid                                          |
 | `applyScaleCorrection` | boolean | No       | `true`  | Whether to apply scale factor correction during transformation        |
 | `combinedScaleFactor`  | number  | No       | --      | Override: apply a single combined scale factor directly               |
-| `chunkSize`            | number  | No       | 1000000 | Number of points per processing chunk                                 |
-| `enforceSourceCrs`     | boolean | No       | `true`  | Block processing if detected CRS does not match configured source CRS |
-| `onMismatch`           | string  | No       | `warn`  | Action on CRS mismatch: `error`, `warn`, or `skip`                    |
-| `compressLaz`          | boolean | No       | `true`  | Whether to compress LAZ output                                        |
+| `chunkSize`            | number  | No       | 1000000 | Points transformed and written at a time -- see the note on memory     |
+| `enforceSourceCrs`     | boolean | No       | `true`  | Fail validation when the file records no CRS of its own               |
+| `onMismatch`           | string  | No       | `warn`  | Action on a failed CRS validation: `error`, `warn`, or `skip`         |
+| `compressLaz`          | boolean | No       | `true`  | Whether LAZ output is compressed; must agree with `outputFormats`     |
+
+:::note[What `chunkSize` bounds, and what it does not]
+Transformed points are written to a spill file on the task's ephemeral volume as they are produced, and the LAS/LAZ output is appended from that file one chunk at a time. For a LAS or LAZ **input**, `chunkSize` therefore bounds the transform's peak memory: raising it trades memory for fewer, larger writes, and lowering it does the reverse. The point count of the file does not enter into it.
+
+For an E57 or PLY **input** the bound is a whole scan, not a chunk, whatever `chunkSize` is set to: `pye57` and `open3d` both read a scan (or a whole cloud) in one call and expose no chunked read. The same applies to E57 and PLY **output** — both libraries take complete arrays — so one full copy is assembled from the spill before the file is written. LAS and LAZ are the formats that stream in both directions.
+
+The spill is a full uncompressed copy of the point payload, so the task's ephemeral volume has to hold the downloaded input, the spill, and every requested output format at once. A run whose estimated need exceeds the free space is refused before the reprojection is paid for, with a message naming the figures.
+:::
+
+:::note[`compressLaz` and `outputFormats` control the same property]
+LAZ is the compressed LAS format, so `compressLaz` and a `laz` entry in `outputFormats` are two controls over one thing. A run that sets `compressLaz` to `false` while `outputFormats` contains `laz` is refused rather than served with one of the two settings discarded — request `las` for uncompressed output. The reverse combination is accepted: `compressLaz` defaults to `true`, so a format list without `laz` needs no change.
+:::
 
 ### Supported CRS Formats
 
@@ -132,6 +151,36 @@ Custom grids allow you to define local or site-specific coordinate systems using
 ```
 
 Custom grid names are only supported for `sourceCrs`. For `targetCrs`, use EPSG codes, PROJ strings, or WKT.
+
+### CRS Validation
+
+Before transforming, the pipeline reads the CRS each input file records for itself and compares it against `sourceCrs`. What it can read depends on the format:
+
+| Format   | CRS source                                                       |
+| :------- | :--------------------------------------------------------------- |
+| LAS, LAZ | Variable Length Record 2112 (OGC WKT) or 34735 (GeoTIFF GeoKeys) |
+| E57      | The `coordinateMetadata` string on the E57Root element           |
+| PLY      | None -- the format has no CRS field                              |
+
+A file whose CRS disagrees with `sourceCrs`, whose CRS string cannot be parsed, or that cannot be read at all is a failed validation. `enforceSourceCrs` decides whether a file that records no CRS of its own is one as well: with `true` it is, and with `false` it passes and the configured `sourceCrs` is assumed.
+
+Two inputs record no CRS and so are subject to that choice. An E57 whose E57Root element carries no `coordinateMetadata` string is one, which is common in files written by other tools; the built-in template enforces a source CRS, so such a file is refused rather than transformed, and processing it needs a template that sets `enforceSourceCrs` to `false`. PLY is the other, and because the format has no CRS field at all it is not in the pipeline's accepted-input list -- see [Supported Formats](#supported-formats) for the template override that accepts one.
+
+`onMismatch` then decides what a failed validation does, and it governs all of them rather than mismatches alone. See [CRS Validation Failures](#crs-validation-failures).
+
+### Recorded CRS in the output
+
+Each output file records the target CRS wherever its format provides for one, in the same place the pipeline reads a CRS from on the way in:
+
+| Format   | CRS recorded in the output                                                       |
+| :------- | :------------------------------------------------------------------------------- |
+| LAS, LAZ | Variable Length Records 34735 and 34737 (GeoTIFF GeoKeys), written as LAS 1.2     |
+| E57      | The `coordinateMetadata` string on the E57Root element                           |
+| PLY      | None -- the format has no CRS field                                              |
+
+Because LAS, LAZ, and E57 outputs carry their CRS, a second run can take one as its input and detect the source CRS from the file itself, including with `enforceSourceCrs` set to `true`. A PLY output records no CRS, which is one of the reasons PLY is an output format rather than an accepted input -- see [Supported Formats](#supported-formats).
+
+Each written output is read back before it is published, and a file that does not carry what its format should fails the run rather than being attached to the asset. See [Output Validation Failures](#output-validation-failures).
 
 ### Example template configuration body
 
@@ -188,10 +237,10 @@ The following metadata key names are recognized (case-insensitive):
 | `targetScaleFactor`    | `targetScaleFactor`    | Numeric value                                   |
 | `applyScaleCorrection` | `applyScaleCorrection` | `true` or `false`                               |
 | `combinedScaleFactor`  | `combinedScaleFactor`  | Numeric value                                   |
-| `chunkSize`            | `chunkSize`            | Numeric value                                   |
+| `chunkSize`            | `chunkSize`            | Numeric value; points transformed and written at a time |
 | `enforceSourceCrs`     | `enforceSourceCrs`     | `true` or `false`                               |
 | `onMismatch`           | `onMismatch`           | `error`, `warn`, or `skip`                      |
-| `compressLaz`          | `compressLaz`          | `true` or `false`                               |
+| `compressLaz`          | `compressLaz`          | `true` or `false`; must agree with `outputFormats` |
 
 :::tip[Per-Asset CRS Configuration]
 Set `sourceCrs` and `targetCrs` as metadata on each asset to define the correct coordinate systems for that specific scan. This is particularly useful when a database contains point clouds from multiple survey sites with different native coordinate systems.
@@ -223,7 +272,7 @@ The following AWS resources are created when this pipeline is enabled:
 | :--------------------------- | :----------------- | :-------------------------------------------------------------------------------- |
 | Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                    |
 | Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                 |
-| Job Definition               | AWS Batch          | Container configuration (60 GiB ephemeral storage)                                |
+| Job Definition               | AWS Batch          | Container configuration (120 GiB ephemeral storage, for the transform spill)       |
 | Container Repository         | Amazon ECR         | Stores the coordinate transform container image                                   |
 | CodeBuild Project            | AWS CodeBuild      | Builds and pushes the container image to Amazon ECR                               |
 | Step Functions State Machine | AWS Step Functions | Workflow orchestration with 4-hour timeout                                        |
@@ -254,13 +303,64 @@ inputParameters must include 'sourceCrs' and 'targetCrs'
 
 `inputParameters` in that message is the container's own name for the merged configuration it receives; the values originate in the template body and the asset metadata. Ensure at least one of those provides both CRS values.
 
-### CRS Mismatch Errors
+### Contradictory Output Compression
 
-If `enforceSourceCrs` is `true` (default) and the file's embedded CRS does not match the configured `sourceCrs`, the pipeline behavior depends on the `onMismatch` setting:
+`compressLaz` and `outputFormats` control the same property, so `compressLaz: false` together with `laz` in `outputFormats` is refused before any container starts:
 
--   `error` -- Pipeline fails immediately
--   `warn` -- Pipeline continues with a warning in the output report
--   `skip` -- File is skipped without processing
+```
+compressLaz is false but outputFormats requests laz. LAZ is the compressed LAS format, so the two settings contradict: request las for uncompressed output, or leave compressLaz at its default.
+```
+
+The check runs on the merged configuration, so it applies whether the value came from the template body or from asset metadata; a metadata value of `false`, `0`, `no`, or `off` (any case) counts as false. Ask for `las` in `outputFormats` to get uncompressed output, or remove `compressLaz`.
+
+### CRS Validation Failures
+
+Validation runs before any point is transformed, and `onMismatch` decides what a failure does:
+
+-   `error` -- the run stops, and nothing is transformed
+-   `warn` -- the failure is logged and the file is transformed anyway
+-   `skip` -- the failure is ignored and the file is transformed anyway
+
+The default is `warn`, so a file whose CRS disagrees with `sourceCrs` is still transformed unless `onMismatch` is set to `error`. A file that records no CRS of its own fails validation only when `enforceSourceCrs` is `true`, reporting:
+
+```
+No CRS detected in file metadata; source CRS enforcement is enabled
+```
+
+Setting `enforceSourceCrs` to `false` accepts such a file and transforms it as though it were already in `sourceCrs`. An E57 with no `coordinateMetadata` string always takes one of these two paths, as does a PLY file reached through the template override in [Supported Formats](#supported-formats).
+
+### No Output Files Produced
+
+A reader that yields no points writes no file, which the pipeline reports rather than recording as a successful conversion:
+
+```
+Transform produced no output files, so there is nothing to publish
+```
+
+Check that the input file contains points and that the configured `outputFormats` are among `laz`, `las`, `e57`, and `ply`.
+
+### Output Validation Failures
+
+Every written output is read back before it is uploaded, and a file that is not usable fails the run rather than being attached to the asset. The message names each offending file and what was wrong with it:
+
+```
+Transform wrote output that failed validation: red-rocks_EPSG_4326.laz: bounding box is not finite ...
+Transform wrote output that failed validation: red-rocks_EPSG_4326.e57: records no coordinate reference system on its E57Root ...
+```
+
+A LAS or LAZ file is rejected when its header bounding box is not finite or is inverted, which is what a reprojection producing coordinates outside double-precision range leaves behind. An E57 is rejected when its E57Root records no CRS, since the coordinates would then carry no record of the system they are in and a second run over the file could not detect a source CRS.
+
+A non-finite bounding box usually means `sourceCrs` does not describe the input. Confirm the input's own CRS -- the validation step logs it -- and set `onMismatch` to `error` so a contradiction stops the run before it transforms anything.
+
+### Output Upload Failures
+
+If the transform succeeds but its results cannot be written back to Amazon S3, the pipeline fails with the number of files affected, the destination bucket, and the object key of each one:
+
+```
+Failed to upload 2 output file(s) to s3://<bucket>: <key>, <key>
+```
+
+A parallel message reports `metadata file(s)` when the metadata files are the ones that fail. Both name the bucket the run writes to -- verify that the pipeline's AWS Batch job role holds `s3:PutObject` on it and that the AWS KMS key policy allows the role to encrypt.
 
 ## Third-Party Library Licenses
 

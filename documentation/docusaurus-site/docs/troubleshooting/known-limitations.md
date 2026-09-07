@@ -87,7 +87,7 @@ Asset-type detection on upload is intentionally **not** exhaustive: it samples u
 
 ### Metadata Retrieval Pagination
 
-Metadata GET endpoints (asset, file, database, and asset link metadata) return results in pages of a default size (**3,000 records**, with a per-response ceiling of **30,000**) plus a `NextToken` when more records exist. Schema enrichment and ordering are applied to the full record set before paging, so the ordering is stable across pages. The VamsCLI and web application automatically follow `NextToken` to retrieve the complete set; direct API consumers that do not follow `NextToken` receive only the first page. This is separate from the per-entity **500 metadata and attribute record** creation limit described above.
+Metadata GET endpoints (asset, file, database, and asset link metadata) return results in pages of a default size (**100 records**, with a per-response ceiling of **1,000**) plus a `NextToken` when more records exist. A `pageSize` or `maxItems` above 1,000 is rejected with a `400` rather than reduced to it. Schema enrichment and ordering are applied to the full record set before paging, so the ordering is stable across pages. The VamsCLI and web application automatically follow `NextToken` to retrieve the complete set; direct API consumers that do not follow `NextToken` receive only the first page. This is separate from the per-entity **500 metadata and attribute record** creation limit described above.
 
 ---
 

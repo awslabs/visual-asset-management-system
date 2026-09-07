@@ -48,18 +48,13 @@ claims_and_roles = {}
 
 try:
     tag_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving tags table name")
-    tag_table_name = None
-
-try:
     tag_type_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving tag types table name")
-    tag_type_table_name = None
+    logger.exception("Failed resolving resource names")
+    raise e
 
-tag_table = dynamodb.Table(tag_table_name) if tag_table_name else None
-tag_type_table = dynamodb.Table(tag_type_table_name) if tag_type_table_name else None
+tag_table = dynamodb.Table(tag_table_name)
+tag_type_table = dynamodb.Table(tag_type_table_name)
 
 #######################
 # Business Logic Functions
@@ -203,7 +198,7 @@ def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
         
     except Exception as e:
         logger.exception(f"Error getting tag types: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving tag types: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error retrieving tag types")
 
 def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str = None) -> TagTypeOperationResponseModel:
     """Delete a tag type
@@ -246,7 +241,7 @@ def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str
 
         stored_scope = normalize_scope(tag_type.get("databaseId"))
 
-        # Check if tag type is in use by any referencing tag. A GLOBAL tag type can be
+        # Check if tag type is in use by any referencing tag.
         # A tag resolves its tag type within its OWN scope, so a reference blocks the delete only
         # when the tag resolves to THIS type:
         #   database-scoped type -> only same-database tags can reference it.
@@ -315,7 +310,7 @@ def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str
         logger.exception(f"Error deleting tag type: {e}")
         if hasattr(e, 'response') and e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
             raise VAMSGeneralErrorResponse("Tag type not found", status_code=404)
-        raise VAMSGeneralErrorResponse(f"Error deleting tag type: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error deleting tag type")
 
 #######################
 # Request Handlers

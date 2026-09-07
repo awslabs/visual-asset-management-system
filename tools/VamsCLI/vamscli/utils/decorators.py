@@ -58,23 +58,27 @@ def requires_setup_and_auth(func):
     
     This decorator performs:
     1. Setup validation (raises SetupRequiredError if not configured)
-    2. API availability check (raises APIUnavailableError if API is down)
-    3. Configuration logging in verbose mode
-    4. Command start/stop logging with timing
-    
+    2. Configuration logging in verbose mode
+    3. Command start/stop logging with timing
+
     This replaces the need for individual commands to check setup and handle
     global infrastructure concerns.
-    
+
+    It performs NO per-command API availability pre-flight: that would cost a round trip on every
+    invocation. The misconfiguration such a check used to catch — a stored API base URL missing its
+    API Gateway stage — is caught where it is created, by `validate_api_gateway_reachable()` in
+    `commands/setup.py`. The legacy `requires_api_access` decorator below still performs the check for
+    the commands that use it.
+
     Raises:
         SetupRequiredError: If profile is not configured
-        APIUnavailableError: If API is not available
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # Import logging utilities
         from .logging import (
-            log_config_info, log_command_start, log_command_end, 
-            log_debug, _is_verbose_mode
+            log_config_info, log_command_start, log_command_end,
+            log_debug, redact_to_text, _is_verbose_mode
         )
         
         # Capture start time for duration calculation
@@ -121,15 +125,11 @@ def requires_setup_and_auth(func):
                 # Don't fail if logging fails
                 pass
             
-            #Commented out to save on performance
-            #api_gateway_url = config.get('api_gateway_url')
-            #if api_gateway_url:
-                #api_client = APIClient(api_gateway_url, profile_manager)
-                # This will raise APIUnavailableError if there are issues
-                #api_client.check_api_availability()
-        except APIUnavailableError:
-            # Re-raise API unavailable errors as global infrastructure errors
-            raise
+            # No per-command API availability pre-flight. It costs a round trip on every invocation,
+            # and the misconfiguration it used to catch — a stored API base URL missing its API Gateway
+            # stage — is now caught where it is created, by `validate_api_gateway_reachable()` in
+            # `commands/setup.py`. A bare `Forbidden` from any later call also carries a hint naming the
+            # stage as the likely cause.
         except Exception:
             # If we can't check availability or load config, continue with the command
             # This prevents the availability check from blocking legitimate operations
@@ -151,8 +151,11 @@ def requires_setup_and_auth(func):
             duration = time.time() - start_time
             try:
                 log_command_end(command_name, True, duration)
-                # Log result (truncate if too large)
-                result_str = str(result)
+                # Log result (truncate if too large). Every decorated command's return value passes
+                # through here, and ~45 of them return the API response body verbatim — including
+                # download responses whose presigned Amazon S3 URLs are bearer credentials — so the
+                # result is redacted before it reaches the rotating log file (Rule 10).
+                result_str = redact_to_text(result)
                 if len(result_str) > 1000:
                     log_debug(f"Command '{command_name}' returned result (truncated): {result_str[:1000]}...")
                 else:

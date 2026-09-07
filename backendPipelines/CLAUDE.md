@@ -124,9 +124,55 @@ Both halves are required, and each is inert without the other:
     Without the grant the call raises `AccessDeniedException`, the handler logs it, and the task hangs
     exactly as before — the only difference is one log line.
 
+A nested `RequestResponse` invoke needs its own result check on top of those two halves. A Lambda that
+RAISED still returns `StatusCode` 200 — the failure is reported in `FunctionError` — so a
+`StatusCode`-only check reads a failed launch as success, no route reports the token, and the callback
+task blocks until `taskTimeout`. Copy the guard verbatim rather than re-wording it, so the copies stay
+comparable (canonical copy: `multi/modelOps/lambda/vamsExecuteModelOps.py`):
+
+```python
+if lambda_response.get('FunctionError'):
+    raise Exception(
+        "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get('FunctionError')))
+```
+
+That propagation is also why, **in the nested-invoke pipelines**, `openPipeline`'s
+`abort_external_workflow` deliberately does NOT wrap its own `send_task_failure` in try/except.
+Swallowing it there returns a payload-level 400 under a clean invoke — a shape the caller does not
+inspect — so the failed callback becomes invisible and the task hangs for its full `taskTimeout`. Letting
+it propagate is what sets `FunctionError`, which makes the caller report the token under the
+`vamsExecute` function's own role: a second attempt under a different identity. A duplicate
+`SendTaskFailure` against an already-failed token raises `TaskDoesNotExist` inside that handler's own
+wrapped abort, which only logs. Both directions are pinned by
+`preview/pcPotreeViewer/lambda/tests/test_open_pipeline_function_error.py`.
+
+The scope of that rule is the `FunctionError` channel, so it holds only where a **lambda** invokes
+`openPipeline`. Where `openPipeline` is a state machine **state** instead — a `tasks.LambdaInvoke`, as in
+`simulation/isaacLabTraining` — there is no calling lambda to inspect a result, and Step Functions fails
+the state directly on a raise. Wrapping the callback is then correct, and `isaacLabTraining`'s
+`lambda/tests/test_open_pipeline_task_failure.py` pins it: a failing callback must not mask the original
+error. The discriminator is one grep, not a judgement:
+
+```bash
+grep -rn "InvocationType" <pipeline>/lambda/*.py    # hits -> nested invoke, do not wrap
+```
+
 Report the token before propagating, so the original error still reaches Amazon CloudWatch, and make the
 call conditional on a token being present: a direct invoke carries none and must not fail inside the
-callback helper. `cause` is truncated to 256 characters to match the peer implementations.
+callback helper. In the abort helpers the `cause` is truncated to 256 characters to match the peer
+implementations — that is a pre-invoke rejection, whose whole message is one sentence. A handler that
+reports a finished JOB's outcome carries the child's own output instead, so it bounds that text itself to
+fit the 32768-character `cause` limit; `multi/rapidPipelineEKS`'s CHECK_JOB path is the example, and its
+`POD_LOG_TAIL_MAX_CHARS` is deliberately far larger than 256.
+
+**On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
+lambda's own return value both land in the execution record, which is durable and readable by anyone who
+can read the execution — and on a run that worked, a third-party tool's stdout has no diagnostic value
+there. Fetch the log and write it to the function's own log stream, which keeps the read permission
+exercised and leaves an operator a tail to read, but keep it out of both payloads. A size bound is not
+redaction: it makes the payload fit, it does not make the content appropriate to store. The pair of
+properties is pinned by `multi/rapidPipelineEKS/lambda/tests/test_pod_log_bounding.py` — absent from the
+success payloads, present in the log stream — because removing the FETCH would satisfy the first alone.
 
 ## Capturing a Child Process's Output for the Execution Record
 
@@ -136,9 +182,9 @@ record is what an operator reads. `subprocess.run(check=True)` with no capture l
 to the inherited stdout: the output reaches Amazon CloudWatch, but the container never sees it, so the
 exception can only report an exit code and the cause has to be hunted for by log stream.
 
-Use the `_run_streaming` helper the five NVIDIA inference containers carry (identical in each; the
-canonical copy is `genAi/nvidia/cosmos/3/container/inference.py`) and put its returned tail in the raised
-message:
+Use the `_run_streaming` helper the four deployable NVIDIA inference containers carry (identical in each;
+the canonical copy is `genAi/nvidia/cosmos/3/container/inference.py`) and put its returned tail in the
+raised message:
 
 ```python
 returncode, output_tail = _run_streaming(cmd, env=env, cwd=REPO_DIR)
@@ -163,8 +209,11 @@ Three things about it are load-bearing:
 The helper is duplicated per container rather than shared: each container is its own Docker build context
 whose Dockerfile `COPY`s an explicit file list, so no shared module is importable at container runtime.
 Inline it into the existing entry point rather than adding a file — a new file also needs a Dockerfile
-`COPY` edit, and a missed one fails at container **runtime**, not at build. The no-drift test compares all
-copies structurally, so edit one and propagate in the same change.
+`COPY` edit, and a missed one fails at container **runtime**, not at build. The no-drift test compares the
+four deployable copies structurally, so edit one and propagate in the same change. A fifth copy sits in
+`genAi/nvidia/cosmos/predict/containerv1/`, which is retained as a reference implementation with no
+configuration key that deploys it; it is outside the no-drift set and outside every other check in that
+file, so a change made across the deployable four does not reach it.
 
 ## `assetId` Threading
 
@@ -260,10 +309,30 @@ partition. Author it with the block for your execution type present but empty:
    nothing. A filter only ever NARROWS eligibility. A match-everything pattern in an `exclude` list
    (`*`, `**`, `*.*`, `/*`, `/**`) is REJECTED on save at every level including triggers, since exclude
    is applied last and would remove every file — leave the list empty to exclude nothing.
-2. **`requireTemplate: true` needs a default template.** Execute auto-selects the pipeline's default;
-   with no default the caller _must_ name a `templateId` or the run is rejected. The importer
-   promotes a **single** template to default automatically, but with two or more templates the choice
-   is ambiguous — mark one `"isDefault": true` in its template file.
+2. **A `requireTemplate: true` bundle either marks a default or is deliberately mutually exclusive.**
+   Execute auto-selects the pipeline's default; with no default the caller _must_ name a `templateId`
+   or the run is rejected. The importer promotes a **single** template to default automatically, so a
+   one-template bundle needs nothing.
+
+    With two or more templates there are two legitimate shapes, and which one applies is a product
+    decision rather than an oversight:
+
+    - **Mark one `"isDefault": true`** when one template is the ordinary choice and the others are
+      variations of it. A caller then gets a working zero-argument run.
+    - **Mark none**, when the templates are _mutually exclusive outputs_ and picking for the caller
+      would silently produce the wrong artifact. Four bundles are this shape: `conversion-3d-basic`
+      (convert-to-glb / -gltf / -obj / -stl), `rapid-pipeline` (to-glb / to-gltf), `vntana-model-ops`
+      (to-glb / -gltf / -usdz) and `3dRecon-splat-toolbox` (splat-objects /
+      splat-environments-360). There is no defensible default target format or capture geometry, so
+      the API refusing a run that names no `templateId` is the correct behaviour.
+
+    The consequence of the second shape is real and must be accepted knowingly: such a workflow is
+    **not runnable through a zero-argument execute**, so anything that launches it — a trigger, a CLI
+    script, the execute wizard — has to supply a `templateId`. Verified live: all three launch normally
+    once the id is named. `infra/test/pipelines/vamsSchemaTemplateDefaults.test.ts` asserts each
+    multi-template `requireTemplate` bundle is one shape or the other, so a bundle that drifts into
+    "several templates, no default, no exemption recorded" fails rather than being discovered at runtime.
+
 3. **`inputFileArity: "none"`** (a results-only or generate-from-nothing pipeline) means the manifest
    has no input files, so the asset identity comes from the execution's **output target**
    (`outputAssetId` / `outputDatabaseId`, resolved in `manifestHelper.resolve_inputs`). Do not read
@@ -316,7 +385,10 @@ partition. Author it with the block for your execution type present but empty:
    (`yaml`, `xml`, `openjd`, `raw`) are stored verbatim and not shape-checked. A `tagKey` may not
    collide with a reserved system tag name or start with the reserved `metadata_` prefix.
 9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
-   `{jobName}` folder in `pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`, is persisted
+   `{jobName}` folder in `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`
+   — relative to the area VAMS owns in the default asset bucket, which
+   `executionRecords.run_bucket_key()` joins that bucket's `baseAssetsPrefix` onto; the state machine
+   carries the relative form and the prefix as separate values. It is persisted
    on the workflow record as the derived `jobNames[]`, and is what `executeWorkflow` reads to
    reconstruct those prefixes at launch. Omit it in a bundle unless the pipeline id would not identify
    the step — blank already falls back to the pipeline id, keeping each step's output distinct. It
@@ -344,6 +416,87 @@ Verify registration after a deploy rather than assuming it:
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
 vamscli pipeline template list -d GLOBAL -p {pipelineId}
 ```
+
+## Every boto3 Client Carries the Adaptive Retry Configuration
+
+Every `boto3.client(...)` and `boto3.resource(...)` in this tree takes the shared retry configuration:
+
+```python
+from botocore.config import Config
+
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+
+s3 = boto3.client('s3', config=retry_config)
+sfn_client = boto3.client('stepfunctions', config=retry_config)
+```
+
+This is the same rule as `backend/CLAUDE.md` Rule 6, and it applies here for a sharper reason: a
+pipeline Lambda or container runs against Step Functions, Amazon S3, and EventBridge for the length of a
+job — hours, on the GPU pipelines — so a bare client sits on botocore's default retry mode with no
+client-side rate limiting, and a sustained burst surfaces as a throttling error on the caller instead of
+being smoothed.
+
+Declare the constant **above the first client**, not merely after the imports. A handful of modules here
+interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds
+a client and then keeps importing), and a constant placed after the last import lands below the client
+that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request.
+
+**A deliberate departure needs a comment saying why.** A call that must NOT retry — a non-idempotent
+operation where a retry would duplicate work — is a legitimate exception, but it has to be
+distinguishable from an oversight, because the ratchet cannot tell them apart.
+
+`backend/tests/common/workflows/test_pipeline_boto_clients_configured.py` holds this at zero bare
+clients. It is scoped to `backendPipelines/`; the separate ratchet for `backend/backend` does not cover
+this tree, which is how 137 bare clients across 68 files sat invisible behind a green "59 → 0" for the
+API handlers.
+
+## Test Conventions
+
+Pipeline tests run with pytest's defaults — there is no `pytest.ini` anywhere under `backendPipelines/`,
+which is why the existing `@pytest.mark.unit` is unregistered and only warns.
+
+**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.**
+`test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py`
+handlers by path under per-pipeline module names and asserts each tests EXACT membership of its parsed
+`ALLOWED_INPUT_FILEEXTENSIONS` list. `in` against the joined env string is substring containment, which
+admits any prefix of a listed extension (`.us` passes for `.usd,.usda`), and the loose form spread by
+copying an existing pipeline — which is precisely what a per-pipeline test cannot catch. Two of seven
+were fixed and five were not, and no per-pipeline suite noticed.
+
+**Give every test module a suite-private basename.** Pipelines are near-copies of one another, so their
+test files collide: `test_extension_gate.py`, `test_manifest_refactor.py`,
+`test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`,
+`test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py` and both `conftest.py` files under
+`pcPotreeViewer` each exist in two or more pipelines. No tests directory carries an `__init__.py`, so a
+single pytest process that collects two same-named modules ERRORS at collection with `import file
+mismatch` — which is why `pytest backendPipelines/` cannot be run as one command today, and why the
+suites have to be invoked one directory at a time. Worse than the inconvenience: with a different
+invocation order a suite can import ANOTHER pipeline's same-named module and assert against the wrong
+file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
+
+**A suite that reads configuration from the process environment must restore it.**
+`splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls
+its loader with no argument, so any other suite in the same process that sets
+`ALLOWED_INPUT_FILEEXTENSIONS` without restoring it makes splat's tests fail on unrelated assertions.
+Pass the value explicitly on every load, or restore what you changed.
+
+**Mark a temporary test.** A test written to prove one specific change landed — a deleted container file, a
+removed helper, a dead branch — carries `@pytest.mark.temporary` plus a line naming what it pins, so release
+cleanup can find it with `pytest -m temporary --collect-only` (root `CLAUDE.md` Rule 13). It is required
+because a temporary test and a durable guardrail are indistinguishable by reading them afterwards: both scan
+source, both assert an absence, both explain themselves.
+
+Do **not** mark a test whose subject stays writable. Several structural tests here are durable and must keep
+holding:
+
+-   the pinned-revision checks over each `Dockerfile` (a `--build-arg …_COMMIT=main` still builds green)
+-   the `manifestHelper.py` byte-identity check across every vendored copy
+-   the `_run_streaming` no-drift comparison across the four deployable NVIDIA containers
+-   `test_container_file_inventory.py`'s `from .utils` scan — the package is `vams_utils`, so that import
+    fails at container **runtime** on a GPU Batch job, invisible to the image build and to CDK synth
+
+The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** — a
+forbid-forever guardrail also has zero occurrences, and that absence is the guard working.
 
 ## Adding a New Processing Pipeline
 
@@ -393,3 +546,45 @@ vamscli pipeline template list -d GLOBAL -p {pipelineId}
 14. **Update licenses/attributions** when a pipeline adds, removes, or changes a third-party model, container base image, or dependency with its own license. Update **both** `NOTICE.md` (the per-pipeline dependency table + attribution note at the repo root) **and** `documentation/docusaurus-site/docs/additional/notices.md` (the per-pipeline license paragraph + the closing attribution/reference list). Record the exact license (e.g. NVIDIA Open Model License, OpenMDW-1.1, Apache-2.0) and any required attribution string. A model under a new license (as Cosmos 3 uses OpenMDW-1.1 rather than the NVIDIA Open Model License) must be reflected in both files, and the pipeline doc page's Prerequisites + Attribution sections.
 15. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _fourteen_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.
 16. **Update the root `CLAUDE.md`** — its Project Overview pipeline list and its directory tree both enumerate the pipeline set, and the tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist. Required by root `CLAUDE.md` Rule 11 ("New pipeline"). Also add a row to `documentation/docusaurus-site/docs/pipelines/` and its `pipelines/overview.md` table per `documentation/CLAUDE.md`.
+17. **A pipeline built by AWS CodeBuild pushes and consumes ONE content-addressed tag.** The construct
+    supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`, and the
+    pull site names that same value — a shared compute construct takes it as one prop together with the
+    repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on `batch-gpu-pipeline.ts`)
+    so the tag cannot be omitted while the repository is supplied. The buildspec must NOT default
+    `IMAGE_TAG`; it fails the build when the project supplied none, because a default pushes a tag the
+    Batch job definition does not name and the deploy still reports success. `:latest` is pushed
+    alongside solely as the `--cache-from` alias, since a content-addressed tag never pre-exists and a
+    cold cache adds hours to a GPU image build. Copying an existing buildspec is how this regresses;
+    `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the immutable-tag block of
+    `infra/test/pipelines/containerBuildSources.test.ts` assert both halves.
+18. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
+    the revision as an `ARG <NAME>_COMMIT=<40-hex>`, `git checkout --detach` it, and verify it landed
+    with `test "$(git rev-parse HEAD)" = "${<NAME>_COMMIT}"` **in the same `RUN`** — a checkout in a
+    later instruction is a different layer and pins nothing. Write the resolved id to a file in the
+    image and echo it from the entrypoint, so a run's log names the code it ran. Without the
+    verification the pin is decorative: `--build-arg <NAME>_COMMIT=main` checks out a moving ref and
+    the build still succeeds. The same applies to a `COPY --from=<image>:<tag>` and to any installer
+    URL that omits a version. Coverage: the NVIDIA block of
+    `infra/test/pipelines/containerBuildSources.test.ts`, which lists the Dockerfiles explicitly
+    because a `**/Dockerfile` glob passes locally and fails in CI on the gitignored splat Dockerfile.
+
+19. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and
+    on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and
+    copies **every** upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. Editing one
+    of those files does not stick: the change survives until the next CDK invocation and is then gone,
+    with `git status` clean afterwards because the restored copy matches `HEAD`.
+
+    **`.gitignore` does not tell you which files are upstream's.** It lists only `Dockerfile`,
+    `/src/*`, `LOCAL_DEBUG_README.md` and `.synced-commit`, so a tracked file like
+    `build_models_tar.py` looks VAMS-owned and is not. What actually distinguishes them is whether the
+    file exists upstream, and the observable proxy is the mtime: after a sync, upstream's files carry
+    the marker's timestamp while VAMS additions (`__main__.py`, `vams_utils/`, `vams_bake_models.py`)
+    keep their own.
+
+    To change behaviour in an upstream-owned file, follow the pattern the sync already uses for the
+    Dockerfile: a **programmatic injection** applied after the copy, anchored on a pattern, that
+    throws when the anchor is missing rather than silently no-op'ing. Reserve that for something the
+    deployed pipeline executes — a workstation-only helper is not worth a brittle anchor, and the
+    honest alternative is to scope the rule that flags it (see
+    `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`, whose exemption is a
+    DENY list precisely so a future upstream file turns the rule red instead of vanishing from it).

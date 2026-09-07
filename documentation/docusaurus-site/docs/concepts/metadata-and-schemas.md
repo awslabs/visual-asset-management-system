@@ -174,14 +174,16 @@ This versioning also applies to file metadata and file attributes -- the snapsho
 
 ## Metadata in search
 
-VAMS indexes metadata into Amazon OpenSearch Service to enable full-text and filtered search. Metadata and attributes are stored as flat key-value objects with prefixed keys:
+VAMS indexes metadata into Amazon OpenSearch Service to enable full-text and filtered search. Metadata and attributes are each stored in one flat key-value object per record, under a field named for the source:
 
-| Prefix | Source                  | Example Key                                |
-| ------ | ----------------------- | ------------------------------------------ |
-| `MD_`  | Asset and file metadata | `MD_location`, `MD_classification`         |
-| `AB_`  | File attributes         | `AB_source_system`, `AB_processing_status` |
+| Field | Source                  | Indexed shape                                          |
+| ----- | ----------------------- | ------------------------------------------------------ |
+| `MD_` | Asset and file metadata | `"MD_": {"location": ..., "classification": ...}`      |
+| `AB_` | File attributes         | `"AB_": {"source_system": ..., "processing_status": ...}` |
 
-This prefix convention prevents key collisions between metadata and attributes that share the same name, and enables targeted search queries against either metadata or attributes.
+Keys are carried into those objects exactly as authored, with no prefix of their own. Keeping metadata and attributes in separate objects prevents key collisions between the two when they share a name, and lets a search target either one. Because each source occupies a single field, a deployment can introduce metadata keys freely without growing the index mapping.
+
+A search request may address a key by its bare name, so `location` and `MD_location` reach the same field. See [Search](../api/search.md) for the full set of accepted spellings.
 
 ## CSV import and export
 

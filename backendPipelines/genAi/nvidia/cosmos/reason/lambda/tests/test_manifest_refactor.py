@@ -37,7 +37,7 @@ for k, v in {
     "AWS_DEFAULT_REGION": "us-east-1",
     "AWS_REGION": "us-east-1",
     "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:CosmosReason",
-    "ALLOWED_INPUT_FILEEXTENSIONS": ".mp4,.mov,.jpg,.jpeg,.png,.webp",
+    "ALLOWED_INPUT_FILEEXTENSIONS": ".mp4,.mov",
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/CosmosReason",
     "STATE_MACHINE_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/CosmosReason:*",

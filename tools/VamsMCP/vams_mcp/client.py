@@ -38,7 +38,12 @@ def _ensure_vamscli_importable() -> None:
 
 _ensure_vamscli_importable()
 
-from vamscli.constants import API_ASSETS, API_DATABASE_ASSETS  # noqa: E402,F401
+from vamscli.constants import (  # noqa: E402,F401
+    API_ASSETS,
+    API_DATABASE_ASSETS,
+    SUBSCRIPTION_ENTITY_ASSET,
+    SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+)
 from vamscli.utils.api_client import APIClient  # noqa: E402
 from vamscli.utils.profile import ProfileManager  # noqa: E402
 

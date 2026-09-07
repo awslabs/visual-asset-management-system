@@ -57,9 +57,15 @@ RESERVED_S3_PREFIX_FOLDERS: FrozenSet[str] = frozenset(
 # TEMPORARY_UPLOAD_PREFIX / PREVIEW_PREFIX: asset-bucket prefixes used by the
 #   upload handlers for in-flight multipart uploads and asset-level preview
 #   images.
-# PIPELINES_PREFIX: asset-bucket prefix where workflow pipeline outputs are
-#   staged (``pipelines/{pipelineName}/{jobName}/output/{executionId}/...``).
-#   The ASSET_PATH_PIPELINE validator requires paths under this prefix.
+# PIPELINES_PREFIX: prefix where workflow run I/O is staged inside the VAMS
+#   default asset bucket -- pipeline outputs under
+#   ``pipelines/{pipelineName}/{jobName}/output/{executionId}/...`` and execution
+#   input definitions under ``pipelines/workflowExecutionInputs/{executionId}/``.
+#   Relative to the area VAMS owns within that bucket (its ``baseAssetsPrefix``,
+#   empty for a bucket registered at the root), which
+#   ``executionRecords.run_bucket_key`` joins on at each S3 call. The
+#   ASSET_PATH_PIPELINE validator requires paths under this prefix, and runs on
+#   the relative form.
 # AUXILIARY_PREVIEW_PREFIX: auxiliary-bucket subfolder (singular ``preview/``,
 #   unlike the asset bucket's plural ``previews/``) where previewFile-type
 #   pipelines write non-versioned viewer data under
@@ -136,3 +142,74 @@ PREVIEW_FILE_PATTERN = ".previewFile."
 EXCLUDED_FILE_PATH_PATTERNS: Tuple[str, ...] = (PREVIEW_FILE_PATTERN,)
 
 ALLOWED_PREVIEW_FILE_EXTENSIONS: Tuple[str, ...] = (".png", ".jpg", ".jpeg", ".svg", ".gif")
+
+
+# ---------------------------------------------------------------------------
+# Reserved-segment test.
+#
+# The single implementation of "is this key VAMS system data". Consumers used to
+# spell this three different ways and one of them was wrong in a way no test
+# caught, so it lives here instead:
+#
+#   fileIndexer / workflowTriggerDispatch  every path segment  (correct)
+#   sqsBucketSync                          the FIRST segment after the
+#                                          configured bucket prefix  (too narrow)
+#
+# Two ways the narrow form misses system data, both reachable once a bucket is
+# registered with a non-root ``baseAssetsPrefix``:
+#
+#   1. A reserved segment DEEPER than the first. Pipeline run I/O is written
+#      under the bucket's own VAMS area, so with a prefix of ``myprefix/`` the
+#      key is ``myprefix/pipelines/...`` -- fine -- but any shape that puts a
+#      reserved folder below an asset id (``myprefix/{assetId}/preview/...``)
+#      reads as an ordinary asset file to a first-segment test.
+#   2. A key that does not START with the configured prefix. The first-segment
+#      test resolves nothing at all there, and bucket sync then treats the
+#      object as "asset id unresolvable" rather than as system data -- which
+#      still writes file metadata and history and, critically, re-stamps the
+#      object's S3 metadata by copying it onto itself.
+#
+# That last point is why this is not cosmetic: the self-copy re-enters the same
+# ``s3:ObjectCreated:*`` notification that triggered the handler, so treating
+# system data as an asset file adds an S3 write, another event, and another hop
+# of the Lambda lineage depth that AWS's recursive-loop detection counts.
+#
+# Both forms are checked -- the raw key AND the prefix-stripped remainder -- so
+# the answer does not depend on whether the caller's prefix happens to line up
+# with the key. Prefix-relative keys (already stripped by the caller) and
+# absolute bucket keys therefore give the same answer.
+# ---------------------------------------------------------------------------
+def key_has_reserved_segment(object_key: str, prefix: str = "", reserved=None) -> bool:
+    """True when any path segment of the key names a reserved VAMS system folder.
+
+    Args:
+        object_key: The S3 object key, with or without the bucket's VAMS prefix.
+        prefix: The bucket's ``baseAssetsPrefix``, if any. Optional: the raw key
+            is always checked too, so omitting it never makes the test weaker.
+        reserved: The reserved folder names to test against. Defaults to
+            ``RESERVED_S3_PREFIX_FOLDERS``. Injectable because callers hold their
+            own module-level reference that their tests substitute -- reading the
+            module global unconditionally would silently make those patches inert
+            and leave the tests asserting nothing.
+
+    Returns:
+        bool: True if the key is VAMS system data and must not be treated as an
+        asset file.
+    """
+    if not object_key:
+        return False
+    reserved_names = RESERVED_S3_PREFIX_FOLDERS if reserved is None else reserved
+
+    candidates = [object_key]
+    normalized_prefix = (prefix or "").strip("/")
+    if normalized_prefix:
+        prefix_with_slash = normalized_prefix + "/"
+        stripped = object_key.lstrip("/")
+        if stripped.startswith(prefix_with_slash):
+            candidates.append(stripped[len(prefix_with_slash):])
+
+    for candidate in candidates:
+        for part in candidate.split("/"):
+            if part in reserved_names:
+                return True
+    return False

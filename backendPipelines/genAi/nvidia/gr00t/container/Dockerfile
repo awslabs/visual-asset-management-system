@@ -4,7 +4,6 @@
 
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-ARG USE_STABLE=true
 ARG STABLE_COMMIT=db107f03d165060998df166292578f1d7fb3c79a
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -21,7 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+# The installer URL carries the version, so a rebuild installs the CLI this image was built and
+# validated with rather than whatever is current. Override with --build-arg to move it.
+ARG AWS_CLI_VERSION=2.36.39
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
     unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf awscliv2.zip aws && \
@@ -35,22 +37,21 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 &
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
 
 # Install UV package manager
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /usr/local/bin/uv
 
 ENV UV_SYSTEM_PYTHON=1
 ENV PYTHONPATH=/workspace
 
-# Clone Isaac-GR00T repository
-RUN git clone https://github.com/NVIDIA/Isaac-GR00T.git /workspace && \
+# Clone Isaac-GR00T, pinned to a commit. STABLE_COMMIT is the revision this image's GPU runs were
+# validated against; override with --build-arg to move the pin. A full 40-character commit id is
+# required, since the rev-parse check below rejects a branch or tag name (both of which move).
+ARG GR00T_REPO=https://github.com/NVIDIA/Isaac-GR00T.git
+RUN git clone ${GR00T_REPO} /workspace && \
     cd /workspace && \
-    if [ "${USE_STABLE}" = "true" ]; then \
-        echo "Using stable commit: ${STABLE_COMMIT}"; \
-        git checkout ${STABLE_COMMIT}; \
-    else \
-        echo "Using latest version from main branch"; \
-    fi && \
-    echo "GR00T version info:" && \
-    git log -1 --format="%H %ai %s"
+    git checkout --detach ${STABLE_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${STABLE_COMMIT}" && \
+    git rev-parse HEAD > /workspace/VAMS_UPSTREAM_COMMIT && \
+    git log -1 --format="Isaac-GR00T %H %ai %s"
 
 WORKDIR /workspace
 

@@ -297,6 +297,8 @@ class TestListingResponseIsBounded:
         assert json.loads(base64.b64decode(payload['NextToken']).decode('utf-8')) == LAST_KEY
         # No read asked DynamoDB for more records than the response could carry. Asserted as a
         # property of every read rather than as a call count, so an extra read is not a failure.
+        # A bound stated over every read says nothing when no read happened.
+        assert pager.calls, "no read reached the table, so the bound below asserts nothing"
         assert all(call['Limit'] <= 1 for call in pager.calls), pager.calls
 
     def test_a_next_token_resumes_where_the_previous_response_stopped(self, mock_env):
@@ -322,6 +324,8 @@ class TestListingResponseIsBounded:
             _event('GET', '/auth/api-keys', query={'maxItems': '99999999'}), {})
 
         assert response['statusCode'] == 200
+        # A bound stated over every read says nothing when no read happened.
+        assert pager.calls, "no read reached the table, so the bound below asserts nothing"
         assert all(call['Limit'] <= apiKeyService.API_KEY_LISTING_MAX_ITEMS
                    for call in pager.calls), pager.calls
 
@@ -335,6 +339,8 @@ class TestListingResponseIsBounded:
             _event('GET', '/auth/api-keys', query={'maxItems': bad, 'pageSize': bad}), {})
 
         assert response['statusCode'] == 200
+        # A bound stated over every read says nothing when no read happened.
+        assert pager.calls, "no read reached the table, so the bound below asserts nothing"
         assert all(1 <= call['Limit'] <= apiKeyService.API_KEY_LISTING_MAX_ITEMS
                    for call in pager.calls), pager.calls
 
@@ -379,6 +385,106 @@ class TestListingResponseIsBounded:
 
         assert [item['apiKeyId'] for item in payload['Items']] == [PAGE_1_KEY_ID]
         assert payload['truncated'] is True
+
+
+#: A cursor from the userId index, which carries the index's partition key as well as the
+#: table's — the shape a user-scoped continuation really travels as.
+GSI_CURSOR = {'userId': USER, 'apiKeyId': PAGE_1_KEY_ID}
+
+
+@pytest.mark.unit
+class TestAUserScopeContinuationStaysOnTheOwnersPartition:
+    """A resumed user listing is scoped by the key condition, never by the cursor.
+
+    The user-scoped listing reads the userId index and stops at a record ceiling, so its
+    continuation is the one read here whose starting point arrives from the caller. The two
+    properties the first page establishes — the read is a query on that index, and ownership
+    is the key condition — have to hold on the second page too, and the first-page assertions
+    say nothing about either: they never see an ``ExclusiveStartKey``. A continuation that
+    dropped the ``IndexName`` would send a GSI cursor to a base-table read, which DynamoDB
+    rejects as a bad starting key and the handler reports as the caller's bad token; one that
+    took ownership from the cursor instead of from the claims would read another user's
+    partition.
+    """
+
+    def _two_pages_on_the_owners_index(self):
+        return _Pager(
+            {'Items': [_item(PAGE_1_KEY_ID, USER)], 'LastEvaluatedKey': GSI_CURSOR},
+            {'Items': [_item(PAGE_2_KEY_ID, USER)]},
+        )
+
+    def test_the_token_a_user_listing_emits_resumes_on_the_userid_index(self, mock_env):
+        """Round trip on the GSI cursor form, through the handler that produced it."""
+        mock_env['table'].query.side_effect = self._two_pages_on_the_owners_index()
+        first = _payload_of(
+            lambda_handler(_event('GET', '/auth/user/api-keys', query={'maxItems': '1'}), {}))
+        assert [item['apiKeyId'] for item in first['Items']] == [PAGE_1_KEY_ID]
+
+        resumed = _Pager({'Items': [_item(PAGE_2_KEY_ID, USER)]})
+        # Served only under the emitted cursor, so a read that did not thread it is not
+        # served at all rather than quietly starting over at page one.
+        resumed.pages = {_cursor(GSI_CURSOR): {'Items': [_item(PAGE_2_KEY_ID, USER)]}}
+        mock_env['table'].query.side_effect = resumed
+
+        response = lambda_handler(
+            _event('GET', '/auth/user/api-keys',
+                   query={'startingToken': first['NextToken']}), {})
+
+        assert response['statusCode'] == 200, (
+            f"the user listing did not accept the cursor it emitted: {response}")
+        assert [item['apiKeyId'] for item in _items_of(response)] == [PAGE_2_KEY_ID]
+        # A bound stated over every read says nothing when no read happened.
+        assert resumed.calls, "no read reached the table, so the bound below asserts nothing"
+        for call in resumed.calls:
+            # 'userIdIndex' as a literal, matching the GSI declared on apiKeyStorageTable.
+            assert call['IndexName'] == 'userIdIndex', call
+            assert _key_condition(call['KeyConditionExpression']) == ('userId', '=', USER)
+        mock_env['table'].scan.assert_not_called()
+
+    def test_a_cursor_naming_another_user_does_not_move_the_listing_off_the_owner(self, mock_env):
+        """Ownership comes from the claims on every page, including a resumed one.
+
+        The cursor names a partition, so a caller can put another user's id in one. The read is
+        still asked for the caller's own keys, and the row the stub hands back anyway does not
+        reach the response.
+        """
+        foreign_cursor = {'userId': OTHER_USER, 'apiKeyId': PAGE_1_KEY_ID}
+        pager = _Pager({'Items': [_item(PAGE_2_KEY_ID, OTHER_USER)]})
+        pager.pages = {_cursor(foreign_cursor): {'Items': [_item(PAGE_2_KEY_ID, OTHER_USER)]}}
+        mock_env['table'].query.side_effect = pager
+
+        response = lambda_handler(
+            _event('GET', '/auth/user/api-keys',
+                   query={'startingToken': _token(foreign_cursor)}), {})
+
+        assert response['statusCode'] == 200, response
+        assert pager.calls, "the resumed read never happened"
+        for call in pager.calls:
+            assert _key_condition(call['KeyConditionExpression']) == ('userId', '=', USER), call
+        assert _items_of(response) == []
+
+    def test_an_admin_continuation_acquires_no_index(self, mock_env):
+        """Control for the two above: the index is a property of the user scope alone.
+
+        The admin listing resumes on a base-table scan, so the assertions above are describing
+        the user-scoped read rather than every continuation this handler makes.
+        """
+        pager = _Pager({'Items': [_item(PAGE_2_KEY_ID, OTHER_USER)]})
+        pager.pages = {_cursor(LAST_KEY): {'Items': [_item(PAGE_2_KEY_ID, OTHER_USER)]}}
+        mock_env['table'].scan.side_effect = pager
+
+        response = lambda_handler(
+            _event('GET', '/auth/api-keys', query={'startingToken': _token(LAST_KEY)}), {})
+
+        assert response['statusCode'] == 200, response
+        # The page came back, so a read really happened and the two assertions below are
+        # statements about it. Without this, "no read carried an IndexName" and "query was
+        # never called" are both satisfied by a listing that read nothing at all.
+        assert [item['apiKeyId'] for item in _items_of(response)] == [PAGE_2_KEY_ID]
+        # A bound stated over every read says nothing when no read happened.
+        assert pager.calls, "no read reached the table, so the bound below asserts nothing"
+        assert all('IndexName' not in call for call in pager.calls), pager.calls
+        mock_env['table'].query.assert_not_called()
 
 
 @pytest.mark.unit

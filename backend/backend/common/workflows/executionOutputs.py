@@ -28,6 +28,8 @@ common.workflows.executionRecords). The module-level logger is the one exception
 resolves the Powertools log level from the environment at import.
 """
 
+import json
+
 from customLogging.logger import safeLogger
 
 from common.workflows import executionRecords as er
@@ -44,6 +46,21 @@ RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
 # Step Functions `.sync` integration needs no entry: Step Functions owns that job's lifecycle, so
 # stopping the sub-execution already terminates it.
 RESOURCE_TYPE_BATCH_JOB = "batchJob"
+# A Deadline Cloud farm job the workflow submitted through createJob.waitForTaskToken. Step Functions
+# owns the token and not the job, so stopping the execution leaves the job running on the farm.
+RESOURCE_TYPE_DEADLINE_CLOUD_JOB = "deadlineCloudJob"
+
+# The reserved job parameter DeadlineCloudTaskBuilder injects that names the VAMS pipeline execution a
+# farm job belongs to. Deadline stores every job parameter as {"string": "<value>"}.
+DEADLINE_PIPELINE_EXECUTION_PARAMETER = "VamsPipelineExecutionId"
+# Upper bound on the job summaries a single discovery pass will read. Discovery walks the newest jobs
+# on the pipeline's queue, and the job it wants was submitted by the execution being reconciled, so it
+# is among the most recent. The bound keeps a pass against a busy queue from turning into an unbounded
+# scan; exceeding it is logged and reported rather than passed over silently.
+DEADLINE_DISCOVERY_MAX_JOBS = 200
+# Task-run statuses that mean the job is over. Only a job that is NOT over is worth cancelling.
+DEADLINE_TERMINAL_TASK_RUN_STATUSES = frozenset(
+    {"SUCCEEDED", "FAILED", "CANCELED", "NOT_COMPATIBLE"})
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +428,7 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
                     f"the {status} finalization write was skipped")
 
 
-def stop_registered_sub_process(sub, sfn_client=None, batch_client=None):
+def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None):
     """Best-effort stop of one registered sub-process. Dispatches on the entry's resourceType and
     returns a message describing what could NOT be stopped, or "" when nothing needs surfacing
     (stopped cleanly, already finished, no actionable locator, or no client for that type).
@@ -444,6 +461,36 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None):
             return ""
         except Exception as e:
             return f"Sub-process stop failed for Batch job {job_id}: {_error_code(e) or e}"
+    if resource_type == RESOURCE_TYPE_DEADLINE_CLOUD_JOB:
+        # The Deadline task runs through `createJob.waitForTaskToken`, so Step Functions holds the
+        # token and NOT the job: stopping the state machine abandons the token and leaves the farm
+        # rendering. Cancelling addresses a job by farm + queue + job together, so a registration
+        # missing either — or a deployment with no Deadline client — is named rather than passed over:
+        # this row is about to be stamped terminal, after which nothing looks at it again.
+        job_id = sub.get("jobId", "")
+        if not job_id:
+            return ""
+        farm_id = sub.get("farmId", "")
+        queue_id = sub.get("queueId", "")
+        if not (farm_id and queue_id):
+            reason = "its registration names no farm or queue"
+        elif deadline_client is None:
+            reason = "Deadline Cloud is not available in this deployment"
+        else:
+            reason = ""
+        if reason:
+            return (f"Sub-process stop failed for Deadline Cloud job {job_id}: {reason}, so it could "
+                    "not be cancelled; it may still be running on the farm.")
+        try:
+            deadline_client.update_job(
+                farmId=farm_id, queueId=queue_id, jobId=job_id,
+                targetTaskRunStatus="CANCELED")
+            return ""
+        except Exception as e:
+            if _is_benign_cancel_error(e):
+                return ""
+            return (f"Sub-process stop failed for Deadline Cloud job {job_id}: "
+                    f"{_error_code(e) or e}; it may still be running on the farm.")
     locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
                or sub.get("taskArn") or sub.get("arn") or resource_type)
     return (f"Sub-process of type '{resource_type}' ({locator}) could not be stopped: stopping this "
@@ -465,32 +512,198 @@ def _is_benign_stop_error(error):
     return code in ("ExecutionDoesNotExist", "ExecutionAlreadyStopped", "ExecutionLimitExceeded")
 
 
-def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=None):
+def _is_benign_cancel_error(error):
+    """Whether an UpdateJob failure means the Deadline job's tasks have all finished — the normal race
+    when a run completes as it is being cancelled, which leaves nothing running to report."""
+    code = _error_code(error) or type(error).__name__
+    return code in ("ConflictException", "ResourceNotFoundException")
+
+
+# ---------------------------------------------------------------------------
+# Deadline Cloud jobs that were never registered
+#
+# A job is registered by the job-status callback, which Deadline invokes on a status CHANGE. A job
+# that is submitted and then sits queued with no worker assigned never produces one, so there is
+# nothing to register from and the registration-driven cancel has no id to act on. Every submitted
+# job does carry the pipeline execution id as a reserved job parameter, so it can be found from the
+# execution alone. Both the abort path (handlers.workflows.executionService) and the failure path
+# below reach the farm job this way; the three helpers live here so the two cannot diverge on which
+# jobs they find or which they leave running.
+# ---------------------------------------------------------------------------
+
+def deadline_farm_queue_for_pipeline(pipeline_row, get_pipeline_definition):
+    """(farmId, queueId) for a DeadlineCloud pipeline execution, read from its pipeline DEFINITION.
+
+    The pipeline EXECUTION row does not carry the farm or queue — they live on the definition at
+    ``executionConfig.deadlineCloud.{farmId,queueId}``, which is also what the ASL builder read when
+    it submitted the job. Returns ("", "") when the pipeline is not DeadlineCloud, the definition is
+    gone (a deleted pipeline), or the fields are absent.
+
+    ``get_pipeline_definition`` is injected because reading it needs the pipeline table, which this
+    module deliberately does not resolve: it is imported by lambdas that hold no read on that table.
+    A caller that cannot supply one passes None and gets ("", ""), so the row is reported rather than
+    silently skipped.
+    """
+    if get_pipeline_definition is None:
+        return "", ""
+    try:
+        db_id = pipeline_row.get('pipelineDatabaseId', '')
+        pipeline_id = pipeline_row.get('pipelineId', '')
+        if not db_id or not pipeline_id:
+            return "", ""
+        definition = get_pipeline_definition(db_id, pipeline_id) or {}
+        deadline = ((definition.get('executionConfig') or {}).get('deadlineCloud') or {})
+        if isinstance(deadline, str):
+            deadline = json.loads(deadline) if deadline else {}
+        return str(deadline.get('farmId', '') or ''), str(deadline.get('queueId', '') or '')
+    except Exception as e:  # noqa: BLE001 - best effort; a missing definition must not fail the caller
+        logger.warning(f"Could not resolve the Deadline farm/queue for pipeline execution "
+                       f"{pipeline_row.get('pipelineExecutionId', '')}: {e}")
+        return "", ""
+
+
+def discover_deadline_job_id(farm_id, queue_id, pipeline_execution_id, deadline_client=None):
+    """The id of the still-running Deadline job this pipeline execution submitted, or "".
+
+    Only NON-terminal jobs are considered: cancelling a finished job is a no-op, and skipping them
+    keeps the number of GetJob calls proportional to what is actually running.
+    """
+    if deadline_client is None or not (farm_id and queue_id and pipeline_execution_id):
+        return ""
+    scanned = 0
+    try:
+        paginator = deadline_client.get_paginator('list_jobs')
+        for page in paginator.paginate(farmId=farm_id, queueId=queue_id):
+            for summary in page.get('jobs', []) or []:
+                scanned += 1
+                if scanned > DEADLINE_DISCOVERY_MAX_JOBS:
+                    logger.warning(
+                        f"Deadline job discovery for pipeline execution {pipeline_execution_id} "
+                        f"stopped after {DEADLINE_DISCOVERY_MAX_JOBS} job summaries on queue "
+                        f"{queue_id}; the job was not among them")
+                    return ""
+                if str(summary.get('taskRunStatus', '')) in DEADLINE_TERMINAL_TASK_RUN_STATUSES:
+                    continue
+                job_id = summary.get('jobId', '')
+                if not job_id:
+                    continue
+                try:
+                    job = deadline_client.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
+                except Exception as e:  # noqa: BLE001 - one unreadable job must not end the search
+                    logger.info(f"Could not read Deadline job {job_id} during discovery: {e}")
+                    continue
+                parameter = (job.get('parameters') or {}).get(
+                    DEADLINE_PIPELINE_EXECUTION_PARAMETER) or {}
+                if str(parameter.get('string', '')) == str(pipeline_execution_id):
+                    logger.info(f"Discovered unregistered Deadline job {job_id} for pipeline "
+                                f"execution {pipeline_execution_id}")
+                    return job_id
+    except Exception as e:  # noqa: BLE001 - discovery is best effort; the caller reports the outcome
+        logger.warning(f"Deadline job discovery failed for pipeline execution "
+                       f"{pipeline_execution_id} on queue {queue_id}: {e}")
+        return ""
+    return ""
+
+
+def cancel_deadline_job_reporting(farm_id, queue_id, job_id, deadline_client=None):
+    """Best-effort Deadline Cloud cancel of a farm job: UpdateJob with
+    targetTaskRunStatus=CANCELED. Returns (ok, reason).
+
+    A job already in a terminal task-run status is accepted rather than reported: cancelling a
+    finished job is a no-op and racing a job that just completed is normal. A real failure (a missing
+    deadline:UpdateJob permission, say) returns its code so the caller can name what was left running.
+    """
+    if not farm_id or not queue_id or not job_id:
+        return True, ""
+    if deadline_client is None:
+        return False, "Deadline Cloud is not available in this deployment"
+    try:
+        deadline_client.update_job(
+            farmId=farm_id, queueId=queue_id, jobId=job_id,
+            targetTaskRunStatus="CANCELED")
+        return True, ""
+    except Exception as e:
+        if _is_benign_cancel_error(e):
+            logger.info(f"Deadline job {job_id} could not be cancelled (already finished): {e}")
+            return True, ""
+        logger.warning(f"Could not cancel Deadline job {job_id}: {e}")
+        return False, _error_code(e) or str(e)
+
+
+def _unregistered_deadline_job_warning(prow, deadline_client, get_pipeline_definition):
+    """Cancel the Deadline job a DeadlineCloud pipeline row submitted but never registered, and
+    return a message when something was left running on the farm, or "".
+
+    Gated exactly as the abort path gates it: the row's execution type is DeadlineCloud and none of
+    its registrations names a Deadline job id. A row that DOES carry one has already been handled by
+    the registration-driven arm, and re-finding it would issue a second cancel for the same job.
+    """
+    if prow.get('pipelineExecutionType', '') != 'DeadlineCloud':
+        return ""
+    for sub in prow.get('registeredSubExecutions', []) or []:
+        if (sub or {}).get('resourceType', '') == RESOURCE_TYPE_DEADLINE_CLOUD_JOB and \
+                (sub or {}).get('jobId', ''):
+            return ""
+    pipeline_execution_id = prow.get('pipelineExecutionId', '')
+    farm_id, queue_id = deadline_farm_queue_for_pipeline(prow, get_pipeline_definition)
+    if not (farm_id and queue_id):
+        return (f"Sub-process stop could not resolve the Deadline farm or queue for pipeline "
+                f"execution {pipeline_execution_id}, so any job it submitted may still be running "
+                f"on the farm.")
+    job_id = discover_deadline_job_id(farm_id, queue_id, pipeline_execution_id,
+                                      deadline_client=deadline_client)
+    if not job_id:
+        # No non-terminal job carries this execution's id: either it finished on its own or it was
+        # never submitted. Both are fine, and neither leaves work running.
+        return ""
+    ok, err = cancel_deadline_job_reporting(farm_id, queue_id, job_id,
+                                            deadline_client=deadline_client)
+    if ok:
+        return ""
+    return (f"Sub-process stop failed for Deadline Cloud job {job_id}: {err}; it may still be "
+            f"running on the farm.")
+
+
+def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=None,
+                                  deadline_client=None, get_pipeline_definition=None):
     """Stop every sub-process registered by a non-terminal pipeline row. Returns the list of messages
-    for the ones that could not be stopped, so the caller can record what was left running."""
+    for the ones that could not be stopped, so the caller can record what was left running.
+
+    A DeadlineCloud row with no registered job also gets a discovery pass, because a queued job
+    produces no status event to register from and this row is about to be stamped terminal — after
+    which nothing looks at it again. Every client and the definition reader are optional, so a
+    caller holding none of those permissions still reconciles the rows.
+    """
     warnings = []
     for prow in pipeline_rows:
         if prow.get("executionStatus", "") in TERMINAL_STATUSES:
             continue
         for sub in prow.get("registeredSubExecutions", []) or []:
             message = stop_registered_sub_process(
-                sub or {}, sfn_client=sfn_client, batch_client=batch_client)
+                sub or {}, sfn_client=sfn_client, batch_client=batch_client,
+                deadline_client=deadline_client)
             if message:
                 warnings.append(message)
+        message = _unregistered_deadline_job_warning(
+            prow, deadline_client, get_pipeline_definition)
+        if message:
+            warnings.append(message)
     return warnings
 
 
 def mark_inflight_pipelines_terminal(dynamo, pipeline_executions_table, pipeline_rows,
-                                     status, stop_date, sfn_client=None, batch_client=None):
+                                     status, stop_date, sfn_client=None, batch_client=None,
+                                     deadline_client=None, get_pipeline_definition=None):
     """Set every non-terminal pipeline row to `status` + stop_date (used by the error handler to fail
     in-flight pipelines), stopping each row's registered sub-processes FIRST.
 
     The order matters: a row stamped terminal is no longer a candidate for the abort API, so a
     sub-process left running here has no in-product remedy. Returns the messages for sub-processes
-    that could not be stopped. Clients are injected (and optional) so a caller with no stop
-    permissions still reconciles the rows."""
+    that could not be stopped. Clients and the definition reader are injected (and optional) so a
+    caller with no stop permissions still reconciles the rows."""
     warnings = stop_registered_sub_processes(
-        pipeline_rows, sfn_client=sfn_client, batch_client=batch_client)
+        pipeline_rows, sfn_client=sfn_client, batch_client=batch_client,
+        deadline_client=deadline_client, get_pipeline_definition=get_pipeline_definition)
     for prow in pipeline_rows:
         if prow.get("executionStatus", "") in TERMINAL_STATUSES:
             continue

@@ -130,9 +130,39 @@ _PIPELINE_OUTPUT_METADATA_SEGMENT = "metadata"
 _PIPELINE_OUTPUT_RESULTS_SEGMENT = "results"
 
 
+def normalize_base_prefix(base_prefix: str) -> str:
+    """The default bucket's VAMS-owned area expressed as a key prefix: '' for the bucket root,
+    otherwise the declared prefix with exactly one trailing slash and no leading slash.
+
+    An empty prefix and '/' both mean the bucket root — the shape a VAMS-created default bucket
+    carries, and the two values storageBuilder accepts in place of a trailing-slash prefix. Anything
+    else names a folder within the bucket, so the run I/O of a bucket registered under a prefix stays
+    inside it rather than at the bucket root.
+    """
+    trimmed = (base_prefix or "").strip("/")
+    return f"{trimmed}/" if trimmed else ""
+
+
+def run_bucket_key(base_prefix: str, key: str) -> str:
+    """A run-I/O key resolved against the default bucket's VAMS-owned area.
+
+    The `*_key` / `*_prefixes` builders below are relative to that area, which is what travels in the
+    Step Functions input and the ASL path templates so a state machine is independent of the
+    deployment's prefix. This is the form an S3 call takes and the form an execution record names, so
+    a stored location points at the object that actually exists.
+
+    An empty key stays empty: an unset location must not resolve to the prefix itself, which would
+    turn "no object here" into a listing of the whole VAMS area.
+    """
+    if not key:
+        return key
+    return normalize_base_prefix(base_prefix) + key.lstrip("/")
+
+
 def pipeline_output_prefixes(first_pipeline_name: str, first_job_name: str, execution_id: str) -> dict:
     """Concrete per-execution output prefixes for the first pipeline's global
-    output location, matching the workflow ASL output paths.
+    output location, matching the workflow ASL output paths. Relative to the default bucket's
+    VAMS-owned area; join with run_bucket_key for the key an S3 call or a record uses.
     Returns a dict with keys: files, previews, metadata, results.
     """
     base = (f"{_PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}/"
@@ -169,24 +199,27 @@ def aux_preview_file_prefix(database_id: str, asset_file_key: str) -> str:
     return f"{base}/{preview_segment}"
 
 
-# Per-execution input-definition folder (asset bucket): the shared input metadata file plus
+# Per-execution input-definition folder (default bucket): the shared input metadata file plus
 # each pipeline's config + resolved manifest. Keyed only on the execution id so executeWorkflow
 # and the ASL compute identical keys (both independently draw job-name uuids).
+#
+# Every key below is relative to the default bucket's VAMS-owned area (its baseAssetsPrefix, empty
+# for a bucket registered at the root) — run_bucket_key turns one into the key S3 sees.
 _EXECUTION_INPUTS_SEGMENT = "workflowExecutionInputs"
 
 
 def execution_input_prefix(execution_id: str) -> str:
-    """Per-execution input-definition folder (asset-bucket relative). Trailing slash."""
+    """Per-execution input-definition folder, relative to the VAMS-owned area. Trailing slash."""
     return f"{_PIPELINES_PREFIX}{_EXECUTION_INPUTS_SEGMENT}/{execution_id}/"
 
 
 def execution_input_metadata_key(execution_id: str) -> str:
-    """Asset-bucket key of the shared input-metadata file for an execution."""
+    """Key of the shared input-metadata file for an execution, relative to the VAMS-owned area."""
     return execution_input_prefix(execution_id) + "metadata.json"
 
 
 def pipeline_input_metadata_key(execution_id: str, pipeline_index: int) -> str:
-    """Asset-bucket key of a pipeline's OWN narrowed input-metadata file.
+    """Key of a pipeline's OWN narrowed input-metadata file, relative to the VAMS-owned area.
 
     Written only when a step's effective metadataInputs is narrower than the workflow's, so the
     common case (every step wanting what the workflow gathered) stays a single shared object. The
@@ -196,12 +229,12 @@ def pipeline_input_metadata_key(execution_id: str, pipeline_index: int) -> str:
 
 
 def pipeline_input_config_key(execution_id: str, pipeline_index: int) -> str:
-    """Asset-bucket key of a pipeline's input configuration file."""
+    """Key of a pipeline's input configuration file, relative to the VAMS-owned area."""
     return f"{execution_input_prefix(execution_id)}pipeline{pipeline_index}/config.json"
 
 
 def pipeline_input_manifest_key(execution_id: str, pipeline_index: int) -> str:
-    """Asset-bucket key of a pipeline's resolved input manifest file."""
+    """Key of a pipeline's resolved input manifest file, relative to the VAMS-owned area."""
     return f"{execution_input_prefix(execution_id)}pipeline{pipeline_index}/manifest.json"
 
 
@@ -249,7 +282,8 @@ def build_manifest_output_target(location_type="asset", asset_id="", database_id
 def build_manifest_outputs(bucket="", files="", previews="", metadata="", results=""):
     """outputs block for the manifest envelope: a single output `bucket` plus bucket-relative
     prefixes for each output kind (no pre-built s3:// URIs). Downstream consumers reconstruct
-    s3://{bucket}/{prefix} as needed."""
+    s3://{bucket}/{prefix} as needed, so each prefix is a FULL key in `bucket` — a run-I/O prefix
+    passes through run_bucket_key first, the same way each input entry's `key` is a full key."""
     return {
         "bucket": bucket or "",
         "files": files or "",

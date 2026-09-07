@@ -27,15 +27,17 @@ import os
 from datetime import datetime, timezone, timedelta
 
 import boto3
+import botocore.exceptions
 from boto3.dynamodb.conditions import Key, Attr
 from botocore.paginate import TokenEncoder
+from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 
 from common.validators import validate
 from common.resourceNames import get_table_name, ResourceKeys
 from common.auth.apiEvent import normalize_event
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, to_update_expr
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -63,7 +65,8 @@ from common.workflows import workflowAsl
 
 logger = safeLogger(service_name="WorkflowService")
 
-dynamodb = boto3.resource("dynamodb")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
 
 try:
     workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
@@ -284,6 +287,36 @@ def get_workflow_item(database_id, workflow_id):
     ).get("Item")
 
 
+def _write_workflow_updates(database_id, workflow_id, updates):
+    """SET only the attributes a request changed on an existing workflow row.
+
+    Update and archive both read the row, mutate it in memory, and can then spend seconds elsewhere
+    (update redeploys the state machine) before the write lands, so writing the whole item back
+    carries every attribute of that stale snapshot with it and reverts whatever another writer
+    changed in between — an archive erased by a concurrent pipeline-set update, or that update
+    reverted by a concurrent archive while its freshly deployed state machine stays deployed. A
+    targeted SET touches only the attributes the caller supplied, so the two writes merge instead of
+    overwriting each other; the existence condition keeps update_item from creating a row that is no
+    longer there.
+
+    Returns False when the row no longer exists (nothing was written)."""
+    keys_map, values_map, expr = to_update_expr(updates)
+    try:
+        _workflow_table().update_item(
+            Key={"databaseId": database_id, "workflowId": workflow_id},
+            UpdateExpression=expr,
+            ExpressionAttributeNames=keys_map,
+            ExpressionAttributeValues=values_map,
+            ConditionExpression=Attr("workflowId").exists(),
+        )
+        return True
+    except botocore.exceptions.ClientError as e:
+        if e.response.get("Error", {}).get("Code", "") != "ConditionalCheckFailedException":
+            raise
+        logger.info(f"Workflow {database_id}:{workflow_id} no longer exists; nothing written")
+        return False
+
+
 def find_workflow_id_owner(workflow_id, excluding_database_id=None):
     """The databaseId of an existing workflow carrying this workflowId, or None. Ids are unique
     across all databases (GLOBAL included); archived rows still hold their id. Queries the
@@ -313,24 +346,35 @@ def find_workflow_id_owner(workflow_id, excluding_database_id=None):
 def _trigger_summary(database_id, workflow_id):
     """Trigger counts for one workflow: {"triggerCount": N, "triggersEnabledCount": M}.
 
-    Queries the triggers table by its partition key, so this is one bounded query per authorized
+    Queries the triggers table by its partition key, so the fan-out is one paged read per authorized
     workflow on the page (the same shape and fan-out bound as _execution_count). The rows are read
     rather than COUNTed because the enabled/disabled split is an item attribute, not a key — a
     workflow can carry a trigger that exists but is switched off, and the list needs to show the
-    difference. A workflow has at most one trigger per triggerType, so the row set is tiny.
+    difference. A workflow may carry several triggers of one base type, each with its own filters and
+    default templates, so the partition is read to exhaustion; only the two counters are kept rather
+    than the rows, because these counts also drive the hasTriggers filter and a short read would drop
+    a workflow from the listing.
 
     Best-effort: returns None on any error so a trigger-read failure never breaks the listing.
     """
     try:
-        rows = _triggers_table().query(
-            KeyConditionExpression=Key("workflowDatabaseId:workflowId").eq(
-                wr.workflow_composite_key(database_id, workflow_id))
-        ).get("Items", [])
-        return {
-            "triggerCount": len(rows),
+        total = 0
+        enabled = 0
+        kwargs = {"KeyConditionExpression": Key("workflowDatabaseId:workflowId").eq(
+            wr.workflow_composite_key(database_id, workflow_id))}
+        while True:
+            response = _triggers_table().query(**kwargs)
+            rows = response.get("Items", [])
+            total += len(rows)
             # A row with no explicit `enabled` predates the flag and is treated as enabled, matching
             # get_workflow_triggers and the trigger-dispatch default.
-            "triggersEnabledCount": sum(1 for r in rows if r.get("enabled", True)),
+            enabled += sum(1 for r in rows if r.get("enabled", True))
+            if "LastEvaluatedKey" not in response:
+                break
+            kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        return {
+            "triggerCount": total,
+            "triggersEnabledCount": enabled,
         }
     except Exception as e:
         logger.warning(f"Trigger count failed for {database_id}:{workflow_id} (non-fatal): {e}")
@@ -353,18 +397,24 @@ def _matches_trigger_filter(summary, has_triggers_filter):
 
 
 def get_workflow_triggers(database_id, workflow_id):
+    """Every trigger of one workflow, for the single-workflow details response.
+
+    A workflow may carry several triggers of one base type, so the partition is read to exhaustion:
+    the response carries no truncation signal, and a trigger absent from it is still firing."""
     composite = wr.workflow_composite_key(database_id, workflow_id)
     triggers = []
-    response = _triggers_table().query(
-        KeyConditionExpression=Key("workflowDatabaseId:workflowId").eq(composite)
-    )
-    for row in response.get("Items", []):
-        triggers.append({
-            "triggerType": row.get("triggerType", ""),
-            "triggerConfig": row.get("triggerConfig", {}),
-            "enabled": row.get("enabled", True),
-        })
-    return triggers
+    kwargs = {"KeyConditionExpression": Key("workflowDatabaseId:workflowId").eq(composite)}
+    while True:
+        response = _triggers_table().query(**kwargs)
+        for row in response.get("Items", []):
+            triggers.append({
+                "triggerType": row.get("triggerType", ""),
+                "triggerConfig": row.get("triggerConfig", {}),
+                "enabled": row.get("enabled", True),
+            })
+        if "LastEvaluatedKey" not in response:
+            return triggers
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
 
 def _pagination_config(query_params):
@@ -589,6 +639,11 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
     if not _enforce_workflow(claims_and_roles, item, "PUT"):
         return authorization_error()
 
+    # The attributes this request changes are collected separately from the row that was read: only
+    # they are written (see _write_workflow_updates), while `item` carries the merged view the
+    # enforcement, save-validation and response steps below read.
+    updates = {}
+
     # If pipelines are changing, re-resolve/authorize them and regenerate the state machine.
     ref_records = None
     if request.specifiedPipelines is not None:
@@ -596,29 +651,30 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
             database_id, request.specifiedPipelines, claims_and_roles)
         if err:
             return err
-        item["specifiedPipelines"] = [
+        updates["specifiedPipelines"] = [
             wr.build_specified_pipeline_ref(rec.get("databaseId", ""), rec.get("pipelineId", ""),
                                             ref.jobName or "", ref.defaultTemplateId or "")
             for ref, rec in ref_records
         ]
 
     if request.workflowName is not None:
-        item["workflowName"] = request.workflowName
+        updates["workflowName"] = request.workflowName
     if request.category is not None:
-        item["category"] = request.category
-        item["databaseId:category"] = f"{database_id}:{request.category}"
+        updates["category"] = request.category
+        updates["databaseId:category"] = f"{database_id}:{request.category}"
     if request.description is not None:
-        item["description"] = request.description
+        updates["description"] = request.description
     if request.systemConfig is not None:
-        item["systemConfig"] = request.systemConfig
+        updates["systemConfig"] = request.systemConfig
     if request.subDashboardUrl is not None:
-        item["subDashboardUrl"] = request.subDashboardUrl
+        updates["subDashboardUrl"] = request.subDashboardUrl
     if request.enabled is not None:
-        item["enabled"] = request.enabled
+        updates["enabled"] = request.enabled
     if request.archived is not None:
-        item["archived"] = request.archived
-    item["dateModified"] = pr.iso_now()
-    item["modifiedBy"] = username
+        updates["archived"] = request.archived
+    updates["dateModified"] = pr.iso_now()
+    updates["modifiedBy"] = username
+    item.update(updates)
 
     # Re-enforce Tier-2 PUT on the MUTATED object: workflowName (-> the `name` constraint field) and
     # category are policy-evaluated attributes, so a caller must be authorized for the workflow it is
@@ -648,10 +704,12 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
     if ref_records is not None:
         workflow_arn, job_names = workflowAsl.deploy_state_machine(
             database_id, workflow_id, ref_records, existing_arn=item.get("workflow_arn", ""))
-        item["workflow_arn"] = workflow_arn or item.get("workflow_arn", "")
-        item["jobNames"] = job_names or []
+        updates["workflow_arn"] = workflow_arn or item.get("workflow_arn", "")
+        updates["jobNames"] = job_names or []
+        item.update(updates)
 
-    _workflow_table().put_item(Item=item)
+    if not _write_workflow_updates(database_id, workflow_id, updates):
+        return validation_error(status_code=404, body={"message": "Workflow not found"})
     # AUDIT LOG: workflow updated.
     log_actions(event or {}, "workflowUpdate", {
         "databaseId": database_id,
@@ -730,11 +788,13 @@ def archive_workflow(database_id, workflow_id, username, claims_and_roles, event
         return validation_error(status_code=404, body={"message": "Workflow not found"})
     if not _enforce_workflow(claims_and_roles, item, "DELETE"):
         return authorization_error()
-    item["archived"] = True
-    item["enabled"] = False
-    item["dateModified"] = pr.iso_now()
-    item["modifiedBy"] = username
-    _workflow_table().put_item(Item=item)
+    if not _write_workflow_updates(database_id, workflow_id, {
+        "archived": True,
+        "enabled": False,
+        "dateModified": pr.iso_now(),
+        "modifiedBy": username,
+    }):
+        return validation_error(status_code=404, body={"message": "Workflow not found"})
     # AUDIT LOG: workflow archived (the delete route archives rather than removing).
     log_actions(event or {}, "workflowArchive", {
         "databaseId": database_id,

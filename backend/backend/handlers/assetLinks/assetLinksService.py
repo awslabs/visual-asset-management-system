@@ -4,8 +4,9 @@
 import os
 import boto3
 import json
+import time
 import uuid
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -30,6 +31,7 @@ from models.assetLinks import (
     AssetTreeNodeModel, 
     AssetLinkModel,
     UnauthorizedCountsModel,
+    UnresolvedCountsModel,
     RelationshipType
 )
 
@@ -40,6 +42,18 @@ retry_config = Config(
         'mode': 'adaptive'
     }
 )
+
+# batch_get_item answers a partially throttled request with HTTP 200 and an UnprocessedKeys map,
+# which the botocore retry config does not cover, so those keys are re-requested here.
+MAX_BATCH_GET_ATTEMPTS = 5
+BATCH_GET_RETRY_BASE_SECONDS = 0.05
+
+# Ceilings on one child-tree walk. The depth stays well below Python's recursion limit (the
+# dictionary-to-model conversion recurses to the same depth), and the node ceiling bounds the
+# serialized tree against the Lambda response limit. A walk that reaches either returns what it
+# has and reports treeTruncated.
+MAX_TREE_DEPTH = 100
+MAX_TREE_NODES = 10000
 
 region = os.environ['AWS_REGION']
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -96,34 +110,56 @@ def get_asset_details(asset_id: str, database_id: str) -> Optional[Dict]:
         logger.exception(f"Error getting asset details for {asset_id}: {e}")
         return None
 
-def batch_get_asset_details(asset_keys: List[tuple]) -> Dict[str, Dict]:
-    """Batch get asset details for multiple assets"""
+def batch_get_asset_details(asset_keys: List[tuple]) -> Tuple[Dict[str, Dict], List[tuple]]:
+    """Batch get asset details for multiple assets.
+
+    Returns the details keyed by ``databaseId:assetId`` alongside the keys that stayed
+    unretrieved after the retry budget. A key missing from the details map because the read did
+    not complete is not the same thing as an asset the caller may not see, so the two are kept
+    apart rather than both reading as absent.
+    """
     asset_details = {}
-    
+    unresolved_keys: List[tuple] = []
+
     # Process in batches of 100 (DynamoDB batch_get_item limit)
     batch_size = 100
     for i in range(0, len(asset_keys), batch_size):
         batch = asset_keys[i:i + batch_size]
-        
+
         try:
-            request_items = {
-                asset_storage_table_name: {
-                    'Keys': [
-                        {
-                            'databaseId': database_id,
-                            'assetId': asset_id
-                        }
-                        for database_id, asset_id  in batch
-                    ]
+            pending = [
+                {
+                    'databaseId': database_id,
+                    'assetId': asset_id
                 }
-            }
-            
-            response = dynamodb.batch_get_item(RequestItems=request_items)
-            
-            for item in response.get('Responses', {}).get(asset_storage_table_name, []):
-                key = f"{item['databaseId']}:{item['assetId']}"
-                asset_details[key] = item
-                
+                for database_id, asset_id  in batch
+            ]
+
+            for attempt in range(MAX_BATCH_GET_ATTEMPTS):
+                response = dynamodb.batch_get_item(
+                    RequestItems={asset_storage_table_name: {'Keys': pending}}
+                )
+
+                for item in response.get('Responses', {}).get(asset_storage_table_name, []):
+                    key = f"{item['databaseId']}:{item['assetId']}"
+                    asset_details[key] = item
+
+                pending = response.get('UnprocessedKeys', {}).get(
+                    asset_storage_table_name, {}).get('Keys', [])
+                if not pending:
+                    break
+                if attempt < MAX_BATCH_GET_ATTEMPTS - 1:
+                    # Exponential backoff before resending the keys batch_get_item left
+                    # unprocessed. Must be the last comment line before the call -- semgrep
+                    # attaches `nosemgrep` to the next line only.
+                    # nosemgrep: arbitrary-sleep
+                    time.sleep(BATCH_GET_RETRY_BASE_SECONDS * (2 ** attempt))
+
+            if pending:
+                logger.warning(
+                    f"{len(pending)} asset keys unretrieved after {MAX_BATCH_GET_ATTEMPTS} batch get attempts")
+                unresolved_keys.extend((key['databaseId'], key['assetId']) for key in pending)
+
         except Exception as e:
             logger.exception(f"Error in batch get asset details: {e}")
             # Fall back to individual gets for this batch
@@ -132,8 +168,8 @@ def batch_get_asset_details(asset_keys: List[tuple]) -> Dict[str, Dict]:
                 if asset:
                     key = f"{database_id}:{asset_id}"
                     asset_details[key] = asset
-    
-    return asset_details
+
+    return asset_details, unresolved_keys
 
 def check_asset_permission(asset: Dict, claims_and_roles: Dict, action: str = "GET") -> bool:
     """Check if user has permission to access an asset"""
@@ -262,15 +298,17 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
             asset_keys.add(to_key)
         
         # Batch get asset details
-        asset_details = batch_get_asset_details(list(asset_keys))
-        
+        asset_details, unresolved_key_list = batch_get_asset_details(list(asset_keys))
+        unresolved = {f"{database}:{asset}" for database, asset in unresolved_key_list}
+
         # Organize relationships
         related_assets = []
         parent_assets = []
         child_assets = []
-        
+
         unauthorized_counts = UnauthorizedCountsModel()
-        
+        unresolved_counts = UnresolvedCountsModel()
+
         for link in all_links:
             from_key = f"{link['fromAssetDatabaseId']}:{link['fromAssetId']}"
             to_key = f"{link['toAssetDatabaseId']}:{link['toAssetId']}"
@@ -288,6 +326,8 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                             assetLinkId=link['assetLinkId'],
                             assetLinkAliasId=None  # Related relationships don't use aliases
                         ))
+                    elif to_key in unresolved:
+                        unresolved_counts.related += 1
                     else:
                         unauthorized_counts.related += 1
                 else:
@@ -301,9 +341,11 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                             assetLinkId=link['assetLinkId'],
                             assetLinkAliasId=None  # Related relationships don't use aliases
                         ))
+                    elif from_key in unresolved:
+                        unresolved_counts.related += 1
                     else:
                         unauthorized_counts.related += 1
-                        
+
             elif link['relationshipType'] == RelationshipType.PARENT_CHILD:
                 if to_key == asset_key:
                     # This asset is the child, so the 'from' asset is the parent
@@ -317,9 +359,11 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                             assetLinkId=link['assetLinkId'],
                             assetLinkAliasId=alias_id if alias_id else None
                         ))
+                    elif from_key in unresolved:
+                        unresolved_counts.parents += 1
                     else:
                         unauthorized_counts.parents += 1
-                        
+
                 elif from_key == asset_key:
                     # This asset is the parent, so the 'to' asset is the child
                     child_asset = asset_details.get(to_key)
@@ -332,45 +376,103 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                             assetLinkId=link['assetLinkId'],
                             assetLinkAliasId=alias_id if alias_id else None
                         ))
+                    elif to_key in unresolved:
+                        unresolved_counts.children += 1
                     else:
                         unauthorized_counts.children += 1
-        
+
         # If tree view is requested, build the tree structure for children
         if child_tree_view:
-            tree_children = build_child_tree(asset_id, database_id, claims_and_roles, unauthorized_counts)
+            tree_children, tree_truncated = build_child_tree(
+                asset_id, database_id, claims_and_roles, unauthorized_counts, unresolved_counts)
             return GetAssetLinksTreeViewResponseModel(
                 related=related_assets,
                 parents=parent_assets,
                 children=tree_children,
-                unauthorizedCounts=unauthorized_counts
+                unauthorizedCounts=unauthorized_counts,
+                unresolvedCounts=unresolved_counts,
+                treeTruncated=tree_truncated
             )
         else:
             return GetAssetLinksResponseModel(
                 related=related_assets,
                 parents=parent_assets,
                 children=child_assets,
-                unauthorizedCounts=unauthorized_counts
+                unauthorizedCounts=unauthorized_counts,
+                unresolvedCounts=unresolved_counts
             )
             
     except Exception as e:
         logger.exception(f"Error getting asset links: {e}")
         raise
 
-def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles: Dict, unauthorized_counts: UnauthorizedCountsModel) -> List[AssetTreeNodeModel]:
-    """Build a recursive tree structure of child assets"""
+def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles: Dict, unauthorized_counts: UnauthorizedCountsModel, unresolved_counts: UnresolvedCountsModel) -> Tuple[List[AssetTreeNodeModel], bool]:
+    """Build a recursive tree structure of child assets.
+
+    Returns the tree alongside whether it stopped at MAX_TREE_DEPTH or MAX_TREE_NODES. Each asset
+    is expanded once and its subtree reused, so a component shared by several parents costs one
+    expansion rather than one per path that reaches it.
+    """
     try:
-        def build_tree_recursive(asset_id: str, database_id: str, current_path: Set[str]) -> List[Dict]:
-            """Recursively build tree nodes as dictionaries with path-based cycle detection"""
+        # Completed expansions keyed by "databaseId:assetId", each as
+        # (child nodes, node count of the whole subtree beneath the asset, its depth).
+        expansions: Dict[str, Tuple[List[Dict], int, int]] = {}
+        # Child assets already looked up, and the keys a look-up did not retrieve.
+        child_details: Dict[str, Dict] = {}
+        looked_up: Set[str] = set()
+        unretrieved: Set[str] = set()
+        # Emitted node count and truncation state, shared by the whole walk.
+        nodes_emitted = 0
+        truncated = False
+
+        def look_up_children(child_links: List[Dict]) -> None:
+            """Batch get the child assets of one expansion that are not already known"""
+            wanted = {(link['toAssetDatabaseId'], link['toAssetId']) for link in child_links
+                      if f"{link['toAssetDatabaseId']}:{link['toAssetId']}" not in looked_up}
+            if not wanted:
+                return
+
+            details, unresolved_key_list = batch_get_asset_details(list(wanted))
+            child_details.update(details)
+            looked_up.update(f"{database}:{asset}" for database, asset in wanted)
+            unretrieved.update(f"{database}:{asset}" for database, asset in unresolved_key_list)
+
+        def build_tree_recursive(asset_id: str, database_id: str, current_path: Set[str]) -> Tuple[List[Dict], int, int, bool]:
+            """Recursively build tree nodes as dictionaries with path-based cycle detection.
+
+            Returns (nodes, subtree node count, subtree depth, cacheable). A result is not
+            cacheable when the cycle guard or a ceiling cut it, because it then depends on how the
+            walk arrived at the asset rather than on the asset itself.
+            """
+            nonlocal nodes_emitted, truncated
+
             asset_key = f"{database_id}:{asset_id}"
-            
+
             # Check if this asset is already in the current path (would create a cycle)
             if asset_key in current_path:
-                return []  # Prevent infinite loops in the current path
-            
+                return [], 0, 0, False  # Prevent infinite loops in the current path
+
+            # Reuse an expansion already computed for this asset on another branch. It is grafted
+            # in whole, so it is charged against both ceilings here: a reuse deeper in the walk
+            # than where it was computed would otherwise carry the tree past MAX_TREE_DEPTH.
+            cached = expansions.get(asset_key)
+            if cached is not None:
+                cached_nodes, cached_size, cached_depth = cached
+                if (nodes_emitted + cached_size > MAX_TREE_NODES
+                        or len(current_path) + cached_depth > MAX_TREE_DEPTH):
+                    truncated = True
+                    return [], 0, 0, False
+                nodes_emitted += cached_size
+                return cached_nodes, cached_size, cached_depth, True
+
+            if len(current_path) >= MAX_TREE_DEPTH:
+                truncated = True
+                return [], 0, 0, False
+
             # Add current asset to the path for this branch
             new_path = current_path.copy()
             new_path.add(asset_key)
-            
+
             # Get all children of this asset (page to exhaustion)
             child_links = query_all_items(
                 asset_links_table,
@@ -379,18 +481,36 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
 
+            look_up_children(child_links)
+
             tree_nodes = []
+            subtree_size = 0
+            subtree_depth = 0
+            cacheable = True
 
             for link in child_links:
-                child_asset = get_asset_details(link['toAssetId'], link['toAssetDatabaseId'])
-                
+                child_key = f"{link['toAssetDatabaseId']}:{link['toAssetId']}"
+                child_asset = child_details.get(child_key)
+
                 if child_asset and check_asset_permission(child_asset, claims_and_roles):
+                    if nodes_emitted >= MAX_TREE_NODES:
+                        truncated = True
+                        cacheable = False
+                        break
+
+                    nodes_emitted += 1
+
                     # Recursively get children of this child, passing the current path
-                    grandchildren = build_tree_recursive(link['toAssetId'], link['toAssetDatabaseId'], new_path)
-                    
+                    grandchildren, grandchildren_size, grandchildren_depth, child_cacheable = (
+                        build_tree_recursive(
+                            link['toAssetId'], link['toAssetDatabaseId'], new_path))
+                    cacheable = cacheable and child_cacheable
+                    subtree_size += 1 + grandchildren_size
+                    subtree_depth = max(subtree_depth, 1 + grandchildren_depth)
+
                     # Get alias ID
                     alias_id = link.get('assetLinkAliasId', '')
-                    
+
                     # Create a dictionary representation of the node
                     tree_node = {
                         "assetId": link['toAssetId'],
@@ -401,14 +521,19 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
                         "children": grandchildren
                     }
                     tree_nodes.append(tree_node)
+                elif child_key in unretrieved:
+                    unresolved_counts.children += 1
                 else:
                     unauthorized_counts.children += 1
-            
-            return tree_nodes
-        
+
+            if cacheable:
+                expansions[asset_key] = (tree_nodes, subtree_size, subtree_depth)
+
+            return tree_nodes, subtree_size, subtree_depth, cacheable
+
         # Get the tree as dictionaries, starting with an empty path
-        tree_dicts = build_tree_recursive(root_asset_id, root_database_id, set())
-        
+        tree_dicts, _, _, _ = build_tree_recursive(root_asset_id, root_database_id, set())
+
         # Convert to AssetTreeNodeModel objects
         def dict_to_model(node_dict):
             children_models = [dict_to_model(child) for child in node_dict["children"]]
@@ -420,12 +545,15 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
                 assetLinkAliasId=node_dict.get("assetLinkAliasId"),
                 children=children_models
             )
-        
-        return [dict_to_model(node) for node in tree_dicts]
-        
+
+        return [dict_to_model(node) for node in tree_dicts], truncated
+
+    # A traversal that fails partway has produced a partial tree, and returning it as the tree
+    # makes a throttle, a malformed composite key or a conversion failure indistinguishable from
+    # an asset that genuinely has no children.
     except Exception as e:
         logger.exception(f"Error building child tree: {e}")
-        return []
+        raise VAMSGeneralErrorResponse("Unable to build the asset link tree")
 
 #######################
 # PUT Operations

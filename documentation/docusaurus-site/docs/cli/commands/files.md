@@ -73,7 +73,7 @@ Only individual-file constraint violations stop an upload. A file requiring more
 :::
 
 :::tip[File Extension Restrictions]
-A database can restrict uploads to specific extensions (`restrictFileUploadsToExtensions`). When set, VamsCLI validates every file before upload and reports all violations at once. Asset preview uploads and `.previewFile.` auxiliary files are exempt; an empty list or `.all` allows any extension. Use `vamscli database get -d my-db` to view the restrictions.
+A database can restrict uploads to specific extensions (`restrictFileUploadsToExtensions`). When set, VamsCLI validates every file before upload and reports all violations at once. Asset preview uploads and `.previewFile.` auxiliary files are exempt from that list, but must still carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`; an empty list or `.all` allows any extension. Use `vamscli database get -d my-db` to view the restrictions.
 :::
 
 :::note[Large-File Asynchronous Processing]

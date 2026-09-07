@@ -445,8 +445,9 @@ class TestADualRoleExecutionIsNotServedTwiceAcrossPages:
     71 input rows repeated exactly the 17 executions carrying both roles.
 
     The token therefore carries a high-water mark: the oldest executionStartDate already returned, plus
-    the id served at that exact date. The output query is bounded above by it, and rows newer than it
-    are dropped.
+    the id served at that exact date. Once the input side is exhausted the mark bounds the per-row reads
+    that ask whether the input direction already served a candidate; while the walk is still descending
+    it can bound the output range directly, since everything newer than it was served.
     """
 
     def test_the_token_carries_the_high_water_mark(self):
@@ -457,22 +458,37 @@ class TestADualRoleExecutionIsNotServedTwiceAcrossPages:
         assert token.get("servedThrough"), f"the mark must be recorded: {token}"
         assert token.get("servedThroughId"), f"the id at that date must be recorded: {token}"
 
-    def test_the_output_query_is_bounded_by_the_mark(self):
-        # The mark is the upper bound of the output range, so the output GSI is never re-read from the
-        # newest row on a later page.
+    def test_a_page_that_drains_the_inputs_withholds_only_what_was_served(self):
+        # Page 1 caps on the inputs, so its token carries an inputs cursor plus the mark. Page 2 serves
+        # the rest of the inputs and DRAINS them, which leaves it in the same position as a page
+        # resuming an already-drained token: the mark is now the oldest date served, so the rows at and
+        # above it are a MIX of served dual-role executions and never-served output-only ones, and only
+        # the per-row read tells them apart. Narrowing the output range by the mark instead withholds
+        # every output-only execution newer than it — and this page does not cap, so there is no
+        # further token and no page ever returns them.
         rows = _input_rows(8)
         first, _i, _c = _run([{"Items": rows, "LastEvaluatedKey": {"k": "in"}}],
                              [{"Items": []}], query_params={"pageSize": "4"})
         mark = _decode(first["NextToken"])["servedThrough"]
+        dual_role = rows[0]["workflowExecutionId"]           # served on page 1, as an input row
+        output_only = {**_cfg_rows(1)[0], "workflowExecutionId": "o" + "5" * 32}
+        assert output_only["executionStartDate"] > mark, (
+            "fixture: the output-only row must sit above the mark or this proves nothing")
         # Page 2 needs headroom under its cap after the remaining inputs, or the output query is never
         # reached and this would assert on a call that never happened.
-        _m2, _i2, cfg_table = _run([{"Items": rows[4:]}], [{"Items": []}],
-                                   query_params={"pageSize": "50",
-                                                 "startingToken": first["NextToken"]})
+        message, _i2, cfg_table = _run(
+            [{"Items": rows[4:]}],
+            [{"Items": [output_only, {**output_only, "workflowExecutionId": dual_role}]}],
+            query_params={"pageSize": "50", "startingToken": first["NextToken"]},
+            probe_hits={dual_role}, echo_items=True)
         cfg_table.query.assert_called()
-        values = _condition_values(cfg_table.query.call_args.kwargs["KeyConditionExpression"])
-        assert mark in values, (
-            f"the output query must be bounded by the high-water mark {mark}: {values}")
+        served = [i["workflowExecutionId"] for i in message["Items"]]
+        assert dual_role not in served, f"page 1 already served it as an input row: {served}"
+        assert output_only["workflowExecutionId"] in served, (
+            f"an output-only execution newer than the mark was withheld for good: {served}")
+        dates = [v for v in _condition_values(
+            cfg_table.query.call_args.kwargs["KeyConditionExpression"]) if v.endswith("Z")]
+        assert len(dates) <= 1, f"the output range must not be narrowed by the mark here: {dates}"
 
     def test_the_first_page_has_no_mark_so_the_output_range_is_unbounded_above(self):
         # The negative control: without a token there is nothing served yet, so the output walk must

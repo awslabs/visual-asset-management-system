@@ -11,13 +11,15 @@ the pipelineEnd Lambda. Container exits 0 on success, non-zero on failure.
 
 import json
 import logging
+import math
 import os
+import re
 import sys
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Set, Tuple
 from urllib.parse import urlparse
 
 from inference import generate_preview_gif, run_inference
@@ -49,13 +51,113 @@ TRANSFER_CAPABLE_VARIANTS = ("nano", "super")
 # Supported control-signal types for transfer
 TRANSFER_CONTROL_TYPES = ("edge", "blur", "depth", "seg", "wsm")
 
+# Buckets a control-signal path is allowed to name, as a comma-separated list of bucket names set on
+# the Batch job definition. It carries the deployment's own asset buckets.
+ALLOWED_INPUT_BUCKETS_ENV = "ALLOWED_INPUT_BUCKETS"
+# Pipeline-definition keys whose values are S3 locations VAMS itself chose for this run.
+RUN_S3_LOCATION_KEYS = (
+    "inputS3AssetFilePath",
+    "outputS3AssetFilesPath",
+    "outputS3AssetPreviewPath",
+    "outputS3AssetMetadataPath",
+    "inputOutputS3AssetAuxiliaryFilesPath",
+)
+# Characters an output file name may keep when it is derived from a framework artifact's own path.
+OUTPUT_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
-def build_control_blocks(control_types_raw, control_paths_raw, control_weights_raw):
+
+def parse_number_setting(raw, setting_name, default, integer=False, minimum=None):
+    """Coerce one caller-supplied numeric setting, or raise ValueError naming the setting.
+
+    A setting arrives as whatever its source carried: a typed template tag as a JSON number, an
+    asset-metadata value as a string. Blank and absent both mean "not supplied" and yield the
+    default; every other value must be a finite number. A boolean is rejected rather than read as
+    1/0, and a fractional value for an integer setting is rejected rather than truncated -- a request
+    for 3.9 frames silently generating 3 is what this exists to prevent.
+    """
+    if raw is None or (not isinstance(raw, bool) and str(raw).strip() == ""):
+        return default
+    if isinstance(raw, bool):
+        raise ValueError(f"{setting_name} must be a number, but the boolean {raw} was supplied")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{setting_name} must be a number, but {raw!r} was supplied")
+    if not math.isfinite(value):
+        raise ValueError(f"{setting_name} must be a finite number, but {raw!r} was supplied")
+    if integer:
+        if not value.is_integer():
+            raise ValueError(f"{setting_name} must be a whole number, but {raw!r} was supplied")
+        value = int(value)
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{setting_name} must be at least {minimum}, but {raw!r} was supplied")
+    return value
+
+
+def allowed_control_buckets(definition: Dict) -> Set[str]:
+    """The S3 buckets a control-signal path may name.
+
+    ALLOWED_INPUT_BUCKETS carries the deployment's own asset buckets. The buckets this run's own
+    input and output locations name are added unconditionally: VAMS chose those, so they belong to
+    the deployment by construction, and including them leaves the check effective on a job
+    definition that does not set the variable.
+    """
+    buckets = set()
+    for name in os.environ.get(ALLOWED_INPUT_BUCKETS_ENV, "").split(","):
+        if name.strip():
+            buckets.add(name.strip())
+    for key in RUN_S3_LOCATION_KEYS:
+        value = definition.get(key) or ""
+        if isinstance(value, str) and value.startswith("s3://"):
+            bucket = value[len("s3://"):].partition("/")[0]
+            if bucket:
+                buckets.add(bucket)
+    return buckets
+
+
+def validate_control_s3_uri(s3_uri, allowed_buckets, setting_name="COSMOS3_CONTROL_PATH") -> str:
+    """Return the control-signal S3 URI unchanged, or raise ValueError explaining the rejection.
+
+    The value is a complete s3://bucket/key URI supplied by whoever authored the execution or the
+    asset's metadata, and it reaches `aws s3 cp` under the Batch job role -- which can read every
+    asset bucket in the deployment. Restricting the bucket to the deployment's own is what keeps a
+    metadata author from naming an unrelated bucket and having its object pulled into the run.
+    """
+    value = (s3_uri or "").strip()
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        raise ValueError(f"{setting_name} must not contain control characters: {s3_uri!r}")
+    if not value.startswith("s3://"):
+        raise ValueError(
+            f"{setting_name} must be a complete S3 URI of the form s3://bucket/key, "
+            f"but {s3_uri!r} was supplied")
+    remainder = value[len("s3://"):]
+    if "?" in remainder or "#" in remainder:
+        # urlparse splits a query or fragment off the key while `aws s3 cp` keeps it, so the object
+        # checked here would not be the object downloaded.
+        raise ValueError(f"{setting_name} must not contain '?' or '#': {s3_uri!r}")
+    bucket, _, key = remainder.partition("/")
+    if not bucket or not key or key.endswith("/"):
+        raise ValueError(
+            f"{setting_name} must name an object, not a bucket or a prefix: {s3_uri!r}")
+    # A leading or doubled slash is a real difference: urlparse strips it while `aws s3 cp` keeps it,
+    # so the two would address different objects.
+    if key.startswith("/") or "//" in key or any(part in (".", "..") for part in key.split("/")):
+        raise ValueError(f"{setting_name} contains an ambiguous key path: {s3_uri!r}")
+    if bucket not in allowed_buckets:
+        raise ValueError(
+            f"{setting_name} names bucket '{bucket}', which is not one of this deployment's "
+            f"buckets ({', '.join(sorted(allowed_buckets)) or 'none resolved'})")
+    return value
+
+
+def build_control_blocks(control_types_raw, control_paths_raw, control_weights_raw, allowed_buckets):
     """Build the per-control-type block mapping for control-signal transfer.
 
     Each of the raw inputs is a comma-separated string (multi-control), aligned
     by position. control_paths entries may be blank (auto-compute from source).
-    Returns {control_type: {"weight": float[, "control_path": str]}}.
+    Returns ``(blocks, control_sources)``: blocks is {control_type: {"weight": float}} as the
+    framework consumes it, and control_sources maps a control type to the validated s3:// URI of its
+    pre-computed control video, for the types that named one.
     """
     types = [t.strip().lower() for t in str(control_types_raw or "").split(",") if t.strip()]
     if not types:
@@ -64,18 +166,23 @@ def build_control_blocks(control_types_raw, control_paths_raw, control_weights_r
     weights = [w.strip() for w in str(control_weights_raw or "").split(",")]
 
     blocks = {}
+    control_sources = {}
     for i, ctype in enumerate(types):
         if ctype not in TRANSFER_CONTROL_TYPES:
             logger.warning(f"Unknown control type '{ctype}' ignored (supported: {TRANSFER_CONTROL_TYPES})")
             continue
-        block = {}
-        # Weight: use the aligned entry if present and non-blank, else default 1.0
-        try:
-            block["weight"] = float(weights[i]) if i < len(weights) and weights[i] != "" else 1.0
-        except ValueError:
-            block["weight"] = 1.0
-        blocks[ctype] = block
-    return blocks, types, paths
+        # Weight: the aligned entry when present and non-blank, else the default 1.0. A weight that
+        # is not a number is rejected rather than quietly becoming 1.0 -- the run would otherwise
+        # apply a conditioning strength nobody asked for and report success.
+        blocks[ctype] = {
+            "weight": parse_number_setting(
+                weights[i] if i < len(weights) else "",
+                f"COSMOS3_CONTROL_WEIGHT ({ctype})", 1.0),
+        }
+        path = paths[i] if i < len(paths) else ""
+        if path:
+            control_sources[ctype] = validate_control_s3_uri(path, allowed_buckets)
+    return blocks, control_sources
 
 
 def load_pipeline_definition() -> Dict:
@@ -134,13 +241,26 @@ def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
     return "/".join(subdir_parts) + "/" if subdir_parts else ""
 
 
-def find_output_file(output_dir: Path, extensions) -> Optional[Path]:
-    for ext in extensions:
-        for f in output_dir.rglob(f"*{ext}"):
-            logger.info(f"Found output file: {f}")
-            return f
-    logger.warning(f"No {extensions} files found in {output_dir}")
-    return None
+def find_output_files(output_dir: Path, extensions) -> List[Path]:
+    """Every artifact under output_dir carrying one of `extensions`, most recently written first.
+
+    `rglob` yields directory order, which is filesystem-dependent rather than sorted, so taking its
+    first hit picks an arbitrary file whenever a run leaves more than one candidate -- and a transfer
+    run does, since the framework writes the control video it computed alongside the generated one.
+    The order here is explicit (newest, then largest, then path) and every candidate is returned, so
+    the caller uploads all of them instead of discarding the rest.
+    """
+    wanted = {ext.lower() for ext in extensions}
+    candidates = [f for f in output_dir.rglob("*") if f.is_file() and f.suffix.lower() in wanted]
+    candidates.sort(key=lambda f: (-f.stat().st_mtime, -f.stat().st_size, str(f)))
+    if not candidates:
+        logger.warning(f"No {extensions} files found in {output_dir}")
+        return []
+    logger.info(f"Found {len(candidates)} output artifact(s) in {output_dir}:")
+    for f in candidates:
+        stat = f.stat()
+        logger.info(f"  {f.relative_to(output_dir)} ({stat.st_size} bytes, mtime {stat.st_mtime})")
+    return candidates
 
 
 def main():
@@ -157,9 +277,12 @@ def main():
         task_mode = definition.get("taskMode") or os.environ.get("TASK_MODE", "")
         cosmos_prompt = definition.get("cosmosPrompt", "")
         negative_prompt = definition.get("cosmosNegativePrompt", "")
-        seed = int(definition.get("cosmosSeed", 0) or 0)
-        guidance_raw = definition.get("cosmosGuidance", "")
-        num_frames = int(definition.get("cosmosNumFrames", 189) or 189)
+        # Numeric settings are coerced here, at the first point they are readable, so a value that
+        # cannot be used costs only the container start rather than the model restore behind it.
+        seed = parse_number_setting(definition.get("cosmosSeed"), "COSMOS3_SEED", 0, integer=True)
+        num_frames = parse_number_setting(
+            definition.get("cosmosNumFrames"), "COSMOS3_NUM_FRAMES", 189, integer=True, minimum=1)
+        guidance = parse_number_setting(definition.get("cosmosGuidance"), "COSMOS3_GUIDANCE", None)
         # Control-signal transfer fields (only used when task_mode == "transfer")
         control_type_raw = definition.get("cosmosControlType", "")
         control_path_raw = definition.get("cosmosControlPath", "")
@@ -211,8 +334,6 @@ def main():
         if not output_s3_asset_files_path:
             raise ValueError("outputS3AssetFilesPath is required in pipeline definition")
 
-        guidance = float(guidance_raw) if str(guidance_raw).strip() != "" else None
-
         # Control-signal transfer is only supported on the general-purpose omni
         # checkpoints (nano, super). Ignore the transfer request for the
         # task-specialized Super variants and fall back to their normal mode.
@@ -225,6 +346,25 @@ def main():
 
         is_transfer = task_mode == "transfer"
         effective_mode = task_mode or ""
+
+        # The control-signal settings are validated here rather than where they are used below:
+        # everything in between is expensive -- the model restore alone moves tens of gigabytes --
+        # and a rejected control weight or control path is knowable now.
+        control_blocks = None
+        control_guidance = None
+        control_sources = {}
+        if is_transfer:
+            control_blocks, control_sources = build_control_blocks(
+                control_type_raw, control_path_raw, control_weight_raw,
+                allowed_control_buckets(definition)
+            )
+            if not control_blocks:
+                raise ValueError(
+                    f"transfer requires at least one valid COSMOS3_CONTROL_TYPE "
+                    f"(supported: {', '.join(TRANSFER_CONTROL_TYPES)})"
+                )
+            control_guidance = parse_number_setting(
+                control_guidance_raw, "COSMOS3_CONTROL_GUIDANCE", 1.5)
 
         logger.info(f"Variant: {variant}, task_mode: {task_mode}, seed: {seed}, num_frames: {num_frames}")
         # The guardrail state is the one generation setting with a safety consequence, and it is
@@ -249,28 +389,13 @@ def main():
             input_file_path = INPUT_DIR / input_filename
             download_from_s3(input_s3_asset_file_path, input_file_path)
 
-        # Step 2b: For transfer, build control blocks and download any pre-computed
-        # control videos. A blank control path leaves the framework to auto-compute
-        # the signal from the source video (vision_path).
-        control_blocks = None
-        control_guidance = None
+        # Step 2b: For transfer, download the pre-computed control videos named above. A control type
+        # with no path leaves the framework to auto-compute the signal from the source video
+        # (vision_path).
         if is_transfer:
-            control_blocks, control_types, control_paths = build_control_blocks(
-                control_type_raw, control_path_raw, control_weight_raw
-            )
-            if not control_blocks:
-                raise ValueError(
-                    f"transfer requires at least one valid COSMOS3_CONTROL_TYPE "
-                    f"(supported: {', '.join(TRANSFER_CONTROL_TYPES)})"
-                )
-            control_guidance = (
-                float(control_guidance_raw) if str(control_guidance_raw).strip() != "" else 1.5
-            )
             logger.info("Step 2b: Preparing transfer control signals")
-            for i, ctype in enumerate(control_types):
-                if ctype not in control_blocks:
-                    continue
-                s3_path = control_paths[i] if i < len(control_paths) else ""
+            for ctype in control_blocks:
+                s3_path = control_sources.get(ctype)
                 if s3_path:
                     control_local = INPUT_DIR / f"control_{ctype}_{Path(parse_s3_uri(s3_path)[1]).name}"
                     download_from_s3(s3_path, control_local)
@@ -303,31 +428,47 @@ def main():
         # Step 4: Find output (image for text2image, else video)
         logger.info("Step 4: Finding output file")
         is_image_output = (task_mode in IMAGE_OUTPUT_MODES) or variant == "super-text2image"
-        if is_image_output:
-            output_file = find_output_file(OUTPUT_DIR, (".png", ".jpg", ".jpeg", ".webp"))
-            out_ext = output_file.suffix if output_file else ".png"
-        else:
-            output_file = find_output_file(OUTPUT_DIR, (".mp4",))
-            out_ext = ".mp4"
-        if not output_file:
+        extensions = (".png", ".jpg", ".jpeg", ".webp") if is_image_output else (".mp4",)
+        output_files = find_output_files(OUTPUT_DIR, extensions)
+        if not output_files:
             raise RuntimeError("No output file generated")
+        output_file, extra_files = output_files[0], output_files[1:]
+        out_ext = output_file.suffix
+        if extra_files:
+            # Which artifact a generative run leaves is not fixed, so uploading one and dropping the
+            # rest would report success for a partial result. All of them travel; the primary is the
+            # one that carries the asset-facing name and the preview.
+            logger.warning(
+                f"{len(output_files)} output artifacts matched {extensions}; primary: "
+                f"{output_file.name}; also uploading: {', '.join(f.name for f in extra_files)}")
 
         # Step 5: Upload to S3, preserving relative path for input-file modes
         logger.info("Step 5: Uploading output to S3")
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_bucket, output_base = parse_s3_uri(output_s3_asset_files_path)
         output_base = output_base.rstrip("/") + "/"
+        relative_subdir = ""
         if needs_input and input_s3_asset_file_path:
             relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id)
             stem = Path(parse_s3_uri(input_s3_asset_file_path)[1]).stem
-            output_filename = f"{stem}_Cosmos3_{variant}_{timestamp}{out_ext}"
-            output_key = f"{output_base}{relative_subdir}{output_filename}"
+            output_basename = f"{stem}_Cosmos3_{variant}_{timestamp}"
         else:
-            output_filename = f"cosmos3-{variant}-{timestamp}{out_ext}"
-            output_key = f"{output_base}{output_filename}"
+            output_basename = f"cosmos3-{variant}-{timestamp}"
+        output_key = f"{output_base}{relative_subdir}{output_basename}{out_ext}"
         output_s3_uri = f"s3://{output_bucket}/{output_key}"
         upload_to_s3(output_file, output_s3_uri)
         logger.info(f"Uploaded output: {output_s3_uri}")
+
+        # Additional artifacts are named after their own path inside the output directory so several
+        # from one run stay distinguishable, and stay flat beside the primary because the workflow's
+        # own path extension is what separates runs.
+        for extra in extra_files:
+            suffix = OUTPUT_NAME_UNSAFE.sub(
+                "_", str(extra.relative_to(OUTPUT_DIR).with_suffix("")))
+            extra_uri = (f"s3://{output_bucket}/{output_base}{relative_subdir}"
+                         f"{output_basename}_{suffix}{extra.suffix}")
+            upload_to_s3(extra, extra_uri)
+            logger.info(f"Uploaded additional output: {extra_uri}")
 
         # Step 6: Optional preview GIF for video outputs
         if generate_preview_gif_flag and out_ext == ".mp4":

@@ -4,19 +4,29 @@
 import os
 import boto3
 import json
+import uuid
 import datetime
 from customLogging.logger import safeLogger
 import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenGr00tFinetunePipeline")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 events_client = boto3.client(
     'events',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
@@ -74,6 +84,26 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         logger.warning(f"Sub-process registration failed (non-critical): {e}")
 
 
+def build_job_name(mode, orchestration_event_prefix):
+    """The name this pipeline's own state machine runs under.
+
+    A workflow may carry several triggers of one type, so one upload can fan out to simultaneous
+    runs of the same mode and Step Functions rejects a repeated name with ExecutionAlreadyExists.
+    The pipeline execution id encoded in the orchestration event prefix makes the name unique per
+    run while keeping it DERIVED: an SFN retry re-invokes this lambda with the same body and must
+    produce the same name rather than starting a second GPU sub-execution. A direct/local
+    invocation carries no prefix, so it falls back to a timestamp plus a random suffix. Kept within
+    the 80-character limit and free of ':' and '/'.
+    """
+    prefix = f"gr00t-{'eval' if mode == 'evaluate' else 'finetune'}-"
+    pipeline_execution_id = manifestHelper.pipeline_execution_id_from_event_prefix(
+        orchestration_event_prefix)
+    if pipeline_execution_id:
+        return f"{prefix}{pipeline_execution_id}"[:80]
+    stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]
+    return f"{prefix}{stamp}-{uuid.uuid4().hex[:8]}"[:80]
+
+
 def lambda_handler(event, context):
     """
     OpenPipeline
@@ -113,9 +143,7 @@ def lambda_handler(event, context):
             }
         }
 
-    # Generate unique execution name
-    job_name = (f"gr00t-{'eval' if mode == 'evaluate' else 'finetune'}-"
-                f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    job_name = build_job_name(mode, orchestration_event_prefix)
 
     sfn_input = {
         "jobName": job_name,

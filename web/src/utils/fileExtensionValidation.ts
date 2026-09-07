@@ -4,7 +4,7 @@
  */
 
 import { FileUploadTableItem } from "../pages/AssetUpload/FileUploadTable";
-import { PREVIEW_FILE_PATTERN } from "../common/constants/fileFormats";
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../common/constants/fileFormats";
 import Synonyms from "../synonyms";
 
 /**
@@ -45,6 +45,28 @@ export function getFileExtension(fileName: string): string {
  */
 export function isPreviewFile(fileName: string): boolean {
     return fileName.includes(PREVIEW_FILE_PATTERN);
+}
+
+/**
+ * Get the extension a preview file is validated against.
+ *
+ * For a name containing .previewFile. the extension is everything AFTER the marker,
+ * not the last dot: `model.gltf.previewFile.p.png` has the extension `.p.png`. This
+ * mirrors validate_preview_file_extension in the backend, which is the check that
+ * rejects the upload.
+ */
+export function getPreviewFileExtension(fileName: string): string {
+    if (fileName.includes(PREVIEW_FILE_PATTERN)) {
+        return "." + fileName.split(PREVIEW_FILE_PATTERN)[1].toLowerCase();
+    }
+    return getFileExtension(fileName);
+}
+
+/**
+ * Check if a preview file carries one of the allowed image extensions
+ */
+export function isPreviewExtensionAllowed(fileName: string): boolean {
+    return previewFileFormats.includes(getPreviewFileExtension(fileName));
 }
 
 /**
@@ -98,25 +120,34 @@ export function validateFiles(
     const allowedExtensions = parseAllowedExtensions(restrictFileUploadsToExtensions);
     const invalidFiles: FileValidationResult[] = [];
 
-    // If no restrictions, all files are valid
-    if (allowedExtensions === null) {
-        return {
-            isValid: true,
-            invalidFiles: [],
-            allowedExtensions: null,
-        };
-    }
-
     // Check each file
     for (const file of files) {
         const fileName = file.name;
-        const fileExt = getFileExtension(fileName);
-        const isPreview = isPreviewFile(fileName);
 
-        // Skip preview files
-        if (isPreview) {
+        // A preview file is exempt from the database restriction list but must still
+        // carry an allowed image extension, so it is checked whether or not the
+        // database restricts extensions
+        if (isPreviewFile(fileName)) {
+            if (!isPreviewExtensionAllowed(fileName)) {
+                invalidFiles.push({
+                    fileName,
+                    isValid: false,
+                    isPreviewFile: true,
+                    extension: getPreviewFileExtension(fileName),
+                    errorMessage: `Preview files must have one of the allowed extensions: ${previewFileFormats.join(
+                        ", "
+                    )}`,
+                });
+            }
             continue;
         }
+
+        // No restrictions means any non-preview file is allowed
+        if (allowedExtensions === null) {
+            continue;
+        }
+
+        const fileExt = getFileExtension(fileName);
 
         // Check if file is allowed
         if (!allowedExtensions.includes(fileExt)) {
@@ -149,14 +180,22 @@ export function formatValidationErrors(validationResult: ValidationResult): stri
 
     const { invalidFiles, allowedExtensions } = validationResult;
 
-    let message = `The following files have extensions that are not allowed for this ${Synonyms.database}:\n\n`;
+    let message = `The following files cannot be uploaded:\n\n`;
 
     invalidFiles.forEach((file) => {
-        message += `• ${file.fileName} - Extension ${file.extension} not allowed\n`;
+        message += `• ${file.fileName} - ${
+            file.errorMessage || `Extension ${file.extension} not allowed`
+        }\n`;
     });
 
-    message += `\nAllowed extensions: ${allowedExtensions?.join(", ") || "none"}`;
-    message += `\n\nNote: Preview files (containing ${PREVIEW_FILE_PATTERN} in the filename) are exempt from these restrictions.`;
+    if (allowedExtensions !== null) {
+        message += `\nAllowed extensions for this ${Synonyms.database}: ${allowedExtensions.join(
+            ", "
+        )}\n`;
+    }
+    message += `\nNote: Preview files (containing ${PREVIEW_FILE_PATTERN} in the filename) are exempt from the ${
+        Synonyms.database
+    } restriction list, but must still be one of ${previewFileFormats.join(", ")}.`;
 
     return message;
 }

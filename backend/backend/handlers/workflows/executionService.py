@@ -7,6 +7,7 @@ import os
 import time
 import boto3
 import botocore
+from botocore.config import Config
 from datetime import datetime, timedelta, timezone
 from weakref import WeakKeyDictionary
 from boto3.dynamodb.conditions import Key, Attr
@@ -138,18 +139,19 @@ def _clean_validation_message(v):
         pass
     return str(v)
 
-sfn = boto3.client('stepfunctions')
-logs_client = boto3.client('logs')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+sfn = boto3.client('stepfunctions', config=retry_config)
+logs_client = boto3.client('logs', config=retry_config)
 # Used only to terminate a registered Batch job on abort (_terminate_batch_job_reporting).
-batch_client = boto3.client('batch')
-dynamodb = boto3.resource('dynamodb')
+batch_client = boto3.client('batch', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 # Used only to cancel a registered Deadline Cloud farm job on abort
 # (_cancel_deadline_job_reporting). Built inside try/except and left None on failure: the execution
 # type is accepted only in the commercial partition, so a partition where the service does not resolve
 # must not lose the whole execution API to a client it never calls. A None client reports the job as
 # left running rather than silently doing nothing.
 try:
-    deadline_client = boto3.client('deadline')
+    deadline_client = boto3.client('deadline', config=retry_config)
 except Exception as e:
     logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
     deadline_client = None
@@ -188,7 +190,7 @@ except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
 
-lambda_client = boto3.client('lambda')
+lambda_client = boto3.client('lambda', config=retry_config)
 
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_file_version_history_table = (
@@ -839,17 +841,16 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # Resume from a prior page if the caller supplied a continuation token. A token that cannot
         # be decoded is a caller error: continuing without it would silently serve page 1 again.
         resume_output_key = None
+        # True once the input side is exhausted — said by the continuation, or reached by this page's
+        # own walk. That is the case the date high-water cannot describe: the mark is the OLDEST date
+        # served, and rows below it are unserved output-only rows sitting in the same range as the
+        # already-served dual-role ones. Such a page identifies an already-served execution per row
+        # instead (`_execution_reads_asset`), which distinguishes the two.
         inputs_drained = False
         # The oldest executionStartDate an earlier page already returned, and the execution at that
         # exact date that was served. Empty on the first page.
         served_through = ''
         served_through_id = ''
-        # True when the CONTINUATION said the input side is exhausted, so an earlier page served every
-        # input-direction execution of this asset. That is the case the date high-water cannot describe:
-        # it marks the OLDEST date served, and rows below it are unserved output-only rows sitting in
-        # the same range as the already-served dual-role ones. Such a page identifies an already-served
-        # execution per row instead (`_execution_reads_asset`), which distinguishes the two.
-        inputs_drained_before_this_page = False
         starting_token = query_params.get('startingToken') if query_params else None
         if starting_token:
             decoded = _decode_starting_token(starting_token)
@@ -858,7 +859,6 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                     body={'message': "startingToken is invalid."}, event=event)
             (resume_inputs_key, resume_output_key, inputs_drained,
              served_through, served_through_id) = _split_asset_list_token(decoded)
-            inputs_drained_before_this_page = inputs_drained
             # The cursor IS the last row served, so it supplies both halves of the high-water mark.
             if resume_inputs_key:
                 query_kwargs['ExclusiveStartKey'] = resume_inputs_key
@@ -894,7 +894,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # reads it, and an input-side cap can skip that block entirely.
         last_output_row_key = None
         # Reads spent asking whether an output-direction candidate was already served through the input
-        # direction. Only a continuation whose input side is drained spends any.
+        # direction. Only a page carrying a high-water mark spends any — a first page has served
+        # nothing to check against — and a page whose inputs drain mid-request spends them too.
         input_row_probes = 0
         # Set when THAT budget - not the executions-inspected one - is what cut the page short. The two
         # name different limits, so a page stopped by the probe budget must not report the inspected
@@ -950,21 +951,23 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             cfg_table = dynamodb.Table(workflow_execution_configuration_table)
             output_key_condition = Key('outputDatabaseId:outputAssetId').eq(
                 er.output_asset_partition_key(database_id, asset_id))
-            # An earlier page's oldest served row bounds this query from above. Both GSIs are walked
+            # An earlier page's oldest served row can bound this query from above. Both GSIs are walked
             # newest-first, so anything at or newer than that date has already been returned — through
             # the INPUT direction, which this query cannot see: dedupe is per-request, so a dual-role
             # execution (an input for this asset AND its output target) would otherwise be served
-            # again on the page that first reaches the output side. Narrowing the range is what makes
-            # the two independent walks behave as one ordered sequence across pages.
+            # again on the page that first reaches the output side.
             #
-            # NOT applied once the input side is already exhausted. The bound rests on "newer than the
-            # mark was served", which holds only while the input walk is still descending: after it
-            # drains, the mark is the OLDEST input row served, and output-only rows newer than it were
-            # never served by either direction — bounding there would hide them permanently, and the
-            # output cursor (which is newer than the mark in that case) would fall outside the range.
-            # Such a page identifies an already-served execution per row instead.
+            # NOT applied once the input side is exhausted, which is every page that reaches here: the
+            # gate above is "the input walk did not fill the budget", and a walk that does not fill it
+            # has drained. The bound rests on "newer than the mark was served", which holds only while
+            # the input walk is still descending — after it drains, the mark is the OLDEST input row
+            # served, and output-only rows newer than it were never served by either direction, so
+            # bounding there would hide them permanently with no cursor left to reach them by, and the
+            # output cursor (newer than the mark in that case) would fall outside the range. Such a
+            # page identifies an already-served execution per row instead, which leaves the caller's
+            # own filterEndDate as this query's only upper bound.
             output_upper_bound = filter_end_date
-            if (served_through and not inputs_drained_before_this_page
+            if (served_through and not inputs_drained
                     and (not output_upper_bound or served_through < output_upper_bound)):
                 output_upper_bound = served_through
             if output_upper_bound:
@@ -1005,14 +1008,15 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                         if not execution_id or execution_id in deduped_inputs:
                             continue
                         row_date = cfg_item.get('executionStartDate', '')
-                        if inputs_drained_before_this_page and served_through:
+                        if inputs_drained and served_through:
                             # The input side is exhausted, so "already served" is exactly "this
                             # execution has an input row for this asset" — asked of the row itself
                             # rather than inferred from a date, because at this point the served and
                             # the unserved share one date range. A row older than the mark cannot be
-                            # one of them (the input walk drained at the mark, so no input row is
-                            # older), which keeps the reads off the tail of the walk. The budget on
-                            # these reads is enforced at the top of this loop.
+                            # one of them (the input walk has drained, and an input row older than the
+                            # mark was served by THIS page and deduped above), which keeps the reads off
+                            # the tail of the walk. The budget on these reads is enforced at the top of
+                            # this loop.
                             if row_date >= served_through:
                                 input_row_probes += 1
                                 if _execution_reads_asset(
@@ -1021,10 +1025,12 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                         elif served_through and (row_date > served_through
                                                  or (row_date == served_through
                                                      and execution_id == served_through_id)):
-                            # The range bound above is inclusive, so rows at exactly the high-water date
-                            # still arrive. Newer than it was already served. AT it, only the one
-                            # execution the cursor names was served — two executions can share a start
-                            # date, so dropping the whole date would lose a sibling never returned.
+                            # The counterpart, for a page whose input walk is still descending and whose
+                            # range the mark therefore bounds: that bound is inclusive, so rows at
+                            # exactly the high-water date still arrive. Newer than it was already
+                            # served. AT it, only the one execution the cursor names was served — two
+                            # executions can share a start date, so dropping the whole date would lose
+                            # a sibling never returned.
                             continue
                         # A placeholder input row: this execution has no input file for the asset (it
                         # only wrote here), so the per-row input fields the response builder reads are
@@ -1376,37 +1382,17 @@ def _terminate_batch_job_reporting(job_id):
 
 
 def _cancel_deadline_job_reporting(farm_id, queue_id, job_id):
-    """Best-effort Deadline Cloud cancel of a registered farm job: UpdateJob with
-    targetTaskRunStatus=CANCELED. Returns (ok, reason).
+    """Best-effort Deadline Cloud cancel of a farm job. Returns (ok, reason).
 
     The Deadline task runs through `createJob.waitForTaskToken`, so Step Functions does NOT own the
     job — stopping the state machine abandons the token and leaves the farm rendering, which is why
-    this exists rather than relying on the parent stop.
+    an explicit cancel exists rather than relying on the parent stop.
 
-    A job already in a terminal task-run status is accepted rather than reported: cancelling a finished
-    job is a no-op and an abort racing a job that just completed is normal. A real failure (a missing
-    deadline:UpdateJob permission, say) returns its code so the caller can name what was left running.
+    The client is forwarded from this module rather than resolved inside the shared helper, so the
+    abort path's client is the one used and the failure path supplies its own.
     """
-    if not farm_id or not queue_id or not job_id:
-        return True, ""
-    if deadline_client is None:
-        return False, "Deadline Cloud is not available in this deployment"
-    try:
-        deadline_client.update_job(
-            farmId=farm_id, queueId=queue_id, jobId=job_id,
-            targetTaskRunStatus="CANCELED")
-        return True, ""
-    except botocore.exceptions.ClientError as e:
-        code = e.response.get('Error', {}).get('Code', '')
-        # A job whose tasks have all finished rejects the transition; that is not a failure to report.
-        if code in ('ConflictException', 'ResourceNotFoundException'):
-            logger.info(f"Deadline job {job_id} could not be cancelled (already finished): {e}")
-            return True, ""
-        logger.warning(f"Could not cancel registered Deadline job {job_id}: {e}")
-        return False, code or str(e)
-    except Exception as e:
-        logger.warning(f"Could not cancel registered Deadline job {job_id}: {e}")
-        return False, str(e)
+    return eo.cancel_deadline_job_reporting(farm_id, queue_id, job_id,
+                                            deadline_client=deadline_client)
 
 
 # Sub-process resource types the abort path can stop today (mirrors registerPipelineExecution).
@@ -1420,41 +1406,22 @@ RESOURCE_TYPE_BATCH_JOB = "batchJob"
 # owns the token, not the job, so stopping the execution leaves the job running on the farm.
 RESOURCE_TYPE_DEADLINE_CLOUD_JOB = "deadlineCloudJob"
 
-# The reserved job parameter DeadlineCloudTaskBuilder injects that names the VAMS pipeline execution a
-# farm job belongs to. Deadline stores every job parameter as {"string": "<value>"}.
-DEADLINE_PIPELINE_EXECUTION_PARAMETER = "VamsPipelineExecutionId"
-# Upper bound on the job summaries a single discovery pass will read. Discovery walks the newest jobs
-# on the pipeline's queue, and the job it wants was submitted by the execution being aborted, so it is
-# among the most recent. The bound keeps an abort against a busy queue from turning into an unbounded
-# scan; exceeding it is logged and reported rather than passed over silently.
-DEADLINE_DISCOVERY_MAX_JOBS = 200
-# Task-run statuses that mean the job is over. Only a job that is NOT over is worth cancelling.
-DEADLINE_TERMINAL_TASK_RUN_STATUSES = frozenset(
-    {"SUCCEEDED", "FAILED", "CANCELED", "NOT_COMPATIBLE"})
+# The discovery constants and helpers are shared with the failure path in
+# common.workflows.executionOutputs, so the two cannot diverge on which jobs they find. Re-exported
+# here because the abort path reads them directly.
+DEADLINE_PIPELINE_EXECUTION_PARAMETER = eo.DEADLINE_PIPELINE_EXECUTION_PARAMETER
+DEADLINE_DISCOVERY_MAX_JOBS = eo.DEADLINE_DISCOVERY_MAX_JOBS
+DEADLINE_TERMINAL_TASK_RUN_STATUSES = eo.DEADLINE_TERMINAL_TASK_RUN_STATUSES
 
 
 def _deadline_farm_queue_for_pipeline(pipeline_row):
     """(farmId, queueId) for a DeadlineCloud pipeline execution, read from its pipeline DEFINITION.
 
-    The pipeline EXECUTION row does not carry the farm or queue — they live on the definition at
-    ``executionConfig.deadlineCloud.{farmId,queueId}``, which is also what the ASL builder read when
-    it submitted the job. Returns ("", "") when the pipeline is not DeadlineCloud, the definition is
-    gone (a deleted pipeline), or the fields are absent.
+    The definition reader is forwarded from this module rather than resolved inside the shared
+    helper: the pipeline table is read here, and executionOutputs is imported by lambdas that hold
+    no read on it.
     """
-    try:
-        db_id = pipeline_row.get('pipelineDatabaseId', '')
-        pipeline_id = pipeline_row.get('pipelineId', '')
-        if not db_id or not pipeline_id:
-            return "", ""
-        definition = get_pipeline_definition(db_id, pipeline_id) or {}
-        deadline = ((definition.get('executionConfig') or {}).get('deadlineCloud') or {})
-        if isinstance(deadline, str):
-            deadline = json.loads(deadline) if deadline else {}
-        return str(deadline.get('farmId', '') or ''), str(deadline.get('queueId', '') or '')
-    except Exception as e:  # noqa: BLE001 - best effort; a missing definition must not fail the abort
-        logger.warning(f"Could not resolve the Deadline farm/queue for pipeline execution "
-                       f"{pipeline_row.get('pipelineExecutionId', '')}: {e}")
-        return "", ""
+    return eo.deadline_farm_queue_for_pipeline(pipeline_row, get_pipeline_definition)
 
 
 def _discover_deadline_job_id(farm_id, queue_id, pipeline_execution_id):
@@ -1466,45 +1433,9 @@ def _discover_deadline_job_id(farm_id, queue_id, pipeline_execution_id):
     to register from and the registration-driven cancel has no id to act on. Every submitted job does
     carry the pipeline execution id as a reserved job parameter, so it can be found from the
     execution being aborted without any event having occurred.
-
-    Only NON-terminal jobs are considered: cancelling a finished job is a no-op, and skipping them
-    keeps the number of GetJob calls proportional to what is actually running.
     """
-    if deadline_client is None or not (farm_id and queue_id and pipeline_execution_id):
-        return ""
-    scanned = 0
-    try:
-        paginator = deadline_client.get_paginator('list_jobs')
-        for page in paginator.paginate(farmId=farm_id, queueId=queue_id):
-            for summary in page.get('jobs', []) or []:
-                scanned += 1
-                if scanned > DEADLINE_DISCOVERY_MAX_JOBS:
-                    logger.warning(
-                        f"Deadline job discovery for pipeline execution {pipeline_execution_id} "
-                        f"stopped after {DEADLINE_DISCOVERY_MAX_JOBS} job summaries on queue "
-                        f"{queue_id}; the job was not among them")
-                    return ""
-                if str(summary.get('taskRunStatus', '')) in DEADLINE_TERMINAL_TASK_RUN_STATUSES:
-                    continue
-                job_id = summary.get('jobId', '')
-                if not job_id:
-                    continue
-                try:
-                    job = deadline_client.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
-                except Exception as e:  # noqa: BLE001 - one unreadable job must not end the search
-                    logger.info(f"Could not read Deadline job {job_id} during discovery: {e}")
-                    continue
-                parameter = (job.get('parameters') or {}).get(
-                    DEADLINE_PIPELINE_EXECUTION_PARAMETER) or {}
-                if str(parameter.get('string', '')) == str(pipeline_execution_id):
-                    logger.info(f"Discovered unregistered Deadline job {job_id} for pipeline "
-                                f"execution {pipeline_execution_id}")
-                    return job_id
-    except Exception as e:  # noqa: BLE001 - discovery is best effort; the caller reports the outcome
-        logger.warning(f"Deadline job discovery failed for pipeline execution "
-                       f"{pipeline_execution_id} on queue {queue_id}: {e}")
-        return ""
-    return ""
+    return eo.discover_deadline_job_id(farm_id, queue_id, pipeline_execution_id,
+                                       deadline_client=deadline_client)
 
 
 def _abort_registered_sub_process(sub):
@@ -1800,7 +1731,11 @@ def abort_execution(event, execution_id):
          Batch jobs and Deadline Cloud jobs are stopped; other resource types warn) and mark
          every non-terminal pipeline row ABORTED (with a stop date).
       5. Re-read the pipeline rows and stop anything registered since step 4's read.
-      6. Mark the main row ABORTED (with a stop date)."""
+      6. Mark the main row ABORTED (with a stop date).
+
+    Repeating an abort is a supported operation and is the remedy for a sub-process whose
+    asynchronous registration landed after the previous abort's last read: rows an earlier abort
+    stamped ABORTED are swept again, while rows that finished on their own are left alone."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
@@ -1827,9 +1762,14 @@ def abort_execution(event, execution_id):
     # attempted is remembered, so the second pass stops only what the first one had not yet seen.
     attempted_subs = set()
     marked_pipelines = set()
-    # Rows that were ALREADY terminal when this request first read them. Their steps finished on their
-    # own, so their sub-processes ended with them: the second pass must not issue stop calls against
-    # them, which would report "may still be running" for work that completed normally.
+    # Rows that had finished ON THEIR OWN before this request read them. Their sub-processes ended
+    # with them, so neither pass issues stop calls against them, which would report "may still be
+    # running" for work that completed normally.
+    #
+    # A row a PREVIOUS abort stamped ABORTED is deliberately NOT in this set. It is terminal, so no
+    # other path in the product ever stops its sub-processes again — and a registration that arrived
+    # after that abort's last read lands on exactly such a row. Sweeping it makes repeating the abort
+    # the remedy for that orphan; the stop calls are no-ops on a resource that has already finished.
     pre_terminal_pipelines = set()
 
     def _stop_row_sub_processes(row):
@@ -1884,9 +1824,9 @@ def abort_execution(event, execution_id):
     pipeline_rows = get_pipeline_execution_rows(execution_id)
     for prow in pipeline_rows:
         status = prow.get('executionStatus', '')
-        if status in TERMINAL_STATUSES:
+        if status in TERMINAL_STATUSES and status != ABORTED_STATUS:
             pre_terminal_pipelines.add(prow.get('pipelineExecutionId', ''))
-            continue  # already finished; leave as-is
+            continue  # finished on its own; leave as-is
 
         _stop_row_sub_processes(prow)
 
@@ -1906,9 +1846,9 @@ def abort_execution(event, execution_id):
     # late registration lands on a row this request has just marked ABORTED.
     for prow in get_pipeline_execution_rows(execution_id):
         if prow.get('pipelineExecutionId', '') in pre_terminal_pipelines:
-            # Terminal before the abort began, so this request never stopped anything on it and has
-            # nothing to catch up on. Skipped rather than re-read for sub-processes: a step that
-            # finished normally has already released its own, and attempting them would attach a
+            # Finished on its own before the abort began, so this request never stopped anything on it
+            # and has nothing to catch up on. Skipped rather than re-read for sub-processes: a step
+            # that finished normally has already released its own, and attempting them would attach a
             # "may still be running" warning to an abort that left nothing running.
             continue
         _stop_row_sub_processes(prow)
@@ -4430,6 +4370,15 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
         params = {}
         if cfg.get("templateId"):
             params["templateId"] = cfg.get("templateId")
+        # The tag values are the caller's own input, so a list trimmed at capture cannot be
+        # re-resolved from anywhere — not even from the template, unlike a truncated override body.
+        # Checked before the truthiness test below so a list trimmed all the way to empty fails here
+        # rather than replaying as no tags at all.
+        if cfg.get("templateTagsTruncated"):
+            raise VAMSGeneralErrorResponse(
+                "This execution's template tag values were too large to store in full, so the run "
+                "cannot be reproduced exactly. Start a new execution with the tag values instead of "
+                "re-running.")
         if cfg.get("templateTags"):
             params["templateTags"] = cfg.get("templateTags")
         # A template-less override run has no templateId; re-run needs the raw override body, which

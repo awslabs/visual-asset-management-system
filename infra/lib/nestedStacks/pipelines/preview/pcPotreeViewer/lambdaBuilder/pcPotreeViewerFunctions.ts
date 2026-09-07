@@ -199,6 +199,20 @@ export function buildConstructPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagLambda(fun);
+    // constructPipeline reports the external VAMS workflow token when it fails before the Batch job
+    // starts. Without this the SendTaskFailure raises AccessDeniedException, the handler logs it, and the
+    // workflow task waits out its full taskTimeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
     return fun;
 }
 

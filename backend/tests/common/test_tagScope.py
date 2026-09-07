@@ -1,11 +1,13 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from backend.backend.common.tagScope import (
-    GLOBAL_SCOPE, normalize_scope, is_visible_in_scope, verify_database_exists,
+    GLOBAL_SCOPE, normalize_scope, verify_database_exists,
     name_used_by_any_database,
 )
 
@@ -24,20 +26,86 @@ class TestNormalizeScope:
 
 
 @pytest.mark.unit
-class TestIsVisibleInScope:
-    def test_global_visible_everywhere(self):
-        assert is_visible_in_scope(None, requested_database_id="factory-db") is True
-        assert is_visible_in_scope("GLOBAL", requested_database_id=None) is True
+class TestNoPerItemVisibilityRule:
+    """A listing's scope is decided by the queried partition, not by a per-item predicate.
 
-    def test_scoped_visible_only_in_own_db_or_all(self):
-        assert is_visible_in_scope("factory-db", requested_database_id="factory-db") is True
-        assert is_visible_in_scope("factory-db", requested_database_id="hospital-db") is False
-        # requested None => "all" admin view: everything visible
-        assert is_visible_in_scope("factory-db", requested_database_id=None) is True
+    ``?databaseId=X`` queries partition X alone and returns no GLOBAL rows
+    (tests/handlers/tags/test_tagServiceScope.py pins that on the handler), so a helper
+    answering "is this row visible for scope X" with a global+X union describes semantics
+    the listings do not have. The union rule belongs to asset tag resolution only, where
+    createAsset.py reads both scopes explicitly.
+    """
 
-    def test_global_only_request_excludes_scoped(self):
-        assert is_visible_in_scope("factory-db", requested_database_id=None, global_only=True) is False
-        assert is_visible_in_scope("GLOBAL", requested_database_id=None, global_only=True) is True
+    def test_no_visibility_predicate_is_exported(self):
+        from backend.backend.common import tagScope
+        assert not hasattr(tagScope, "is_visible_in_scope")
+
+    def test_module_functions_are_only_the_ones_handlers_import(self):
+        # Guards the shape rather than one name: a new module-level helper here has to be
+        # added deliberately and checked against the partition-only listing rule.
+        from backend.backend.common import tagScope
+        defined_here = {
+            name for name, value in vars(tagScope).items()
+            if callable(value)
+            and not name.startswith("_")
+            and getattr(value, "__module__", None) == tagScope.__name__
+        }
+        assert defined_here == {
+            "normalize_scope", "verify_database_exists", "name_used_by_any_database",
+        }
+
+
+@pytest.mark.unit
+class TestHandlerImportSurface:
+    """Positive control: tagScope still satisfies every name production code imports from it.
+
+    A missing name here is an ImportError at Lambda cold start, so the guard reads the import
+    statements out of the tree rather than naming the importers: the set of modules that import
+    from tagScope may grow, but every name any of them takes has to exist.
+    """
+
+    def test_every_production_import_of_tagScope_resolves(self):
+        from backend.backend.common import tagScope
+
+        backend_root = Path(__file__).resolve().parents[2] / "backend"
+        scanned = 0
+        requested = []
+        for source_file in backend_root.rglob("*.py"):
+            try:
+                tree = ast.parse(source_file.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            scanned += 1
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("tagScope"):
+                    for alias in node.names:
+                        requested.append((source_file.name, alias.name))
+
+        # Both floors keep a walk that matched nothing from passing vacuously.
+        assert scanned >= 50, f"only parsed {scanned} backend modules — the walk is broken"
+        assert requested, "found no production import of tagScope — the walk is broken"
+
+        missing = [(f, n) for f, n in requested if not hasattr(tagScope, n)]
+        assert missing == [], f"tagScope no longer provides imported names: {missing}"
+
+    def test_every_imported_symbol_resolves_and_works(self):
+        # Resolving is not enough — each surviving symbol still has to behave.
+        from backend.backend.common.tagScope import (
+            GLOBAL_SCOPE as sentinel,
+            normalize_scope as normalize,
+            verify_database_exists as verify,
+            name_used_by_any_database as name_used,
+        )
+        assert sentinel == "GLOBAL"
+        assert normalize("factory-db") == "factory-db"
+
+        database_table = MagicMock()
+        database_table.get_item.return_value = {"Item": {"databaseId": "factory-db"}}
+        assert verify("factory-db", database_table) is True
+
+        tag_table = MagicMock()
+        tag_table.query.return_value = {"Items": [{"databaseId": "GLOBAL", "tagName": "Status"}]}
+        assert name_used(tag_table, "tagNameIndex", "tagName", "Status") is False
 
 
 @pytest.mark.unit

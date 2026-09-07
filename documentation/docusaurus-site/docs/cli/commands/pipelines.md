@@ -178,6 +178,9 @@ vamscli pipeline template delete -d my-db -p my-pipeline -t to-obj
 | `--overrides[-file]`                  | Per-template overrides (arity, metadata inputs, asset scope, filters) |
 | `--tag-schema[-file]`                 | Inline tag schema (list of field definitions)                         |
 
+The `--overrides` block is at most 64 KB serialized, the same budget as the pipeline's own
+`systemConfig`, whose keys it replaces a subset of.
+
 :::note[Create vs update flags]
 `create` takes the bare enabling flags `--allow-custom-edit` and `--default`. `update` takes the paired toggle forms `--allow-custom-edit/--no-custom-edit` and `--default/--no-default`, so an update can also clear either setting.
 :::
@@ -187,6 +190,11 @@ vamscli pipeline template delete -d my-db -p my-pipeline -t to-obj
 tag schema are all removed, and there is no archived copy to restore. This differs from
 `pipeline delete` and `workflow delete`, which archive. The command prompts for confirmation, and
 `--yes` is required in `--json-output` mode where no prompt is possible.
+
+Deleting a template that a file-upload trigger still names as a default template succeeds and prints
+a warning naming those workflows and triggers; in `--json-output` mode the same list is returned as a
+`warnings` array. Triggered executions of the named workflows fail until each trigger picks a
+different default template for this pipeline (`vamscli workflow trigger set`).
 :::
 
 ---
@@ -205,6 +213,14 @@ vamscli pipeline tag-schema set -d my-db -p my-pipeline -t to-glb \
 
 vamscli pipeline tag-schema set -d my-db -p my-pipeline -t to-glb --fields-file tags.json
 ```
+
+:::note[A field definition takes only these keys]
+`tagKey`, `type`, `required`, `default`, `label`, `description`, and `enumValues`. Any other key is
+rejected with a `400` naming the offending index and key, rather than ignored — a hand-written
+`tags.json` with a misspelled `requried` or a capitalised `Type` fails the command instead of storing
+a tag that is silently optional or untyped. The same rule applies to `--tag-schema` on
+`pipeline template create` and `pipeline template update`.
+:::
 
 ---
 

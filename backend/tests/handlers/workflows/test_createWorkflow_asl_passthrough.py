@@ -119,6 +119,11 @@ def test_interim_threads_the_next_steps_delivery_metadata_key():
     threaded = sorted(
         s["Parameters"]["Payload"]["body"]["nextPipelineMetadataS3Key.$"] for s in interim)
     assert threaded == ["$.stepMetadataS3Keys[1]", "$.stepMetadataS3Keys[2]"]
+    # The viewer subfolder travels the same way and for the same reason: a suffix edited on a pipeline
+    # record after the workflow was saved must reach steps 2+ on the next run, not on the next save.
+    suffixes = sorted(
+        s["Parameters"]["Payload"]["body"]["nextPipelineAuxPreviewSuffix.$"] for s in interim)
+    assert suffixes == ["$.stepAuxPreviewSuffixes[1]", "$.stepAuxPreviewSuffixes[2]"]
 
 
 @pytest.mark.unit

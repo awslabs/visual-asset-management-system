@@ -6,6 +6,8 @@ the change_password flow, and the forgot-password reset flow) and the auth login
 """
 
 import json
+import sys
+
 import pytest
 from unittest.mock import Mock, patch
 from botocore.exceptions import ClientError
@@ -16,14 +18,25 @@ from vamscli.utils.exceptions import AuthenticationError
 
 
 def _make_authenticator(client_secret=None):
-    """Build a CognitoAuthenticator with a mocked boto3 client."""
-    authenticator = CognitoAuthenticator(
-        region='us-east-1',
-        user_pool_id='us-east-1_test123',
-        client_id='test-client-id',
-        client_secret=client_secret,
+    """Build a CognitoAuthenticator whose boto3 client is mocked at the boundary.
+
+    The patch wraps the constructor rather than assigning over `.client` afterwards:
+    CognitoAuthenticator builds its cognito-idp client in __init__, so a later assignment
+    leaves a real client already constructed and makes the test depend on whatever AWS
+    configuration the machine happens to have.
+    """
+    with patch('vamscli.auth.cognito.boto3.client') as mock_boto3_client:
+        authenticator = CognitoAuthenticator(
+            region='us-east-1',
+            user_pool_id='us-east-1_test123',
+            client_id='test-client-id',
+            client_secret=client_secret,
+        )
+    assert mock_boto3_client.called, (
+        "CognitoAuthenticator no longer builds its client through "
+        "vamscli.auth.cognito.boto3.client, so this helper is patching the wrong boundary "
+        "and a real client was constructed"
     )
-    authenticator.client = Mock()
     return authenticator
 
 
@@ -42,6 +55,47 @@ def _tokens():
 
 def _client_error(code, message='boom', operation='ChangePassword'):
     return ClientError({'Error': {'Code': code, 'Message': message}}, operation)
+
+
+class TestAuthenticatorHelperIsHermetic:
+    """`_make_authenticator` must build no real boto3 client.
+
+    Assigning a `Mock` over `.client` after construction leaves the real client already built, so
+    every test in this file reached out through botocore during setup and the file's result depended
+    on ambient machine state rather than on the code under test.
+    """
+
+    def test_no_real_client_is_ever_constructed(self, monkeypatch):
+        """`create_client` is where boto3 builds the client, whether signed or not, so a helper that
+        patches the boundary never reaches it. Deliberately not asserted through credential
+        resolution: the production client is unsigned, so credentials are not resolved either way and
+        such an assertion would pass on the unfixed helper."""
+        import botocore.session
+
+        def _boom(self, *args, **kwargs):
+            raise AssertionError(
+                "a real botocore client was constructed during test setup: the helper is patching "
+                "after the fact instead of at the boto3.client boundary"
+            )
+
+        monkeypatch.setattr(botocore.session.Session, 'create_client', _boom)
+
+        authenticator = _make_authenticator()
+        assert authenticator.client is not None
+
+    def test_the_helper_fails_loudly_if_the_patch_target_moves(self):
+        """The helper's own guard, exercised. If CognitoAuthenticator stops building its client
+        through `vamscli.auth.cognito.boto3.client`, the patch silently covers nothing and every test
+        here goes back to constructing a real client — the guard has to fail instead."""
+        class _NoBoto3:
+            def __init__(self, **kwargs):
+                self.client = None
+
+        # Patched by module object rather than by dotted path, so the test does not depend on
+        # whether pytest imports this file as `tests.test_auth_password` or as a top-level module.
+        with patch.object(sys.modules[__name__], 'CognitoAuthenticator', _NoBoto3):
+            with pytest.raises(AssertionError, match="wrong boundary"):
+                _make_authenticator()
 
 
 class TestAuthenticatorForcedPasswordChange:

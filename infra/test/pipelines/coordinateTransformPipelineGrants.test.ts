@@ -212,6 +212,32 @@ describe("Coordinate Transform vamsExecute lambda", () => {
     });
 });
 
+describe("Coordinate Transform constructPipeline lambda", () => {
+    // constructPipeline fails BEFORE the Batch job exists — an unreadable input configuration, a
+    // manifest that resolves no output path — so nothing downstream can report for it. Its handler now
+    // calls SendTaskFailure on those routes, and without this grant that call raises
+    // AccessDeniedException, is logged, and the workflow task still waits out its 14400s taskTimeout.
+    // The fix and the grant are each inert without the other.
+    //
+    // Asserted against the synthesized POLICY rather than the builder source, because a file-level grep
+    // for the action passes on this builder file already: three peer builders in it grant the action and
+    // constructPipeline did not. Scoping matters, and the template is what scopes it.
+    test("can fail the workflow callback token when it rejects an input", () => {
+        const statements = Object.entries(template.findResources("AWS::IAM::Policy"))
+            .filter(([logicalId]) => logicalId.includes("constructPipeline"))
+            .flatMap(([, policy]) => (policy as any).Properties.PolicyDocument.Statement);
+
+        // Control: an empty statement list would satisfy the action assertions vacuously, and the
+        // logical-id filter is exactly the kind of predicate that silently matches nothing after a
+        // construct is renamed.
+        expect(statements.length).toBeGreaterThan(0);
+
+        const actions = statements.flatMap(actionsOf);
+        expect(actions).toContain("states:SendTaskFailure");
+        expect(actions).toContain("states:SendTaskSuccess");
+    });
+});
+
 describe("Coordinate Transform processing state machine", () => {
     test("execution timeout envelopes the batch-job task timeout", () => {
         const machines = Object.values(

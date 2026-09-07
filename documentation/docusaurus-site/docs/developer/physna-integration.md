@@ -144,10 +144,10 @@ flowchart LR
 ### Event flow
 
 1. **File upload:** S3 `ObjectCreated` event → `fileIndexerSnsTopic` → file sync Lambda → downloads to `/tmp` → `POST /tenants/{tenant}/assets` with merged metadata → cleans up `/tmp`.
-2. **File deletion:** S3 `ObjectRemoved` event → file sync Lambda → `DELETE /tenants/{tenant}/assets` → cleans up empty parent folder.
+2. **File deletion:** S3 `ObjectRemoved` event → file sync Lambda → `DELETE /tenants/{tenant}/assets`.
 3. **File metadata or attribute change:** DynamoDB stream → file sync Lambda → attempts `PATCH` on Physna asset metadata; if the asset does not exist yet, falls back to the upload flow.
 4. **Asset metadata change:** DynamoDB stream on `assetStorageTable` → asset sync Lambda → lists all Physna assets under `{dbId}/{assetId}/` and rebuilds their metadata; removes Physna assets that no longer have a matching VAMS file.
-5. **Asset permanent deletion or archive:** asset sync Lambda deletes every Physna asset under the VAMS asset folder and removes empty folders.
+5. **Asset permanent deletion or archive:** asset sync Lambda deletes every Physna asset under the VAMS asset folder. The emptied folders themselves stay in the tenant.
 
 ### Metadata precedence
 
@@ -248,9 +248,9 @@ Planned behavior once implemented: on every file upload and every asset-metadata
 
 ### Empty folders are not cleaned up after file deletes
 
-When a file delete in VAMS removes the last file inside an asset folder (or the last asset inside a database folder) on the Physna side, the now-empty folder is left in place. The emptiness check is wired into `_delete_physna_asset` via `delete_folder_if_empty`, but the Physna folder-delete HTTP call itself is stubbed behind a mock callback because the public API docs did not unambiguously identify the delete endpoint at implementation time. Search `physnaCommon.py` for `TODO: verify with Physna` to find the stub.
+When a file delete in VAMS removes the last file inside an asset folder (or the last asset inside a database folder) on the Physna side, the now-empty folder is left in place. Folder cleanup is outside the scope of the integration: `delete_folder_if_empty` in `physnaCommon.py` issues no request and reports that no folder was deleted, because the public Physna API docs do not identify a folder-delete endpoint.
 
-Planned behavior once implemented: after a file delete succeeds, if the asset folder has no remaining assets, `DELETE` it in Physna. Walk one level up and repeat for the database folder. Until then, expect orphan empty folders to accumulate under high-delete-volume tenants; they are harmless but untidy.
+Planned behavior once the endpoint is confirmed with Physna: after a file delete succeeds, if the asset folder has no remaining assets, `DELETE` it in Physna. Walk one level up and repeat for the database folder. Until then, expect orphan empty folders to accumulate under high-delete-volume tenants; they are harmless but untidy.
 
 ---
 

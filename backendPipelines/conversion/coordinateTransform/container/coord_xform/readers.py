@@ -70,19 +70,37 @@ class PointCloudReader(ABC):
 class E57Reader(PointCloudReader):
     """Reader for ASTM E2807 E57 files."""
 
+    def _read_crs(self, e57_file: pye57.E57) -> str | None:
+        """The dataset CRS from the E57 root's `coordinateMetadata` string, or None when absent.
+
+        ASTM E2807 records the coordinate reference system on the E57Root element. A scan header
+        carries no CRS at all, so it cannot be reached through `get_header`. The field is optional and
+        pye57's own writer seeds it with an empty string, so a blank value means "not recorded" rather
+        than a CRS whose name is empty.
+        """
+        try:
+            root = e57_file.root
+            if not root.isDefined("coordinateMetadata"):
+                return None
+            value = root["coordinateMetadata"].value()
+        except Exception:
+            # An unreadable or absent root element is not a CRS mismatch; the rest of the metadata is
+            # still usable, and `enforce_source_crs` is what decides whether an absent CRS blocks.
+            return None
+
+        text = str(value).strip()
+        return text or None
+
     def read_metadata(self, path: Path) -> DatasetMetadata:
         """Read E57 file metadata."""
         import pye57
 
         e57 = pye57.E57(str(path))
-        header = e57.get_header(0)
         point_count = sum(
             e57.get_header(i).point_count for i in range(e57.scan_count)
         )
 
-        crs = None
-        if hasattr(header, "coordinate_metadata"):
-            crs = header.coordinate_metadata
+        crs = self._read_crs(e57)
 
         return DatasetMetadata(
             file_path=path,
@@ -111,7 +129,15 @@ class E57Reader(PointCloudReader):
     def read_chunks(
         self, path: Path, chunk_size: int
     ) -> Iterator[PointChunk]:
-        """Yield point data from E57 in chunks."""
+        """Yield point data from E57 in chunks.
+
+        `pye57` has no chunked read -- `read_scan_raw` returns a whole scan -- so `chunk_size` bounds
+        what the caller receives, not what is read. Two things keep that to ONE scan rather than
+        several: the raw dictionary is released as soon as its columns have been stacked (it holds a
+        full-length array per dimension, so it is the larger of the two copies), and the stacked arrays
+        are released at the end of each scan, before the next `read_scan_raw`. Without the second, a
+        generator suspended in scan N+1 while the caller writes scan N would hold both.
+        """
         import numpy as np
         import pye57
 
@@ -141,6 +167,8 @@ class E57Reader(PointCloudReader):
                     data["colorBlue"],
                 ]).astype(np.uint8)
 
+            del data
+
             total_points = xyz.shape[0]
             for chunk_idx, start in enumerate(
                 range(0, total_points, chunk_size)
@@ -159,6 +187,8 @@ class E57Reader(PointCloudReader):
                     scan_metadata=scan_meta,
                 )
                 yield chunk
+
+            xyz = intensity = rgb = None
 
 
 class LasReader(PointCloudReader):
@@ -284,26 +314,35 @@ class PlyReader(PointCloudReader):
     def read_chunks(
         self, path: Path, chunk_size: int
     ) -> Iterator[PointChunk]:
-        """Yield point data from PLY in chunks."""
+        """Yield point data from PLY in chunks.
+
+        `open3d` reads a whole cloud, so as with E57 `chunk_size` bounds what the caller receives rather
+        than what is read. Colours are scaled per chunk instead of for the whole cloud: the scale
+        promotes uint8 to float64, so doing it up front cost a second full-cloud array three times the
+        size of the one it produced.
+        """
         import open3d as o3d
 
         pcd = o3d.io.read_point_cloud(str(path))
         xyz = np.asarray(pcd.points, dtype=np.float64)
 
-        rgb = None
-        if pcd.has_colors():
-            rgb = (np.asarray(pcd.colors) * 255).astype(np.uint8)
-
-        normals = None
-        if pcd.has_normals():
-            normals = np.asarray(pcd.normals, dtype=np.float32)
+        colors = np.asarray(pcd.colors) if pcd.has_colors() else None
+        normals = (
+            np.asarray(pcd.normals, dtype=np.float32)
+            if pcd.has_normals()
+            else None
+        )
 
         total_points = xyz.shape[0]
         for chunk_idx, start in enumerate(range(0, total_points, chunk_size)):
             end = min(start + chunk_size, total_points)
             yield PointChunk(
                 xyz=xyz[start:end],
-                rgb=rgb[start:end] if rgb is not None else None,
+                rgb=(
+                    (colors[start:end] * 255).astype(np.uint8)
+                    if colors is not None
+                    else None
+                ),
                 normals=normals[start:end] if normals is not None else None,
                 scan_index=0,
                 chunk_index=chunk_idx,
