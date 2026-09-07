@@ -244,15 +244,25 @@ class TestVerboseMode:
     
     def test_is_verbose_mode_default(self):
         """Test verbose mode detection with default settings."""
-        # Without --verbose in sys.argv, should return False
         result = _is_verbose_mode()
         assert isinstance(result, bool)
-    
+
     @patch('sys.argv', ['vamscli', '--verbose', 'test'])
-    def test_is_verbose_mode_with_flag(self):
-        """Test verbose mode detection with --verbose flag."""
-        result = _is_verbose_mode()
-        assert result is True
+    def test_is_verbose_mode_ignores_process_argv(self):
+        """Raw argv must not control verbosity — only the parsed flag does.
+
+        `_is_verbose_mode()` used to match the literal `--verbose` anywhere in `sys.argv`, which made
+        the suite's outcome depend on how pytest was invoked and turned full request/response logging
+        on for `vamscli search assets -q "--verbose"`. `main.py` registers the option and
+        `initialize_logging()` writes the module global, so the global is the whole contract.
+        """
+        initialize_logging(verbose=False)
+        assert _is_verbose_mode() is False
+
+    def test_is_verbose_mode_follows_the_parsed_flag(self):
+        """Positive control for the test above: the parsed flag still turns verbosity on."""
+        initialize_logging(verbose=True)
+        assert _is_verbose_mode() is True
 
 
 class TestLoggingIntegration:

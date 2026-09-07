@@ -6,13 +6,15 @@ and returns only unique IPs to prevent duplicate target errors.
 
 import json
 import boto3
+from botocore.config import Config
 import logging
 from typing import Dict, Any, List
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-ec2_client = boto3.client('ec2')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+ec2_client = boto3.client('ec2', config=retry_config)
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:

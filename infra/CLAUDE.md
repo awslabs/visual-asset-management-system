@@ -9,7 +9,7 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 -   **Name**: VAMS (Visual Asset Management System) -- CDK Infrastructure
 -   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`)
 -   **Runtime**: AWS CDK v2 (TypeScript), targeting `aws-cdk-lib`
--   **Node**: NODEJS_20_X for Lambda and CDK
+-   **Node**: NODEJS_22_X for Lambda and CDK
 -   **Python**: PYTHON_3_12 for all Lambda functions
 -   **Lambda Memory**: 5308 MB (all functions)
 -   **Lambda Timeout**: 15 minutes (all functions)
@@ -23,122 +23,85 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 
 ```
 infra/
-  bin/
-    infra.ts                    # CDK app entry point
+  bin/infra.ts                  # CDK app entry point
   common/
-    vamsAppFeatures.ts          # VAMS_APP_FEATURES enum (feature flags)
+    vamsAppFeatures.ts          # VAMS_APP_FEATURES enum
+    resourceParamKeys.ts        # SSM key constants (mirrored in backend/common/resourceNames.py)
   config/
     config.ts                   # Config interfaces, getConfig(), constants
     config.json                 # Active deployment configuration
-    config.template.commercial.json  # Commercial template
-    config.template.govcloud.json    # GovCloud template
+    config.template.{commercial,govcloud,eusovereign}.json
     saml-config.ts              # SAML provider settings
-    csp/                        # CSP additional config (cspAdditionalConfig.json)
-    docker/                     # Docker build configurations
-    policy/                     # S3 additional bucket policy JSON
-  gen/
-    genEndpoints.ts             # Endpoint generation utility
+    csp/ docker/ policy/        # CSP additional config, Docker build, S3 bucket + IAM role + WAF rule policy (wafPolicyConfig.json) JSON
+  gen/genEndpoints.ts           # Endpoint generation utility
   lib/
     core-stack.ts               # CoreVAMSStack -- root stack orchestrator
-    cf-waf-stack.ts             # WAF stack (us-east-1 for CloudFront, regional for ALB)
-    aspects/
-      iam-role-transform.aspect.ts  # IAM role naming + permission boundaries
-      log-retention.aspect.ts       # Forces 1-year log retention on all LogGroups
-    constructs/
-      wafv2-basic-construct.ts  # WAFv2 web ACL construct
+    cf-waf-stack.ts             # WAF (regional ACL for API GW/ALB; CLOUDFRONT ACL in us-east-1 when CloudFront on); rules built from config/policy/wafPolicyConfig.json
+    aspects/                    # iam-role-transform.aspect.ts, log-retention.aspect.ts (1-year retention)
+    constructs/wafv2-basic-construct.ts  # Builds the WAF Web ACL from wafPolicyConfig.json: managed rule groups (block or count-only per `block`) + per-rule `ruleActionOverrides` (e.g. SizeRestrictions_BODY -> count) + rate-based rules (always keyed on the connection `IP`; a `FORWARDED_IP` override is accepted but not emitted and raises a synth warning, and a 429 custom-response body); count-only Common Rule Set fallback when no policy supplied
     helper/
-      const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso)
-      lambda.ts                 # Layer bundling commands (poetry-based)
-      s3AssetBuckets.ts         # Global asset bucket registry (shared across stacks)
+      const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso, aws-eusc)
+      iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring
+      lambda.ts                 # Layer bundling commands
+      s3AssetBuckets.ts         # Global asset bucket registry
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
-      service-helper.ts         # ServiceFormatter class: ARN(), Endpoint, Principal
-    lambdaBuilder/              # ~17 builder files, ~40+ function builders
-      assetFunctions.ts
-      assetsLinkFunctions.ts
-      authFunctions.ts          # Includes buildApiKeyServiceFunction
-      commentFunctions.ts
-      configFunctions.ts
-      databaseFunctions.ts
-      metadataFunctions.ts
-      metadataSchemaFunctions.ts
-      pipelineFunctions.ts
-      roleFunctions.ts
-      searchIndexBucketSyncFunctions.ts
-      sendEmailFunctions.ts
-      subscriptionFunctions.ts
-      tagFunctions.ts
-      tagTypeFunctions.ts
-      userRoleFunctions.ts
-      workflowFunctions.ts
+      service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
+    lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
+                                # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
+                                # metadataSchema, assetsLink, searchIndexBucketSync)
     nestedStacks/
-      vpc/
-        vpcBuilder-nestedStack.ts          # VPC, subnets, VPC endpoints
+      vpc/vpcBuilder-nestedStack.ts      # VPC, subnets, VPC endpoints
       storage/
-        storageBuilder-nestedStack.ts      # ~1800 lines: DynamoDB tables, S3, SNS, SQS, KMS, CloudWatch
-        customResources/
-          populateS3AssetBucketsTable.ts   # Custom resource for S3 bucket table population
+        storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
+        customResources/populateS3AssetBucketsTable.ts
+      resourceNames/
+        resourceNamesBuilder-nestedStack.ts  # 64 SSM String parameters, one per registry descriptor
+        resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
       auth/
-        authBuilder-nestedStack.ts         # Cognito user pool, identity pool, SAML, external OAuth
-        constructs/
-          cognito-web-native-construct.ts
-          dynamodb-authdefaults-admin-construct.ts
-          dynamodb-authdefaults-ro-construct.ts
+        authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
+        constructs/                      # cognito-web-native, dynamodb-authdefaults-{admin,ro}
       apiLambda/
-        apigatewayv2-amplify-nestedStack.ts  # API Gateway V2 HttpApi + Lambda authorizer
-        apiBuilder-nestedStack.ts            # ~1375 lines: all API routes + Lambda wiring
-        lambdaLayersBuilder-nestedStack.ts   # Lambda layer construction
-        constructs/
-          apigatewayv2-lambda-construct.ts       # Route attachment helper
-          amplify-config-lambda-construct.ts     # /api/amplify-config endpoint
-          vams-version-lambda-construct.ts       # /api/version endpoint
-          dynamodb-metadataschema-defaults-construct.ts
+        api-nestedStack.ts                 # Selects impl by config.app.api.apiType
+        apiRouteRegistry.ts                # Cross-stack route registry + attachFunctionToApi()
+        apiBuilder-nestedStack.ts          # Primary API routes + Lambda wiring
+        apiBuilder2-nestedStack.ts         # Secondary API stack: Tags, Tag Types, Auth Constraints,
+                                           # asset history, and the pipeline / pipeline template /
+                                           # workflow / workflow trigger / execution routes
+        lambdaLayersBuilder-nestedStack.ts
+        constructs/                        # rest-api-gateway-construct, buildOpenApiSpec, amplify-config-lambda,
+                                           # vams-version-lambda, dynamodb-metadataschema-defaults
       staticWebApp/
         staticWebBuilder-nestedStack.ts    # S3 + CloudFront or ALB web hosting
-        constructs/
-          cloudfront-s3-website-construct.ts
-          alb-s3-website-albDeploy-construct.ts
-          gateway-albDeploy-construct.ts
-          custom-cognito-config-construct.ts
+        constructs/                        # cloudfront-s3-website, alb-s3-website-albDeploy, gateway-albDeploy, custom-cognito-config
       searchAndIndexing/
         searchBuilder-nestedStack.ts       # OpenSearch serverless or provisioned
-        constructs/
-          opensearch-serverless.ts
-          opensearch-provisioned.ts
-          schemaDeploy/
-            deployschema.ts
-      pipelines/
+        constructs/                        # opensearch-serverless, opensearch-provisioned, schemaDeploy/deployschema.ts
+      pipelines/                           # Pipeline stacks — see pipelines/CLAUDE.md
         pipelineBuilder-nestedStack.ts     # Pipeline orchestrator
-        constructs/
-          batch-fargate-pipeline.ts
-          batch-gpu-pipeline.ts
-          securitygroup-gateway-pipeline-construct.ts
-        conversion/
-          3dBasic/                          # 3D file conversion pipeline
-          meshCadMetadataExtraction/        # CAD/mesh metadata extraction
-        preview/
-          pcPotreeViewer/                   # Point cloud Potree viewer pipeline
-          3dThumbnail/                      # 3D preview thumbnail pipeline (GIF/JPG/PNG)
-        3dRecon/
-          splatToolbox/                     # Gaussian splatting pipeline
-        genAi/
-          metadata3dLabeling/              # AI-powered metadata labeling
-        multi/
-          modelOps/                        # Model optimization pipeline
-          rapidPipeline/                   # RapidPipeline ECS
-          rapidPipelineEKS/               # RapidPipeline EKS
-        simulation/
-          isaacLabTraining/               # NVIDIA Isaac Lab training
-      featureEnabled/
-        custom-featureEnabled-config-nestedStack.ts  # Feature flag DynamoDB persistence
-      locationService/
-        location-service-nestedStack.ts    # Amazon Location Service (commercial only)
+        constructs/                        # batch-fargate-pipeline, batch-gpu-pipeline,
+                                           # securitygroup-gateway-pipeline, vamsSchemaRegistration
+        conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
+        preview/{pcPotreeViewer,3dThumbnail}/
+        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/{cosmos,gr00t}}/
+        multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
+      featureEnabled/custom-featureEnabled-config-nestedStack.ts
+      locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
       addon/
         addonBuilder-nestedStack.ts        # Addon orchestrator
         garnetFramework/                   # Garnet NGSI-LD digital twin framework
-  test/
-    infra.test.ts              # Single snapshot test (outdated, uses legacy @aws-cdk/assert)
-  deploymentDataMigration/     # Data migration utilities
-    v2.4_to_v2.5/upgrade/    # Backfills databaseId and databaseId:assetId on asset version records
+        physna/                            # Physna 3D/CAD geometric search sync (builds physnaFileSync, physnaAssetSync, physnaViewer lambdas for addon API)
+  test/                          # Jest suites: route registry, OpenAPI spec, config-builder drift, WAF,
+                                 # lambda grants, presigned-URL policy, migration tooling, plus the legacy
+                                 # infra.test.ts snapshot (uses the outdated @aws-cdk/assert)
+    apiStackCeilings.test.ts     # Grounds the API-stack-split figures + app-wide log retention
+                                 # against the synthesized templates
+    support/templateSynth.ts     # T1 harness: synthesizes the whole app from each shipped config
+                                 # template with no Docker daemon; exposes every nested template
+    t1PartitionPortability.test.ts  # T1 assertions across commercial/govcloud/eusovereign
+  deploymentDataMigration/
+    tools/ssm_resource_lookup.py                 # Resolves resource names from the SSM parameters
+    v2.4_to_v2.5/upgrade/                        # Backfills databaseId + databaseId:assetId on asset versions
+    v2.5_to_v2.6/upgrade/                        # Transforms pipeline/workflow/execution rows into the V2 tables
 ```
 
 ---
@@ -147,170 +110,78 @@ infra/
 
 ### Nested Stack Dependency Chain
 
+Each arrow is an explicit `addDependency()` call in `core-stack.ts` (Rule 9), so the chain reads bottom-up: a stack is created after everything it points to.
+
 ```
 CoreVAMSStack (root)
-  |
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
-  +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, KMS, CloudWatch)
-  |     |
-  |     +-- AuthBuilder (depends on Storage)
-  |     |     |
-  |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
-  |     |     |     |
-  |     |     |     +-- ApiBuilder (all API route Lambda wiring)
-  |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
-  |     |     |     +-- SearchBuilder (OpenSearch)
-  |     |     |     +-- PipelineBuilder (all use-case pipelines)
-  |     |     |     +-- AddonBuilder (Garnet)
-  |     |
+  +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
+  |     +-- ResourceNamesBuilder (publishes 64 SSM parameters)
+  |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
+  |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
+  |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
+  |     +-- SearchBuilder (OpenSearch)                           -> storage, resourceNames
+  |     +-- PipelineBuilder (all use-case pipelines)             -> storage, ApiBuilder2
+  |     |                                                           (its vamsSchema registration custom
+  |     |                                                            resources invoke an ApiBuilder2 Lambda)
+  |     +-- AddonBuilder (Garnet, Physna Sync)                   -> storage, resourceNames
+  |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)   -> storage, AuthBuilder, ApiBuilder,
+  |     |                                                           ApiBuilder2, SearchBuilder, AddonBuilder
+  |     +-- StaticWeb (CloudFront or ALB hosting)                -> storage
   +-- LocationService (conditional: useLocationService.enabled)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
 ```
 
+`RestApi` materializes the routes every API stack registered into `RouteRegistry`, which is why it depends on all of them rather than the reverse.
+
 ### Cross-Stack Shared Interfaces
 
-**`storageResources`** (defined in `storageBuilder-nestedStack.ts`):
+**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 46 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). There is no `sqs` member: the two Amazon SQS queues the builder creates buffer S3 object-created/deleted notifications for the indexers and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
 
-```typescript
-interface storageResources {
-    encryption: { kmsKey?: kms.IKey };
-    s3: {
-        assetAuxiliaryBucket: s3.Bucket;
-        artefactsBucket: s3.Bucket;
-        accessLogsBucket: s3.Bucket;
-    };
-    sqs: { workflowAutoExecuteQueue: sqs.Queue };
-    sns: {
-        eventEmailSubscriptionTopic: sns.Topic;
-        fileIndexerSnsTopic: sns.Topic;
-        assetIndexerSnsTopic: sns.Topic;
-        databaseIndexerSnsTopic: sns.Topic;
-    };
-    cloudWatchAuditLogGroups: {
-        authentication;
-        authorization;
-        fileUpload;
-        fileDownload;
-        fileDownloadStreamed;
-        authOther;
-        authChanges;
-        actions;
-        errors: logs.LogGroup;
-    };
-    dynamo: {
-        // 20+ DynamoDB tables -- see storageBuilder-nestedStack.ts lines 72-98
-        appFeatureEnabledStorageTable;
-        assetLinksStorageTableV2;
-        assetLinksMetadataStorageTable;
-        assetStorageTable;
-        assetUploadsStorageTable;
-        assetVersionsStorageTable;
-        assetFileVersionsStorageTable;
-        assetFileMetadataVersionsStorageTable;
-        authEntitiesStorageTable;
-        commentStorageTable;
-        constraintsStorageTable;
-        databaseStorageTable;
-        metadataSchemaStorageTableV2;
-        databaseMetadataStorageTable;
-        assetFileMetadataStorageTable;
-        fileAttributeStorageTable;
-        pipelineStorageTable;
-        rolesStorageTable;
-        s3AssetBucketsStorageTable;
-        subscriptionsStorageTable;
-        tagStorageTable;
-        tagTypeStorageTable;
-        userRolesStorageTable;
-        userStorageTable;
-        workflowExecutionsStorageTable;
-        apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
-        workflowStorageTable: dynamodb.Table;
-        // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
-    };
-}
-```
-
-**`authResources`** (defined in `authBuilder-nestedStack.ts`):
-
-```typescript
-interface authResources {
-    roles: { unAuthenticatedRole: iam.Role };
-    cognito: {
-        userPool: cognito.UserPool;
-        webClientUserPool: cognito.UserPoolClient;
-        userPoolId: string;
-        identityPoolId: string;
-        webClientId: string;
-    };
-}
-```
+**`authResources`** (`authBuilder-nestedStack.ts`): `roles.unAuthenticatedRole`; `cognito.{userPool, webClientUserPool, userPoolId, identityPoolId, webClientId}`.
 
 ---
 
 ## Configuration System
 
-### 3-Tier Fallback Chain
-
-Configuration values resolve in order:
-
-1. CDK context (`-c key=value`)
-2. `config/config.json` file
-3. Environment variables
-4. Hardcoded defaults
-
-The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`.
+Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`.
 
 ### Key Constants (config/config.ts)
 
-| Constant                          | Value                                     |
-| --------------------------------- | ----------------------------------------- |
-| `VAMS_VERSION`                    | `"2.X.0"`                                 |
-| `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                     |
-| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_20_X`                     |
-| `LAMBDA_MEMORY_SIZE`              | `5308`                                    |
-| `OPENSEARCH_VERSION`              | `OPENSEARCH_2_7`                          |
-| `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]` |
+| Constant                          | Value                                                                                                                             |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `VAMS_VERSION`                    | `"2.X.0"`                                                                                                                         |
+| `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                                                                                                             |
+| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_22_X`                                                                                                             |
+| `LAMBDA_MEMORY_SIZE`              | `5308`                                                                                                                            |
+| `OPENSEARCH_VERSION`              | `OPENSEARCH_3_5` (standard partitions)                                                                                            |
+| `OPENSEARCH_VERSION_EUSOVEREIGN`  | `OPENSEARCH_2_19` — provisioned construct selects this when `Partition() === "aws-eusc"` (OpenSearch 3.x not yet supported there) |
+| `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]`                                                                                         |
+| `API_GATEWAY_STAGE_NAME`          | `"api"` (fixed; baked into VamsCLI endpoint constants and web `/api/*` fronting)                                                  |
 
 ### ConfigPublic Interface
 
-The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all deployment parameters. Key sections:
+`ConfigPublic` (~200 lines in `config/config.ts`) defines all deployment parameters. Key sections:
 
 -   `env`: account, region, partition, coreStackName
--   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets
+-   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets (bucketArn, baseAssetsPrefix, defaultSyncDatabaseId; optional bucketAccountId / bucketRegion / bucketKmsKeyArn for cross-account + SSE-KMS), presignedUrlNetworkRestrictions (allowedIpRanges / allowedVpceIds; mutually exclusive; empty = no restriction). Non-empty restrictions add a bucket policy Deny scoped to presigned `s3:authType=REST-QUERY-STRING` requests on the created asset + auxiliary bucket via `addPresignedUrlNetworkRestrictionsToBucketPolicy()`; imported external buckets are not policy-managed by VAMS. A bucketArn may be registered multiple times under non-overlapping prefixes (validated by `validateExternalAssetBuckets()`, which rejects overlapping prefixes and inconsistent per-bucket attributes); `storageBuilder` imports each unique ARN once so per-prefix event notifications merge into one S3 notification configuration.
 -   `app.useGlobalVpc`: enabled, useForAllLambdas, addVpcEndpoints, optionalExternalVpcId, vpcCidrRange
--   `app.openSearch`: useServerless, useProvisioned, reindexOnCdkDeploy
+-   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
--   `app.addons`: useGarnetFramework
--   `app.authProvider`: useCognito (enabled, useSaml, useUserPasswordAuthFlow), useExternalOAuthIdp, authorizerOptions.allowedIpRanges
--   `app.api`: globalRateLimit (default 50), globalBurstLimit (default 100)
--   `app.govCloud`: enabled, il6Compliant
--   `app.webUi`: optionalBannerHtmlMessage, allowUnsafeEvalFeatures
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
+-   `app.addons`: useGarnetFramework, usePhysnaSync
+-   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
+-   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase)
+-   `app.govCloud` (enabled, il6Compliant); `app.iamRoleConfig` (useCustomBootstrapRoles, useCustomVamsStackRoles — mappings in `config/policy/iamRoleConfig.json`); `app.webUi` (optionalBannerHtmlMessage, allowUnsafeEvalFeatures)
+-   `app.useWaf` (boolean): when true, the Web ACL rules load from `config/policy/wafPolicyConfig.json` — `managedRuleGroups` (block or count-only per `block`, plus optional per-rule `ruleActionOverrides` such as `SizeRestrictions_BODY -> count` so large upload bodies up to the API Gateway REST 10 MB limit are not blocked, and `SizeRestrictions_QUERYSTRING -> count` so the SuperSplat viewer's presigned-URL `?load=` parameter is not blocked above 2048 bytes) and `rateBasedRules` (per-entry `limit` and `blockResponseCode` default 429; `aggregateKeyType`/`forwardedIPConfig` are accepted for compatibility but every rule is emitted with `IP`). `getConfig()` loads the file into `config.wafPolicyJSON` (undefined = legacy count-only Common Rule Set). Not part of `config.json`/ConfigPublic beyond the boolean, so it is outside ConfigBuilder + the config templates.
 
-### Config extends ConfigPublic (Internal)
-
-Adds: `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, SSM parameter paths.
+`Config` extends `ConfigPublic` internally with `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `iamRoleCustomizationJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, and SSM parameter paths.
 
 ### Feature Flags (common/vamsAppFeatures.ts)
 
-```typescript
-enum VAMS_APP_FEATURES {
-    GOVCLOUD,
-    ALLOWUNSAFEEVAL,
-    LOCATIONSERVICES,
-    ALBDEPLOY,
-    CLOUDFRONTDEPLOY,
-    NOOPENSEARCH,
-    AUTHPROVIDER_COGNITO,
-    AUTHPROVIDER_COGNITO_SAML,
-    AUTHPROVIDER_EXTERNALOAUTHIDP,
-}
-```
-
-Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`.
+`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `PHYSNA_ADDON`, `DEADLINECLOUD_PIPELINES`. Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`.
 
 ---
 
@@ -318,7 +189,7 @@ Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persi
 
 All 17 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
 
-### Standard Function Signature
+### Standard Function Signature + Configuration
 
 ```typescript
 export function buildSomeFunction(
@@ -329,121 +200,111 @@ export function buildSomeFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
+    const name = "functionName";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, "../../../backend/backend")),
+        handler: `handlers.{category}.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas ? vpc : undefined,
+        vpcSubnets: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas ? { subnets } : undefined,
+        environment: { /* handler-specific env vars only; resource names resolve via SSM */ },
+    });
 ```
 
-### Standard Lambda Configuration
+### Required Security Calls (Every Lambda Builder)
+
+After creating the function, every builder MUST call these five helpers, in order:
 
 ```typescript
-const name = "functionName";
-const fun = new lambda.Function(scope, name, {
-    code: lambda.Code.fromAsset(path.join(__dirname, "../../../backend/backend")),
-    handler: `handlers.{category}.${name}.lambda_handler`,
-    runtime: LAMBDA_PYTHON_RUNTIME,
-    layers: [lambdaCommonBaseLayer],
-    timeout: Duration.minutes(15),
-    memorySize: Config.LAMBDA_MEMORY_SIZE,
-    vpc:
-        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-            ? vpc
-            : undefined,
-    vpcSubnets:
-        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-            ? { subnets: subnets }
-            : undefined,
-    environment: {
-        // Table name environment variables
-    },
-});
+kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey); // 1. KMS
+setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources); // 2. Auth tables + audit logs
+globalLambdaEnvironmentsAndPermissions(fun, config); // 3. VAMS_RESOURCE_PARAM_PREFIX + SSM grant
+suppressCdkNagLambda(fun); // 4. Per-Lambda IAM4/IAM5 + wildcard KMS
+suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grantReadWrite
 ```
 
-### 4 Required Security Calls (Every Lambda Builder)
-
-Every lambda builder function MUST include these four calls after creating the function:
-
-```typescript
-// 1. KMS permissions (if encryption enabled)
-kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-
-// 2. Auth table access + audit log setup
-setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-
-// 3. Global environment variables (Cognito auth flag)
-globalLambdaEnvironmentsAndPermissions(fun, config);
-
-// 4. CDK Nag suppression for S3 grant patterns
-suppressCdkNagErrorsByGrantReadWrite(scope);
-```
+`suppressCdkNagLambda(fun)` is required on every authored Lambda (including those built inside constructs and custom resources). It replaces a stack-wide suppression that bloated synthesized CloudFormation templates by stamping metadata onto every nested-stack resource. Scope the suppression to the function.
 
 ### What the Security Helpers Do
 
--   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key
--   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Adds env vars for AUTH_TABLE_NAME, CONSTRAINTS_TABLE_NAME, USER_ROLES_TABLE_NAME, ROLES_TABLE_NAME + 9 audit log group env vars. Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all audit log groups.
--   **`globalLambdaEnvironmentsAndPermissions`**: Sets COGNITO_AUTH_ENABLED based on Cognito + VPC configuration
--   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
+-   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key.
+-   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Grants read on auth/constraints/userRoles/roles tables and CloudWatch PutLogEvents on all 9 audit log groups. **Does not inject table or log group environment variables** — non-pipeline handlers resolve those from SSM.
+-   **`globalLambdaEnvironmentsAndPermissions`**: Adds `VAMS_RESOURCE_PARAM_PREFIX` env var and grants `ssm:GetParameter[s]`, `ssm:GetParametersByPath` on the deployment's resource-name parameter prefix.
+-   **`isCognitoMfaCheckEnabled`** (authorizer builder only): computes whether the API Gateway authorizer can reach Cognito for the MFA-preference check — `TRUE` whenever Cognito is the auth provider and the authorizer runs **outside** the VPC, `FALSE` when Lambdas run in the VPC (`useForAllLambdas`), regardless of partition. VAMS does not create Cognito VPC interface endpoints, so an in-VPC authorizer has no path to Amazon Cognito. Set as `COGNITO_AUTH_ENABLED` on the **authorizer Lambda only** — the authorizer resolves MFA status (`AdminGetUser`, cached per sign-in session) and passes it to handler Lambdas via the `vams:mfaEnabled` authorizer context value, so handlers need no Cognito access.
+-   **`suppressCdkNagLambda`**: Standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS), scoped to the function.
+-   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards.
+-   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies IAM4/IAM5 suppressions to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach.
 
 ---
 
 ## API Gateway Pattern
 
-### HttpApi Setup (apigatewayv2-amplify-nestedStack.ts)
+### REST API Setup (api-nestedStack.ts + constructs/rest-api-gateway-construct.ts)
 
--   API Gateway V2 HttpApi with custom Lambda authorizer
--   Authorizer: `HttpLambdaResponseType.SIMPLE`, cache TTL 30 seconds, identity source `$request.header.Authorization`
--   CORS: all origins (`*`), standard + auth headers, all HTTP methods, credentials=false
--   Rate limiting: `config.app.api.globalRateLimit` (default 50) / `config.app.api.globalBurstLimit` (default 100)
--   Access logging to CloudWatch with structured JSON format
+-   `ApiNestedStack` is implementation-agnostic: it selects an API implementation by `config.app.api.apiType` and exposes the result via `IApiImplementation` (`apiEndpoint`, `invokeUrlWithStage`, `stageName`). The only supported type today is `API_TYPE_APIGATEWAY_REST` (the only value in `SUPPORTED_API_TYPES`); it instantiates `RestApiGatewayConstruct`. A future entry point (e.g. ALB) adds a `SUPPORTED_API_TYPES` value, a construct under `constructs/` implementing `IApiImplementation`, and a branch here — downstream consumers stay unchanged.
+-   REST API (v1) built from a cross-stack route registry, materialized as a single `SpecRestApi` with an inline OpenAPI spec. Explicit Deployment + Stage (name = the fixed constant `API_GATEWAY_STAGE_NAME` = `"api"`). Access logging to CloudWatch with structured JSON. Rate limiting: `globalRateLimit` (default 50) / `globalBurstLimit` (default 100). Integration timeout: `apiGatewayTimeoutTime` (default 29s, max 300s) rendered as `timeoutInMillis` on each route's `x-amazon-apigateway-integration` (the CORS OPTIONS MOCK is excluded).
+-   Custom Lambda authorizer: REQUEST type, returns IAM policy with wildcard resource (for cache correctness). Authenticated routes use the `VamsAuthorizer` scheme (identity source `method.request.header.Authorization`, 30s cache TTL); anonymous/ignored routes use `VamsAnonymousAuthorizer` (identity source `context.identity.sourceIp`, 900s cache TTL) — the same Lambda still runs the IP-restriction check, so no route is left without an authorizer.
+-   CORS: all origins (`*`), standard + auth headers, all HTTP methods, credentials=false. Set in three places because REST responses come from three layers: (1) the per-path OPTIONS **MOCK** method (unauthenticated — no `security` on OPTIONS) returns the preflight ACAO from `buildOpenApiSpec.ts`; (2) **GatewayResponses** (`DEFAULT_4XX`/`DEFAULT_5XX`, added in `rest-api-gateway-construct.ts`) inject ACAO on authorizer denials (401/403), missing-auth-token, and errors — these never reach a Lambda; (3) the Lambda handler adds ACAO to its own proxy response body (`commonHeaders()`), which API Gateway returns verbatim.
+-   Resource policy: **always** written explicitly to match `endpointType` (`buildOpenApiSpec.ts`) — `aws:SourceVpce`-restricted for `PRIVATE`, public allow-all for `REGIONAL`. API Gateway does not clear a prior resource policy when an update omits one, so emitting it for both types ensures a `PRIVATE`↔`REGIONAL` switch overwrites the old policy. A stale `PRIVATE` policy left on a `REGIONAL` API denies every request (incl. the CORS preflight) with `403 AccessDeniedException` at the resource-policy layer, which a browser misreports as a CORS-preflight failure.
+-   Endpoint type: `endpointType` `"REGIONAL"` (default, public) or `"PRIVATE"` (reachable only through the execute-api VPC interface endpoint; requires `useGlobalVpc.enabled` + either `addVpcEndpoints` or `optionalExternalPrivateApigVPCEId`; incompatible with CloudFront; must be fronted by an ALB in isolated non-public subnets — `useAlb.enabled` + `useAlb.usePublicSubnet = false`). Only `PRIVATE` uses an execute-api interface endpoint (created by the VPC builder when `addVpcEndpoints` is enabled, else supplied via `optionalExternalPrivateApigVPCEId`); `REGIONAL` ignores any endpoint. `resolveApiGatewayVpcEndpointId()` encodes this.
 
-### Route Attachment (attachFunctionToApi helper)
+### Route Registration (attachFunctionToApi helper)
 
-Routes are wired in `apiBuilder-nestedStack.ts` using:
+Routes are registered across nested stacks (`apiBuilder-nestedStack.ts`, `apiBuilder2-nestedStack.ts`) via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })`. The pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. For each route this (1) grants the REST API's execution role invoke permission on the Lambda, and (2) adds a descriptor (path, method, function ARN, allow-anonymous flag) to `RouteRegistry`. The REST API builder then renders all descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`.
 
-```typescript
-attachFunctionToApi(this, lambdaFunction, {
-    routePath: "/database/{databaseId}",
-    method: apigateway.HttpMethod.GET,
-    api: api,
-});
-```
+### API Stack Ceilings
 
-This creates an `ApiGatewayV2LambdaConstruct` which:
+The two API builder stacks stay split, and consolidating them would remove headroom rather than tidy anything up. Three limits govern how many endpoints a deployment can carry, and they are not the same limit:
 
-1. Grants invoke permission to the API Gateway service principal
-2. Creates an HttpLambdaIntegration
-3. Adds the route to the API
+| Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
+| ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
+| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 71                             |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.49 MB, `apiBuilder2` ~0.29 MB                  |
+| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
+
+Two consequences worth holding onto:
+
+-   **A CDK Nag suppression `reason` is a real consumer of the body budget.** cdk-nag stamps the reason
+    onto the metadata of EVERY resource a suppression applies to, and the shared grant suppressions are
+    applied with `applyToChildren` over whole stacks — so the text is multiplied by the resource count.
+    Replacing one catch-all entry with six individually justified ones moved `apiBuilder` from ~0.40 MB
+    to ~0.57 MB; shortening each reason to the fact that justifies it brought that back to ~0.48 MB.
+    Keep a reason to one sentence and put the reasoning in the helper's doc comment, which costs nothing.
+
+-   **Resource count understates how full an API stack is.** `apiBuilder` sits at about a fifth of the resource ceiling but two fifths of the template-body ceiling — the Lambda functions there carry long inline IAM policies and CDK Nag metadata. Both ceilings are per-template, so both are what the split buys headroom against.
+-   **Splitting the CDK stacks does not relieve the API Gateway quota.** Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. API Gateway builds it from the inline OpenAPI document, which is why no `AWS::ApiGateway::Resource` appears in any template and no per-stack ceiling applies to it. That quota is the adjustable one of the three; the CloudFormation ceilings are not.
+
+The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `test/api/apiStackCeilings.test.ts` asserts every figure above against the synthesized templates, so this table cannot silently go stale.
+
+**A fourth ceiling governs the storage stack: 200 Outputs per template, not adjustable.**
+`StorageResourcesBuilder` emits 133 of them where the next highest stack emits 32 — every table a
+sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a
+`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 64 as its own
+Parameters. Exceeding 200 is rejected at ValidateTemplate, the same class of failure that forced the
+API stack split, so roughly 30 more cross-stack-referenced storage resources would hit it.
+`test/api/apiStackCeilings.test.ts` fails above 170, which leaves headroom to design a split rather than
+discovering the limit at the deploy that crosses it. Counted from a fresh synth, not from `cdk.out`.
 
 ### RESTful Route Convention
 
-Routes use path parameters: `/database/{databaseId}/assets/{assetId}`
-
-Additional asset version routes:
-
--   `PUT /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}` -- update version (alias, comment)
--   `POST /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/archive` -- archive version
--   `POST /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/unarchive` -- unarchive version
-
-Unauthenticated paths (no authorizer): `/api/amplify-config`, `/api/version`
+Routes use path parameters: `/database/{databaseId}/assets/{assetId}`. Asset version subresource routes include `PUT .../assetversions/{assetVersionId}` (update alias/comment), `POST .../{assetVersionId}/archive`, and `POST .../{assetVersionId}/unarchive`. Unauthenticated paths (no authorizer): `/api/amplify-config`, `/api/version`.
 
 ---
 
 ## Service Helper (Partition-Aware ARN/Endpoint Generation)
 
-### Critical Initialization
+**Critical initialization** — in `bin/infra.ts`, `Service.SetConfig(config)` MUST be called at startup after `Config.getConfig(app)`, before any `Service()` call.
 
-```typescript
-// In bin/infra.ts -- MUST be called at startup
-const config = Config.getConfig(app);
-Service.SetConfig(config); // Required before any Service() call
-```
-
-### ServiceFormatter Class (lib/helper/service-helper.ts)
+**ServiceFormatter** (`lib/helper/service-helper.ts`):
 
 ```typescript
 Service(name: SERVICE, useFipsOverride?: boolean): ServiceFormatter
-// Returns object with:
 //   .ARN(resource, resourceName?)  -- partition-aware ARN
 //   .Endpoint                      -- hostname (FIPS-aware)
-//   .Principal                     -- iam.ServicePrincipal
-//   .PrincipalString               -- string principal
+//   .Principal / .PrincipalString  -- iam.ServicePrincipal / string
 
 IAMArn(name: string): { role, policy, statemachine, statemachineExecution,
     stateMachineEvents, lambda, subnet, vpc, securitygroup, ssm, loggroup,
@@ -452,93 +313,193 @@ IAMArn(name: string): { role, policy, statemachine, statemachineExecution,
 Partition(): string  // Returns current partition
 ```
 
-### Partition Lookup (lib/helper/const.ts)
-
-Massive lookup table supporting 4 AWS partitions:
-
--   `aws` (commercial)
--   `aws-us-gov` (GovCloud)
--   `aws-cn` (China)
--   `aws-iso` (isolated)
-
-Each entry contains: `arn`, `hostname`, `fipsHostname`, `principal`
+**Partition lookup** (`lib/helper/const.ts`): a lookup table supporting 5 partitions — `aws` (commercial), `aws-us-gov` (GovCloud), `aws-cn` (China), `aws-iso` (isolated), `aws-eusc` (EU Sovereign Cloud; region `eusc-de-east-1`, DNS suffix `.amazonaws.eu`). Each entry contains `arn`, `hostname`, `fipsHostname`, `principal`.
 
 ---
 
 ## Security Patterns
 
-### CDK Nag (Always Enabled)
+**CDK Nag (always enabled).** `bin/infra.ts` sets `config.enableCdkNag = true` and applies `Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }))`. Suppressions are applied at three levels: **stack** (AwsSolutions-COG3 for GovCloud, IAM4/IAM5 for Lambda execution roles), **resource** (`suppressCdkNagErrorsByGrantReadWrite()` in every lambda builder), and **path** (specific workflow IAM roles).
 
-```typescript
-// bin/infra.ts
-config.enableCdkNag = true;
-if (config.enableCdkNag) {
-    Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
-}
+**KMS encryption.** Optional CMK via `config.app.useKmsCmkEncryption`. `kmsKeyLambdaPermissionAddToResourcePolicy()` grants Lambda access; `kmsKeyPolicyStatementPrincipalGenerator()` creates key policy with service principals (S3, DynamoDB, SQS, SNS, ECS, EKS, Lambda, etc.).
+
+**Encryption at rest for a new resource.** Any resource that supports encryption at rest takes
+`storageResources.encryption.kmsKey`, which is `undefined` when `config.app.useKmsCmkEncryption.enabled` is
+false — so the prop is self-guarding and needs no ternary. Pass it and the resource falls back to its
+service's AWS-managed key when the operator has not enabled a CMK.
+
+| Resource                  | Prop                           | Notes                                                    |
+| ------------------------- | ------------------------------ | -------------------------------------------------------- |
+| `dynamodb.Table`          | `encryption` + `encryptionKey` | `CUSTOMER_MANAGED` only when a key exists                |
+| `s3.Bucket`               | `encryption` + `encryptionKey` | `BucketEncryption.KMS`; set `bucketKeyEnabled`           |
+| `sns.Topic` / `sqs.Queue` | `masterKey` / `encryptionKey`  |                                                          |
+| `logs.LogGroup`           | `encryptionKey`                | The key policy already admits the Logs service principal |
+| `efs.FileSystem`          | `encrypted: true` + `kmsKey`   | See trap 1                                               |
+| `secretsmanager.Secret`   | `encryptionKey`                | See trap 2                                               |
+
+Three traps, each of which passes `cdk synth` and fails later:
+
+1.  **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on a file system that
+    already exists makes AWS CloudFormation create an empty replacement and delete the original. VAMS
+    declares these `RemovalPolicy.DESTROY`, so the original is not retained. Changing the key on an
+    existing file system is a breaking change and belongs in `CHANGELOG.md` plus the upgrade guide. Log
+    groups and secrets update in place and need no such note.
+
+2.  **Do not pass the key OBJECT to a construct whose grants CDK derives.** `Secret.grantRead`/`grantWrite`
+    call `Key.grant()`, which writes the grantee's ARN into the key's RESOURCE policy. The key lives in the
+    storage nested stack, so a grantee in another nested stack makes the storage template consume that
+    stack's output while that stack consumes storage — AWS CloudFormation rejects the changeset with
+    `Circular dependency between resources`. Import the key by ARN instead, which keeps the derived grant
+    on the grantee's own policy:
+
+    ```typescript
+    encryptionKey: props.storageResources.encryption.kmsKey
+        ? kms.Key.fromKeyArn(this, "MySecretKmsKeyRef", props.storageResources.encryption.kmsKey.keyArn)
+        : undefined,
+    ```
+
+    This is sufficient because `kmsKeyPolicyStatementPrincipalGenerator()` already delegates to
+    `AccountRootPrincipal`, so a principal-side grant authorizes the key.
+
+3.  **A ROOT-stack resource cannot consume the key.** The key belongs to a nested stack, so a root-stack
+    resource referencing it makes the root stack and every nested stack in it circular. The AWS CloudTrail
+    log group is the case in the tree today and stays on the AWS-managed key.
+
+Two further resources stay on their AWS-managed key by necessity: the VPC flow log group, because the VPC
+nested stack is created before the storage nested stack, and the provisioned OpenSearch domain's log groups,
+which Amazon OpenSearch Service creates from the domain's `logging` props rather than VAMS.
+
+**Verify before deploying, not after.** `cdk synth` emits a cyclic assembly without complaint; the cycle
+appears only at changeset creation. Synth and confirm the storage stack takes no parameter fed from another
+nested stack's output:
+
+```bash
+npx cdk synth <stack> --output /tmp/cyclecheck
+node -e "const t=require('/tmp/cyclecheck/<stack>.template.json');
+  const s=Object.entries(t.Resources).find(([k])=>k.includes('StorageResourcesBuilder'))[1];
+  console.log(Object.entries(s.Properties.Parameters||{}).filter(([,v])=>JSON.stringify(v).includes('PipelineBuilder')).length)"
 ```
 
-CDK Nag suppressions are applied at multiple levels:
+Regression coverage for all of the above: `test/security/inPlaceUpdateSafety.test.ts`, which asserts the CMK-on and
+CMK-off directions, the exemption list, and the nested-stack dependency direction.
 
--   **Stack-level**: AwsSolutions-COG3 for GovCloud, AwsSolutions-IAM4/IAM5 for Lambda execution roles
--   **Resource-level**: `suppressCdkNagErrorsByGrantReadWrite()` in every lambda builder
--   **Path-level**: Specific suppressions for workflow IAM roles
+**S3 TLS enforcement.** Every S3 bucket gets `requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config)` — Deny policy for `s3:*` when `aws:SecureTransport=false`, plus optional additional policy from `config/policy/s3AdditionalBucketPolicyConfig.json`.
 
-### KMS Encryption
+**Content Security Policy.** `generateContentSecurityPolicy()` in `security.ts` builds CSP headers: base sources (self, blob, data, API URL, S3 endpoint); conditional sources (Cognito IDP/Identity, Location Service, unsafe-eval); extensible via `config/csp/cspAdditionalConfig.json`.
 
--   Optional CMK via `config.app.useKmsCmkEncryption`
--   `kmsKeyLambdaPermissionAddToResourcePolicy()` grants Lambda access to KMS key
--   `kmsKeyPolicyStatementPrincipalGenerator()` creates key policy with service principals (S3, DynamoDB, SQS, SNS, ECS, EKS, Lambda, etc.)
+`script-src` allows the inline `<script>` blocks in `web/index.html` by **SHA-256 hash**, from the generated `INDEX_HTML_INLINE_SCRIPT_HASHES` in `lib/helper/cspInlineScriptHashes.ts`. **That file is generated — do not hand-edit it.** A hash covers the exact text content of the element, indentation included, so any edit to an inline block (a reformat is enough) invalidates it, and the browser then silently refuses to run the script. Regenerate with `cd web && npm run build && node scripts/cspInlineScriptHashes.js --ts`; `test/web/cspInlineScriptHashes.test.ts` recomputes from `web/index.html` and fails on drift. The full workflow lives in `web/CLAUDE.md` Rule 9.
 
-### S3 TLS Enforcement
+A CSP may allow inline script by hash **or** by `'unsafe-inline'`, never both — a hash source makes browsers ignore the keyword. `'unsafe-inline'` is therefore emitted in **no** configuration, the Physna add-on included: the add-on's viewer frames Physna's own HTTPS origin, so that document loads under Physna's policy and its inline scripts are outside this one's reach, and the keyword would be ignored on a VAMS page anyway because the hash sources are present. The add-on contributes `frame-src` and `connect-src` origins only. A new viewer that genuinely needs inline script is served by hashing that document's own blocks, not by adding the keyword.
 
-Every S3 bucket gets:
+**WAF rule policy.** When `config.app.useWaf` is true, `Wafv2BasicConstruct` (`constructs/wafv2-basic-construct.ts`) builds the Web ACL rules from `config/policy/wafPolicyConfig.json` via `buildRulesFromPolicy()`: managed rule groups (`overrideAction` count vs none per `block`), optional per-rule `ruleActionOverrides` mapped to `managedRuleGroupStatement.ruleActionOverrides` (`actionToUse` count/block/allow), and rate-based rules. The shipped policy overrides two Common Rule Set rules to `count`. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking (the remaining body-inspecting rules use `oversizeHandling: CONTINUE`, matching on attack signatures, not size). No `AssociationConfig` body-inspection override is needed for the 10 MB guarantee. `SizeRestrictions_QUERYSTRING` is likewise overridden to `count`: it blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter. A presigned URL carrying a session security token already approaches that limit, and the viewer requires the value double-encoded to survive its own two decode passes, which roughly doubles it again — so the iframe request for the static viewer page was blocked with a 403 before it ever reached S3.
 
-```typescript
-requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config);
-// Adds Deny policy for s3:* when aws:SecureTransport=false
-// Plus optional additional policy from config/policy/s3AdditionalBucketPolicyConfig.json
-```
+**WAF rate-based rules.** Each `rateBasedRules` entry sets `limit` (per 5-min window). Every rule is built with `aggregateKeyType: "IP"`, the address WAF observes on the connection, for both the CloudFront-scoped and the regional ACL. A `FORWARDED_IP` key is **accepted in the policy file but not emitted**, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and WAF omits a request carrying no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. Rate blocks return a `429` (via `blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`, `APPLICATION_JSON`) registered on the ACL when any rate rule exists — distinct from the `403` used for auth denials. The web `apiClient` and the VAMS CLI both treat `429` as retryable (honor `Retry-After`, back off) rather than an auth failure. Managed-group blocks keep the WAF default 403. Test: `test/waf/wafRateLimit.test.ts`.
 
-### Content Security Policy (CSP)
-
-`generateContentSecurityPolicy()` in `security.ts` builds CSP headers for the web app:
-
--   Base sources: self, blob, data, API URL, S3 endpoint
--   Conditional: Cognito IDP/Identity endpoints, Location Service, unsafe-eval
--   Extensible via `config/csp/cspAdditionalConfig.json`
-
-### IAM Aspects
-
--   **IamRoleTransform**: Applies role name prefixes and permission boundaries (from `cdk.json` "aws" environment settings)
--   **LogRetentionAspect**: Forces `RetentionDays.ONE_YEAR` on all CfnLogGroup resources in the stack
+**IAM aspects.** `IamRoleTransform` applies role name prefixes and permission boundaries (from `cdk.json` "aws" environment settings). `LogRetentionAspect` forces `RetentionDays.ONE_YEAR` on all `CfnLogGroup` resources.
 
 ---
 
 ## GovCloud Considerations
 
-### Required Configuration
+**Required when `config.app.govCloud.enabled = true`:** `useGlobalVpc.enabled` MUST be `true`; `useCloudFront.enabled` MUST be `false` (no CloudFront in GovCloud); `useLocationService.enabled` MUST be `false`.
 
-When `config.app.govCloud.enabled = true`:
+**Additional when `config.app.govCloud.il6Compliant = true`:** Cognito MUST be disabled (`useCognito.enabled = false`); WAF MUST be disabled (`useWaf = false`); KMS CMK encryption MUST be enabled (`useKmsCmkEncryption.enabled = true`).
 
-1. `useGlobalVpc.enabled` MUST be `true`
-2. `useCloudFront.enabled` MUST be `false` (no CloudFront in GovCloud)
-3. `useLocationService.enabled` MUST be `false`
+**GovCloud-specific behavior:** FIPS endpoints via `config.app.useFips` (used by ServiceFormatter); `AwsSolutions-COG3` suppressed (AdvancedSecurityMode unavailable); EventSourceMapping tags removed via `addPropertyDeletionOverride` (some resources don't support tags in GovCloud); VPC endpoints conditional on feature flags; ALB deployment instead of CloudFront for static web hosting.
 
-### IL6 Compliance (Additional)
+---
 
-When `config.app.govCloud.il6Compliant = true`:
+## Partition Portability (Commercial / GovCloud / EU Sovereign)
 
-1. Cognito MUST be disabled (`useCognito.enabled = false`)
-2. WAF MUST be disabled (`useWaf = false`)
-3. KMS CMK encryption MUST be enabled (`useKmsCmkEncryption.enabled = true`)
+VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eusc-de-east-1`), and potentially `aws-cn` / `aws-iso*`. A partition defect is expensive in a way ordinary bugs are not: it is invisible in commercial synth, invisible in unit tests, and typically surfaces as a `CREATE_FAILED` **mid-deploy**, which rolls back the whole core stack (~30 min). Treat the checklist below as part of writing any new construct.
 
-### GovCloud-Specific Behavior
+### `govCloud.enabled` is the restricted-partition flag, not a GovCloud flag
 
--   FIPS endpoints via `config.app.useFips` (used by ServiceFormatter)
--   `AwsSolutions-COG3` suppressed (AdvancedSecurityMode not available)
--   EventSourceMapping tags removed via `addPropertyDeletionOverride` (some resources don't support tags in GovCloud)
--   VPC endpoints conditional on feature flags
--   ALB deployment instead of CloudFront for static web hosting
+**Both the govcloud and the eusovereign config templates set `app.govCloud.enabled: true`** (`config.template.govcloud.json`, `config.template.eusovereign.json`); only commercial sets `false`. Read it as "this partition has reduced service/feature capability." Gating a capability downgrade on it therefore covers EU Sovereign automatically — which is why the EventSourceMapping tag strip, the Cognito feature downgrades, and the API Gateway TLS-policy skip are all keyed on this one flag.
+
+Choose between the two forms deliberately:
+
+| Use                                    | When                                                                                                                                                                                                                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.app.govCloud.enabled`          | A capability downgrade shared by every restricted partition. Matches every existing EventSourceMapping tag strip and the Cognito/TLS branches.                                                                                                                                                     |
+| `config.env.partition` / `Partition()` | The decision must hold regardless of operator flag hygiene, or it is genuinely partition-specific. Used for the commercial-only EventBridge bus CMK (`storageBuilder-nestedStack.ts`), the SAML and Deadline Cloud `=== "aws"` gates in `getConfig()`, and the `aws-eusc` OpenSearch version pick. |
+
+When writing a partition deny-list, **name every restricted partition explicitly** — the VPC builder's Cognito-PrivateLink check is the model to copy, because it excludes `aws-us-gov`, `aws-eusc`, and `aws-iso*` while still allowing `aws-cn`, where the service does exist. A check written as `Partition() === "aws-us-gov"` would silently miss EU Sovereign.
+
+> **Known gap:** nothing validates that `app.govCloud.enabled` agrees with `config.env.partition`. Deploying to GovCloud/EU Sovereign while leaving the flag `false` is representable, passes synth, and then fails at the first EventSourceMapping with "Tags not supported in request."
+
+### Checklist for new infrastructure
+
+1. **Event source mappings — never call `fun.addEventSource()` unconditionally.** CDK's high-level construct stamps the stack tags onto the underlying `AWS::Lambda::EventSourceMapping`, and GovCloud/EU Sovereign Lambda rejects Tags outright. Every mapping needs the branch below. This applies to SQS (`eventSourceArn`) and DynamoDB streams (`tableStreamArn`) alike; `AWS::Lambda::EventSourceMapping` is the only CFN resource type in VAMS that needs a property stripped for partition reasons.
+
+    ```typescript
+    queue.grantConsumeMessages(fun); // addEventSource() did this implicitly; do it explicitly now
+    if (config.app.govCloud.enabled) {
+        const esm = new lambda.EventSourceMapping(scope, "MyQueueSqsEventSource", {
+            eventSourceArn: queue.queueArn,
+            target: fun,
+            batchSize: 10,
+            maxBatchingWindow: Duration.seconds(3),
+        });
+        (esm.node.defaultChild as lambda.CfnEventSourceMapping).addPropertyDeletionOverride("Tags");
+    } else {
+        fun.addEventSource(
+            new eventsources.SqsEventSource(queue, {
+                batchSize: 10,
+                maxBatchingWindow: Duration.seconds(3),
+            })
+        );
+    }
+    ```
+
+    There is no CDK aspect that can do this for you: the L1 is created lazily inside `addEventSource()`, after an aspect has finished visiting the construct tree. Regression coverage: `test/partition/eventSourceMappingGovCloudTags.test.ts`.
+
+2. **Never hardcode a partition, DNS suffix, or region.** Use `Service("X").ARN(...)` / `.Endpoint` / `.Principal`, `IAMArn(name)`, and `Partition()`. The DNS suffix differs per partition (`.amazonaws.com`, `.amazonaws.com.cn`, **`.amazonaws.eu`** for `aws-eusc`, `.c2s.ic.gov`, …), while service **principals** stay `.amazonaws.com` in `aws-us-gov` and `aws-eusc` — so a literal `ServicePrincipal("lambda.amazonaws.com")` happens to work in those two but is wrong in `aws-cn`/ISO. Prefer `Service("LAMBDA").Principal` in new code.
+
+3. **Adding a `Service()` call means checking `SERVICE_LOOKUP` coverage.** `ServiceFormatter` **throws** at synth (`Service ${name} not found in partition ${partition}`) when the service has no entry for the deployment's partition. Several entries are commercial-only or commercial+GovCloud (`AOSS`, `GEO`, `CLOUDFRONT`, `COGNITO_HOSTED_UI`). Two ways to resolve it, and the choice is a product decision, not a mechanical one: **add the partition entry** in `lib/helper/const.ts` if the service exists there, or **forbid the feature in `getConfig()`** if it does not. Prefer the validation when the service is genuinely unavailable — a `Service ${name} not found` throw names the service rather than the configuration field that caused it, which sends the operator to the wrong file. `AOSS` in `aws-eusc` is the worked example: OpenSearch Serverless is not offered in the EU Sovereign Cloud, so `getConfig()` rejects `openSearch.useServerless.enabled` there and points at `useProvisioned` instead of leaving the operator with an opaque service-lookup failure.
+
+4. **A new service/feature may not exist everywhere.** Add the validation to `getConfig()` (Rule 1 / Rule 3) so a bad combination fails at synth with a clear message rather than mid-deploy. Mirror it into `ConfigBuilder/validation.ts` by hand.
+
+5. **Service versions can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates. Check availability before pinning a version or a model.
+
+6. **All three config templates must be updated together** (Rule 1 step 4) — `commercial`, `govcloud`, `eusovereign`. They are structurally identical and differ only in values; a missed template silently falls back to a `getConfig()` default and drops the operator's value. Note `useFips` is the one capability flag where the two restricted templates disagree (`true` for GovCloud, `false` for EU Sovereign).
+
+7. **No internet egress at build time.** A restricted-partition build host generally cannot reach commercial endpoints, so a `curl`/download inside a Docker bundling command hardcoded to a commercial S3 host will fail there.
+
+8. **IAM resource matching is case-sensitive.** Log-group grants for `/aws/vendedlogs/*` are explicit allow-lists, and the pipeline constructs are split across two casings (`VAMSStateMachine-*` and `VAMSstateMachine-*`), both of which `workflowFunctions.ts` grants. A new pipeline that invents a third casing silently loses log-read access — reuse an existing casing.
+
+### How to verify a partition change before shipping
+
+Synth is the only cheap check, and it must be a **paired** one — assert the restricted output AND the commercial output, or you cannot tell a correct strip from a resource that was never emitted:
+
+```bash
+# Temporarily point config.json at the govcloud template (set env.region/account, then restore it)
+npx cdk synth --all -o /tmp/gcsynth
+# Inspect the emitted nested template, not the construct tree
+node -e "const t=require('/abs/path/to/gcsynth/<stack>.nested.template.json');
+  Object.entries(t.Resources).filter(([,v])=>v.Type==='AWS::Lambda::EventSourceMapping')
+    .forEach(([k,v])=>console.log(k, 'Tags?', 'Tags' in v.Properties));"
+```
+
+A `cdk synth` against a placeholder account still emits templates (the context-lookup and CDK-Nag errors it prints are artifacts of the fake account); the templates are what matter. Prefer encoding the check as a Jest test over a one-off synth — see `test/partition/eventSourceMappingGovCloudTags.test.ts`, which tags its test stack the way `core-stack.ts` does so the assertion is load-bearing rather than vacuous.
+
+---
+
+## OpenSearch Serverless Connectivity
+
+A **private** OpenSearch Serverless collection (`allowPublic = false`) is reached only through a VPC endpoint whose **type is selected by the collection generation**:
+
+-   **NEXTGEN** (`nextGen = true`) — hostname `\{collection-id\}.aoss.\{region\}.on.aws`. Reached through a **standard EC2 interface endpoint** (service `com.amazonaws.\{region\}.aoss-data`, `privateDnsEnabled: true`).
+-   **CLASSIC** (`nextGen = false`) — hostname `\{collection-id\}.\{region\}.aoss.amazonaws.com`. Reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`) with its own Route 53 private hosted zone.
+
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Only OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required. Schema-deploy uses a 14-min timeout + readiness poll because a fresh collection/endpoint plus NEXTGEN scale-to-zero cold start (10–30s) can take minutes to become reachable. Backend Lambdas sign SigV4 with service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+
+**`addVpcEndpoints` gating (NEXTGEN only).** NEXTGEN's endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints`. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
+
+-   True: VAMS creates the endpoint, its security group, and the VPC network policy, and runs schema-deploy in the VPC.
+-   False (private NEXTGEN + `addVpcEndpoints = false`, the **deferred** case): VAMS skips the endpoint **and** the network policy. Schema-deploy runs **outside** the VPC, writes SSM parameters, and skips index creation (`DeploySSMIndexSchema` passes `deferIndexCreation: "true"`). Operator creates the `aoss-data` endpoint and matching network policy manually. To then create index mappings, set `deployDeferredIndexSchema = true` for one deployment (CDK context override honored) — the construct then computes `deferIndexCreation = deferVpcSetup && !deployDeferredIndexSchema` and `schemaDeployInVpc = createEndpointResources || (deferVpcSetup && !deferIndexCreation)`, so schema-deploy runs in the VPC against the operator endpoint and creates the (idempotent) indexes. Then reindex. Ignored when `addVpcEndpoints = true`.
+
+CLASSIC's managed endpoint is not an EC2 interface endpoint and is always created for a private collection. See `documentation/docusaurus-site/docs/developer/opensearch.md`.
 
 ---
 
@@ -546,45 +507,69 @@ When `config.app.govCloud.il6Compliant = true`:
 
 ### 1. Configuration Changes
 
-1. Add new properties to `ConfigPublic` interface in `config/config.ts`
+1. Add properties to `ConfigPublic` interface in `config/config.ts`
 2. Add backward-compatibility defaults in `getConfig()` (check for `undefined`)
 3. Add validation logic in `getConfig()` if constraints exist
-4. Update BOTH template files: `config.template.commercial.json` and `config.template.govcloud.json`
+4. Update **ALL** config template files: `config.template.{commercial,govcloud,eusovereign}.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 5. Update `config.json` for the active deployment
+6. Document the option in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
+7. Mirror the **field** into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — `schema.ts` (the field) and `defaults.ts` (the presets); see its `README.md`. Then run the `infra/test/config/configBuilderSync.test.ts` drift check (part of `npm test`), which covers these two files.
+8. **Mirror every `getConfig()` VALIDATION rule into `ConfigBuilder/validation.ts` — by hand, in the same change.** This is the step the tooling cannot catch: the drift check verifies `schema.ts` and `defaults.ts` only, so a `throw new Error(...)` added to `getConfig()` without a matching `validation.ts` rule leaves the ConfigBuilder silently approving a configuration that fails at `cdk synth`. That is worse than no validation, because the operator has been told the config is valid.
+
+    Each rule is a `Rule` entry carrying `id`, `severity` (`error` | `warning`), `fieldPaths` (so the UI can highlight the offending fields), an `appliesWhen` predicate that returns **true when the rule is VIOLATED**, and a `message`. Keep the `// ----- Section (config.ts: "quoted anchor") -----` comment, which names the `getConfig()` block the section mirrors by quoting that block's leading comment or error-message text — it is what makes the two files diffable later. Anchor by quoted text, not by line number: a line number goes stale silently, since a wrong one reads exactly like a right one until the file is opened. Port a `console.warn` as `severity: "warning"`.
+
+    Two exclusions, so the mirror is not chased pointlessly: rules that read a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`, a file the ConfigBuilder never loads. Everything derivable from `config.json` itself belongs in `validation.ts`.
+
+    Verify the port by reading both sides rather than trusting a text search: `getConfig()` and `validation.ts` word the same rule differently, so matching on message text under-reports. Compare the config field paths each rule references.
+
+9. **Keep `ConfigBuilder/derived.ts` limited to what `getConfig()` actually assigns — by hand, in the same change.** `derived.ts` is the only file in the component that can rewrite the operator's config rather than describing or validating it, and it is outside the drift check as well. An auto-mutation is any assignment in `getConfig()` that changes a value the operator supplied. Three directions to keep in step:
+
+    - **Added or changed** auto-mutation → add or adjust the matching entry in `derived.ts`.
+    - **Removed** auto-mutation (replaced by a `throw`) → **delete** it from `derived.ts`. Leaving it behind means the builder keeps silently rewriting the downloaded `config.json` in a way the deployment does not — exactly the silent topology change the `throw` exists to prevent.
+    - **A `getConfig()` constraint LIST that gains a feature** — the VPC-requiring set is the worked example → extend the matching table in `validation.ts` (`VPC_REQUIRING_FEATURES`). `getConfig()` rejects rather than assigns for these, so the mirror is an error rule, not a derivation; omitting the feature means the builder approves a config that then fails at `cdk synth`.
+
+    `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Keep the function and its `DerivedResult` contract regardless — `ConfigBuilder.commitConfig()` routes every field edit through it, and it is where a future mutation would be mirrored.
 
 ### 2. Adding a New Lambda Function
 
-1. Create the builder function in the appropriate file under `lib/lambdaBuilder/`
-2. Follow the standard pattern exactly:
-    - `lambda.Code.fromAsset(path.join(__dirname, '../../../backend/backend'))`
-    - `handler: handlers.{category}.${name}.lambda_handler`
-    - `runtime: LAMBDA_PYTHON_RUNTIME`
-    - `timeout: Duration.minutes(15)`
-    - `memorySize: Config.LAMBDA_MEMORY_SIZE`
-    - VPC conditional on `config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas`
+1. Create the builder function in `lib/lambdaBuilder/`
+2. Follow the standard pattern exactly (see [Lambda Builder Pattern](#lambda-builder-pattern)): `lambda.Code.fromAsset(path.join(__dirname, '../../../backend/backend'))`, `handler: handlers.{category}.${name}.lambda_handler`, `LAMBDA_PYTHON_RUNTIME`, `Duration.minutes(15)`, `Config.LAMBDA_MEMORY_SIZE`, VPC conditional on `config.app.useGlobalVpc.enabled && useForAllLambdas`
 3. Grant DynamoDB table permissions (grantReadData or grantReadWriteData)
-4. Apply ALL 4 security calls:
-    - `kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey)`
-    - `setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources)`
-    - `globalLambdaEnvironmentsAndPermissions(fun, config)`
-    - `suppressCdkNagErrorsByGrantReadWrite(scope)`
-5. Wire the function to API Gateway in `apiBuilder-nestedStack.ts` using `attachFunctionToApi()`
+4. Apply the 5 security calls: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions`, `suppressCdkNagLambda`, and `suppressCdkNagErrorsByGrantReadWrite` (last only if using `grantRead*`)
+5. Wire the function via `attachFunctionToApi()`. Prefer `apiBuilder2-nestedStack.ts` for new endpoints (see [API stack ceilings](#api-stack-ceilings) for why the two stacks stay split). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there.
 
 ### 3. Adding a New Nested Stack
 
-1. Create file at `lib/nestedStacks/{name}/{name}Builder-nestedStack.ts`
-2. Extend `NestedStack`
-3. Accept `config`, `storageResources`, and other shared resources as constructor params
-4. Instantiate in `core-stack.ts` with `addDependency(storageResourcesNestedStack)`
-5. Export any resources needed by other stacks via public properties
+1. Create `lib/nestedStacks/{name}/{name}Builder-nestedStack.ts` extending `NestedStack`
+2. Accept `config`, `storageResources`, and other shared resources as constructor params
+3. Instantiate in `core-stack.ts` with `addDependency(storageResourcesNestedStack)`
+4. Export any resources needed by other stacks via public properties
 
 ### 4. Adding a New DynamoDB Table
 
-1. Add to `storageResources` interface in `storageBuilder-nestedStack.ts`
-2. Create the table in `storageResourcesBuilder()` function
-3. Apply KMS encryption if `config.app.useKmsCmkEncryption.enabled`
-4. Add `RemovalPolicy.DESTROY` (current pattern -- all tables use DESTROY)
-5. Update lambda builders to reference the new table name env var and grant permissions
+1. Add to `storageResources` interface + create the table in `storageResourcesBuilder()` in `storageBuilder-nestedStack.ts`
+2. Apply KMS encryption if `config.app.useKmsCmkEncryption.enabled`; the shared `dynamodbDefaultProps` sets `RemovalPolicy.RETAIN` (current pattern — retained tables survive teardown; all tables are auto-named so retained orphans never collide on redeploy)
+3. Add constant to `RESOURCE_PARAM_KEYS.dynamoTables` in `infra/common/resourceParamKeys.ts`
+4. Add matching `ResourceParamKey` entry to `ResourceKeys` in `backend/backend/common/resourceNames.py`
+5. Add matching constant to `ResourceParamKeys` in `infra/deploymentDataMigration/tools/ssm_resource_lookup.py`
+6. Register descriptor in `resourceNameRegistry` (imported in `storageBuilder-nestedStack.ts`)
+7. Grant permissions (`grantReadData`, `grantReadWriteData`) in lambda builders (SSM read is already granted by `globalLambdaEnvironmentsAndPermissions`)
+8. Document the table in `architecture/aws-resources.md` and `architecture/data-model.md`
+
+The same three-way constants update applies to new CloudWatch audit log groups: `RESOURCE_PARAM_KEYS.cloudwatchLogGroups`, `ResourceKeys` in `resourceNames.py`, and `ResourceParamKeys` in `ssm_resource_lookup.py`. Deprecated-but-retained tables move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
+
+### Documentation Rule: Storage Resources, Log Groups, and SSM Parameters
+
+Whenever you **add or change** an S3 bucket, DynamoDB table, or CloudWatch log group, update `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` (and the matching Kiro steering — see Rule 11 + the bidirectional-sync rule in root `CLAUDE.md`). Document **two independent properties**:
+
+1. **Removal on teardown** — `RemovalPolicy.RETAIN` (survives `cdk destroy`; manual delete) vs. `RemovalPolicy.DESTROY` (auto; pair S3 with `autoDeleteObjects: true`).
+2. **Custom name (redeploy-collision flag)** — whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can collide on a redeploy into the same account/configuration.
+
+These axes are independent. **Retained + auto-named** resources (asset, auxiliary, artefacts, access logs buckets; all DynamoDB tables) survive teardown but do **not** block redeploy. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
+
+**The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
+
+**SSM String parameters** (64 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 
@@ -595,229 +580,44 @@ Always use the `Service()` helper for partition-aware resources:
 Service("S3").Endpoint;
 Service("DYNAMODB").ARN("table/myTable");
 Service("LAMBDA").Principal;
-
-// Wrong -- hardcoded partition
-("arn:aws:s3:::my-bucket");
-("dynamodb.us-east-1.amazonaws.com");
 ```
+
+Never hardcode `arn:aws:...` — the system supports aws, aws-us-gov, aws-cn, aws-iso, and aws-eusc.
 
 ---
 
 ## Anti-Patterns to Avoid
 
-1. **Hardcoding ARN partitions**: Never use `arn:aws:`. Always use `Service()` or `Service.Partition()` for partition-aware ARNs. The system supports aws, aws-us-gov, aws-cn, and aws-iso.
+Most correspond to a Development Rule above; the rule text is the full guidance.
 
-2. **Skipping security calls**: Every lambda builder MUST include all 4 security helper calls. Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks auth checking in Lambda handlers.
-
-3. **Forgetting VPC conditional**: All Lambda functions must conditionally attach to VPC:
-
-    ```typescript
-    vpc: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-        ? vpc
-        : undefined;
-    ```
-
-4. **Hardcoding Lambda runtime/memory**: Always use `LAMBDA_PYTHON_RUNTIME` and `Config.LAMBDA_MEMORY_SIZE` constants.
-
-5. **Missing backward compatibility**: When adding new config properties, always add `undefined` checks in `getConfig()` to handle old config files.
-
-6. **Not calling Service.SetConfig()**: The service helper module-level `config` must be initialized via `SetConfig(config)` in `bin/infra.ts` before any `Service()` calls.
-
-7. **Creating resources without CDK Nag suppression**: CDK Nag is always enabled. New IAM policies, S3 buckets, or Lambda functions will fail synthesis without appropriate suppressions.
-
-8. **Ignoring GovCloud constraints**: Features conditional on GovCloud (CloudFront, Location Service, Cognito AdvancedSecurityMode) must be checked before use.
-
-9. **Forgetting stack dependencies**: All nested stacks that use `storageResources` must call `nestedStack.addDependency(storageResourcesNestedStack)`.
-
-10. **Using `grantReadWrite` without Nag suppression**: S3 bucket `grantRead`/`grantReadWrite` generates IAM wildcard actions that CDK Nag flags. Always pair with `suppressCdkNagErrorsByGrantReadWrite(scope)`.
+1. **Hardcoding ARN partitions** (`arn:aws:...`) — see Rule 5. Use `Service()` / `Service.Partition()`.
+2. **Skipping security calls** — see Rule 2. Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks handler auth checks.
+3. **Forgetting VPC conditional** — see Rule 2. Attach VPC conditionally on `useGlobalVpc.enabled && useForAllLambdas`.
+4. **Hardcoding Lambda runtime/memory** — see Rule 2. Always use `LAMBDA_PYTHON_RUNTIME` and `Config.LAMBDA_MEMORY_SIZE`.
+5. **Missing backward compatibility** — see Rule 1. Add `undefined` checks in `getConfig()` for old config files.
+6. **Not calling `Service.SetConfig()`**: module-level `config` must be initialized in `bin/infra.ts` before any `Service()` call — otherwise every partition-aware lookup fails at synth.
+7. **Creating resources without CDK Nag suppression**: CDK Nag is always enabled; new IAM policies, S3 buckets, or Lambdas fail synthesis without appropriate suppressions.
+8. **Ignoring GovCloud constraints**: features conditional on GovCloud (CloudFront, Location Service, Cognito AdvancedSecurityMode) must be checked before use.
+9. **Forgetting stack dependencies** — see Rule 3. Stacks using `storageResources` must call `addDependency(storageResourcesNestedStack)`.
+10. **Using `grantReadWrite` without Nag suppression** — see Rule 2. Pair with `suppressCdkNagErrorsByGrantReadWrite(scope)`.
+11. **Calling `fun.addEventSource()` without the `govCloud.enabled` branch** — see Partition Portability item 1. CDK tags the underlying `AWS::Lambda::EventSourceMapping`, which GovCloud and EU Sovereign reject, failing the deploy and rolling back the core stack.
+12. **Writing a partition check as `Partition() === "aws-us-gov"`** — see Partition Portability. It misses EU Sovereign (`aws-eusc`); name every restricted partition, or gate on `config.app.govCloud.enabled`, which both restricted templates set.
 
 ---
 
 ## Templates
 
-### New Lambda Builder Function
-
-```typescript
-export function buildMyNewFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    storageResources: storageResources,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const name = "myNewFunction";
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.myCategory.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined,
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {
-            MY_TABLE_NAME: storageResources.dynamo.myTable.tableName,
-        },
-    });
-
-    // Grant DynamoDB permissions
-    storageResources.dynamo.myTable.grantReadWriteData(fun);
-
-    // Required security calls (all 4)
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
-
-    return fun;
-}
-```
-
-### New API Route Wiring (in apiBuilder-nestedStack.ts)
-
-```typescript
-// Build the function
-const myFunction = buildMyNewFunction(
-    this,
-    lambdaCommonBaseLayer,
-    storageResources,
-    config,
-    vpc,
-    subnets
-);
-
-// Wire to API Gateway
-attachFunctionToApi(this, myFunction, {
-    routePath: "/my-resource/{resourceId}",
-    method: apigateway.HttpMethod.GET,
-    api: api,
-});
-attachFunctionToApi(this, myFunction, {
-    routePath: "/my-resource",
-    method: apigateway.HttpMethod.POST,
-    api: api,
-});
-```
-
-### New Nested Stack
-
-```typescript
-import { NestedStack } from "aws-cdk-lib";
-import { Construct } from "constructs";
-import * as Config from "../../../config/config";
-import { storageResources } from "../storage/storageBuilder-nestedStack";
-
-export interface MyBuilderNestedStackProps {
-    config: Config.Config;
-    storageResources: storageResources;
-    // Add other required resources
-}
-
-export class MyBuilderNestedStack extends NestedStack {
-    constructor(parent: Construct, name: string, props: MyBuilderNestedStackProps) {
-        super(parent, name);
-        // Build resources here
-    }
-}
-```
-
-### New Config Property (with backward compatibility)
-
-```typescript
-// 1. Add to ConfigPublic interface
-app: {
-    myNewFeature: {
-        enabled: boolean;
-        someOption: string;
-    }
-}
-
-// 2. Add backward-compatibility check in getConfig()
-if (config.app.myNewFeature == undefined) {
-    config.app.myNewFeature = {
-        enabled: false,
-        someOption: "",
-    };
-}
-
-// 3. Add validation if needed
-if (config.app.myNewFeature.enabled && !config.app.myNewFeature.someOption) {
-    throw new Error("Configuration Error: myNewFeature requires someOption when enabled");
-}
-```
+Copy-paste scaffolds for new lambda builders, API routes, nested stacks, and config properties live in `infra/TEMPLATES.md`. Gold-standard reference files: `lib/lambdaBuilder/assetFunctions.ts` and `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`.
 
 ---
 
-## Pipeline Nested Stack Pattern
+## Pipeline Stacks
 
-Each pipeline follows a consistent structure:
-
-```
-lib/nestedStacks/pipelines/{category}/{pipelineName}/
-    {pipelineName}Builder-nestedStack.ts    # Stack definition
-    constructs/
-        {pipelineName}-construct.ts         # Infrastructure construct
-    lambdaBuilder/
-        {pipelineName}Functions.ts          # Lambda builder functions
-```
-
-**CRITICAL — Pipeline Lambda Directory Structure:** Every pipeline's `lambda/` directory in `backendPipelines/` MUST include:
-
-```
-lambda/
-  __init__.py                    # Package marker (copy from existing pipeline)
-  customLogging/
-    __init__.py                  # Package marker
-    logger.py                    # safeLogger + mask_sensitive_data (copy from existing pipeline)
-  vamsExecute*.py                # Pipeline handler(s)
-  constructPipeline.py           # Batch job definition builder
-  openPipeline.py                # Step Functions starter
-  pipelineEnd.py                 # Cleanup + task token callback
-```
-
-Without `__init__.py` and `customLogging/logger.py`, Lambda will fail at import time with `No module named 'customLogging'`. Copy these files from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`).
-
-Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on config flags.
-
-**CRITICAL — VPC Builder Updates:** New pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Missing any one of these causes deployment failures. Search for `useSplatToolbox` in the file to find all locations:
-
-1. **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig`. Without this, the VPC has only isolated subnets and Batch compute environments fail with `"Resource subnets are required"`.
-2. **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, ECR Docker, and optionally EFS interface VPC endpoints. Without this, Batch jobs cannot pull container images or access AWS services.
-3. **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable. Without this, the ECS agent on Batch instances cannot register with the ECS service.
-
-### Pipeline S3 Output Path Conventions
-
-The workflow ASL (built by `createWorkflow.py`) generates S3 paths for each pipeline step. The `vamsExecute` lambda and `constructPipeline` lambda must handle these correctly:
-
-| Path                                   | Bucket    | Use For                                                                     |
-| -------------------------------------- | --------- | --------------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned. |
-| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.    |
-| `outputS3AssetMetadataPath`            | Asset     | Metadata output. Versioned.                                                 |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.          |
-
-**Key distinction:** `outputS3AssetFilesPath` is for file-level outputs, including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images representing the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
-
-**Rules:**
-
-1. The `vamsExecute` lambda **must pass through** all output paths from the workflow payload to the `constructPipeline` lambda. Never hardcode empty strings — the workflow's process-output step depends on finding files at these locations.
-2. The `constructPipeline` lambda should use the appropriate output path for the container's `outputFiles` stage definition: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only. Fall back to `inputOutputS3AssetAuxiliaryFilesPath` only for direct/local invocations.
-3. The **auxiliary path** (`inputOutputS3AssetAuxiliaryFilesPath`) is for temporary files during container processing or special non-versioned viewer data (e.g., Potree octree files that the frontend reads directly). It should **not** be used for standard pipeline outputs that flow through the workflow's process-output step.
-4. Container IAM roles must have write access to the target buckets. The `inputBucketPolicy` in pipeline constructs typically grants read/write to all asset buckets; the `outputBucketPolicy` covers the auxiliary bucket.
-5. **Containers must preserve the input file's relative path** when writing asset-adjacent outputs (e.g., `.previewFile.X` thumbnails). Asset files are stored at `{assetId}/{relative_dirs}/{filename}` — the relative subdirectory structure between the asset ID and filename must be maintained in the output S3 key. The process-output step expects outputs at the same relative location as the input. The `assetId` is a workflow state variable that must be **threaded through the entire chain** (vamsExecute → constructPipeline → pipeline definition → container) — never derive it from path segments. In the container, use the explicit `assetId` to find the split point in the input object key: `"/".join(input_parts[input_parts.index(assetId) + 1:-1])`.
+Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, the three VPC builder condition blocks that new Batch/ECS/Fargate pipelines must be added to, and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
 
 ---
 
 ## Build and Deploy
-
-### CDK Commands
 
 ```bash
 cd infra
@@ -828,35 +628,105 @@ npx cdk diff         # Show pending changes
 npx cdk destroy      # Tear down stack
 ```
 
-### Context Variables
+Note: `test/platform/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock config. Tests may need updates when adding features.
 
-```bash
-npx cdk synth
+### Label a temporary test with a `TEMPORARY-TEST` comment
+
+Jest has no marker system, so a test written to prove one specific change landed — a removed construct, a
+deleted suppression entry, a renamed export — carries a `TEMPORARY-TEST` token in a comment directly above
+its `it(...)`, naming what it pins. Release cleanup finds them with `grep -rn "TEMPORARY-TEST" infra/test`.
+
+Most absence assertions in `infra/test` are **not** temporary and must not be labelled or removed: a
+weaker TLS policy, an `arn:aws:s3:::*` wildcard, a `cdk-nag` suppression hiding a finding, a HuggingFace
+token reaching a synthesized template, `'unsafe-inline'` in the base CSP. Each forbids something a future
+edit could plausibly write, so each guard can still fire for a good reason.
+
+The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** — a
+forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full criterion:
+root `CLAUDE.md` Rule 13.
+
+### The T1 tier: synth assertions across all three config templates
+
+`test/support/templateSynth.ts` synthesizes the entire app from `config.template.{commercial,govcloud,eusovereign}.json` and exposes every emitted nested template for assertion. This is the **only** validation GovCloud and EU Sovereign get, because no environment exists for either — so a partition defect otherwise ships and surfaces as a `CREATE_FAILED` mid-deploy.
+
+```typescript
+const s = synthTemplate("govcloud");
+const withTags = s.ofType("AWS::Lambda::EventSourceMapping").filter((m) => "Tags" in m.properties);
+expectAbsent("EventSourceMapping with Tags", withTags, {
+    description: "govcloud emits mappings at all",
+    count: s.ofType("AWS::Lambda::EventSourceMapping").length,
+});
 ```
 
-Note: The test file uses the legacy `@aws-cdk/assert` library and has an outdated mock config. Test updates may be needed when adding new features.
+Four things to know before writing one:
+
+-   **`expectAbsent()` requires a positive control.** A negative assertion on a restricted partition is satisfied equally by correct behaviour and by a template that emitted nothing. The control is a required argument so it cannot be forgotten.
+-   **Docker is not required, but avoiding it takes two steps.** `lambdaLayersBuilder-nestedStack.ts:36` calls `cdk.DockerImage.fromBuild()` as an _eager argument_ to `bundling.image`, so it runs before CDK consults its bundling-skip logic. `aws:cdk:bundling-stacks: []` alone does **not** avoid the docker build; the harness also stubs the static. (`infra.test.ts` and `genAiPipelineConstructs.test.ts` do neither, which is why they fail whenever Docker Desktop is not running — finding `S17-TEST-001`.)
+-   **Assertions must run over the assembly, not one stack.** VAMS puts nearly everything in nested stacks, so `Template.fromStack(root)` sees ~17 resources out of ~600.
+-   **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix and then a token boundary, so an assertion written that way passes while checking nothing. Use `SynthResult.flatten()`.
+
+The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
+
+**Enabling `useSplatToolbox` in a T1 synth requires `useCodeBuild: true`.** Splat is the only one of the
+fifteen pipeline Dockerfiles that is **not in the repository** —
+`backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
+Download Ignore", because it arrives from an upstream sync. With `useCodeBuild` false,
+`batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which
+resolves that path when the construct is built — before any bundling-skip logic, so stubbing Docker does
+not help — and a fresh checkout has no such file.
+
+That makes it a **CI-only failure**: locally a previous sync has left the file on disk and the synth
+succeeds, so the same commit is green on a developer machine and red on a runner with
+`«CannotFindFile»` pointing at `addContainer` rather than at the config. `templateSynth.ts` now refuses
+this configuration up front with a named explanation (`assertNoUntrackedDockerAsset`), so it fails
+locally too. The check is on the CONFIG, not on whether the file happens to be present — a
+presence check passes on any machine that synthesized splat recently, which is the trap itself.
+
+Setting the flag changes nothing a subnet, endpoint or Batch assertion looks at: the public/private
+subnet condition (`vpcBuilder-nestedStack.ts:348`) and `needsEcsPrivate` (`:750`) both key on
+`useSplatToolbox.enabled` alone, and only the image source moves. Finding `S37-CI-001`.
+
+### Platform-Specific Native Bindings in the Lockfile
+
+`esbuild` is a direct dependency here because `NodejsFunction` bundling runs it at synth (e.g. the OpenSearch schema-deploy Lambda). npm records only the compiled binary matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on a different platform does **not** add the missing one — so a lockfile written on Windows leaves a Linux CI runner without `@esbuild/linux-x64`. `infra/package.json` declares the other platforms explicitly:
+
+```json
+"optionalDependencies": {
+    "@esbuild/darwin-arm64": "^0.28.1",
+    "@esbuild/darwin-x64": "^0.28.1",
+    "@esbuild/linux-x64": "^0.28.1"
+}
+```
+
+Each package carries its own `os`/`cpu` constraints, so only the matching binary is ever installed. **The versions are coupled to `esbuild` and no test catches drift** — when bumping it, re-pin these to the version `npm ls esbuild` reports, then confirm `darwin`, `linux`, and `win32` are all still recorded:
+
+```bash
+node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
+```
+
+`npm install --force` and the `--os`/`--cpu` flags do **not** repair an already-pruned lockfile; use `npm install --package-lock-only --save-optional <pkg>@<version>`. `web/` needs the same treatment for rolldown and esbuild — see `web/CLAUDE.md` Rule 5.
 
 ---
 
 ## Key Files Quick Reference
 
-| Purpose                          | File                                                              |
-| -------------------------------- | ----------------------------------------------------------------- |
-| CDK entry point                  | `bin/infra.ts`                                                    |
-| Config & constants               | `config/config.ts`                                                |
-| Root stack                       | `lib/core-stack.ts`                                               |
-| Storage (DynamoDB, S3, SNS, SQS) | `lib/nestedStacks/storage/storageBuilder-nestedStack.ts`          |
-| API routes                       | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`            |
-| API Gateway setup                | `lib/nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts`  |
-| Auth (Cognito/SAML/OAuth)        | `lib/nestedStacks/auth/authBuilder-nestedStack.ts`                |
-| Security helpers                 | `lib/helper/security.ts`                                          |
-| Service helper (ARN/endpoint)    | `lib/helper/service-helper.ts`                                    |
-| Partition lookup                 | `lib/helper/const.ts`                                             |
-| S3 bucket registry               | `lib/helper/s3AssetBuckets.ts`                                    |
-| Feature flags enum               | `common/vamsAppFeatures.ts`                                       |
-| WAF stack                        | `lib/cf-waf-stack.ts`                                             |
-| IAM role aspect                  | `lib/aspects/iam-role-transform.aspect.ts`                        |
-| Log retention aspect             | `lib/aspects/log-retention.aspect.ts`                             |
-| Pipeline orchestrator            | `lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`       |
-| Static web hosting               | `lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`   |
-| OpenSearch                       | `lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts` |
+| Purpose                           | File                                                                                         |
+| --------------------------------- | -------------------------------------------------------------------------------------------- |
+| CDK entry point                   | `bin/infra.ts`                                                                               |
+| Config & constants                | `config/config.ts`                                                                           |
+| Root stack                        | `lib/core-stack.ts`                                                                          |
+| Storage (DynamoDB, S3, SNS, SQS)  | `lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                     |
+| API routes                        | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` + `apiBuilder2-nestedStack.ts`        |
+| API Gateway setup                 | `lib/nestedStacks/apiLambda/api-nestedStack.ts` + `constructs/rest-api-gateway-construct.ts` |
+| Auth (Cognito/SAML/OAuth)         | `lib/nestedStacks/auth/authBuilder-nestedStack.ts`                                           |
+| Security / Service / Partition    | `lib/helper/{security,service-helper,const}.ts`                                              |
+| S3 bucket registry                | `lib/helper/s3AssetBuckets.ts`                                                               |
+| Feature flags enum                | `common/vamsAppFeatures.ts`                                                                  |
+| WAF stack                         | `lib/cf-waf-stack.ts`                                                                        |
+| WAF construct + rule policy       | `lib/constructs/wafv2-basic-construct.ts` + `config/policy/wafPolicyConfig.json`             |
+| Aspects (IAM role, log retention) | `lib/aspects/{iam-role-transform,log-retention}.aspect.ts`                                   |
+| Pipeline orchestrator             | `lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`                                  |
+| Static web hosting                | `lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`                              |
+| OpenSearch                        | `lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`                            |
+| Templates (scaffolds)             | `infra/TEMPLATES.md`                                                                         |
+| Pipeline stack pattern            | `lib/nestedStacks/pipelines/CLAUDE.md`                                                       |

@@ -11,7 +11,6 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -28,9 +27,13 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs"; // remove once ECS cluster is moved to VAMS vpc
 
@@ -42,7 +45,7 @@ export interface RapidPipelineConstructProps extends cdk.StackProps {
     pipelineSubnetsIsolated: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -83,8 +86,11 @@ export class RapidPipelineConstruct extends NestedStack {
                 // Add permissions for all asset buckets from the global array
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
-                    // Ensure the prefix ends with a slash for proper path construction
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
@@ -97,7 +103,7 @@ export class RapidPipelineConstruct extends NestedStack {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -182,6 +188,11 @@ export class RapidPipelineConstruct extends NestedStack {
             ],
         });
 
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
+
         /**
          * SFN States
          */
@@ -244,6 +255,22 @@ export class RapidPipelineConstruct extends NestedStack {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full taskTimeout. The handler reports the
+        // token for the errors it raises itself; this covers the failures where it never runs at all:
+        // the function timeout, an out-of-memory kill, an import failure, or an invoke fault that
+        // exhausts the task's service-exception retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         /**
          * RapidPipeline Container Setup
          */
@@ -267,7 +294,7 @@ export class RapidPipelineConstruct extends NestedStack {
         //             "VAMSCloudWatchVPCLogsRapidPipeline",
         //             10
         //         ),
-        //     retention: RetentionDays.TEN_YEARS,
+        //     retention: RetentionDays.ONE_YEAR,
         //     removalPolicy: cdk.RemovalPolicy.DESTROY,
         // });
 
@@ -312,6 +339,9 @@ export class RapidPipelineConstruct extends NestedStack {
         });
 
         const logGroup = new cdk.aws_logs.LogGroup(this, "RapidPipelineLogGroup", {
+            // Encrypted with the shared VAMS CMK when the deployment enables one; undefined
+            // leaves the CloudWatch Logs AWS-managed key.
+            encryptionKey: props.storageResources.encryption.kmsKey,
             logGroupName: "/aws/vendedlogs/Pipelines/" + containerName,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             retention: logs.RetentionDays.ONE_MONTH,
@@ -389,6 +419,7 @@ export class RapidPipelineConstruct extends NestedStack {
             this,
             "RapidPipelineProcessing-StateMachineLogGroup",
             {
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 logGroupName:
                     "/aws/vendedlogs/VAMSStateMachine-RapidPipeline" +
                     generateUniqueNameHash(
@@ -397,7 +428,7 @@ export class RapidPipelineConstruct extends NestedStack {
                         "RapidPipelineProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );
@@ -436,6 +467,8 @@ export class RapidPipelineConstruct extends NestedStack {
             props.config,
             props.vpc,
             props.pipelineSubnetsIsolated,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -453,131 +486,35 @@ export class RapidPipelineConstruct extends NestedStack {
 
         this.pipelineVamsLambdaFunctionName = rapidPipelineExecuteFunction.functionName;
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables). The
+        // former per-output-format registrations (glb / gltf, with duplicates) collapse to ONE pipeline +
+        // two templates (rapid-pipeline-to-glb / rapid-pipeline-to-gltf) selected per execution.
         if (props.config.app.pipelines.useRapidPipeline.useEcs.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register GLTF to GLB optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineGltfToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-to-glb",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLB optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".glb",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "RapidPipelineRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "multi",
+                    "rapidPipeline",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-to-glb",
-                    workflowDescription:
-                        "Automated workflow for GLTF to GLB optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
+                },
+                idOverrides: {
+                    pipelineId: "rapid-pipeline",
+                    workflowId: "rapid-pipeline",
                 },
             });
-
-            // Register OBJ to GLTF optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineObjToGltfPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-to-gltf",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLTF optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".gltf",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-obj-to-gltf",
-                    workflowDescription:
-                        "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            // Register FBX to GLB optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineFbxToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-to-glb",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLB optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".glb",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-to-glb",
-                    workflowDescription:
-                        "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            // Register USD to GLTF optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineUsdToGltfPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "rapid-pipeline-to-gltf",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLTF optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".gltf",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-to-gltf",
-                    workflowDescription:
-                        "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            //Nag supression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
         }
 
         //Output VAMS Pipeline Execution Function name
@@ -624,7 +561,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -641,7 +578,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*RapidPipelineProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*RapidPipelineProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -658,7 +595,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -675,7 +612,7 @@ export class RapidPipelineConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecuteRapidPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteRapidPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -688,7 +625,7 @@ export class RapidPipelineConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -703,7 +640,7 @@ export class RapidPipelineConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

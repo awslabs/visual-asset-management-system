@@ -8,8 +8,11 @@ import * as path from "path";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
+import * as events from "aws-cdk-lib/aws-events";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
+import { NagSuppressions } from "cdk-nag";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
@@ -20,6 +23,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 import {
@@ -70,6 +74,20 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -82,6 +100,8 @@ export function buildOpenPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -112,12 +132,16 @@ export function buildOpenPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
+    orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -130,6 +154,7 @@ export function buildOpenPipelineFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -176,6 +201,7 @@ export function buildConstructPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -204,7 +230,12 @@ export function buildMetadataGenerationPipelineFunction(
         bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId;
     }
 
-    const bedrockModelPermissions = bedrockModelId.replace("global.", "").replace("us.", "");
+    // The foundation-model id underneath any cross-Region inference-profile prefix, which is what the
+    // `foundation-model/*` ARN in the grant below has to name. The prefix set is partition-specific:
+    // `global.`/`us.` in the commercial partition, `us-gov.` in GovCloud, `eu.`/`apac.` for the
+    // regional profiles. Anchored, and only the leading prefix is removed — a bare `.replace()` would
+    // also strip the same text from the middle of a model name.
+    const bedrockModelPermissions = bedrockModelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
@@ -216,7 +247,7 @@ export function buildMetadataGenerationPipelineFunction(
         handler: `${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer, lambdaMetadataGenerationLayer],
-        timeout: Duration.minutes(5),
+        timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
@@ -290,6 +321,36 @@ export function buildMetadataGenerationPipelineFunction(
     });
     fun.addToRolePolicy(rekognitionPolicy);
 
+    // The two resource wildcards this handler genuinely needs, each named rather than covered by a
+    // blanket. Amazon Rekognition's detection APIs analyse bytes supplied in the request and publish no
+    // resource to scope to (see the link above the policy). The Bedrock inference-profile wildcard
+    // exists because the profile is chosen by the operator through
+    // `useGenAiMetadata3dLabeling.bedrockModelId` and its id is not known at synthesis; the
+    // foundation-model ARNs beside it are already exact.
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Amazon Rekognition's Detect*/Describe* APIs operate on image bytes passed in the " +
+                    "request and support no resource-level permissions, so Resource must be '*'. " +
+                    "https://docs.aws.amazon.com/rekognition/latest/dg/security_iam_id-based-policy-examples.html",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "The Bedrock cross-Region inference profile is selected by the operator through " +
+                    "pipelines.useGenAiMetadata3dLabeling.bedrockModelId, so its identifier is not known " +
+                    "at synthesis. Scoped to this account and Region, and to inference profiles only.",
+                appliesTo: [{ regex: "/^Resource::arn:.*:bedrock:.*:inference-profile/\\*$/g" }],
+            },
+        ],
+        true
+    );
+
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -349,5 +410,6 @@ export function buildPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

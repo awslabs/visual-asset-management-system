@@ -14,6 +14,7 @@ import {
     Toggle,
 } from "@cloudscape-design/components";
 import { SearchPreferences, FIELD_MAPPINGS, SearchFilters } from "../types";
+import { RECORD_TYPE_FIELD } from "../utils/recordType";
 import DraggableColumnList from "./DraggableColumnList";
 
 interface PreferencesPanelProps {
@@ -61,6 +62,7 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
     const fileSpecificColumns = [
         "str_key",
         "str_assetname",
+        "str_assetid",
         "str_bucketid",
         "str_bucketname",
         "str_bucketprefix",
@@ -85,7 +87,7 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
         .filter(([key]) => {
             // Exclude MD_* pattern and rectype, but keep 'metadata' column
             if (key.startsWith("MD_") && key !== "metadata") return false;
-            if (key === "_rectype") return false;
+            if (key === RECORD_TYPE_FIELD) return false;
 
             // Filter by record type
             if (recordType === "asset") {

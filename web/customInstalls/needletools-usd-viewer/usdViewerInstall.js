@@ -11,11 +11,11 @@ const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
 const viewerId = "needletools-usd-viewer";
-const gitRepoSourceDestDir = "./customInstalls/needletools-usd-viewer/source"; //Relative to base web directory where yarn/npm is run
+const gitRepoSourceDestDir = "./customInstalls/needletools-usd-viewer/source"; //Relative to base web directory where npm is run
 const gitRepoUrl = "https://github.com/needle-tools/usd-viewer.git";
 const gitRepoCommitHash = "aab170a";
 
-const destinationDir = "./public/viewers/needletools_usd_viewer"; //Relative to base web directory where yarn/npm is run
+const destinationDir = "./public/viewers/needletools_usd_viewer"; //Relative to base web directory where npm is run
 
 // Function to cleanup previous git source and build binaries
 const previousCleanUp = async () => {

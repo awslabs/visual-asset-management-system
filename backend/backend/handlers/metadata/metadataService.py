@@ -7,6 +7,7 @@ import os
 import boto3
 import json
 import base64
+import time
 from datetime import datetime
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -15,6 +16,10 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import (
+    API_ASSET_LINK_METADATA, API_ASSET_METADATA,
+    API_FILE_METADATA, API_DATABASE_METADATA,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -25,7 +30,7 @@ from common.metadataSchemaValidation import (
     validate_metadata_keys_against_schema,
     enrich_metadata_with_schema
 )
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from handlers.assets.assetVersions import validate_asset_version_exists, get_asset_metadata_version
 from models.metadata import (
     # Asset Link Metadata Models
@@ -63,7 +68,11 @@ from models.metadata import (
     # Common Models
     BulkOperationResponseModel,
     MetadataValueType,
-    UpdateType
+    UpdateType,
+    # Shared limits and pagination defaults
+    MAX_METADATA_PAGE_SIZE,
+    DEFAULT_METADATA_MAX_ITEMS,
+    DEFAULT_METADATA_PAGE_SIZE,
 )
 
 # Configure AWS clients with retry configuration
@@ -86,19 +95,90 @@ claims_and_roles = {}
 # Constants
 MAX_METADATA_RECORDS_PER_ENTITY = 500
 
+# The pagination defaults are imported from models.metadata, where the request models declare them
+# as their field defaults: maxItems is the per-response ceiling that keeps the payload under the
+# Lambda (6 MB) / API Gateway limits, pageSize is the slice served, and the page is the smaller of
+# the two — so a caller supplying only maxItems bounds the response with it and one supplying only
+# pageSize keeps the default ceiling. Defining them here as well would let a request that reaches a
+# handler through a model disagree with one that does not.
+
+# Returned for a pagination parameter above MAX_METADATA_PAGE_SIZE, the ceiling shared with the
+# request models, which carry it as their le= bound. A parameter arriving through a model is
+# refused there; resolve_metadata_page_parameter covers a query_params dict built without one.
+METADATA_PAGE_SIZE_OUT_OF_RANGE_MESSAGE = (
+    f"pageSize and maxItems must each be between 1 and {MAX_METADATA_PAGE_SIZE}"
+)
+
+# Bound on re-driving a partially accepted batch. DynamoDB answers HTTP 200 with a
+# populated UnprocessedItems map when part of a batch was throttled or exceeded a
+# limit -- botocore's retry layer does not see that as an error, so the requests have
+# to be re-sent here or they are silently lost.
+#
+# The bound is what keeps a throttled table from trading data loss for a Lambda
+# timeout. Five attempts with 50/100/200/400 ms of backoff cap one chunk at 0.75 s of
+# sleep; at the MAX_METADATA_RECORDS_PER_ENTITY ceiling (500 records, 20 chunks) the
+# worst case is 15 s against this handler's 15-minute timeout. Exhausting the bound
+# raises, so the caller's own failure handling reports the affected keys rather than
+# the operation claiming success.
+BATCH_WRITE_MAX_ATTEMPTS = 5
+BATCH_WRITE_INITIAL_BACKOFF_SECONDS = 0.05
+
+# Returned when the schema-validation block cannot complete. That block carries schema
+# conformance, the controlled-list check, the type-change guard and the
+# restrictMetadataOutsideSchemas key prohibition, so an infrastructure error inside it
+# denies the write instead of letting the metadata through unvalidated. The message states
+# the outcome rather than inviting a retry: the causes range from a transient throttle to a
+# stored schema this code cannot read, and the guard cannot tell them apart.
+SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE = (
+    "Metadata could not be validated against the applicable schemas; nothing was written"
+)
+
+# Logged when the additive schema-default injection fails. That step only ADDS fields whose
+# schema declares a default, and it runs after schema conformance, the controlled-list check
+# and the off-schema key prohibition have all passed -- so a failure there loses defaults and
+# cannot admit anything the checks refused. It is therefore the one step in the block that stays
+# fail-open, which the surrounding fail-closed arm would otherwise convert into a denied write.
+SCHEMA_DEFAULT_INJECTION_FAILED_LOG = (
+    "Schema default injection failed; the validated metadata is written without "
+    "schema-supplied defaults"
+)
+
+# Returned when the deletion-validation block cannot complete. That block is the only guard on
+# removing metadata a schema governs: a required field may not be deleted, and neither may a
+# field that another schema field depends on. Swallowing an error there deleted the keys with no
+# validation and answered 200, so a transient DynamoDB error -- or a SchemaLookupError from a
+# schema read that did not complete -- silently turned the control off, exactly as it did on the
+# write path. Like SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE the text states the outcome rather than
+# inviting a retry, and names no request input (Rule 11).
+SCHEMA_DELETION_VALIDATION_UNAVAILABLE_MESSAGE = (
+    "Metadata deletion could not be validated against the applicable schemas; "
+    "nothing was deleted"
+)
+
+# Returned when deletion validation REFUSES the deletion. validate_metadata_deletion builds one
+# reason per refused key, and every reason names the metadata key the caller asked to delete -- and
+# the schema field that depends on it -- so the reasons are logged and the caller gets this generic
+# text instead (Rule 11). The prefix is kept so a refusal stays distinguishable from the
+# could-not-validate outcome above.
+SCHEMA_DELETION_NOT_ALLOWED_MESSAGE = (
+    "Deletion validation failed: one or more of the requested metadata keys is required by a "
+    "metadata schema, or another schema field depends on it; nothing was deleted"
+)
+
 # Load environment variables
 try:
-    asset_links_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    database_metadata_table_name = os.environ["DATABASE_METADATA_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    metadata_schema_table_v2_name = os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_links_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    database_metadata_table_name = get_table_name(ResourceKeys.DATABASE_METADATA_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    metadata_schema_table_v2_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -114,6 +194,322 @@ s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 #######################
 # Common Utility Functions
 #######################
+
+class BatchWriteIncompleteError(Exception):
+    """DynamoDB still reported UnprocessedItems after the retry bound was exhausted.
+
+    Raised so the caller's existing failure handling runs: the affected keys move from
+    successfulItems into failedItems, a REPLACE_ALL rolls back, and the response stops
+    claiming a clean write.
+    """
+
+
+def batch_write_with_retry(table_name: str, batch: list) -> None:
+    """Write one batch_write_item chunk, re-driving whatever DynamoDB did not accept.
+
+    Every batch write in this handler goes through here. `batch_write_item` answers
+    HTTP 200 with the requests it declined in `UnprocessedItems`, so a caller that
+    ignores the response reports a partial write as a complete one.
+
+    Args:
+        table_name: Target table for every request in the chunk.
+        batch: PutRequest/DeleteRequest entries, at most the 25 DynamoDB accepts.
+
+    Raises:
+        BatchWriteIncompleteError: Requests remained unprocessed after
+            BATCH_WRITE_MAX_ATTEMPTS attempts.
+    """
+    pending = list(batch)
+    if not pending:
+        return
+
+    backoff = BATCH_WRITE_INITIAL_BACKOFF_SECONDS
+    for attempt in range(1, BATCH_WRITE_MAX_ATTEMPTS + 1):
+        response = dynamodb_client.batch_write_item(RequestItems={table_name: pending})
+        pending = (response or {}).get('UnprocessedItems', {}).get(table_name) or []
+        if not pending:
+            return
+        logger.warning(
+            f"batch_write_item left {len(pending)} of {len(batch)} requests unprocessed on "
+            f"{table_name} (attempt {attempt} of {BATCH_WRITE_MAX_ATTEMPTS})"
+        )
+        if attempt < BATCH_WRITE_MAX_ATTEMPTS:
+            # Deliberate exponential backoff between batch_write_item retries. DynamoDB answers a
+            # partially accepted batch with UnprocessedItems rather than an error, and the documented
+            # handling is to resend only those after a growing delay -- retrying immediately re-hits
+            # the same throttle. This is not a sleep left in from debugging.
+            #
+            # The suppression must be the LAST comment line before the call: semgrep applies
+            # `nosemgrep` to the line immediately following it, so an explanation placed in between
+            # silently detaches it and the finding returns.
+            # nosemgrep: arbitrary-sleep
+            time.sleep(backoff)
+            backoff *= 2
+
+    logger.error(
+        f"batch_write_item could not place {len(pending)} of {len(batch)} requests on "
+        f"{table_name} after {BATCH_WRITE_MAX_ATTEMPTS} attempts"
+    )
+    raise BatchWriteIncompleteError(
+        f"{len(pending)} of {len(batch)} items were not written after "
+        f"{BATCH_WRITE_MAX_ATTEMPTS} attempts"
+    )
+
+
+# Stored-row attributes that a metadata read tolerates as absent, and the placeholder each is
+# validated with before being reported as null. A row written by an earlier release can carry
+# neither (handlers/indexing/fileIndexer.py tolerates exactly that shape), which is why the
+# DELETE paths and the REPLACE_ALL rollbacks already read them with .get. The GET paths read
+# them by subscript, so ONE such row raised KeyError inside the schema-enrichment arm, the
+# unenriched fallback raised the same KeyError again, and the entity's whole metadata list
+# answered 400 -- withholding the one thing needed to repair it, which is the key. Absent is
+# reported as null: the row is neither dropped, which would leave nobody aware it exists, nor
+# given a value or a type it does not carry.
+TOLERATED_ABSENT_STORED_FIELDS = ('metadataValue', 'metadataValueType')
+_ABSENT_FIELD_VALIDATION_PLACEHOLDERS = {
+    'metadataValue': '',
+    'metadataValueType': MetadataValueType.STRING,
+}
+
+# Attributes enrich_metadata_with_schema adds to a row. Read with .get, so the unenriched
+# fallback needs no second, differently written conversion -- it leaves them at the response
+# model's own defaults. That second copy is where this class kept reappearing.
+SCHEMA_ENRICHMENT_RESPONSE_FIELDS = (
+    'metadataSchemaName', 'metadataSchemaField', 'metadataSchemaRequired',
+    'metadataSchemaSequence', 'metadataSchemaDefaultValue', 'metadataSchemaDependsOn',
+    'metadataSchemaMultiFieldConflict', 'metadataSchemaControlledListKeys',
+)
+
+# How many metadata keys one aggregated line names. Rule 9: keys are identifiers, so naming
+# them is safe where rendering their values would not be -- but an entity can hold
+# MAX_METADATA_RECORDS_PER_ENTITY of them, and a line that grows with the data is the same
+# volume problem in another shape. The count is always reported in full.
+ABSENT_FIELD_LOG_KEY_SAMPLE = 25
+
+
+def log_absent_stored_fields(absent_keys_by_field: dict, disposition: str) -> None:
+    """Report a whole entity's malformed stored rows in one line per absent attribute.
+
+    Reporting per row emitted a line for every legacy row on every metadata request, so an
+    upgraded entity's log volume scaled with its row count. The count, plus enough keys to begin
+    repairing them, is what an operator needs -- and neither requires a line per row.
+
+    Args:
+        absent_keys_by_field: Attribute name -> metadata keys of the rows that lack it.
+        disposition: What the caller did about it, restated in the line.
+    """
+    for field_name in sorted(absent_keys_by_field):
+        keys = absent_keys_by_field[field_name]
+        if not keys:
+            continue
+        sample = [str(key) for key in keys[:ABSENT_FIELD_LOG_KEY_SAMPLE]]
+        remainder = len(keys) - len(sample)
+        more = f" (+{remainder} more)" if remainder > 0 else ""
+        logger.warning(
+            f"{len(keys)} stored metadata row(s) carry no {field_name}; {disposition}. "
+            f"Keys: {', '.join(sample)}{more}")
+
+
+def _stored_metadata_entry(deserialized: dict, key_fields, value_fields,
+                           value_type_fields) -> tuple:
+    """One stored metadata row, normalized to (key, {metadataValue, metadataValueType}, absent).
+
+    Each field argument is the ordered list of attribute names that can carry that part of a
+    row: file ATTRIBUTE rows store attributeKey/attributeValue/attributeValueType, metadata rows
+    store the metadata* names, and a row may carry either.
+
+    An absent attribute is reported back to the caller and evaluated as absent rather than
+    raising. Reading one by subscript inside the fail-closed schema-validation arm raised
+    KeyError -- which that arm answers with SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE, so one such
+    row made every metadata create AND update for the entity a permanent 400: the write that
+    would repair the row is the write being refused. A malformed stored row is a different
+    condition from a schema lookup that did not complete, and only the second may deny a write.
+
+    Evaluating the attributes as absent keeps the checks conservative rather than lenient: an
+    absent value still reads as empty, so a schema-required field still blocks the write, and an
+    absent value type only skips the type comparison it has no operand for.
+
+    Reporting is the caller's job so that a whole entity is reported in one line; use
+    stored_metadata_entries, which does both.
+
+    Returns:
+        Tuple of (key, {'metadataValue': ..., 'metadataValueType': ...}, absent_field_names).
+    """
+    def first_present(names):
+        for name in names:
+            if name in deserialized:
+                return deserialized[name], True
+        return None, False
+
+    key, _ = first_present(key_fields)
+    value, has_value = first_present(value_fields)
+    value_type, has_value_type = first_present(value_type_fields)
+
+    absent = ([value_fields[0]] if not has_value else []) + (
+        [value_type_fields[0]] if not has_value_type else [])
+
+    return key, {'metadataValue': value, 'metadataValueType': value_type}, absent
+
+
+def stored_metadata_entries(items, key_fields=('metadataKey',),
+                            value_fields=('metadataValue',),
+                            value_type_fields=('metadataValueType',)) -> dict:
+    """One entity's stored metadata rows, keyed by metadata key, reported in one log line.
+
+    Args:
+        items: Rows as DynamoDB returns them, in the typed attribute-value shape.
+        key_fields: Attribute names that can hold the metadata key, most specific first.
+        value_fields: Attribute names that can hold the value.
+        value_type_fields: Attribute names that can hold the value type.
+
+    Returns:
+        Dict of metadata key -> {'metadataValue': ..., 'metadataValueType': ...}.
+    """
+    deserializer = TypeDeserializer()
+    entries = {}
+    absent_keys_by_field = {}
+    for item in items:
+        deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
+        key, entry, absent = _stored_metadata_entry(
+            deserialized, key_fields, value_fields, value_type_fields)
+        entries[key] = entry
+        for field_name in absent:
+            absent_keys_by_field.setdefault(field_name, []).append(key)
+
+    log_absent_stored_fields(
+        absent_keys_by_field,
+        "evaluating those attributes as absent instead of refusing the operation")
+    return entries
+
+
+def metadata_response_models(model_cls, items, **identity_fields) -> list:
+    """Response models for one entity's metadata rows, tolerating absent stored attributes.
+
+    Every metadata GET converts its rows here, whether the schema-enrichment arm completed or
+    the unenriched fallback ran, so the stored attribute names have one reader rather than two.
+
+    A row missing metadataValue or metadataValueType is reported with that field null. The rest
+    of the row is still validated by the response model: the absent fields are validated with a
+    placeholder that is replaced by None before the item is returned, so no placeholder reaches
+    a caller and no type is invented for a row that does not carry one.
+
+    Args:
+        model_cls: The response model for this entity type.
+        items: Metadata row dicts, enriched or raw.
+        identity_fields: Entity identity fields shared by every row (databaseId, assetId,
+            filePath, assetLinkId), taken from the request path rather than the stored row.
+
+    Returns:
+        List of response models, one per row, in the order given.
+    """
+    response_models = []
+    absent_keys_by_field = {}
+    for item in items:
+        fields = dict(identity_fields)
+        fields['metadataKey'] = item.get('metadataKey')
+        for field_name in TOLERATED_ABSENT_STORED_FIELDS:
+            fields[field_name] = item.get(field_name)
+        for field_name in SCHEMA_ENRICHMENT_RESPONSE_FIELDS:
+            fields[field_name] = item.get(field_name)
+
+        absent = [name for name in TOLERATED_ABSENT_STORED_FIELDS if fields[name] is None]
+        if absent:
+            for field_name in absent:
+                absent_keys_by_field.setdefault(field_name, []).append(fields['metadataKey'])
+            placeholders = {
+                name: _ABSENT_FIELD_VALIDATION_PLACEHOLDERS[name] for name in absent}
+            validated = model_cls(**dict(fields, **placeholders))
+            response_models.append(validated.copy(update={name: None for name in absent}))
+        else:
+            response_models.append(model_cls(**fields))
+
+    log_absent_stored_fields(
+        absent_keys_by_field,
+        "returning those attributes as null so the row stays visible for repair")
+    return response_models
+
+
+def resolve_metadata_page_parameter(raw, default: int, name: str) -> int:
+    """One metadata pagination parameter, defaulted when absent and bounded when oversized.
+
+    Args:
+        raw: The submitted value, as the request model or the query string left it.
+        default: Size to use when nothing usable was submitted.
+        name: Parameter name, for the log line.
+
+    Returns:
+        A size between 1 and MAX_METADATA_PAGE_SIZE.
+
+    Raises:
+        VAMSGeneralErrorResponse: The submitted value exceeds MAX_METADATA_PAGE_SIZE.
+    """
+    if raw is None or raw == '':
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"Metadata {name} is not a number; serving {default}")
+        return default
+    if value < 1:
+        logger.warning(f"Metadata {name} is below 1; serving {default}")
+        return default
+    if value > MAX_METADATA_PAGE_SIZE:
+        logger.warning(
+            f"Metadata {name} of {value} exceeds the {MAX_METADATA_PAGE_SIZE} ceiling")
+        raise VAMSGeneralErrorResponse(METADATA_PAGE_SIZE_OUT_OF_RANGE_MESSAGE)
+    return value
+
+
+def paginate_metadata_records(records: list, query_params: dict):
+    """Offset-paginate an already-enriched, fully-ordered metadata record list.
+
+    Metadata GETs enrich the full record set with schema fields (injecting
+    schema-defined fields that have no stored value) and order it by schema
+    sequence, so paging happens after enrichment on the in-memory list rather
+    than at the DynamoDB cursor level. The page size and ceiling default to
+    named constants when not supplied, keeping the response payload bounded
+    while preserving correct ordering and schema injection.
+
+    Args:
+        records: The fully enriched, ordered list of metadata response items.
+        query_params: May contain 'startingToken' (base64 offset), 'pageSize',
+            and 'maxItems'.
+
+    Returns:
+        Tuple of (page_records, next_token). next_token is None on the last page.
+
+    Raises:
+        VAMSGeneralErrorResponse: pageSize or maxItems exceeds MAX_METADATA_PAGE_SIZE.
+    """
+    # The page is the smaller of the slice asked for and the ceiling allowed, so maxItems
+    # bounds the response even though every request model supplies a pageSize default.
+    page_size = min(
+        resolve_metadata_page_parameter(
+            query_params.get('pageSize'), DEFAULT_METADATA_PAGE_SIZE, 'pageSize'),
+        resolve_metadata_page_parameter(
+            query_params.get('maxItems'), DEFAULT_METADATA_MAX_ITEMS, 'maxItems'),
+    )
+
+    # Decode the starting offset from the token (defaults to first page).
+    start = 0
+    starting_token = query_params.get('startingToken')
+    if starting_token:
+        try:
+            start = int(base64.b64decode(starting_token).decode('utf-8'))
+        except (ValueError, base64.binascii.Error, UnicodeDecodeError):
+            logger.warning("Invalid metadata startingToken; serving from the first page")
+            start = 0
+        if start < 0:
+            start = 0
+
+    page = records[start:start + page_size]
+
+    next_token = None
+    if start + page_size < len(records):
+        next_offset = start + page_size
+        next_token = base64.b64encode(str(next_offset).encode('utf-8')).decode('utf-8')
+
+    return page, next_token
 
 def get_bucket_details(bucket_id: str) -> dict:
     """Get S3 bucket details from buckets table
@@ -371,15 +767,15 @@ def get_database_config(database_id: str) -> dict:
 #######################
 
 def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_roles: dict) -> GetAssetLinkMetadataResponseModel:
-    """Get metadata for an asset link - Returns ALL records (pagination ignored)
+    """Get metadata for an asset link - Returns one page of records
     
     Args:
         asset_link_id: The asset link ID
-        query_params: Query parameters (ignored - for backward compatibility)
+        query_params: 'pageSize', 'maxItems' and 'startingToken' for the returned page
         claims_and_roles: User claims and roles
         
     Returns:
-        GetAssetLinkMetadataResponseModel with ALL metadata records
+        GetAssetLinkMetadataResponseModel with one page of metadata records and its NextToken
     """
     try:
         # Validate asset link exists and check authorization
@@ -396,7 +792,7 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
                 check_entity_authorization(to_asset, "GET", claims_and_roles)):
             raise PermissionError("Not authorized to view metadata for this asset link")
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=asset_links_metadata_table_name,
@@ -446,44 +842,29 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
             
             # Enrich metadata with schema information
             enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
-            
+
             # Convert to response models
-            response_models = []
-            for item in enriched_metadata:
-                response_models.append(AssetLinkMetadataResponseModel(
-                    assetLinkId=item.get('assetLinkId', asset_link_id),
-                    metadataKey=item['metadataKey'],
-                    metadataValue=item['metadataValue'],
-                    metadataValueType=item['metadataValueType'],
-                    metadataSchemaName=item.get('metadataSchemaName'),
-                    metadataSchemaField=item.get('metadataSchemaField'),
-                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
-                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
-                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
-                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
-                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
-                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
-                ))
-            
-            metadata_list = response_models
+            metadata_list = metadata_response_models(
+                AssetLinkMetadataResponseModel, enriched_metadata,
+                assetLinkId=asset_link_id)
         except Exception as e:
             logger.warning(f"Error enriching metadata with schema: {e}")
             # If schema enrichment fails, return metadata without enrichment
-            metadata_list = [AssetLinkMetadataResponseModel(
-                assetLinkId=item['assetLinkId'],
-                metadataKey=item['metadataKey'],
-                metadataValue=item['metadataValue'],
-                metadataValueType=item['metadataValueType']
-            ) for item in metadata_list]
+            metadata_list = metadata_response_models(
+                AssetLinkMetadataResponseModel, metadata_list,
+                assetLinkId=asset_link_id)
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetAssetLinkMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
         
     except PermissionError as p:
@@ -554,11 +935,11 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 # Get schemas from both databases + GLOBAL
@@ -582,14 +963,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                 ).build_full_result()
                 
                 # Build existing metadata dict
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    existing_metadata[deserialized['metadataKey']] = {
-                        'metadataValue': deserialized['metadataValue'],
-                        'metadataValueType': deserialized['metadataValueType']
-                    }
+                existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Merge incoming metadata with existing (simulating upsert)
                 merged_metadata = existing_metadata.copy()
@@ -623,27 +997,36 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
                             raise VAMSGeneralErrorResponse(error_message)
                 
-                # Update request model with defaults applied (only for new fields)
-                updated_metadata = []
-                for item in request_model.metadata:
-                    updated_metadata.append(item)
-                
-                # Add any new fields with defaults that weren't in the request
-                for key, value_dict in metadata_with_defaults.items():
-                    if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
-                        from models.metadata import MetadataItemModel
-                        updated_metadata.append(MetadataItemModel(
-                            metadataKey=key,
-                            metadataValue=value_dict['metadataValue'],
-                            metadataValueType=value_dict['metadataValueType']
-                        ))
-                request_model.metadata = updated_metadata
+                # Update request model with defaults applied (only for new fields).
+                # This step is purely ADDITIVE and runs after every check above has passed,
+                # so it is deliberately fail-open: a failure here loses schema-supplied
+                # defaults and cannot admit anything validation refused. Guarded on its own so
+                # the surrounding fail-closed arm does not turn it into a denied write.
+                try:
+                    updated_metadata = []
+                    for item in request_model.metadata:
+                        updated_metadata.append(item)
+
+                    # Add any new fields with defaults that weren't in the request
+                    for key, value_dict in metadata_with_defaults.items():
+                        if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
+                            from models.metadata import MetadataItemModel
+                            updated_metadata.append(MetadataItemModel(
+                                metadataKey=key,
+                                metadataValue=value_dict['metadataValue'],
+                                metadataValueType=value_dict['metadataValueType']
+                            ))
+                    request_model.metadata = updated_metadata
+                except Exception as default_error:
+                    logger.warning(
+                        f"{SCHEMA_DEFAULT_INJECTION_FAILED_LOG}: {default_error}"
+                    )
                 
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Process metadata items in bulk - UNIFIED UPSERT (create or update)
         successful_items = []
@@ -675,11 +1058,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_links_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_links_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     # Mark all items in this batch as failed
@@ -752,11 +1131,11 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                     check_entity_authorization(to_asset, "PUT", claims_and_roles)):
                 raise PermissionError("Not authorized to update metadata for this asset link")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 # Fetch ALL existing metadata for this asset link
@@ -768,14 +1147,7 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 ).build_full_result()
                 
                 # Build existing metadata dict
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    existing_metadata[deserialized['metadataKey']] = {
-                        'metadataValue': deserialized['metadataValue'],
-                        'metadataValueType': deserialized['metadataValueType']
-                    }
+                existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
@@ -837,8 +1209,8 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
@@ -889,15 +1261,11 @@ def _upsert_asset_link_metadata(asset_link_id: str, metadata_items: list, claims
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_links_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_links_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     for item in batch:
-                        key = item['PutRequest']['Item']['metadataKey']
+                        key = item['PutRequest']['Item']['metadataKey']['S']
                         if key in successful_items:
                             successful_items.remove(key)
                         failed_items.append({
@@ -974,11 +1342,7 @@ def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, c
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_links_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_links_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error deleting metadata in REPLACE_ALL: {e}")
                     raise VAMSGeneralErrorResponse("Failed to delete existing metadata")
@@ -999,11 +1363,7 @@ def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, c
             # Write in batches of 25
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
-                dynamodb_client.batch_write_item(
-                    RequestItems={
-                        asset_links_metadata_table_name: batch
-                    }
-                )
+                batch_write_with_retry(asset_links_metadata_table_name, batch)
             
             # Success - build response
             timestamp = datetime.utcnow().isoformat()
@@ -1030,29 +1390,41 @@ def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, c
                         restore_item = {
                             'assetLinkId': {'S': item['assetLinkId']},
                             'metadataKey': {'S': item['metadataKey']},
-                            'metadataValue': {'S': item['metadataValue']},
-                            'metadataValueType': {'S': item['metadataValueType']}
+                            # Carried only when the backup holds them: a row written by an
+                            # earlier release can lack either attribute, and subscripting it
+                            # here raised before any write was issued - so a single legacy row
+                            # in the deleted set meant NO row was restored and the metadata was
+                            # permanently lost. A rollback reinstates what was there, so an
+                            # absent attribute stays absent rather than gaining a default.
+                            **({'metadataValue': {'S': item['metadataValue']}}
+                               if item.get('metadataValue') is not None else {}),
+                            **({'metadataValueType': {'S': item['metadataValueType']}}
+                               if item.get('metadataValueType') is not None else {}),
                         }
                         items_to_restore.append({'PutRequest': {'Item': restore_item}})
                     
                     # Restore in batches of 25
                     for i in range(0, len(items_to_restore), 25):
                         batch = items_to_restore[i:i+25]
-                        dynamodb_client.batch_write_item(
-                            RequestItems={
-                                asset_links_metadata_table_name: batch
-                            }
-                        )
+                        batch_write_with_retry(asset_links_metadata_table_name, batch)
                     
                     logger.info(f"Rollback successful: restored {len(deleted_items_backup)} deleted items")
-                    raise VAMSGeneralErrorResponse("REPLACE_ALL operation failed, all changes rolled back successfully")
-                    
+                    rollback_succeeded = True
+
                 except Exception as rollback_error:
                     logger.error(f"Rollback failed: {rollback_error}")
+                    rollback_succeeded = False
+
+                # Reported outside the rollback try so the except arm above cannot catch
+                # this signal and describe a completed rollback as an inconsistent one.
+                if rollback_succeeded:
                     raise VAMSGeneralErrorResponse(
-                        "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
-                        "Please contact administrator."
+                        "REPLACE_ALL operation failed, all changes rolled back successfully"
                     )
+                raise VAMSGeneralErrorResponse(
+                    "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
+                    "Please contact administrator."
+                )
             else:
                 # No items were deleted, so just report the upsert failure
                 raise VAMSGeneralErrorResponse(f"REPLACE_ALL operation failed during upsert: {str(upsert_error)}")
@@ -1106,9 +1478,11 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
             deserializer = TypeDeserializer()
             for item in page_iterator.get('Items', []):
                 deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                existing_metadata[deserialized['metadataKey']] = {
-                    'metadataValue': deserialized['metadataValue'],
-                    'metadataValueType': deserialized['metadataValueType']
+                # .get: only the remaining KEYS matter here, and a row written by an earlier
+                # version may carry neither attribute. The block below denies on error.
+                existing_metadata[deserialized.get('metadataKey')] = {
+                    'metadataValue': deserialized.get('metadataValue'),
+                    'metadataValueType': deserialized.get('metadataValueType')
                 }
             
             # Calculate remaining metadata after deletion
@@ -1138,14 +1512,17 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
             )
             
             if not is_valid:
-                error_message = "Deletion validation failed: " + "; ".join(validation_errors)
-                raise VAMSGeneralErrorResponse(error_message)
+                logger.warning(
+                    f"Deletion validation failed: {'; '.join(validation_errors)}")
+                raise VAMSGeneralErrorResponse(SCHEMA_DELETION_NOT_ALLOWED_MESSAGE)
                 
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error during deletion validation: {e}")
-            # Continue without validation if it fails
+            # Fail closed like the write path: this block is the only guard on removing a
+            # schema-required field, and swallowing the error deleted the keys unvalidated.
+            logger.exception(f"Error during deletion validation: {e}")
+            raise VAMSGeneralErrorResponse(SCHEMA_DELETION_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Process metadata keys
         successful_items = []
@@ -1194,11 +1571,7 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_links_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_links_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch delete: {e}")
                     # Mark all items in this batch as failed
@@ -1252,18 +1625,19 @@ def handle_asset_link_metadata_get(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse query parameters
         try:
             query_request_model = parse(query_parameters, model=GetAssetLinkMetadataRequestModel)
             query_params = {
+                'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Get metadata
         response = get_asset_link_metadata(path_request_model.assetLinkId, query_params, claims_and_roles)
@@ -1289,7 +1663,7 @@ def handle_asset_link_metadata_post(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -1317,7 +1691,7 @@ def handle_asset_link_metadata_post(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -1338,7 +1712,7 @@ def handle_asset_link_metadata_put(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -1366,7 +1740,7 @@ def handle_asset_link_metadata_put(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -1387,7 +1761,7 @@ def handle_asset_link_metadata_delete(event):
             path_request_model = parse(path_parameters, model=AssetLinkMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -1415,7 +1789,7 @@ def handle_asset_link_metadata_delete(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -1431,16 +1805,16 @@ def handle_asset_link_metadata_delete(event):
 #######################
 
 def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, claims_and_roles: dict) -> GetAssetMetadataResponseModel:
-    """Get metadata for an asset - Returns ALL records (pagination ignored)
+    """Get metadata for an asset - Returns one page of records
 
     Args:
         database_id: The database ID
         asset_id: The asset ID
-        query_params: Query parameters (ignored - for backward compatibility)
+        query_params: 'pageSize', 'maxItems' and 'startingToken' for the returned page
         claims_and_roles: User claims and roles
 
     Returns:
-        GetAssetMetadataResponseModel with ALL metadata records
+        GetAssetMetadataResponseModel with one page of metadata records and its NextToken
     """
     # Check if querying a specific version
     asset_version_id = query_params.get('assetVersionId')
@@ -1460,7 +1834,7 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
         # Build composite key for query
         composite_key = f"{database_id}:{asset_id}:/"
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=asset_file_metadata_table_name,
@@ -1504,46 +1878,29 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
             
             # Enrich metadata with schema information
             enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
-            
+
             # Convert to response models
-            response_models = []
-            for item in enriched_metadata:
-                response_models.append(AssetMetadataResponseModel(
-                    databaseId=database_id,
-                    assetId=asset_id,
-                    metadataKey=item['metadataKey'],
-                    metadataValue=item['metadataValue'],
-                    metadataValueType=item['metadataValueType'],
-                    metadataSchemaName=item.get('metadataSchemaName'),
-                    metadataSchemaField=item.get('metadataSchemaField'),
-                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
-                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
-                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
-                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
-                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
-                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
-                ))
-            
-            metadata_list = response_models
+            metadata_list = metadata_response_models(
+                AssetMetadataResponseModel, enriched_metadata,
+                databaseId=database_id, assetId=asset_id)
         except Exception as e:
             logger.warning(f"Error enriching metadata with schema: {e}")
             # If schema enrichment fails, return metadata without enrichment
-            metadata_list = [AssetMetadataResponseModel(
-                databaseId=database_id,
-                assetId=asset_id,
-                metadataKey=item['metadataKey'],
-                metadataValue=item['metadataValue'],
-                metadataValueType=item['metadataValueType']
-            ) for item in metadata_list]
+            metadata_list = metadata_response_models(
+                AssetMetadataResponseModel, metadata_list,
+                databaseId=database_id, assetId=asset_id)
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetAssetMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
         
     except PermissionError as p:
@@ -1616,39 +1973,23 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
 
             enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
 
-            response_models = []
-            for item in enriched_metadata:
-                response_models.append(AssetMetadataResponseModel(
-                    databaseId=database_id,
-                    assetId=asset_id,
-                    metadataKey=item['metadataKey'],
-                    metadataValue=item['metadataValue'],
-                    metadataValueType=item['metadataValueType'],
-                    metadataSchemaName=item.get('metadataSchemaName'),
-                    metadataSchemaField=item.get('metadataSchemaField'),
-                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
-                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
-                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
-                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
-                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
-                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
-                ))
-
-            metadata_list = response_models
+            metadata_list = metadata_response_models(
+                AssetMetadataResponseModel, enriched_metadata,
+                databaseId=database_id, assetId=asset_id)
         except Exception as e:
             logger.warning(f"Error enriching version metadata with schema: {e}")
-            metadata_list = [AssetMetadataResponseModel(
-                databaseId=database_id,
-                assetId=asset_id,
-                metadataKey=item['metadataKey'],
-                metadataValue=item['metadataValue'],
-                metadataValueType=item['metadataValueType']
-            ) for item in metadata_list]
+            metadata_list = metadata_response_models(
+                AssetMetadataResponseModel, metadata_list,
+                databaseId=database_id, assetId=asset_id)
             restrict_metadata_outside_schemas = False
 
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
         return GetAssetMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
 
     except PermissionError as p:
@@ -1716,11 +2057,11 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 database_ids = [database_id, 'GLOBAL']
@@ -1744,14 +2085,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                 ).build_full_result()
                 
                 # Build existing metadata dict
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    existing_metadata[deserialized['metadataKey']] = {
-                        'metadataValue': deserialized['metadataValue'],
-                        'metadataValueType': deserialized['metadataValueType']
-                    }
+                existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Merge incoming metadata with existing (simulating upsert)
                 merged_metadata = existing_metadata.copy()
@@ -1783,27 +2117,36 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
                             raise VAMSGeneralErrorResponse(error_message)
                 
-                # Update request model with defaults applied (only for new fields)
-                updated_metadata = []
-                for item in request_model.metadata:
-                    updated_metadata.append(item)
-                
-                # Add any new fields with defaults that weren't in the request
-                for key, value_dict in metadata_with_defaults.items():
-                    if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
-                        from models.metadata import MetadataItemModel
-                        updated_metadata.append(MetadataItemModel(
-                            metadataKey=key,
-                            metadataValue=value_dict['metadataValue'],
-                            metadataValueType=value_dict['metadataValueType']
-                        ))
-                request_model.metadata = updated_metadata
+                # Update request model with defaults applied (only for new fields).
+                # This step is purely ADDITIVE and runs after every check above has passed,
+                # so it is deliberately fail-open: a failure here loses schema-supplied
+                # defaults and cannot admit anything validation refused. Guarded on its own so
+                # the surrounding fail-closed arm does not turn it into a denied write.
+                try:
+                    updated_metadata = []
+                    for item in request_model.metadata:
+                        updated_metadata.append(item)
+
+                    # Add any new fields with defaults that weren't in the request
+                    for key, value_dict in metadata_with_defaults.items():
+                        if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
+                            from models.metadata import MetadataItemModel
+                            updated_metadata.append(MetadataItemModel(
+                                metadataKey=key,
+                                metadataValue=value_dict['metadataValue'],
+                                metadataValueType=value_dict['metadataValueType']
+                            ))
+                    request_model.metadata = updated_metadata
+                except Exception as default_error:
+                    logger.warning(
+                        f"{SCHEMA_DEFAULT_INJECTION_FAILED_LOG}: {default_error}"
+                    )
                 
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Process metadata items in bulk
         successful_items = []
@@ -1839,11 +2182,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_file_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_file_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     for item in batch:
@@ -1908,11 +2247,11 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
             if not check_entity_authorization(asset, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this asset")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         composite_key = f"{database_id}:{asset_id}:/"
         if not skip_schema_validation:
             try:
@@ -1927,14 +2266,7 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 ).build_full_result()
                 
                 # Build existing metadata dict
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    existing_metadata[deserialized['metadataKey']] = {
-                        'metadataValue': deserialized['metadataValue'],
-                        'metadataValueType': deserialized['metadataValueType']
-                    }
+                existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
@@ -2008,8 +2340,8 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
@@ -2063,11 +2395,7 @@ def _upsert_asset_metadata(database_id: str, asset_id: str, metadata_items: list
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_file_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_file_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     for item in batch:
@@ -2152,11 +2480,7 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_file_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_file_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error deleting metadata in REPLACE_ALL: {e}")
                     raise VAMSGeneralErrorResponse("Failed to delete existing metadata")
@@ -2178,11 +2502,7 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
             # Write in batches of 25
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
-                dynamodb_client.batch_write_item(
-                    RequestItems={
-                        asset_file_metadata_table_name: batch
-                    }
-                )
+                batch_write_with_retry(asset_file_metadata_table_name, batch)
             
             # Success - build response
             timestamp = datetime.utcnow().isoformat()
@@ -2210,29 +2530,41 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
                             'metadataKey': {'S': item['metadataKey']},
                             'databaseId:assetId:filePath': {'S': composite_key},
                             'databaseId:assetId': {'S': asset_composite_key},
-                            'metadataValue': {'S': item['metadataValue']},
-                            'metadataValueType': {'S': item['metadataValueType']}
+                            # Carried only when the backup holds them: a row written by an
+                            # earlier release can lack either attribute, and subscripting it
+                            # here raised before any write was issued - so a single legacy row
+                            # in the deleted set meant NO row was restored and the metadata was
+                            # permanently lost. A rollback reinstates what was there, so an
+                            # absent attribute stays absent rather than gaining a default.
+                            **({'metadataValue': {'S': item['metadataValue']}}
+                               if item.get('metadataValue') is not None else {}),
+                            **({'metadataValueType': {'S': item['metadataValueType']}}
+                               if item.get('metadataValueType') is not None else {}),
                         }
                         items_to_restore.append({'PutRequest': {'Item': restore_item}})
                     
                     # Restore in batches of 25
                     for i in range(0, len(items_to_restore), 25):
                         batch = items_to_restore[i:i+25]
-                        dynamodb_client.batch_write_item(
-                            RequestItems={
-                                asset_file_metadata_table_name: batch
-                            }
-                        )
+                        batch_write_with_retry(asset_file_metadata_table_name, batch)
                     
                     logger.info(f"Rollback successful: restored {len(deleted_items_backup)} deleted items")
-                    raise VAMSGeneralErrorResponse("REPLACE_ALL operation failed, all changes rolled back successfully")
-                    
+                    rollback_succeeded = True
+
                 except Exception as rollback_error:
                     logger.error(f"Rollback failed: {rollback_error}")
+                    rollback_succeeded = False
+
+                # Reported outside the rollback try so the except arm above cannot catch
+                # this signal and describe a completed rollback as an inconsistent one.
+                if rollback_succeeded:
                     raise VAMSGeneralErrorResponse(
-                        "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
-                        "Please contact administrator."
+                        "REPLACE_ALL operation failed, all changes rolled back successfully"
                     )
+                raise VAMSGeneralErrorResponse(
+                    "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
+                    "Please contact administrator."
+                )
             else:
                 # No items were deleted, so just report the upsert failure
                 raise VAMSGeneralErrorResponse(f"REPLACE_ALL operation failed during upsert: {str(upsert_error)}")
@@ -2283,9 +2615,11 @@ def delete_asset_metadata(database_id: str, asset_id: str, request_model: Delete
             deserializer = TypeDeserializer()
             for item in page_iterator.get('Items', []):
                 deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                existing_metadata[deserialized['metadataKey']] = {
-                    'metadataValue': deserialized['metadataValue'],
-                    'metadataValueType': deserialized['metadataValueType']
+                # .get: only the remaining KEYS matter here, and a row written by an earlier
+                # version may carry neither attribute. The block below denies on error.
+                existing_metadata[deserialized.get('metadataKey')] = {
+                    'metadataValue': deserialized.get('metadataValue'),
+                    'metadataValueType': deserialized.get('metadataValueType')
                 }
             
             # Calculate remaining metadata after deletion
@@ -2314,14 +2648,17 @@ def delete_asset_metadata(database_id: str, asset_id: str, request_model: Delete
             )
             
             if not is_valid:
-                error_message = "Deletion validation failed: " + "; ".join(validation_errors)
-                raise VAMSGeneralErrorResponse(error_message)
+                logger.warning(
+                    f"Deletion validation failed: {'; '.join(validation_errors)}")
+                raise VAMSGeneralErrorResponse(SCHEMA_DELETION_NOT_ALLOWED_MESSAGE)
                 
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error during deletion validation: {e}")
-            # Continue without validation if it fails
+            # Fail closed like the write path: this block is the only guard on removing a
+            # schema-required field, and swallowing the error deleted the keys unvalidated.
+            logger.exception(f"Error during deletion validation: {e}")
+            raise VAMSGeneralErrorResponse(SCHEMA_DELETION_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Process metadata keys
         successful_items = []
@@ -2368,11 +2705,7 @@ def delete_asset_metadata(database_id: str, asset_id: str, request_model: Delete
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            asset_file_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(asset_file_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch delete: {e}")
                     for item in batch:
@@ -2425,19 +2758,20 @@ def handle_asset_metadata_get(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse query parameters
         try:
             query_request_model = parse(query_parameters, model=GetAssetMetadataRequestModel)
             query_params = {
+                'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken,
                 'assetVersionId': query_request_model.assetVersionId
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Get metadata
         response = get_asset_metadata(path_request_model.databaseId, path_request_model.assetId, query_params, claims_and_roles)
@@ -2463,7 +2797,7 @@ def handle_asset_metadata_post(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -2491,7 +2825,7 @@ def handle_asset_metadata_post(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -2512,7 +2846,7 @@ def handle_asset_metadata_put(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -2540,7 +2874,7 @@ def handle_asset_metadata_put(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -2561,7 +2895,7 @@ def handle_asset_metadata_delete(event):
             path_request_model = parse(path_parameters, model=AssetMetadataPathRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Parse request body
         body = event.get('body')
@@ -2589,7 +2923,7 @@ def handle_asset_metadata_delete(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
@@ -2605,7 +2939,7 @@ def handle_asset_metadata_delete(event):
 #######################
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, query_params: dict, claims_and_roles: dict):
-    """Get metadata or attributes for a file - Returns ALL records (pagination ignored)"""
+    """Get metadata or attributes for a file - Returns one page of records"""
     # Check if querying a specific version
     asset_version_id = query_params.get('assetVersionId')
     if asset_version_id:
@@ -2625,7 +2959,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
         composite_key = f"{database_id}:{asset_id}:{file_path}"
         table_name = asset_file_metadata_table_name if metadata_type == 'metadata' else file_attribute_table_name
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=table_name,
@@ -2647,9 +2981,9 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
                 value_field = deserialized_item.get('attributeValue', deserialized_item.get('metadataValue'))
                 type_field = deserialized_item.get('attributeValueType', deserialized_item.get('metadataValueType'))
             else:
-                key_field = deserialized_item['metadataKey']
-                value_field = deserialized_item['metadataValue']
-                type_field = deserialized_item['metadataValueType']
+                key_field = deserialized_item.get('metadataKey')
+                value_field = deserialized_item.get('metadataValue')
+                type_field = deserialized_item.get('metadataValueType')
             
             # Store as dict for enrichment
             metadata_list.append({
@@ -2685,48 +3019,29 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
             
             # Enrich metadata with schema information
             enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
-            
+
             # Convert to response models
-            response_models = []
-            for item in enriched_metadata:
-                response_models.append(FileMetadataResponseModel(
-                    databaseId=database_id,
-                    assetId=asset_id,
-                    filePath=file_path,
-                    metadataKey=item['metadataKey'],
-                    metadataValue=item['metadataValue'],
-                    metadataValueType=item['metadataValueType'],
-                    metadataSchemaName=item.get('metadataSchemaName'),
-                    metadataSchemaField=item.get('metadataSchemaField'),
-                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
-                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
-                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
-                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
-                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
-                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
-                ))
-            
-            metadata_list = response_models
+            metadata_list = metadata_response_models(
+                FileMetadataResponseModel, enriched_metadata,
+                databaseId=database_id, assetId=asset_id, filePath=file_path)
         except Exception as e:
             logger.warning(f"Error enriching metadata with schema: {e}")
             # If schema enrichment fails, return metadata without enrichment
-            metadata_list = [FileMetadataResponseModel(
-                databaseId=database_id,
-                assetId=asset_id,
-                filePath=file_path,
-                metadataKey=item['metadataKey'],
-                metadataValue=item['metadataValue'],
-                metadataValueType=item['metadataValueType']
-            ) for item in metadata_list]
+            metadata_list = metadata_response_models(
+                FileMetadataResponseModel, metadata_list,
+                databaseId=database_id, assetId=asset_id, filePath=file_path)
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetFileMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
     except PermissionError as p:
         raise p
@@ -2800,41 +3115,23 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
 
             enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
 
-            response_models = []
-            for item in enriched_metadata:
-                response_models.append(FileMetadataResponseModel(
-                    databaseId=database_id,
-                    assetId=asset_id,
-                    filePath=file_path,
-                    metadataKey=item['metadataKey'],
-                    metadataValue=item['metadataValue'],
-                    metadataValueType=item['metadataValueType'],
-                    metadataSchemaName=item.get('metadataSchemaName'),
-                    metadataSchemaField=item.get('metadataSchemaField'),
-                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
-                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
-                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
-                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
-                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
-                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
-                ))
-
-            metadata_list = response_models
+            metadata_list = metadata_response_models(
+                FileMetadataResponseModel, enriched_metadata,
+                databaseId=database_id, assetId=asset_id, filePath=file_path)
         except Exception as e:
             logger.warning(f"Error enriching version file metadata with schema: {e}")
-            metadata_list = [FileMetadataResponseModel(
-                databaseId=database_id,
-                assetId=asset_id,
-                filePath=file_path,
-                metadataKey=item['metadataKey'],
-                metadataValue=item['metadataValue'],
-                metadataValueType=item['metadataValueType']
-            ) for item in metadata_list]
+            metadata_list = metadata_response_models(
+                FileMetadataResponseModel, metadata_list,
+                databaseId=database_id, assetId=asset_id, filePath=file_path)
             restrict_metadata_outside_schemas = False
 
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
         return GetFileMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
 
     except PermissionError as p:
@@ -2897,11 +3194,11 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 database_ids = [database_id, 'GLOBAL']
@@ -2926,23 +3223,14 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                 ).build_full_result()
                 
                 # Build existing metadata dict (normalize field names)
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    if request_model.type == 'attribute':
-                        key = deserialized.get('attributeKey', deserialized.get('metadataKey'))
-                        value = deserialized.get('attributeValue', deserialized.get('metadataValue'))
-                        value_type = deserialized.get('attributeValueType', deserialized.get('metadataValueType'))
-                    else:
-                        key = deserialized['metadataKey']
-                        value = deserialized['metadataValue']
-                        value_type = deserialized['metadataValueType']
-                    
-                    existing_metadata[key] = {
-                        'metadataValue': value,
-                        'metadataValueType': value_type
-                    }
+                if request_model.type == 'attribute':
+                    existing_metadata = stored_metadata_entries(
+                        page_iterator.get('Items', []),
+                        key_fields=('attributeKey', 'metadataKey'),
+                        value_fields=('attributeValue', 'metadataValue'),
+                        value_type_fields=('attributeValueType', 'metadataValueType'))
+                else:
+                    existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Merge incoming metadata with existing (simulating upsert)
                 merged_metadata = existing_metadata.copy()
@@ -2974,27 +3262,36 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
                             raise VAMSGeneralErrorResponse(error_message)
                 
-                # Update request model with defaults applied (only for new fields)
-                updated_metadata = []
-                for item in request_model.metadata:
-                    updated_metadata.append(item)
-                
-                # Add any new fields with defaults that weren't in the request
-                for key, value_dict in metadata_with_defaults.items():
-                    if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
-                        from models.metadata import MetadataItemModel
-                        updated_metadata.append(MetadataItemModel(
-                            metadataKey=key,
-                            metadataValue=value_dict['metadataValue'],
-                            metadataValueType=value_dict['metadataValueType']
-                        ))
-                request_model.metadata = updated_metadata
+                # Update request model with defaults applied (only for new fields).
+                # This step is purely ADDITIVE and runs after every check above has passed,
+                # so it is deliberately fail-open: a failure here loses schema-supplied
+                # defaults and cannot admit anything validation refused. Guarded on its own so
+                # the surrounding fail-closed arm does not turn it into a denied write.
+                try:
+                    updated_metadata = []
+                    for item in request_model.metadata:
+                        updated_metadata.append(item)
+
+                    # Add any new fields with defaults that weren't in the request
+                    for key, value_dict in metadata_with_defaults.items():
+                        if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
+                            from models.metadata import MetadataItemModel
+                            updated_metadata.append(MetadataItemModel(
+                                metadataKey=key,
+                                metadataValue=value_dict['metadataValue'],
+                                metadataValueType=value_dict['metadataValueType']
+                            ))
+                    request_model.metadata = updated_metadata
+                except Exception as default_error:
+                    logger.warning(
+                        f"{SCHEMA_DEFAULT_INJECTION_FAILED_LOG}: {default_error}"
+                    )
                 
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         successful_items = []
         failed_items = []
@@ -3035,7 +3332,7 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(RequestItems={table_name: batch})
+                    batch_write_with_retry(table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     for item in batch:
@@ -3082,11 +3379,11 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
             if not check_entity_authorization(asset, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this file")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
         if not skip_schema_validation:
             try:
@@ -3102,23 +3399,14 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 ).build_full_result()
                 
                 # Build existing metadata dict (normalize field names)
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    if request_model.type == 'attribute':
-                        key = deserialized.get('attributeKey', deserialized.get('metadataKey'))
-                        value = deserialized.get('attributeValue', deserialized.get('metadataValue'))
-                        value_type = deserialized.get('attributeValueType', deserialized.get('metadataValueType'))
-                    else:
-                        key = deserialized['metadataKey']
-                        value = deserialized['metadataValue']
-                        value_type = deserialized['metadataValueType']
-                    
-                    existing_metadata[key] = {
-                        'metadataValue': value,
-                        'metadataValueType': value_type
-                    }
+                if request_model.type == 'attribute':
+                    existing_metadata = stored_metadata_entries(
+                        page_iterator.get('Items', []),
+                        key_fields=('attributeKey', 'metadataKey'),
+                        value_fields=('attributeValue', 'metadataValue'),
+                        value_type_fields=('attributeValueType', 'metadataValueType'))
+                else:
+                    existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Validate 500 record limit based on updateType (separate limits for metadata vs attributes)
                 if request_model.updateType == UpdateType.UPDATE:
@@ -3193,8 +3481,8 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
@@ -3258,11 +3546,7 @@ def _upsert_file_metadata(database_id: str, asset_id: str, file_path: str, metad
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     for item in batch:
@@ -3362,11 +3646,7 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error deleting {metadata_type} in REPLACE_ALL: {e}")
                     raise VAMSGeneralErrorResponse(f"Failed to delete existing {metadata_type}")
@@ -3397,11 +3677,7 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
             # Write in batches of 25
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
-                dynamodb_client.batch_write_item(
-                    RequestItems={
-                        table_name: batch
-                    }
-                )
+                batch_write_with_retry(table_name, batch)
             
             # Success - build response
             timestamp = datetime.utcnow().isoformat()
@@ -3430,8 +3706,13 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
                                 'metadataKey': {'S': item['metadataKey']},
                                 'databaseId:assetId:filePath': {'S': composite_key},
                                 'databaseId:assetId': {'S': asset_composite_key},
-                                'metadataValue': {'S': item['metadataValue']},
-                                'metadataValueType': {'S': item['metadataValueType']}
+                                # See the sibling rollback loops: an attribute absent from a
+                                # row written by an earlier release must stay absent, and must
+                                # not raise before the restore writes anything.
+                                **({'metadataValue': {'S': item['metadataValue']}}
+                                   if item.get('metadataValue') is not None else {}),
+                                **({'metadataValueType': {'S': item['metadataValueType']}}
+                                   if item.get('metadataValueType') is not None else {}),
                             }
                         else:  # attribute
                             key = item.get('attributeKey', item.get('metadataKey'))
@@ -3449,21 +3730,25 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
                     # Restore in batches of 25
                     for i in range(0, len(items_to_restore), 25):
                         batch = items_to_restore[i:i+25]
-                        dynamodb_client.batch_write_item(
-                            RequestItems={
-                                table_name: batch
-                            }
-                        )
+                        batch_write_with_retry(table_name, batch)
                     
                     logger.info(f"Rollback successful: restored {len(deleted_items_backup)} deleted items")
-                    raise VAMSGeneralErrorResponse("REPLACE_ALL operation failed, all changes rolled back successfully")
-                    
+                    rollback_succeeded = True
+
                 except Exception as rollback_error:
                     logger.error(f"Rollback failed: {rollback_error}")
+                    rollback_succeeded = False
+
+                # Reported outside the rollback try so the except arm above cannot catch
+                # this signal and describe a completed rollback as an inconsistent one.
+                if rollback_succeeded:
                     raise VAMSGeneralErrorResponse(
-                        "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
-                        "Please contact administrator."
+                        "REPLACE_ALL operation failed, all changes rolled back successfully"
                     )
+                raise VAMSGeneralErrorResponse(
+                    "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
+                    "Please contact administrator."
+                )
             else:
                 # No items were deleted, so just report the upsert failure
                 raise VAMSGeneralErrorResponse(f"REPLACE_ALL operation failed during upsert: {str(upsert_error)}")
@@ -3511,9 +3796,9 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
                     value = deserialized.get('attributeValue', deserialized.get('metadataValue'))
                     value_type = deserialized.get('attributeValueType', deserialized.get('metadataValueType'))
                 else:
-                    key = deserialized['metadataKey']
-                    value = deserialized['metadataValue']
-                    value_type = deserialized['metadataValueType']
+                    key = deserialized.get('metadataKey')
+                    value = deserialized.get('metadataValue')
+                    value_type = deserialized.get('metadataValueType')
                 
                 existing_metadata[key] = {
                     'metadataValue': value,
@@ -3547,14 +3832,17 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
             )
             
             if not is_valid:
-                error_message = "Deletion validation failed: " + "; ".join(validation_errors)
-                raise VAMSGeneralErrorResponse(error_message)
+                logger.warning(
+                    f"Deletion validation failed: {'; '.join(validation_errors)}")
+                raise VAMSGeneralErrorResponse(SCHEMA_DELETION_NOT_ALLOWED_MESSAGE)
                 
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error during deletion validation: {e}")
-            # Continue without validation if it fails
+            # Fail closed like the write path: this block is the only guard on removing a
+            # schema-required field, and swallowing the error deleted the keys unvalidated.
+            logger.exception(f"Error during deletion validation: {e}")
+            raise VAMSGeneralErrorResponse(SCHEMA_DELETION_VALIDATION_UNAVAILABLE_MESSAGE)
         
         successful_items = []
         failed_items = []
@@ -3613,7 +3901,7 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(RequestItems={table_name: batch})
+                    batch_write_with_retry(table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch delete: {e}")
                     for item in batch:
@@ -3665,11 +3953,12 @@ def handle_file_metadata_get(event):
             file_path = file_path[len(path_request_model.assetId)+1:]
             logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
         
-        query_params = {'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -3709,7 +3998,8 @@ def handle_file_metadata_post(event):
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -3749,7 +4039,8 @@ def handle_file_metadata_put(event):
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -3789,7 +4080,8 @@ def handle_file_metadata_delete(event):
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -3804,7 +4096,7 @@ def handle_file_metadata_delete(event):
 #######################
 
 def get_database_metadata(database_id: str, query_params: dict, claims_and_roles: dict):
-    """Get metadata for a database - Returns ALL records (pagination ignored)"""
+    """Get metadata for a database - Returns one page of records"""
     try:
         database = validate_database_exists(database_id)
         database.update({"object__type": "database"})
@@ -3812,7 +4104,7 @@ def get_database_metadata(database_id: str, query_params: dict, claims_and_roles
         if not check_entity_authorization(database, "GET", claims_and_roles):
             raise PermissionError("Not authorized to view metadata for this database")
         
-        # Fetch ALL metadata using paginator (ignore query_params pagination)
+        # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=database_metadata_table_name,
@@ -3855,44 +4147,29 @@ def get_database_metadata(database_id: str, query_params: dict, claims_and_roles
             
             # Enrich metadata with schema information
             enriched_metadata = enrich_metadata_with_schema(metadata_list, aggregated_schema)
-            
+
             # Convert to response models
-            response_models = []
-            for item in enriched_metadata:
-                response_models.append(DatabaseMetadataResponseModel(
-                    databaseId=database_id,
-                    metadataKey=item['metadataKey'],
-                    metadataValue=item['metadataValue'],
-                    metadataValueType=item['metadataValueType'],
-                    metadataSchemaName=item.get('metadataSchemaName'),
-                    metadataSchemaField=item.get('metadataSchemaField'),
-                    metadataSchemaRequired=item.get('metadataSchemaRequired'),
-                    metadataSchemaSequence=item.get('metadataSchemaSequence'),
-                    metadataSchemaDefaultValue=item.get('metadataSchemaDefaultValue'),
-                    metadataSchemaDependsOn=item.get('metadataSchemaDependsOn'),
-                    metadataSchemaMultiFieldConflict=item.get('metadataSchemaMultiFieldConflict'),
-                    metadataSchemaControlledListKeys=item.get('metadataSchemaControlledListKeys')
-                ))
-            
-            metadata_list = response_models
+            metadata_list = metadata_response_models(
+                DatabaseMetadataResponseModel, enriched_metadata,
+                databaseId=database_id)
         except Exception as e:
             logger.warning(f"Error enriching metadata with schema: {e}")
             # If schema enrichment fails, return metadata without enrichment
-            metadata_list = [DatabaseMetadataResponseModel(
-                databaseId=database_id,
-                metadataKey=item['metadataKey'],
-                metadataValue=item['metadataValue'],
-                metadataValueType=item['metadataValueType']
-            ) for item in metadata_list]
+            metadata_list = metadata_response_models(
+                DatabaseMetadataResponseModel, metadata_list,
+                databaseId=database_id)
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetDatabaseMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
     except PermissionError as p:
         raise p
@@ -3946,11 +4223,11 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 database_ids = [database_id, 'GLOBAL']
@@ -3973,14 +4250,7 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                 ).build_full_result()
                 
                 # Build existing metadata dict
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    existing_metadata[deserialized['metadataKey']] = {
-                        'metadataValue': deserialized['metadataValue'],
-                        'metadataValueType': deserialized['metadataValueType']
-                    }
+                existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Merge incoming metadata with existing (simulating upsert)
                 merged_metadata = existing_metadata.copy()
@@ -4012,27 +4282,36 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
                             raise VAMSGeneralErrorResponse(error_message)
                 
-                # Update request model with defaults applied (only for new fields)
-                updated_metadata = []
-                for item in request_model.metadata:
-                    updated_metadata.append(item)
-                
-                # Add any new fields with defaults that weren't in the request
-                for key, value_dict in metadata_with_defaults.items():
-                    if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
-                        from models.metadata import MetadataItemModel
-                        updated_metadata.append(MetadataItemModel(
-                            metadataKey=key,
-                            metadataValue=value_dict['metadataValue'],
-                            metadataValueType=value_dict['metadataValueType']
-                        ))
-                request_model.metadata = updated_metadata
+                # Update request model with defaults applied (only for new fields).
+                # This step is purely ADDITIVE and runs after every check above has passed,
+                # so it is deliberately fail-open: a failure here loses schema-supplied
+                # defaults and cannot admit anything validation refused. Guarded on its own so
+                # the surrounding fail-closed arm does not turn it into a denied write.
+                try:
+                    updated_metadata = []
+                    for item in request_model.metadata:
+                        updated_metadata.append(item)
+
+                    # Add any new fields with defaults that weren't in the request
+                    for key, value_dict in metadata_with_defaults.items():
+                        if key not in existing_metadata and not any(item.metadataKey == key for item in request_model.metadata):
+                            from models.metadata import MetadataItemModel
+                            updated_metadata.append(MetadataItemModel(
+                                metadataKey=key,
+                                metadataValue=value_dict['metadataValue'],
+                                metadataValueType=value_dict['metadataValueType']
+                            ))
+                    request_model.metadata = updated_metadata
+                except Exception as default_error:
+                    logger.warning(
+                        f"{SCHEMA_DEFAULT_INJECTION_FAILED_LOG}: {default_error}"
+                    )
                 
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         successful_items = []
         failed_items = []
@@ -4056,7 +4335,7 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(RequestItems={database_metadata_table_name: batch})
+                    batch_write_with_retry(database_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     for item in batch:
@@ -4101,11 +4380,11 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
             if not check_entity_authorization(database, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this database")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 # Fetch ALL existing metadata for this database
@@ -4118,14 +4397,7 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 ).build_full_result()
                 
                 # Build existing metadata dict
-                existing_metadata = {}
-                deserializer = TypeDeserializer()
-                for item in page_iterator.get('Items', []):
-                    deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                    existing_metadata[deserialized['metadataKey']] = {
-                        'metadataValue': deserialized['metadataValue'],
-                        'metadataValueType': deserialized['metadataValueType']
-                    }
+                existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
@@ -4199,8 +4471,8 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
             except VAMSGeneralErrorResponse:
                 raise
             except Exception as e:
-                logger.warning(f"Error during schema validation: {e}")
-                # Continue without schema validation if it fails
+                logger.exception(f"Error during schema validation: {e}")
+                raise VAMSGeneralErrorResponse(SCHEMA_VALIDATION_UNAVAILABLE_MESSAGE)
         
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
@@ -4251,11 +4523,7 @@ def _upsert_database_metadata(database_id: str, metadata_items: list, claims_and
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            database_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(database_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch write: {e}")
                     for item in batch:
@@ -4337,11 +4605,7 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            database_metadata_table_name: batch
-                        }
-                    )
+                    batch_write_with_retry(database_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error deleting metadata in REPLACE_ALL: {e}")
                     raise VAMSGeneralErrorResponse("Failed to delete existing metadata")
@@ -4361,11 +4625,7 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
             # Write in batches of 25
             for i in range(0, len(items_to_write), 25):
                 batch = items_to_write[i:i+25]
-                dynamodb_client.batch_write_item(
-                    RequestItems={
-                        database_metadata_table_name: batch
-                    }
-                )
+                batch_write_with_retry(database_metadata_table_name, batch)
             
             # Success - build response
             timestamp = datetime.utcnow().isoformat()
@@ -4392,29 +4652,41 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
                         restore_item = {
                             'metadataKey': {'S': item['metadataKey']},
                             'databaseId': {'S': database_id},
-                            'metadataValue': {'S': item['metadataValue']},
-                            'metadataValueType': {'S': item['metadataValueType']}
+                            # Carried only when the backup holds them: a row written by an
+                            # earlier release can lack either attribute, and subscripting it
+                            # here raised before any write was issued - so a single legacy row
+                            # in the deleted set meant NO row was restored and the metadata was
+                            # permanently lost. A rollback reinstates what was there, so an
+                            # absent attribute stays absent rather than gaining a default.
+                            **({'metadataValue': {'S': item['metadataValue']}}
+                               if item.get('metadataValue') is not None else {}),
+                            **({'metadataValueType': {'S': item['metadataValueType']}}
+                               if item.get('metadataValueType') is not None else {}),
                         }
                         items_to_restore.append({'PutRequest': {'Item': restore_item}})
                     
                     # Restore in batches of 25
                     for i in range(0, len(items_to_restore), 25):
                         batch = items_to_restore[i:i+25]
-                        dynamodb_client.batch_write_item(
-                            RequestItems={
-                                database_metadata_table_name: batch
-                            }
-                        )
+                        batch_write_with_retry(database_metadata_table_name, batch)
                     
                     logger.info(f"Rollback successful: restored {len(deleted_items_backup)} deleted items")
-                    raise VAMSGeneralErrorResponse("REPLACE_ALL operation failed, all changes rolled back successfully")
-                    
+                    rollback_succeeded = True
+
                 except Exception as rollback_error:
                     logger.error(f"Rollback failed: {rollback_error}")
+                    rollback_succeeded = False
+
+                # Reported outside the rollback try so the except arm above cannot catch
+                # this signal and describe a completed rollback as an inconsistent one.
+                if rollback_succeeded:
                     raise VAMSGeneralErrorResponse(
-                        "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
-                        "Please contact administrator."
+                        "REPLACE_ALL operation failed, all changes rolled back successfully"
                     )
+                raise VAMSGeneralErrorResponse(
+                    "REPLACE_ALL operation failed and rollback unsuccessful - data may be inconsistent. "
+                    "Please contact administrator."
+                )
             else:
                 # No items were deleted, so just report the upsert failure
                 raise VAMSGeneralErrorResponse(f"REPLACE_ALL operation failed during upsert: {str(upsert_error)}")
@@ -4452,9 +4724,11 @@ def delete_database_metadata(database_id: str, request_model: DeleteDatabaseMeta
             deserializer = TypeDeserializer()
             for item in page_iterator.get('Items', []):
                 deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-                existing_metadata[deserialized['metadataKey']] = {
-                    'metadataValue': deserialized['metadataValue'],
-                    'metadataValueType': deserialized['metadataValueType']
+                # .get: only the remaining KEYS matter here, and a row written by an earlier
+                # version may carry neither attribute. The block below denies on error.
+                existing_metadata[deserialized.get('metadataKey')] = {
+                    'metadataValue': deserialized.get('metadataValue'),
+                    'metadataValueType': deserialized.get('metadataValueType')
                 }
             
             # Calculate remaining metadata after deletion
@@ -4483,14 +4757,17 @@ def delete_database_metadata(database_id: str, request_model: DeleteDatabaseMeta
             )
             
             if not is_valid:
-                error_message = "Deletion validation failed: " + "; ".join(validation_errors)
-                raise VAMSGeneralErrorResponse(error_message)
+                logger.warning(
+                    f"Deletion validation failed: {'; '.join(validation_errors)}")
+                raise VAMSGeneralErrorResponse(SCHEMA_DELETION_NOT_ALLOWED_MESSAGE)
                 
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error during deletion validation: {e}")
-            # Continue without validation if it fails
+            # Fail closed like the write path: this block is the only guard on removing a
+            # schema-required field, and swallowing the error deleted the keys unvalidated.
+            logger.exception(f"Error during deletion validation: {e}")
+            raise VAMSGeneralErrorResponse(SCHEMA_DELETION_VALIDATION_UNAVAILABLE_MESSAGE)
         
         successful_items = []
         failed_items = []
@@ -4527,7 +4804,7 @@ def delete_database_metadata(database_id: str, request_model: DeleteDatabaseMeta
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(RequestItems={database_metadata_table_name: batch})
+                    batch_write_with_retry(database_metadata_table_name, batch)
                 except Exception as e:
                     logger.exception(f"Error in batch delete: {e}")
                     for item in batch:
@@ -4570,8 +4847,8 @@ def handle_database_metadata_get(event):
         path_request_model = parse(path_parameters, model=DatabaseMetadataPathRequestModel)
         
         query_request_model = parse(query_parameters, model=GetDatabaseMetadataRequestModel)
-        query_params = {'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken}
-        
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken}
+
         response = get_database_metadata(path_request_model.databaseId, query_params, claims_and_roles)
         return success(body=response.dict())
     except PermissionError as p:
@@ -4606,7 +4883,8 @@ def handle_database_metadata_post(event):
         response = create_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -4639,7 +4917,8 @@ def handle_database_metadata_put(event):
         response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -4672,7 +4951,8 @@ def handle_database_metadata_delete(event):
         response = delete_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
-        return validation_error(body={'message': str(v)}, event=event)
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
@@ -4706,9 +4986,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route to appropriate handler based on path
+        # Route to appropriate handler based on the master API route definitions
         # Asset Link Metadata Routes
-        if '/asset-links/' in path and '/metadata' in path:
+        if API_ASSET_LINK_METADATA.matches(path):
             if method == 'GET':
                 return handle_asset_link_metadata_get(event)
             elif method == 'POST':
@@ -4717,9 +4997,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_asset_link_metadata_put(event)
             elif method == 'DELETE':
                 return handle_asset_link_metadata_delete(event)
-        
+
         # File Metadata/Attribute Routes
-        elif '/database/' in path and '/assets/' in path and '/metadata/file' in path:
+        elif API_FILE_METADATA.matches(path):
             if method == 'GET':
                 return handle_file_metadata_get(event)
             elif method == 'POST':
@@ -4728,9 +5008,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_file_metadata_put(event)
             elif method == 'DELETE':
                 return handle_file_metadata_delete(event)
-        
+
         # Asset Metadata Routes (not file metadata)
-        elif '/database/' in path and '/assets/' in path and '/metadata' in path:
+        elif API_ASSET_METADATA.matches(path):
             if method == 'GET':
                 return handle_asset_metadata_get(event)
             elif method == 'POST':
@@ -4739,9 +5019,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_asset_metadata_put(event)
             elif method == 'DELETE':
                 return handle_asset_metadata_delete(event)
-        
+
         # Database Metadata Routes
-        elif '/database/' in path and '/metadata' in path and '/assets/' not in path:
+        elif API_DATABASE_METADATA.matches(path):
             if method == 'GET':
                 return handle_database_metadata_get(event)
             elif method == 'POST':
@@ -4756,7 +5036,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

@@ -79,7 +79,7 @@ You must enable access to the configured Amazon Bedrock model in your deployment
 
 ### Input parameters
 
-The pipeline accepts optional `inputParameters` in JSON format when triggered:
+Parameters reach the pipeline through the template selected for the run. Deployment registers the `metadata-3d-labeling-default` template, whose configuration body sets both parameters to `"True"`:
 
 ```json
 {
@@ -88,17 +88,19 @@ The pipeline accepts optional `inputParameters` in JSON format when triggered:
 }
 ```
 
-| Parameter                                 | Default   | Description                                                                                                                                               |
-| ----------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `includeAllAssetFileHierarchyFiles`       | `"False"` | When `"True"`, downloads all files in the asset directory hierarchy (useful for models with separate texture or material files).                          |
-| `seedMetadataGenerationWithInputMetadata` | `"False"` | When `"True"`, passes existing asset metadata, file metadata, and file attributes to the LLM to help refine label generation and reduce outlier keywords. |
+| Parameter                                 | Value when absent | Description                                                                                                                                               |
+| ----------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `includeAllAssetFileHierarchyFiles`       | `"False"`         | When `"True"`, downloads all files in the asset directory hierarchy (useful for models with separate texture or material files).                          |
+| `seedMetadataGenerationWithInputMetadata` | `"False"`         | When `"True"`, passes existing asset metadata, file metadata, and file attributes to the LLM to help refine label generation and reduce outlier keywords. |
+
+The template allows per-run edits, so a run can supply a replacement configuration body without changing the registered template.
 
 ### Rendering stage
 
 The Blender container imports the 3D model and renders multiple camera views as PNG images using the Cycles rendering engine. The `renderScene.py` script handles camera placement, lighting setup, and multi-angle capture. Rendered images are uploaded to the auxiliary Amazon S3 bucket.
 
 :::tip[Supported 3D formats]
-The Blender renderer supports all formats that Blender can import natively: OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, and USD. Complex models with external texture references benefit from setting `includeAllAssetFileHierarchyFiles` to `"True"`.
+The Blender renderer imports OBJ, GLB, FBX, ABC, DAE, PLY, STL, and USD models. Complex models with external texture references benefit from setting `includeAllAssetFileHierarchyFiles` to `"True"`.
 :::
 
 ### Metadata generation stage

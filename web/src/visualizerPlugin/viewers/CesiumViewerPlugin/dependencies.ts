@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { loadExternalScript } from "../../core/loadExternalScript";
+
 import { StylesheetManager } from "../../core/StylesheetManager";
 
 export class CesiumDependencyManager {
@@ -63,8 +65,8 @@ export class CesiumDependencyManager {
             // Debug: Check what's available
             console.log(`[${this.PLUGIN_ID}] Cesium loaded successfully from bundle`);
             console.log(
-                `[${this.PLUGIN_ID}] Cesium.Viewer available:`,
-                typeof this.cesiumInstance.Viewer
+                `[${this.PLUGIN_ID}] Cesium.CesiumWidget available:`,
+                typeof this.cesiumInstance.CesiumWidget
             );
             console.log(
                 `[${this.PLUGIN_ID}] Cesium keys:`,
@@ -96,7 +98,7 @@ export class CesiumDependencyManager {
      */
     private static async loadCesiumFromAssets(): Promise<void> {
         // Load CSS first using StylesheetManager
-        const stylesheets = ["/viewers/cesium/Widgets/widgets.css"];
+        const stylesheets = ["/viewers/cesium/Widget/CesiumWidget.css"];
 
         for (const stylesheet of stylesheets) {
             try {
@@ -118,29 +120,12 @@ export class CesiumDependencyManager {
     /**
      * Load a script dynamically
      */
-    private static loadScript(src: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            if (this.loadedDependencies.has(src)) {
-                resolve(); // Already loaded
-                return;
-            }
-
-            if (document.querySelector(`script[src="${src}"]`)) {
-                this.loadedDependencies.add(src);
-                resolve(); // Already in DOM
-                return;
-            }
-
-            const script = document.createElement("script");
-            script.src = src;
-            script.onload = () => {
-                this.loadedDependencies.add(src);
-                console.log(`[${this.PLUGIN_ID}] Loaded script: ${src}`);
-                resolve();
-            };
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+    // Resolving on the mere presence of a tag returned before an in-flight download had executed,
+    // handing the caller a library whose global was still undefined.
+    private static async loadScript(src: string): Promise<void> {
+        await loadExternalScript(src);
+        this.loadedDependencies.add(src);
+        console.log(`[${this.PLUGIN_ID}] Loaded script: ${src}`);
     }
 
     /**

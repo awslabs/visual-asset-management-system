@@ -1,16 +1,20 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
+import copy
 import boto3
 import json
 
 from botocore.exceptions import ClientError
+from botocore.config import Config
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
+from common.validators import validate, normalize_userid_array
+from models.common import VAMSGeneralErrorResponse
 from handlers.authz import CasbinEnforcer
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, query_all_items
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
 from boto3.dynamodb.conditions import Key
@@ -19,11 +23,10 @@ from boto3.dynamodb.types import TypeDeserializer
 claims_and_roles = {}
 logger = safeLogger(service="SubscriptionService")
 
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
-sns_client = boto3.client('sns')
-
-main_rest_response = STANDARD_JSON_RESPONSE
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
+sns_client = boto3.client('sns', config=retry_config)
 
 # Hard-coded allowed values for subscription fields
 ALLOWED_EVENT_NAMES = [
@@ -36,47 +39,52 @@ ALLOWED_ENTITY_NAMES = [
 
 def validate_subscription_fields(body):
     """Validate subscription fields against allowed values"""
-    
+
     # Validate eventName
     if body['eventName'] not in ALLOWED_EVENT_NAMES:
         raise ValueError(f"Invalid eventName. Allowed values: {', '.join(ALLOWED_EVENT_NAMES)}")
-    
+
     # Validate entityName
     if body['entityName'] not in ALLOWED_ENTITY_NAMES:
         raise ValueError(f"Invalid entityName. Allowed values: {', '.join(ALLOWED_ENTITY_NAMES)}")
-    
+
     return True
 
+# A required table name that cannot be resolved fails the module load, so the deployment reports it
+# at cold start. Degrading to None instead let the module import and turned the failure into a boto3
+# error on a None table name for every request afterwards -- a generic 500 naming nothing.
 try:
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    user_table_name = os.environ["USER_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    user_table_name = get_table_name(ResourceKeys.USER_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed loading resource names")
+    raise e
 
 
-def get_name_for_asset_ids(asset_ids):
-    #TODO: Implement paginiation but should be auto-limited by the amount of records (implementing pagination) returned by the function calling this
-    if not asset_ids:
-        return {}
-    # TODO: Check if we can optimize this further
-    filter_expression = " OR ".join([f"assetId = :id{i}" for i, asset_id in enumerate(asset_ids, 1)])
+def get_asset_object_for_entity(entity_id):
+    """Resolve the asset a subscription row points at, annotated for authorization.
 
-    expression_attribute_values = {f":id{i}": {"S": asset_id} for i, asset_id in enumerate(asset_ids, 1)}
+    Returns None when the assetId resolves to no live asset, or to more than one asset and
+    so cannot be attributed to a single database. Such a row cannot be authorized against
+    an asset and is left out of the listing.
+    """
+    try:
+        asset_object = get_asset_object_from_id(None, entity_id)
+    except VAMSGeneralErrorResponse as e:
+        logger.warning(f"Could not resolve the asset for subscription entity {entity_id}: {e}")
+        return None
 
-    items = dynamodb_client.scan(
-        TableName=asset_table_name,
-        ProjectionExpression='assetId, assetName, databaseId',
-        FilterExpression=filter_expression,
-        ExpressionAttributeValues=expression_attribute_values,
-    )
-    return {item['assetId']['S']: {"assetName": item['assetName']['S'], "databaseId": item['databaseId']['S']} for item in items.get("Items", [])}
+    if asset_object is None:
+        logger.info(f"Subscription entity {entity_id} has no live asset")
+        return None
+
+    asset_object.update({"object__type": "asset"})
+    return asset_object
 
 
 def get_subscriptions(query_params):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     deserializer = TypeDeserializer()
     paginator = dynamodb_client.get_paginator('scan')
 
@@ -90,7 +98,9 @@ def get_subscriptions(query_params):
     ).build_full_result()
 
     output_objects = []
-    unique_asset_entity_ids = set()
+    #Each distinct entityId is resolved once and reused across every row that references
+    #it, so a page of subscriptions costs one asset lookup per asset rather than per row
+    resolved_assets = {}
     for obj in page_iterator.get('Items', []):
         deserialized_document = {k: deserializer.deserialize(v) for k, v in obj.items()}
         entity_name, entity_id = deserialized_document["entityName_entityId"].split("#")
@@ -102,28 +112,31 @@ def get_subscriptions(query_params):
         }
 
         # Add Casbin Enforcer to check if the user has access to GET subscription of specific Assets
-        asset_object = get_asset_object_from_id(None, entity_id)
-        asset_object.update({"object__type": "asset"})
+        if entity_id not in resolved_assets:
+            resolved_assets[entity_id] = get_asset_object_for_entity(entity_id)
+
+        asset_object = resolved_assets[entity_id]
+        #A row with no asset to authorize against is dropped; the rest of the page still returns
+        if asset_object is None:
+            continue
+
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(asset_object, "GET"):
                 output_objects.append(output_obj)
-                if entity_name == "Asset":
-                    unique_asset_entity_ids.add(entity_id)
 
     result = {
         "Items": []
     }
 
-    assets_with_name = get_name_for_asset_ids(list(unique_asset_entity_ids))
     result["Items"] = [
         {
             "eventName": obj["eventName"],
             "entityName": obj["entityName"],
             "entityId": obj["entityId"],
             "subscribers": obj["subscribers"],
-            "entityValue": assets_with_name[obj["entityId"]]["assetName"] if obj["entityId"] in assets_with_name else None,
-            "databaseId": assets_with_name[obj["entityId"]]["databaseId"] if obj["entityId"] in assets_with_name else None
+            "entityValue": resolved_assets[obj["entityId"]].get("assetName") if obj["entityName"] == "Asset" else None,
+            "databaseId": resolved_assets[obj["entityId"]].get("databaseId") if obj["entityName"] == "Asset" else None
         }
         for obj in output_objects
     ]
@@ -152,33 +165,72 @@ def add_sns_topic_in_asset(asset_id, database_id, sns_topic):
         logger.error(f"No asset found - {asset_id}.")
         return
 
-    asset_table.update_item(
-        Key={'databaseId': database_id, 'assetId': asset_id},
-        UpdateExpression='SET snsTopic = :sns_topic',
-        ExpressionAttributeValues={':sns_topic': sns_topic}
-    )
+    # Conditional on the record still existing: the asset may be archived or
+    # deleted between the query above and this update, and an unconditional
+    # update_item would re-create a phantom record containing only the key
+    try:
+        asset_table.update_item(
+            Key={'databaseId': database_id, 'assetId': asset_id},
+            UpdateExpression='SET snsTopic = :sns_topic',
+            ConditionExpression='attribute_exists(assetId)',
+            ExpressionAttributeValues={':sns_topic': sns_topic}
+        )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset no longer exists; skipping snsTopic update - {asset_id}")
+            return
+        raise
 
 
 def get_asset(asset_id):
-    resp = dynamodb_client.scan(
-        TableName=asset_table_name,
-        ProjectionExpression='snsTopic, databaseId',
-        FilterExpression='assetId = :asset_id',
-        ExpressionAttributeValues={':asset_id': {'S': asset_id}},
+    """Resolve the databaseId and SNS topic of the asset carrying an assetId.
+
+    assetIdGSI is partitioned on assetId, so this is a keyed read of that index paged to
+    exhaustion. A single scan with a FilterExpression applies its filter only to the page
+    it already read, so it answers None for an asset that exists once the table outgrows
+    one page.
+
+    Returns None when the assetId resolves to no live asset, and when it resolves to more
+    than one: assetIds are unique within a database only, so an ambiguous match cannot be
+    attributed to a single database's record.
+    """
+    asset_table = dynamodb.Table(asset_table_name)
+    items = query_all_items(
+        asset_table,
+        IndexName='assetIdGSI',
+        KeyConditionExpression=Key('assetId').eq(asset_id)
     )
 
-    items = resp.get('Items')
-    if items:
-        asset_obj = {"databaseId": items[0].get('databaseId').get("S")}
-        if items[0].get('snsTopic'):
-            asset_obj["snsTopic"] = items[0].get('snsTopic').get("S")
-        return asset_obj
-    return None
+    # Archiving rewrites a record under a "{databaseId}#deleted" partition, so an archived
+    # row is not the live asset and must not stand in for it
+    live_items = [
+        item for item in items
+        if not str(item.get('databaseId', '')).endswith('#deleted')
+        and item.get('status') != 'archived'
+    ]
+
+    if len(live_items) != 1:
+        logger.error(
+            f"assetId {asset_id} matches {len(live_items)} live assets; "
+            f"archived or duplicate matches: {len(items)}")
+        return None
+
+    item = live_items[0]
+    asset_obj = {"databaseId": item.get('databaseId')}
+    if item.get('snsTopic'):
+        asset_obj["snsTopic"] = item.get('snsTopic')
+    return asset_obj
 
 
 def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
     asset_table = dynamodb.Table(asset_table_name)
     asset_obj = get_asset(asset_id)
+
+    # The subscription row has already been updated; the topic cleanup is best effort and
+    # is skipped when the asset can no longer be resolved to one live record
+    if asset_obj is None:
+        logger.error(f"No live asset found for asset {asset_id}")
+        return
 
     if not asset_obj.get("snsTopic"):
         logger.error(f"No topic found for asset {asset_id}")
@@ -186,10 +238,19 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
 
     if delete_sns:
         sns_client.delete_topic(TopicArn=asset_obj.get("snsTopic"))
-        asset_table.update_item(
-            Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
-            UpdateExpression=f"REMOVE snsTopic"
-        )
+        # Conditional on the record still existing: a REMOVE-only update on a
+        # missing key would otherwise create a key-only phantom record
+        try:
+            asset_table.update_item(
+                Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
+                UpdateExpression="REMOVE snsTopic",
+                ConditionExpression='attribute_exists(assetId)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.warning(f"Asset no longer exists; skipping snsTopic removal - {asset_id}")
+            else:
+                raise
     else:
         resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
         subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]
@@ -203,6 +264,13 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
 
 def create_sns_subscriptions(asset_id, emails):
     asset_obj = get_asset(asset_id)
+
+    # The subscription row is written before this runs, so an assetId that no longer resolves
+    # to one live asset is reported rather than dereferenced into a 500
+    if asset_obj is None:
+        logger.error(f"No live asset found for asset {asset_id}")
+        raise VAMSGeneralErrorResponse("Asset could not be resolved for this subscription.")
+
     asset_sns_topic = asset_obj.get("snsTopic")
 
     if not asset_sns_topic:
@@ -261,7 +329,7 @@ def get_userProfile_Email(userId):
 
 
 def create_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     
     # Validate subscription fields against allowed values
@@ -325,7 +393,7 @@ def create_subscription(body):
 
 
 def update_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     
     # Validate subscription fields against allowed values
@@ -389,7 +457,7 @@ def update_subscription(body):
 
 
 def delete_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     try:
         subscription_table.delete_item(
@@ -418,7 +486,8 @@ def delete_subscription(body):
 
 
 def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
+    normalize_event(event)
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     try:
         httpMethod = event['requestContext']['http']['method']
 
@@ -461,6 +530,10 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": message})
             return response
 
+        # The subscriber ids key the subscription row and are looked up in the user table for
+        # their e-mail addresses, so the normalized form is what is validated and stored
+        event['body']['subscribers'] = normalize_userid_array(event['body']['subscribers'])
+
         (valid, message) = validate({
             'eventName': {
                 'value': event['body']['eventName'],
@@ -488,6 +561,11 @@ def lambda_handler(event, context):
         if event['body']["entityName"] == "Asset":
             allowed = False
             asset_object = get_asset_object_from_id(None, event['body']["entityId"])
+            if asset_object is None:
+                response['statusCode'] = 404
+                response['body'] = json.dumps({"message": "Asset not found"})
+                return response
+
             asset_object.update({"object__type": "asset"})
 
             if len(claims_and_roles["tokens"]) > 0:
@@ -510,6 +588,11 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "EntityName provided not supported for subscriptions"})
             return response
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(v)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         logger.exception(e)
         response['statusCode'] = 500

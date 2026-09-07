@@ -3,9 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
-import * as apigwIntegrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
-import * as apigwAuthorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { LAMBDA_NODE_RUNTIME } from "../../../../config/config";
@@ -13,6 +10,7 @@ import { Construct } from "constructs";
 import { Service } from "../../../helper/service-helper";
 import { authResources } from "../../auth/authBuilder-nestedStack";
 import * as Config from "../../../../config/config";
+import { suppressCdkNagLambda } from "../../../helper/security";
 
 /**
  * Additional configuration needed to use federated identities
@@ -22,6 +20,10 @@ export interface AmplifyConfigFederatedIdentityProps {
      * The name of the federated identity provider.
      */
     customFederatedIdentityProviderName: string;
+    /**
+     * Display name for the identity provider (shown on login button)
+     */
+    idpDisplayName?: string;
     /**
      * The cognito auth domain
      */
@@ -58,6 +60,13 @@ interface InlineLambdaProps {
      * The Cognito IdentityPoolId to authenticate users in the front-end
      */
     cognitoIdentityPoolId: string;
+
+    /**
+     * Partition-aware Cognito user pool (IDP) endpoint for the front-end.
+     * Required because Amplify JS resolves only the `aws` / `aws-cn` partitions and
+     * would otherwise build a `.amazonaws.com` host in the EU Sovereign Cloud.
+     */
+    cognitoUserPoolEndpoint: string;
 
     /**
      * Additional configuration needed for federated auth
@@ -100,6 +109,11 @@ interface InlineLambdaProps {
     externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
+     * External OAUTH IDP Display Name Configuration (shown on login button)
+     */
+    externalOAuthIdpDisplayName?: string;
+
+    /**
      * Name of deployed stack
      */
     stackName: string;
@@ -126,13 +140,9 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
      */
     authResources: authResources;
     /**
-     * The ApiGatewayV2 HttpApi to create route from
+     * The ApiGatewayV2 HttpApi URL to attach the lambda (optional; may be empty at construct time; will be set via env var at runtime)
      */
-    api: apigatewayv2.HttpApi;
-    /**
-     * The ApiGatewayV2 HttpApi URL to attach the lambda
-     */
-    apiUrl: string;
+    apiUrl?: string;
     /**
      * region
      */
@@ -143,34 +153,30 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
     cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
 
     /**
-     * Content Security Policy to apply at the react level [none headers passed from static webpage service] (generally not used as alreayd provided in Cloudfront and ALB deployment)
+     * Content Security Policy to apply at the react level [none headers passed from static webpage service] (generally not used as already provided in Cloudfront and ALB deployment)
      */
     contentSecurityPolicy?: string;
-
-    /**
-     * Custom authorizer function for ignored paths
-     */
-    customAuthorizerFunction: lambda.Function;
 }
 
 /**
- * Deploys a lambda to the api gateway under the path `/api/amplify-config`.
- * The route is unauthenticated.  Use this with `apigatewayv2-cloudfront` for a CORS free
- * amplify configuration setup
+ * Builds the /api/amplify-config Lambda function. Route registration is handled by the REST API builder.
+ * The API URL is read from process.env.API_URL at runtime (set after the API exists).
  */
 export class AmplifyConfigLambdaConstruct extends Construct {
+    public readonly lambdaFn: lambda.Function;
+
     constructor(parent: Construct, name: string, props: AmplifyConfigLambdaConstructProps) {
         super(parent, name);
 
         props = { ...props };
 
-        const lambdaFn = new lambda.Function(this, "AmplifyConfigLambda", {
+        this.lambdaFn = new lambda.Function(this, "AmplifyConfigLambda", {
             runtime: LAMBDA_NODE_RUNTIME,
             handler: "index.handler",
             code: lambda.Code.fromInline(
                 this.getJavascriptInlineFunction({
                     region: props.region,
-                    api: props.apiUrl || "us-east-1",
+                    api: props.apiUrl || "",
                     cognitoUserPoolId: props.config.app.authProvider.useCognito.enabled
                         ? props.authResources.cognito.userPoolId
                         : "undefined",
@@ -179,6 +185,15 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                         : "undefined",
                     cognitoIdentityPoolId: props.config.app.authProvider.useCognito.enabled
                         ? props.authResources.cognito.identityPoolId
+                        : "undefined",
+                    // Amplify JS only knows the `aws` and `aws-cn` partitions, so it resolves
+                    // every region to the commercial `.amazonaws.com` suffix. In the EU
+                    // Sovereign Cloud the correct suffix is `.amazonaws.eu`, so the frontend
+                    // must be given explicit endpoints. Service() is partition-aware and
+                    // already backs the CSP allow-list, so this stays correct in every
+                    // partition (commercial and GovCloud keep resolving to .amazonaws.com).
+                    cognitoUserPoolEndpoint: props.config.app.authProvider.useCognito.enabled
+                        ? `https://${Service("COGNITO_IDP", false).Endpoint}`
                         : "undefined",
                     cognitoFederatedConfig: props.cognitoFederatedConfig,
                     externalOAuthIdpURL:
@@ -202,6 +217,9 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     externalOAuthIdpDiscoveryEndpoint:
                         props.config.app.authProvider.useExternalOAuthIdp
                             .idpAuthProviderDiscoveryEndpoint || "undefined",
+                    externalOAuthIdpDisplayName:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpDisplayName ||
+                        "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",
@@ -210,40 +228,13 @@ export class AmplifyConfigLambdaConstruct extends Construct {
             timeout: cdk.Duration.seconds(15),
         });
 
-        // add lambda policies
-        lambdaFn.grantInvoke(Service("APIGATEWAY").Principal);
+        // API Gateway invoke permission is granted by the REST API builder, which emits one
+        // CfnPermission per registered route Lambda scoped to this deployment's own execute-api
+        // source ARN. It cannot be granted here: the construct is created before the SpecRestApi
+        // (whose inline OpenAPI document names this function), so referring to the API id from here
+        // makes the two resources reference each other.
 
-        // add lambda integration
-        const lambdaFnIntegration = new apigwIntegrations.HttpLambdaIntegration(
-            "AmplifyConfigLambdaIntegration",
-            lambdaFn
-        );
-
-        // Determine cache TTL based on IP restrictions
-        const hasIpRestrictions =
-            props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
-        // nosemgrep: useless-ternary
-        const cacheTtlSeconds = hasIpRestrictions ? 900 : 900;
-
-        // Create custom authorizer for ignored path with routeKey identity source
-        const routeKeyAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
-            "AmplifyConfigAuthorizer",
-            props.customAuthorizerFunction,
-            {
-                authorizerName: "AmplifyConfigCustomAuthorizer",
-                resultsCacheTtl: cdk.Duration.seconds(cacheTtlSeconds),
-                identitySource: ["$context.identity.sourceIp"],
-                responseTypes: [apigwAuthorizers.HttpLambdaResponseType.SIMPLE],
-            }
-        );
-
-        // add route to the api gateway with custom authorizer
-        props.api.addRoutes({
-            path: "/api/amplify-config",
-            methods: [apigatewayv2.HttpMethod.GET],
-            integration: lambdaFnIntegration,
-            authorizer: routeKeyAuthorizer,
-        });
+        suppressCdkNagLambda(this.lambdaFn);
     }
 
     private getJavascriptInlineFunction(props: InlineLambdaProps) {
@@ -251,12 +242,35 @@ export class AmplifyConfigLambdaConstruct extends Construct {
 
         return `
             exports.handler = async function(event, context) {
+                const config = ${resp};
+                // Derive the API base URL from the invoking request rather than from a
+                // CDK reference to the REST API. Referencing the API id at deploy time
+                // would create an Api <-> Lambda circular dependency (this Lambda is
+                // itself an integration target in the API spec). The REST API stage URL
+                // is reconstructed from the request context: protocol + host + stage.
+                try {
+                    var rc = (event && event.requestContext) || {};
+                    var host = rc.domainName
+                        || (event && event.headers && (event.headers.Host || event.headers.host))
+                        || "";
+                    if (host) {
+                        var stageSeg = rc.stage ? ("/" + rc.stage) : "";
+                        config.api = "https://" + host + stageSeg + "/";
+                    }
+                } catch (e) {
+                    // Fall back to the build-time value if request context is unavailable.
+                }
                 return {
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        // REST API returns the Lambda response verbatim (no auto-CORS). Under
+                        // ALB fronting this endpoint is fetched cross-origin (the ALB
+                        // 301-redirects /api/* to the execute-api host), so the response must
+                        // carry the CORS origin header for the browser to read it.
+                        'Access-Control-Allow-Origin': '*'
                     },
                     statusCode: 200,
-                    body: JSON.stringify(${resp}),
+                    body: JSON.stringify(config),
                 };
             };
         `;

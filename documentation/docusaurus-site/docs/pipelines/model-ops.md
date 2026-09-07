@@ -83,7 +83,7 @@ All registered pipelines accept any supported input file format (`.all`) and ope
 
 ## VNTANA optimization capabilities
 
-The VNTANA engine provides the following optimization modules that can be configured through pipeline input parameters:
+The VNTANA engine provides the following optimization modules, configured through the template configuration body the run uses:
 
 -   **Mesh decimation** -- Reduces polygon count while preserving visual quality.
 -   **Texture optimization** -- Compresses and resizes textures for target delivery platforms.
@@ -93,12 +93,25 @@ The VNTANA engine provides the following optimization modules that can be config
 -   **Animation preservation** -- Maintains skeletal and morph target animations during conversion.
 
 :::info[Template-based configuration]
-VNTANA supports template-based optimization configurations through the `inputParameters` field. Templates define a sequence of optimization and conversion modules with per-module settings. Refer to the VNTANA documentation for the full template schema and available options.
+VNTANA supports its own optimization templates, supplied in the configuration body of the VAMS pipeline template the run uses. A VNTANA template defines a sequence of optimization and conversion modules with per-module settings. Refer to the VNTANA documentation for the full template schema and available options.
+
+Deployment registers one VAMS pipeline template per output format (`model-ops-to-glb`, `model-ops-to-gltf`, `model-ops-to-usdz`), each carrying only its `outputType`. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`). To supply a VNTANA optimization template, either register a pipeline template whose configuration body carries it, or override the selected template's body for a single run -- the pipeline permits a per-run override (`systemConfig.allowCustomTemplateOverride` is `true`).
 :::
 
 ## AWS Marketplace integration
 
 The ModelOps container integrates with AWS Marketplace for usage tracking. The container IAM roles include permissions for `aws-marketplace:RegisterUsage` and `aws-marketplace:MeterUsage`. Ensure the AWS Marketplace subscription is active in the deployment account before running the pipeline.
+
+:::warning[Partition availability]
+AWS Marketplace product availability differs by partition. A subscription is bought and metered in the
+partition it is offered in, and a container obtained through AWS Marketplace in the commercial partition
+is not automatically available in AWS GovCloud (US) or the AWS European Sovereign Cloud — the Marketplace
+listing, the metering API, and the vendor's own distribution all have to support the target partition.
+Confirm availability with the vendor before enabling this pipeline in a restricted partition. VAMS does
+not block the configuration, because whether a given subscription is available is a fact about the
+listing rather than about the deployment: with no reachable image or metering endpoint the pipeline
+deploys and then fails when a job runs.
+:::
 
 ## Related pages
 

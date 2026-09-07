@@ -10,17 +10,28 @@ to route requests to the appropriate handler logic.
 import os
 import boto3
 import json
+import shlex
 import uuid
 import time
 import sys
 from botocore.exceptions import ClientError
 
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+
 # Initialize Step Functions client for task token callbacks
-sfn = boto3.client('stepfunctions')
+sfn = boto3.client('stepfunctions', config=retry_config)
 
 # Import custom logging utilities
 from customLogging.logger import safeLogger
 logger = safeLogger(service="ConsolidatedEksHandler")
+
+import manifestHelper
 
 # Import Kubernetes utilities
 from kubernetes_utils import (
@@ -31,13 +42,15 @@ from kubernetes_utils import (
     delete_job,
     with_retries
 )
-
 # Initialize AWS clients
-s3 = boto3.client('s3')
-sfn = boto3.client('stepfunctions')
+s3 = boto3.client('s3', config=retry_config)
+sfn = boto3.client('stepfunctions', config=retry_config)
 
 # Get environment variables with defaults
 CLUSTER_NAME = os.environ.get('EKS_CLUSTER_NAME')
+# Maximum pod runtime. The default matches the shipped useEks.jobTimeout so a deployment whose Lambda
+# predates this variable behaves exactly as before rather than falling back to something shorter.
+JOB_TIMEOUT_SECONDS = int(os.environ.get('EKS_JOB_TIMEOUT_SECONDS') or 7200)
 CONTAINER_IMAGE_URI = os.environ.get('CONTAINER_IMAGE_URI')
 NAMESPACE = os.environ.get('KUBERNETES_NAMESPACE', 'default')
 REGION = os.environ.get('AWS_REGION', 'us-west-2')
@@ -358,6 +371,78 @@ def lambda_handler(event, context):
             }
         }
 
+def relative_subdir_from_asset_id(input_s3_asset_file_key, asset_id):
+    """The input file's subdirectory within the asset, located by the threaded assetId within the
+    file's full S3 key ('base/xidM/parts/housing/pump.glb' + 'xidM' -> 'parts/housing'). Yields ''
+    when the assetId names no segment of the key, so an asset whose base location key does not
+    contain it writes at the output root rather than at a guessed depth.
+
+    The asset-relative part of a key is not recoverable from the key alone: an asset's root prefix
+    within its bucket is configurable per bucket (baseAssetsPrefix) and per asset (assetLocation).
+    The assetId is a workflow state variable, threaded from the manifest through vamsExecute and
+    openPipeline, and is empty for a direct invoke that carries no workflow context.
+    """
+    if not asset_id:
+        return ""
+    segments = (input_s3_asset_file_key or "").split("/")
+    if asset_id not in segments:
+        return ""
+    return "/".join(segments[segments.index(asset_id) + 1:-1])
+
+
+# The folder a converted file is written under when the conversion does not change the file
+# extension, so an optimize-in-place run is a sibling of its source rather than a new version of it.
+SAME_FORMAT_OUTPUT_SUBDIR = "optimized"
+
+
+def output_relative_subdir(relative_subdir, input_extension, output_extension):
+    """The subdirectory the converted file is written under, relative to the output-files prefix:
+    the input file's own subdirectory within the asset, plus a trailing `optimized` folder when the
+    output cannot be told apart from the input by name.
+
+    rpdx optimizes as well as converts, so the output extension can equal the input's — a template
+    that targets the input's own format, or a run that names no output type and falls back to it.
+    The output then keeps both the input's subdirectory and its file name, so its ASSET-RELATIVE
+    path equals the input's; the workflow's process-output step writes each staged output back to
+    the output asset at exactly that relative path, so the write-back would land a new version of
+    the operator's source object rather than a sibling file. The extra folder is what keeps the two
+    apart, and it is a folder rather than a changed file name because the name is what identifies
+    the converted model.
+
+    An `.all` run takes the folder unconditionally: it produces every supported format, one of which
+    is the input's own, and its upload loop globs the working directory — which also holds the
+    downloaded input file — so the uploaded set always contains an object at the input's own name.
+
+    A format-changing conversion still lands directly beside its source, and the folder is constant
+    per format, so it separates the output from the input rather than separating runs from each other
+    (the workflow's own output path extension does that).
+    """
+    subdir = (relative_subdir or "").strip("/")
+    # Both comparisons run on the extension without its leading dot and case-folded, because the
+    # input's extension is derived from the S3 key while the output's is whatever `outputType`
+    # carries - caller data, which the shipped templates write as ".glb" and a caller may write as
+    # "glb". Compared raw, those read as a format CHANGE, the folder is skipped, and the write-back
+    # resolves onto the operator's own source object. The same applies to the all-formats value: a
+    # dotless "all" would otherwise miss the unconditional-folder branch.
+    normalized_output = (output_extension or "").lstrip(".").lower()
+    if (normalized_output != "all"
+            and (input_extension or "").lstrip(".").lower() != normalized_output):
+        return subdir
+    return f"{subdir}/{SAME_FORMAT_OUTPUT_SUBDIR}" if subdir else SAME_FORMAT_OUTPUT_SUBDIR
+
+
+def output_object_prefix(output_s3_asset_files_key, relative_subdir):
+    """The output destination prefix: the workflow's output-files prefix followed by the output
+    file's own subdirectory within the asset, so a converted file lands beside its source instead of
+    at the asset root. Exactly one separator joins the two parts, so a prefix that already ends in
+    '/' and a file at the asset root both compose without an empty segment."""
+    prefix = output_s3_asset_files_key or ""
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+    subdir = (relative_subdir or "").strip("/")
+    return f"{prefix}{subdir}/" if subdir else prefix
+
+
 def handle_construct_pipeline(event):
     """
     Handler for constructing pipeline definition
@@ -415,6 +500,12 @@ def handle_construct_pipeline(event):
         input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(input_s3_asset_file_key)
         input_s3_asset_file_filename = os.path.basename(input_s3_asset_file_root)
 
+        # The converted file keeps the input file's subdirectory within the asset, so the workflow's
+        # process-output step places it beside its source rather than at the asset root - where two
+        # sources sharing a basename in different folders would overwrite each other.
+        input_relative_subdir = relative_subdir_from_asset_id(
+            input_s3_asset_file_key, event.get('assetId', ''))
+
         # Get auxiliary bucket information with validation
         inputOutput_s3_assetAuxiliary_files_uri = event.get('inputOutputS3AssetAuxiliaryFilesPath', '')
         if inputOutput_s3_assetAuxiliary_files_uri:
@@ -429,51 +520,88 @@ def handle_construct_pipeline(event):
             inputOutput_s3_assetAuxiliary_files_bucket = input_s3_asset_file_bucket
             inputOutput_s3_assetAuxiliary_files_key = "auxiliary"
 
-        # Get output type
-        output_s3_asset_extension = event.get('outputFileType', input_s3_asset_extension)
+        # Read the input configuration (rp_config) from its S3 location, with inline fallback for
+        # executions whose ASL predates the S3 input-configuration delivery.
+        input_configuration = manifestHelper.fetch_input_configuration(
+            s3, event.get('inputConfigurationS3Location', '')) or {}
+        if not input_configuration:
+            inline_parameters = event.get('inputParameters', '')
+            if inline_parameters:
+                input_configuration = json.loads(inline_parameters) if isinstance(inline_parameters, str) else inline_parameters
+
+        # outputType is a VAMS-reserved key in the input configuration: it selects the output file
+        # extension and is removed before the remainder is written as the rpdx rp_config.json. Fall
+        # back to the threaded outputFileType, then to the input file's own extension so the written
+        # object always carries one — rpdx then optimizes the model without changing its format.
+        output_s3_asset_extension = input_configuration.pop('outputType', None) \
+            or event.get('outputFileType', '') \
+            or input_s3_asset_extension
 
         # Handle .all format to generate all supported output formats
         is_all_formats = (output_s3_asset_extension == '.all')
 
+        # A conversion that does not change the file extension gains one further folder, so the
+        # write-back cannot resolve to the input's own key. The workflow's own output path extension
+        # is inserted immediately before the file name at write-back, giving {subdir}/{extension}/
+        # {name}.
+        relative_subdir = output_relative_subdir(
+            input_relative_subdir, input_s3_asset_extension, output_s3_asset_extension)
+
         # Determine output filename
         if is_all_formats:
             output_s3_asset_file_filename = input_s3_asset_file_filename + '*'
-            output_path_base = output_s3_asset_files_key.rstrip('/')
+            output_path_base = output_object_prefix(output_s3_asset_files_key,
+                                                    relative_subdir)
         elif input_s3_asset_extension == output_s3_asset_extension:
             output_s3_asset_file_filename = input_s3_asset_file_filename + output_s3_asset_extension
         else:
             output_s3_asset_file_filename = input_s3_asset_file_filename + '-' + output_s3_asset_extension.replace(".", "") + output_s3_asset_extension
 
-        # Build container command with output path
+        # Build container command with output path. A prefix destination takes the output
+        # subdirectory and the output file name; a destination that is already a full object key is
+        # used verbatim.
         if not is_all_formats:
-            output_path = output_s3_asset_files_key
-            if output_path.endswith('/'):
-                output_path = output_path + output_s3_asset_file_filename
+            if output_s3_asset_files_key.endswith('/'):
+                output_path = (output_object_prefix(output_s3_asset_files_key, relative_subdir)
+                               + output_s3_asset_file_filename)
             else:
                 output_path = output_s3_asset_files_key
 
+        # Every value interpolated into the shell command below originates from asset filenames /
+        # S3 keys / caller-supplied parameters, so each is shell-quoted with shlex.quote(). The
+        # command runs under /bin/sh (it chains steps with &&), so untrusted values must be inert
+        # single-quoted literals to prevent command injection (e.g. a filename containing $(...),
+        # backticks, or ';').
+        q_input_object = shlex.quote(f"s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key}")
+        q_input_file = shlex.quote(f"{input_s3_asset_file_filename}{input_s3_asset_extension}")
+
         # Format standard RapidPipeline command string
         if is_all_formats:
-            # Generate all formats and upload using shell globbing
-            standard_command_with_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx --read_config rp_config.json -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c && for file in {input_s3_asset_file_filename}*; do aws s3 cp \"$file\" s3://{output_s3_asset_files_bucket}/{output_path_base}/\"$file\"; done"
-            standard_command_no_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c && for file in {input_s3_asset_file_filename}*; do aws s3 cp \"$file\" s3://{output_s3_asset_files_bucket}/{output_path_base}/\"$file\"; done"
+            # Generate all formats and upload using shell globbing. The filename stem is quoted and
+            # the '*' left outside the quotes so it still expands as a glob.
+            q_output_stem = shlex.quote(input_s3_asset_file_filename)
+            q_output_prefix = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path_base}")
+            standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
+            standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
         else:
-            standard_command_with_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx --read_config rp_config.json -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c -e {output_s3_asset_file_filename} && aws s3 cp {output_s3_asset_file_filename} s3://{output_s3_asset_files_bucket}/{output_path}"
-            standard_command_no_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c -e {output_s3_asset_file_filename} && aws s3 cp {output_s3_asset_file_filename} s3://{output_s3_asset_files_bucket}/{output_path}"
+            q_output_file = shlex.quote(output_s3_asset_file_filename)
+            q_output_object = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path}")
+            standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
+            standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
 
-        # Handle custom configurations using config.json file
+        # Handle custom configurations using config.json file (outputType already removed above).
         processing_command = standard_command_no_config
-        input_parameters = event.get('inputParameters', '')
-
-        if input_parameters:
+        if input_configuration:
             # Write config json file to S3
             s3.put_object(
-                Body=input_parameters,
+                Body=json.dumps(input_configuration),
                 Bucket=inputOutput_s3_assetAuxiliary_files_bucket,
                 Key=f"{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json"
             )
             # Download config file from S3, read config file, then execute standard command
-            processing_command = f"aws s3 cp s3://{inputOutput_s3_assetAuxiliary_files_bucket}/{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json rp_config.json && {standard_command_with_config}"
+            q_config_object = shlex.quote(
+                f"s3://{inputOutput_s3_assetAuxiliary_files_bucket}/{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json")
+            processing_command = f"aws s3 cp {q_config_object} rp_config.json && {standard_command_with_config}"
 
         # Generate unique job ID
         job_id = str(uuid.uuid4())[:8]
@@ -506,7 +634,10 @@ def handle_construct_pipeline(event):
             },
             "spec": {
                 "ttlSecondsAfterFinished": 600,  # Delete job 10 minutes after completion
-                "activeDeadlineSeconds": 7200,  # Maximum job runtime of 2 hours for large files
+                # From the same configuration value the state machine derives its poll ceiling from
+                # (useEks.jobTimeout), so a pod cannot outlive the poll that watches it — which reported
+                # the execution FAILED while the pod carried on writing output.
+                "activeDeadlineSeconds": JOB_TIMEOUT_SECONDS,
                 "template": {
                     "metadata": {
                         "labels": {
@@ -586,8 +717,8 @@ def handle_construct_pipeline(event):
         return {
             "jobName": job_name,
             "jobManifest": job_manifest,
-            "inputMetadata": event.get("inputMetadata", ""),
-            "inputParameters": event.get("inputParameters", ""),
+            "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+            "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
             "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
             "status": "STARTING"
         }
@@ -661,6 +792,47 @@ def handle_run_job(event):
             }
         }
 
+
+# The bound kept on a pod log that is carried in a payload rather than only written to the log
+# stream: the last lines, each itself capped, then the joined text capped again.
+POD_LOG_TAIL_LINES = 80
+POD_LOG_TAIL_LINE_CHARS = 2000
+POD_LOG_TAIL_MAX_CHARS = 24000
+POD_LOG_TRUNCATION_MARKER = "[earlier log output omitted]\n"
+
+
+def bounded_log_tail(log_text):
+    """The end of a pod log, bounded so it fits every payload it is placed in.
+
+    The text is a job's whole pod log: `get_pod_logs_for_job` concatenates up to 1000 lines per
+    container across every pod the job produced (a `backoffLimit` of 2 allows three, each with its
+    current and previous logs), and `check_job_status` embeds that same text in the error string it
+    returns. Nothing bounds its byte size.
+
+    Unbounded, it exceeds the 32768-character SendTaskFailure cause and the 262144-byte
+    SendTaskSuccess output, and Step Functions rejects the call. The rejection is raised inside the
+    callback's own `except`, which logs and returns, so the parent workflow's task token is never
+    released and a finished job reads RUNNING until its taskTimeout expires - hours later.
+
+    The end is kept because that is where a conversion reports what went wrong; a marker replaces
+    what was dropped so the record does not read as a complete log.
+    """
+    if not log_text:
+        return log_text
+
+    raw_lines = str(log_text).splitlines()
+    lines = [line[:POD_LOG_TAIL_LINE_CHARS] for line in raw_lines]
+    dropped = len(raw_lines) > POD_LOG_TAIL_LINES or any(
+        len(line) > POD_LOG_TAIL_LINE_CHARS for line in raw_lines)
+
+    tail = "\n".join(lines[-POD_LOG_TAIL_LINES:])
+    if len(tail) > POD_LOG_TAIL_MAX_CHARS:
+        tail = tail[-POD_LOG_TAIL_MAX_CHARS:]
+        dropped = True
+
+    return POD_LOG_TRUNCATION_MARKER + tail if dropped else tail
+
+
 def handle_check_job(event):
     """
     Handler for monitoring a Kubernetes job
@@ -701,13 +873,18 @@ def handle_check_job(event):
         if status == "SUCCEEDED":
             logger.info(f"Job {k8s_job_name} completed successfully after {counter + 1} checks")
 
-            # Get success logs for debugging
-            success_logs = ""
+            # The pod log goes to this function's own log stream and nowhere else. On a success it has
+            # no diagnostic value in the execution record - the run worked - and it is third-party rpdx
+            # output, so carrying it in the payloads below would copy it into a durable, broadly
+            # readable place. It is still FETCHED, which is what exercises the `pods/log` RBAC verb and
+            # what leaves an operator a tail to read.
             try:
-                success_logs = get_pod_logs_for_job(k8s_job_name, NAMESPACE)
+                logger.info(
+                    f"Pod log tail for {k8s_job_name}:\n"
+                    f"{bounded_log_tail(get_pod_logs_for_job(k8s_job_name, NAMESPACE))}"
+                )
             except Exception as log_error:
                 logger.warning(f"Could not retrieve success logs: {log_error}")
-                success_logs = "Logs not available"
 
             # If we have an external task token, call back to Step Functions
             if external_task_token:
@@ -720,7 +897,6 @@ def handle_check_job(event):
                         "counter": counter,
                         "maxAttempts": max_attempts,
                         "startTime": start_time,
-                        "logs": success_logs,
                         "message": f"Job completed successfully after {counter + 1} status checks"
                     }
 
@@ -742,7 +918,6 @@ def handle_check_job(event):
                     "counter": counter,
                     "maxAttempts": max_attempts,
                     "startTime": start_time,
-                    "logs": success_logs,
                     "message": f"Job completed successfully after {counter + 1} status checks"
                 }
             }
@@ -750,13 +925,14 @@ def handle_check_job(event):
         elif status == "FAILED":
             logger.error(f"Job {k8s_job_name} failed after {counter + 1} checks")
 
-            # Enhanced error information
-            detailed_error_logs = error_logs or "No error logs available"
+            # Enhanced error information. check_job_status already embeds the pod log in the error it
+            # returns, so both sources are bounded.
+            detailed_error_logs = bounded_log_tail(error_logs) or "No error logs available"
             try:
                 # Try to get more detailed logs
                 pod_logs = get_pod_logs_for_job(k8s_job_name, NAMESPACE)
                 if pod_logs and pod_logs != "No pods found for job":
-                    detailed_error_logs = pod_logs
+                    detailed_error_logs = bounded_log_tail(pod_logs)
             except Exception as log_error:
                 logger.warning(f"Could not retrieve detailed error logs: {log_error}")
 
@@ -809,6 +985,7 @@ def handle_check_job(event):
 
         elif status == "UNKNOWN":
             logger.warning(f"Job {k8s_job_name} status is unknown - check {counter + 1}/{max_attempts}")
+            error_logs = bounded_log_tail(error_logs)
             return {
                 'statusCode': 500,
                 'body': {

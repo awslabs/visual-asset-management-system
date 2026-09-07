@@ -39,6 +39,17 @@ import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
+import FileViewerModal from "../filemanager/modals/FileViewerModal";
+import { FileInfo } from "../../visualizerPlugin/core/types";
+import { EYE_ICON_SVG } from "../../visualizerPlugin/components/EyeIconSvg";
+import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
+import {
+    searchRowToFileInfo,
+    isViewableExtension,
+    reconcileViewerSelection,
+} from "./utils/searchRowToFileInfo";
+import { isFileHitSource } from "./utils/recordType";
+import { areFilenamesViewableTogether } from "../../visualizerPlugin/core/viewableExtensions";
 
 let tagTypes: any;
 
@@ -364,7 +375,15 @@ const TruncatedCell: React.FC<{
     return <span title={isTruncated ? text : undefined}>{displayText}</span>;
 };
 
-function columnRender(e: any, name: string, value: any, navigate?: any, isFileMode?: boolean) {
+function columnRender(
+    e: any,
+    name: string,
+    value: any,
+    navigate?: any,
+    isFileMode?: boolean,
+    onViewFile?: (item: any) => void,
+    viewerRegistryReady?: boolean
+) {
     // Check if item is archived
     const isArchived = e.bool_archived === true || e.status === "archived";
 
@@ -415,17 +434,60 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             lineHeight: "1.4",
             fontSize: "13px",
         };
+        // A horizontal SpaceBetween is a WRAPPING flex container, so a path long enough to wrap
+        // pushed the eye icon onto a line of its own. This row keeps the icon and the path on one
+        // line: the icon does not shrink, and the path is the only flexible item, so the text wraps
+        // inside its own column with the icon pinned to the first line beside it.
+        const rowStyle: React.CSSProperties = {
+            display: "flex",
+            flexWrap: "nowrap",
+            alignItems: "flex-start",
+            gap: "4px",
+        };
+        const iconStyle: React.CSSProperties = { flexShrink: 0, lineHeight: "1.4" };
+        const pathCellStyle: React.CSSProperties = { ...pathStyle, flex: 1, minWidth: 0 };
+        // Per-row eye icon: opens the popup viewer for this single file directly
+        // from the search table (no need to navigate into the asset). Only shown in
+        // file mode when a viewer plugin can render the file's extension.
+        const viewLabel = `Visualize File ${value || e.str_fileext || ""}`.trim();
+        const viewButton =
+            isFileMode &&
+            onViewFile &&
+            viewerRegistryReady &&
+            isViewableExtension(e.str_fileext) ? (
+                <Button
+                    variant="icon"
+                    iconSvg={EYE_ICON_SVG}
+                    ariaLabel={viewLabel}
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onViewFile(e);
+                    }}
+                />
+            ) : null;
         if (isFileMode && navigate && !isArchived) {
+            // Encode the file path in BOTH the href (`?filePath=`) and the
+            // router state. The href is what right-click → "Open in new
+            // tab" copies, so it must carry enough information to reach
+            // the target file on a fresh page load. The state remains
+            // for the in-app left-click path so we don't have to re-parse
+            // the URL on the receiving side.
+            const filePathQuery = `?filePath=${encodeURIComponent(value)}`;
             return (
                 <Box>
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <span style={pathStyle}>
+                    <div style={rowStyle}>
+                        {viewButton && (
+                            <span style={iconStyle} title={viewLabel}>
+                                {viewButton}
+                            </span>
+                        )}
+                        <span style={pathCellStyle}>
                             <Link
-                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
+                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`}
                                 onFollow={(event) => {
                                     event.preventDefault();
                                     navigate(
-                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`,
+                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`,
                                         {
                                             state: { filePathToNavigate: value },
                                         }
@@ -435,19 +497,30 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
                                 {value}
                             </Link>
                         </span>
-                        {e.explanation && <ExplanationPopover explanation={e.explanation} />}
-                    </SpaceBetween>
+                        {e.explanation && (
+                            <span style={iconStyle}>
+                                <ExplanationPopover explanation={e.explanation} />
+                            </span>
+                        )}
+                    </div>
                 </Box>
             );
         } else {
             return (
                 <Box>
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <span style={pathStyle}>{value}</span>
-                        {e.explanation && isFileMode && (
-                            <ExplanationPopover explanation={e.explanation} />
+                    <div style={rowStyle}>
+                        {viewButton && (
+                            <span style={iconStyle} title={viewLabel}>
+                                {viewButton}
+                            </span>
                         )}
-                    </SpaceBetween>
+                        <span style={pathCellStyle}>{value}</span>
+                        {e.explanation && isFileMode && (
+                            <span style={iconStyle}>
+                                <ExplanationPopover explanation={e.explanation} />
+                            </span>
+                        )}
+                    </div>
                 </Box>
             );
         }
@@ -496,9 +569,21 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             return <Box>{value}</Box>;
         }
     } else if (name === "str_description") {
+        const description = String(value ?? "");
+        if (!description) {
+            return (
+                <Box>
+                    <span>-</span>
+                </Box>
+            );
+        }
+        // Descriptions wrap onto as many lines as they need instead of being cut off. The table is
+        // rendered with wrapLines={false}, which sets nowrap on an ancestor, so white-space is
+        // overridden here on the element holding the text; wordBreak keeps an unbroken string from
+        // overflowing the column.
         return (
             <Box>
-                <TruncatedCell text={String(value ?? "")} maxLength={80} />
+                <div style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{description}</div>
             </Box>
         );
     } else if (name.indexOf("str") === 0 || name.indexOf("num_") === 0) {
@@ -506,7 +591,50 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
     }
 }
 
+/**
+ * Declared column widths, keyed by column id.
+ *
+ * A width must not vary with the record type. A resizable column's width is seeded once — on the
+ * render its id first becomes visible — and every later declaration for that id is ignored, so an id
+ * declaring one width in asset mode and another in file mode keeps whichever mode happened to render
+ * first, for as long as the table stays mounted. Headers and cell renderers may still differ per
+ * mode; only the widths have to agree, which is why they all resolve through this one table.
+ *
+ * The table uses a fixed layout, so these widths are honored as declared and the table scrolls
+ * horizontally rather than squeezing a column toward its minWidth.
+ */
+const COLUMN_WIDTHS: Record<string, { width: number; minWidth: number }> = {
+    // A full asset-relative path is the widest value in the file-mode table, and the eye icon shares
+    // the cell, so this column gets the most room.
+    str_key: { width: 400, minWidth: 200 },
+    str_asset: { width: 180, minWidth: 120 },
+    str_assetname: { width: 180, minWidth: 120 },
+    str_databaseid: { width: 150, minWidth: 100 },
+    str_assettype: { width: 120, minWidth: 80 },
+    list_tags: { width: 150, minWidth: 100 },
+    // Description wraps rather than truncating, so it is given room for a couple of lines.
+    str_description: { width: 230, minWidth: 120 },
+    str_asset_version_id: { width: 180, minWidth: 130 },
+    str_assetversionid: { width: 180, minWidth: 130 },
+    num_filesize: { width: 100, minWidth: 70 },
+    num_size: { width: 100, minWidth: 70 },
+    // Client-side thumbnail columns. Each is declared from a separate asset-mode and file-mode
+    // branch below, so they resolve here rather than being written out twice.
+    preview: { width: 150, minWidth: 100 },
+    mapThumbnail: { width: 230, minWidth: 220 },
+};
+const DATE_COLUMN_WIDTH = { width: 160, minWidth: 120 };
+const FALLBACK_COLUMN_WIDTH = { width: 150, minWidth: 100 };
+
+/** Resolves a column id to its declared width, by id first and then by field-name convention. */
+const columnWidthFor = (name: string): { width: number; minWidth: number } =>
+    COLUMN_WIDTHS[name] ?? (name.startsWith("date_") ? DATE_COLUMN_WIDTH : FALLBACK_COLUMN_WIDTH);
+
 function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProps) {
+    // Guarantees a re-render once the viewer registry is ready. The container kicks initialization
+    // off in an effect, so a render that happens first would see no compatible viewers and omit
+    // every eye icon; today that self-corrects only because results arrive afterwards.
+    const viewerRegistryReady = useViewerRegistryReady();
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
     const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -520,6 +648,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
         assetName?: string;
         downloadType?: "assetPreview" | "assetFile";
     }>({});
+    const [viewerFiles, setViewerFiles] = useState<FileInfo[]>([]);
+    const [showViewerModal, setShowViewerModal] = useState(false);
+
+    const openViewer = (files: FileInfo[]) => {
+        const viewable = files.filter((f) => !!f.key);
+        if (viewable.length === 0) {
+            onShowToast?.("Nothing to preview", "No selected files can be visualized");
+            return;
+        }
+        setViewerFiles(viewable);
+        setShowViewerModal(true);
+    };
 
     useEffect(() => {
         fetchtagTypes().then((res) => {
@@ -573,8 +713,26 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     // Use tablePreferences.visibleContent for column order if available, otherwise use columnNames
     const orderedColumnNames = state.tablePreferences?.visibleContent || columnNames;
 
-    // Determine if we're in file mode
-    const isFileMode = state.filters._rectype.value === "file";
+    // Determine if we're in file mode.
+    //
+    // This prefers the container's recordType over the _rectype filter because the filter is written
+    // from an effect, one render after recordType changes, while the visible column list switches to
+    // the file set in the same render. Reading the lagging value left one render in which str_key was
+    // already visible but fell through to the generic ~150px branch below. A resizable column's
+    // width is seeded exactly once — on the render it first appears — so that stale 150px stuck
+    // permanently and every later declaration was ignored.
+    const isFileMode = (state.recordType ?? state.filters._rectype.value) === "file";
+
+    // A multi-file viewer has to support every selected extension, so a mixed selection no single
+    // viewer covers cannot be opened. Recomputed when the registry finishes initializing, because
+    // until then it reports nothing as viewable.
+    const viewerSelectionFilenames: string[] = (state.viewerSelection || []).map(
+        (file: any) => file?.filename || file?.key || ""
+    );
+    const selectionHasViewer =
+        viewerSelectionFilenames.length > 0 &&
+        viewerRegistryReady &&
+        areFilenamesViewableTogether(viewerSelectionFilenames);
 
     // Determine if unarchive button should be shown (single archived asset selected)
     const showUnarchiveButton =
@@ -593,15 +751,16 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
         ?.map((name: string) => {
             // Custom headers based on record type
 
-            if (name === "str_asset") {
+            // Both the legacy `str_asset` field and the `str_assetname` field the result documents
+            // actually carry render as the asset column.
+            if (name === "str_asset" || name === "str_assetname") {
                 return {
                     id: name,
                     header: Synonyms.Asset,
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 150,
-                    minWidth: 120,
+                    ...columnWidthFor(name),
                 };
             }
             if (name === "str_databaseid") {
@@ -611,8 +770,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 150,
-                    minWidth: 100,
+                    ...columnWidthFor(name),
                 };
             }
             if (name === "str_assettype") {
@@ -622,8 +780,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 120,
-                    minWidth: 80,
+                    ...columnWidthFor(name),
                 };
             }
             if (name === "list_tags") {
@@ -633,19 +790,26 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 150,
-                    minWidth: 100,
+                    ...columnWidthFor(name),
                 };
             }
             if (name === "str_key" && isFileMode) {
                 return {
                     id: name,
                     header: "File Path",
-                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    cell: (e: any) =>
+                        columnRender(
+                            e,
+                            name,
+                            e[name],
+                            navigate,
+                            isFileMode,
+                            (item: any) => openViewer([searchRowToFileInfo(item)]),
+                            viewerRegistryReady
+                        ),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 350,
-                    minWidth: 200,
+                    ...columnWidthFor(name),
                 };
             }
             if (name === "str_description" && isFileMode) {
@@ -655,34 +819,9 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
                     isRowHeader: false,
-                    width: 150,
-                    minWidth: 100,
+                    ...columnWidthFor(name),
                 };
             }
-            // Determine width for common column types
-            const isDateColumn = name.startsWith("date_");
-            const isSizeColumn = name === "num_filesize" || name === "num_size";
-            const isDescriptionColumn = name === "str_description";
-            const isVersionColumn =
-                name === "str_asset_version_id" || name === "str_assetversionid";
-            const defaultWidth = isDateColumn
-                ? 160
-                : isSizeColumn
-                ? 100
-                : isDescriptionColumn
-                ? 200
-                : isVersionColumn
-                ? 180
-                : 150;
-            const defaultMinWidth = isDateColumn
-                ? 120
-                : isSizeColumn
-                ? 70
-                : isDescriptionColumn
-                ? 120
-                : isVersionColumn
-                ? 130
-                : 100;
 
             // Use FIELD_MAPPINGS label if available, with overrides for brevity
             const shortLabels: Record<string, string> = {
@@ -706,23 +845,22 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 cell: (e: any) => {
                     if (name === "metadata") {
                         const { metadata, attributes } = extractMetadata(e);
-                        console.log("[MetadataDebug] Extracted data:", {
-                            metadata,
-                            attributes,
-                            allKeys: Object.keys(e).filter(
-                                (k) =>
-                                    k.toUpperCase().startsWith("MD_") ||
-                                    k.toUpperCase().startsWith("AB_")
-                            ),
-                        });
+                        // console.log("[MetadataDebug] Extracted data:", {
+                        //     metadata,
+                        //     attributes,
+                        //     allKeys: Object.keys(e).filter(
+                        //         (k) =>
+                        //             k.toUpperCase().startsWith("MD_") ||
+                        //             k.toUpperCase().startsWith("AB_")
+                        //     ),
+                        // });
                         return <MetadataPopover metadata={metadata} attributes={attributes} />;
                     }
                     return columnRender(e, name, e[name], navigate, isFileMode);
                 },
                 sortingField: name === "metadata" ? undefined : name,
                 isRowHeader: false,
-                width: defaultWidth,
-                minWidth: defaultMinWidth,
+                ...columnWidthFor(name),
             };
         });
 
@@ -759,8 +897,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
-                    width: 150,
-                    minWidth: 100,
+                    ...columnWidthFor("preview"),
                 },
                 ...enhancedColumnDefinitions,
             ];
@@ -789,8 +926,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
-                    width: 150,
-                    minWidth: 100,
+                    ...columnWidthFor("preview"),
                 },
                 ...enhancedColumnDefinitions,
             ];
@@ -821,8 +957,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     }
 
     // Add or remove map thumbnail column based on showMapThumbnails toggle
-    // Only for assets when maps are enabled
-    if (state.showMapThumbnails && state.useMapView && state.filters._rectype.value === "asset") {
+    // Available for both asset and file results when maps are enabled
+    if (state.showMapThumbnails && state.useMapView) {
         const config = appCache.getItem("config");
         const mapStyleUrl = config?.locationServiceApiUrl;
 
@@ -837,18 +973,34 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
             enhancedColumnDefinitions.splice(insertIndex, 0, {
                 id: "mapThumbnail",
                 header: "Map",
-                cell: (item: any) => (
-                    <MapThumbnail
-                        assetData={item}
-                        mapStyleUrl={mapStyleUrl}
-                        width={200}
-                        height={150}
-                    />
-                ),
+                cell: (item: any) => {
+                    const source = item?._source ?? item;
+                    const isFile = isFileHitSource(source, isFileMode);
+                    const expandHeader =
+                        source?.str_assetname ||
+                        (isFile ? source?.str_key : undefined) ||
+                        "Map preview";
+                    // Stable id used to stagger polygon colors so adjacent rows differ
+                    // even when each row only contains a single polygon.
+                    const colorKey =
+                        item?._id ||
+                        source?.str_assetid ||
+                        source?.str_key ||
+                        source?.str_databaseid;
+                    return (
+                        <MapThumbnail
+                            assetData={item}
+                            mapStyleUrl={mapStyleUrl}
+                            width={200}
+                            height={150}
+                            expandHeader={expandHeader}
+                            colorKey={colorKey}
+                        />
+                    );
+                },
                 sortingField: undefined, // Not sortable - client-side column
                 isRowHeader: false,
-                width: 230,
-                minWidth: 220,
+                ...columnWidthFor("mapThumbnail"),
             });
 
             // Add mapThumbnail to visible columns if not already there
@@ -939,9 +1091,35 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 type: "set-selected-items",
                                 selectedItems: detail.selectedItems,
                             });
+                            // Viewer-selection spans searches: a file picked from an earlier result
+                            // set stays selected so several searches can be combined into one
+                            // viewer session. Within the CURRENT result set the checkboxes remain
+                            // authoritative (check = in, uncheck = out), so the running set is
+                            // rebuilt as "everything previously selected that this result set does
+                            // not contain" plus "the viewable rows checked right now". Replacing it
+                            // with only the current checkboxes would drop the earlier picks the
+                            // moment the first row of a new search is checked, because a new search
+                            // clears the checkboxes while keeping the selection.
+                            if (isFileMode && state?.viewerSelectMode) {
+                                const currentRows: any[] =
+                                    state?.result?.hits?.hits?.map((hit: any) => hit._source) || [];
+                                state.setViewerSelection(
+                                    reconcileViewerSelection(
+                                        state.viewerSelection || [],
+                                        currentRows,
+                                        detail.selectedItems as any[]
+                                    )
+                                );
+                            }
                         }
                     }}
-                    selectionType={state?.filters._rectype.value === "asset" ? "multi" : undefined}
+                    selectionType={
+                        state?.filters._rectype.value === "asset"
+                            ? "multi"
+                            : isFileMode && state?.viewerSelectMode
+                            ? "multi"
+                            : undefined
+                    }
                     trackBy="_id"
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
@@ -1080,6 +1258,68 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                             Create {Synonyms.Asset}
                                         </Button>
                                     </SpaceBetween>
+                                ) : isFileMode ? (
+                                    !state.viewerSelectMode ? (
+                                        <Button onClick={() => state.enterViewerSelectMode()}>
+                                            Multi-select to view
+                                        </Button>
+                                    ) : (
+                                        <SpaceBetween direction="horizontal" size="xs">
+                                            <span
+                                                title={
+                                                    !state.viewerSelection?.length
+                                                        ? undefined
+                                                        : selectionHasViewer
+                                                        ? undefined
+                                                        : "No viewer can display this combination of file types together. Every selected file has to be supported by the same viewer."
+                                                }
+                                            >
+                                                <Button
+                                                    variant="primary"
+                                                    disabled={
+                                                        !state.viewerSelection?.length ||
+                                                        !selectionHasViewer
+                                                    }
+                                                    onClick={() =>
+                                                        openViewer(state.viewerSelection)
+                                                    }
+                                                >
+                                                    View Selected (
+                                                    {state.viewerSelection?.length || 0})
+                                                </Button>
+                                            </span>
+                                            <Button
+                                                disabled={!state.viewerSelection?.length}
+                                                onClick={() => {
+                                                    // The checkboxes are a second copy of this
+                                                    // state, so both are emptied together —
+                                                    // clearing only the running set left the rows
+                                                    // on screen ticked while the count read 0.
+                                                    state.clearViewerSelection();
+                                                    dispatch({
+                                                        type: "set-selected-items",
+                                                        selectedItems: [],
+                                                    });
+                                                }}
+                                            >
+                                                Clear selection
+                                            </Button>
+                                            <Button
+                                                onClick={() => {
+                                                    // Leaving the mode discards the selection too,
+                                                    // so the checkboxes cannot come back ticked
+                                                    // against an empty set on re-entry.
+                                                    state.exitViewerSelectMode();
+                                                    dispatch({
+                                                        type: "set-selected-items",
+                                                        selectedItems: [],
+                                                    });
+                                                }}
+                                            >
+                                                Exit
+                                            </Button>
+                                        </SpaceBetween>
+                                    )
                                 ) : null
                             }
                         />
@@ -1152,6 +1392,19 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 assetName={previewAsset.assetName || ""}
                 downloadType={previewAsset.downloadType}
             />
+
+            {showViewerModal && viewerFiles.length > 0 && (
+                <FileViewerModal
+                    visible={showViewerModal}
+                    files={viewerFiles}
+                    databaseId={viewerFiles[0].databaseId || ""}
+                    assetId={viewerFiles[0].assetId || ""}
+                    onDismiss={() => {
+                        setShowViewerModal(false);
+                        setViewerFiles([]);
+                    }}
+                />
+            )}
         </>
     );
 }

@@ -21,8 +21,32 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.batchItemFailures import (
+    all_batch_item_failures,
+    batch_item_identifier,
+    with_batch_item_failures,
+)
+from common.syncTracking import (
+    SYNC_OBJECT_TYPE_ASSET_FILE,
+    SYNC_ACTION_CREATE,
+    SYNC_ACTION_DELETE,
+    SYNC_ACTION_MODIFY,
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_SUCCESS,
+    write_outbound_sync_record,
+)
 from common.validators import validate
+from common.dynamodb import query_all_items
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    SEARCHABLE_VAMS_METADATA_KEYS,
+    is_system_metadata_key,
+)
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
 # Helper function to convert Decimal to int/float for JSON serialization
@@ -45,23 +69,68 @@ s3_client = boto3.client('s3', config=retry_config)
 sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetFileIndexer")
 
-# Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-excluded_patterns = ['.previewFile.']
+# System type identifier for outbound sync tracking records.
+SYNC_SYSTEM_TYPE = "garnetFramework"
 
-# Load environment variables with error handling
+
+def _sync_action_for_stream_event(event_name: str) -> str:
+    """Map a DynamoDB stream event name onto a sync-tracking action.
+
+    Mirrors the asset and database indexers: a first-time index (INSERT) is a
+    create and a removed metadata record is a delete. The Garnet entity itself is
+    re-sent with the archived flag rather than removed from the broker, so the
+    action describes what happened to the VAMS record.
+    """
+    if event_name == 'INSERT':
+        return SYNC_ACTION_CREATE
+    if event_name == 'REMOVE':
+        return SYNC_ACTION_DELETE
+    return SYNC_ACTION_MODIFY
+
+
+def _sync_action_for_s3_event(event_name: str) -> str:
+    """Map an S3 notification event name onto a sync-tracking action."""
+    if event_name.startswith('ObjectCreated'):
+        return SYNC_ACTION_CREATE
+    if event_name.startswith('ObjectRemoved'):
+        return SYNC_ACTION_DELETE
+    return SYNC_ACTION_MODIFY
+
+
+def _record_sync(object_type, action, success, database_id, asset_id=None,
+                 file_path=None, s3_version_id=None, entity_id=None):
+    """Best-effort outbound sync tracking record. Success means the entity was
+    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    write_outbound_sync_record(
+        object_type,
+        database_id,
+        SYNC_SYSTEM_TYPE,
+        garnet_ingestion_queue_url,
+        action,
+        SYNC_STATUS_SUCCESS if success else SYNC_STATUS_FAILED,
+        asset_id=asset_id,
+        file_path=file_path,
+        s3_version_id=s3_version_id,
+        error_message=None if success else "Failed to send entity to Garnet ingestion queue",
+        sync_system_entity_id=entity_id,
+    )
+
+
+# Excluded patterns or prefixes from file paths to exclude
+excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
+excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
+
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_storage_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_storage_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_storage_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_storage_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-# Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
 file_attribute_table = dynamodb.Table(file_attribute_storage_table_name)
@@ -72,14 +141,26 @@ s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
 #######################
 
 def extract_file_extension(file_path: str) -> Optional[str]:
-    """Extract file extension from file path"""
-    if '.' in file_path and not file_path.endswith('/'):
-        return file_path.split('.')[-1].lower()
-    return None
+    """Extract file extension from file path.
+
+    Read from the basename, so a dot in a parent folder name (`/folder.v2/LICENSE`)
+    is not mistaken for an extension. A file with no extension has none.
+    """
+    if file_path.endswith('/'):
+        return None
+    basename = os.path.basename(file_path)
+    if '.' not in basename:
+        return None
+    return basename.split('.')[-1].lower()
 
 def is_folder_path(file_path: str) -> bool:
-    """Check if path represents a folder"""
-    return file_path.endswith('/') or '.' not in os.path.basename(file_path)
+    """Check if path represents a folder.
+
+    Folder-ness is decided from the key shape alone. A missing filename extension
+    does not mean a folder: `LICENSE`, `Dockerfile`, `Makefile` and extension-less
+    data exports are ordinary files, and upload validation accepts them.
+    """
+    return file_path.endswith('/')
 
 def should_skip_file(s3_key: str) -> bool:
     """Check if file should be skipped based on excluded patterns/prefixes"""
@@ -91,12 +172,12 @@ def should_skip_file(s3_key: str) -> bool:
     if any(pattern in s3_key for pattern in excluded_patterns):
         return True
     
-    # Check if s3_key starts with any excluded prefixes
+    # Check if any path component is a reserved excluded folder.
     path_parts = s3_key.split('/')
     for part in path_parts:
-        if any(part.startswith(prefix) for prefix in excluded_prefixes):
+        if part in excluded_prefixes:
             return True
-    
+
     return False
 
 #######################
@@ -176,18 +257,19 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
         attributes = {}
         
         # Query assetFileMetadataStorageTable for metadata fields
-        response = asset_file_metadata_table.query(
+        metadata_items = query_all_items(
+            asset_file_metadata_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in metadata_items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType', 'string')
             
             # Skip system metadata records
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue
             
@@ -198,12 +280,13 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
                 }
         
         # Query fileAttributeStorageTable for attribute fields
-        response = file_attribute_table.query(
+        attribute_items = query_all_items(
+            file_attribute_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in attribute_items:
             attribute_key = item.get('attributeKey')
             attribute_value = item.get('attributeValue')
             attribute_value_type = item.get('attributeValueType', 'string')
@@ -237,9 +320,9 @@ def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, 
             # Extract additional metadata from S3 object metadata
             s3_metadata = response.get('Metadata', {})
             for key, value in s3_metadata.items():
-                if not key.startswith('vams-') and key not in ['assetid', 'databaseid', 'uploadid']:
+                if not is_system_metadata_key(key):
                     file_info[f"s3_{key}"] = value
-                if key in ['vams-primarytype']:
+                if key in SEARCHABLE_VAMS_METADATA_KEYS:
                     file_info[f"s3_{key}"] = value
             
             return file_info, False  # Not archived
@@ -607,12 +690,15 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Ignoring file with excluded pattern: {s3_key}")
             return True
         
+        # Excluded prefixes are reserved directory segment names, so match a whole path
+        # segment exactly - a base filename like "preview.jpg" must NOT be excluded, while
+        # a reserved folder like ".../preview/..." still is.
         path_parts = s3_key.split('/')
         for part in path_parts:
-            if any(part.startswith(prefix) for prefix in excluded_prefixes):
+            if part in excluded_prefixes:
                 logger.info(f"Ignoring excluded prefix file: {s3_key}")
                 return True
-        
+
         logger.info(f"Processing S3 event: {event_name} for {s3_key}")
         
         # Get S3 object metadata to extract asset/database IDs
@@ -620,9 +706,9 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
             s3_metadata = s3_response.get('Metadata', {})
             
-            asset_id = s3_metadata.get('assetid')
-            database_id = s3_metadata.get('databaseid')
-            
+            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+
             if not asset_id or not database_id:
                 logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
                 return True  # Skip, not an error
@@ -681,6 +767,11 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
         else:
             logger.error(f"Failed to send file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE,
+                     _sync_action_for_s3_event(event_name), success,
+                     database_id, asset_id=asset_id, file_path=relative_path,
+                     s3_version_id=(s3_file_info or {}).get("versionId"),
+                     entity_id=ngsi_ld_entity["id"])
         return success
         
     except Exception as e:
@@ -789,6 +880,11 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
         else:
             logger.error(f"Failed to send file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE,
+                     _sync_action_for_stream_event(event_name), success,
+                     database_id, asset_id=asset_id, file_path=file_path,
+                     s3_version_id=(s3_file_info or {}).get("versionId"),
+                     entity_id=ngsi_ld_entity["id"])
         return success
         
     except Exception as e:
@@ -811,6 +907,9 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
         
         successful_records = 0
         failed_records = 0
+        # Identifiers of records the event-source mapping must redrive. Counting alone left a
+        # failed record deleted from the queue and its document never indexed.
+        batch_failures = []
         
         # Extract bucket info from top-level event (if present from sqsBucketSync)
         asset_bucket_name = event.get('ASSET_BUCKET_NAME')
@@ -845,6 +944,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             
                             # Check if SNS message contains Records array (nested from sqsBucketSync)
                             elif 'Records' in sns_message:
@@ -861,6 +961,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                             successful_records += 1
                                         else:
                                             failed_records += 1
+                                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                                     elif inner_event_source == 'aws:sqs':
                                         # Nested SQS record (from sqsBucketSync)
@@ -889,45 +990,52 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                                                 successful_records += 1
                                                             else:
                                                                 failed_records += 1
+                                                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                         except json.JSONDecodeError as inner_e:
                                             logger.exception(f"Error parsing nested SQS/SNS message: {inner_e}")
                                             failed_records += 1
+                                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                                     else:
                                         logger.warning(f"Unknown inner event source: {inner_event_source}")
                                         failed_records += 1
+                                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             
                             else:
                                 logger.warning(f"SNS message format not recognized: {list(sns_message.keys())}")
                                 failed_records += 1
+                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         else:
                             logger.warning("SQS message is not an SNS notification")
                             failed_records += 1
+                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                     except json.JSONDecodeError as e:
                         logger.exception(f"Error parsing SQS/SNS message: {e}")
                         failed_records += 1
+                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
                     failed_records += 1
+                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
         
         logger.info(f"Garnet file indexing completed: {successful_records} successful, {failed_records} failed")
         
-        return {
+        return with_batch_item_failures({
             'statusCode': 200,
             'body': {
                 'message': 'Garnet file indexing completed',
                 'successful_records': successful_records,
                 'failed_records': failed_records
             }
-        }
+        }, event, batch_failures)
         
     except Exception as e:
         logger.exception(f"Error in Garnet file indexer lambda handler: {e}")
-        return {
+        return with_batch_item_failures({
             'statusCode': 500,
             'body': {
                 'message': 'Error processing Garnet file indexing',
                 'error': str(e)
             }
-        }
+        }, event, all_batch_item_failures(event))

@@ -2,13 +2,15 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import boto3
+from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="AssetCount")
 
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 
 
 def update_asset_count(db_database, asset_database, queryParams, databaseId):

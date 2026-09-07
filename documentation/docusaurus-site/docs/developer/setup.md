@@ -9,7 +9,7 @@ Before starting, ensure you have the following installed on your development mac
 | Tool        | Minimum Version    | Purpose                             |
 | ----------- | ------------------ | ----------------------------------- |
 | Python      | 3.13+              | Backend Lambda handlers, CLI tool   |
-| Node.js     | 20.18.1+           | Frontend build, CDK infrastructure  |
+| Node.js     | 22.22.3+           | Frontend build, CDK infrastructure  |
 | npm         | Included with Node | Package management (never use yarn) |
 | Docker      | Latest             | CDK deployment, container pipelines |
 | AWS CLI     | v2                 | AWS account access                  |
@@ -23,7 +23,7 @@ While AWS Lambda functions run on Python 3.12, local development and testing use
 
 ## Frontend Setup
 
-The VAMS frontend is a React 17 single-page application built with Vite.
+The VAMS frontend is a React 18 single-page application built with Vite.
 
 ### Install Dependencies
 
@@ -116,15 +116,35 @@ pip install -r requirements-dev.txt
 | Package                 | Version | Purpose                   |
 | ----------------------- | ------- | ------------------------- |
 | `aws-lambda-powertools` | 2.36.0  | Logger, Parser, BaseModel |
-| `boto3`                 | 1.34.84 | AWS SDK                   |
-| `pydantic`              | 1.10.7  | Data validation (v1 only) |
+| `boto3`                 | 1.43.45 | AWS SDK                   |
+| `pydantic`              | 1.10.13 | Data validation (v1 only) |
 | `casbin`                | 1.33.0  | ABAC/RBAC authorization   |
 | `moto`                  | 5.1.0   | AWS service mocking (dev) |
-| `pytest`                | 8.3.4   | Test framework (dev)      |
+| `pytest`                | 9.0.3   | Test framework (dev)      |
 
 :::warning[Pydantic Version]
-VAMS uses Pydantic **v1** (1.10.7). Never install or use Pydantic v2 APIs such as `model_validator`, `model_dump`, or `ConfigDict`. These will fail at Lambda import time. See the [Backend Development](backend.md) guide for correct patterns.
+VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such as `model_validator`, `model_dump`, or `ConfigDict`. These will fail at Lambda import time. See the [Backend Development](backend.md) guide for correct patterns.
 :::
+
+### Managing Python Dependencies
+
+The backend and Lambda layer projects manage their Python dependencies with [Poetry](https://python-poetry.org/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `poetry.lock` — the Lambda layer bundling process installs from the exported file, so it must always match the lock. Poetry-managed projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+
+To change a dependency version, edit the constraint in `pyproject.toml` (only needed when the existing constraint excludes the target version), re-resolve the lock, and re-export the requirements file:
+
+```bash
+# Re-resolve the lock without installing
+poetry update --lock <package>
+
+# Lambda layers and pipeline layers (single requirements.txt)
+poetry export --without-hashes -f requirements.txt -o requirements.txt
+
+# backend/ exports two files (main vs. dev)
+poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
+poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+```
+
+Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together. Do not edit a Poetry-exported requirements file directly — the next export silently overwrites manual changes. Requirements files without a side-by-side `pyproject.toml` (for example, `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
 
 ## Infrastructure Setup
 
@@ -160,6 +180,10 @@ npx cdk deploy --all --require-approval never
 
 :::info[Docker Required]
 Docker must be running before deployment. CDK builds container images for Lambda layers and processing pipeline containers during synthesis.
+:::
+
+:::warning[Wait for every stack to complete before using the deployment]
+The solution is usable only after `cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish.
 :::
 
 ### Configuration
@@ -235,6 +259,10 @@ Do not run lint or prettier commands from individual subdirectories. The root-le
 | ---------------------- | ----------------------------------- |
 | `USE_LOCAL_MOCKS`      | Enable local mock mode (`true`)     |
 | `COGNITO_AUTH_ENABLED` | Enable/disable Cognito auth locally |
+
+:::note
+`USE_LOCAL_MOCKS` applies to the local mock server only. A deployed AWS Lambda function resolves its resource names from AWS Systems Manager Parameter Store and therefore carries `VAMS_RESOURCE_PARAM_PREFIX` in its environment. The auth routes handler ignores `USE_LOCAL_MOCKS` whenever that variable is set, records the combination as an error in its log, and evaluates every submitted web route against the caller's permissions.
+:::
 
 ### Infrastructure
 

@@ -17,12 +17,16 @@ import { Duration } from "aws-cdk-lib";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import * as Config from "../../../../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as events from "aws-cdk-lib/aws-events";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { storageResources } from "../../../../../nestedStacks/storage/storageBuilder-nestedStack";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    grantExternalAssetBucketKmsKeys,
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
@@ -78,6 +82,13 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
             // Reference to open pipeline function
             OPEN_PIPELINE_FUNCTION_NAME_EKS: openPipelineFunction.functionName,
 
+            // The Kubernetes Job's activeDeadlineSeconds. Sourced from the same configuration value the
+            // state machine derives its poll ceiling from, so the two cannot drift: a pod allowed to run
+            // longer than the poll watches for it produces a FAILED execution that then writes output.
+            EKS_JOB_TIMEOUT_SECONDS: String(
+                config.app.pipelines.useRapidPipeline.useEks.jobTimeout
+            ),
+
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",
         },
@@ -95,12 +106,29 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
     // Grant auxiliary bucket access
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
 
+    grantExternalAssetBucketKmsKeys(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+
     // Apply global environment and permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
 
     // CDK Nag Suppressions
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -126,7 +154,9 @@ export function buildOpenPipelineEKSFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    securityGroups: ec2.ISecurityGroup[]
+    securityGroups: ec2.ISecurityGroup[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup
 ): lambda.Function {
     const name = "OpenPipelineHandler";
 
@@ -157,11 +187,17 @@ export function buildOpenPipelineEKSFunction(
 
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",
+
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     // Grant Step Functions permissions to start state machine execution
     stateMachine.grantStartExecution(fun);
+
+    orchestrationBus.grantPutEventsTo(fun);
 
     // Grant S3 permissions for all asset buckets using new pattern
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
@@ -171,6 +207,9 @@ export function buildOpenPipelineEKSFunction(
 
     // Grant auxiliary bucket access
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
+
+    grantExternalAssetBucketKmsKeys(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Apply global environment and permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -186,6 +225,7 @@ export function buildOpenPipelineEKSFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -257,19 +297,20 @@ export function buildConsolidatedHandlerFunction(
         },
     });
 
-    // Grant EKS permissions - comprehensive permissions for cluster access
+    // EKS permissions, scoped to this deployment's own cluster. The three actions kept are the ones
+    // the handler calls (describe_cluster, list_access_entries) plus the one the Kubernetes API path
+    // needs when a cluster is set to API authentication mode rather than the aws-auth ConfigMap this
+    // stack configures. eks:ListClusters, eks:ListUpdates and eks:DescribeUpdate are called nowhere,
+    // and eks:GetToken is not an IAM action at all — the boto3 get_token is client-side, and the
+    // handler already logs that the method is absent and falls back to a presigned STS request.
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: [
-                "eks:DescribeCluster",
-                "eks:ListClusters",
-                "eks:AccessKubernetesApi",
-                "eks:GetToken",
-                "eks:ListAccessEntries",
-                "eks:ListUpdates",
-                "eks:DescribeUpdate",
+            actions: ["eks:DescribeCluster", "eks:AccessKubernetesApi", "eks:ListAccessEntries"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:eks:${config.env.region}:${
+                    config.env.account
+                }:cluster/${clusterName}`,
             ],
-            resources: ["*"],
             effect: iam.Effect.ALLOW,
         })
     );
@@ -279,14 +320,6 @@ export function buildConsolidatedHandlerFunction(
         new iam.PolicyStatement({
             actions: ["sts:GetCallerIdentity"],
             resources: ["*"], // GetCallerIdentity doesn't support resource-level permissions
-        })
-    );
-
-    // Grant permissions to pass role for EKS auth
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["iam:PassRole"],
-            resources: [fun.role!.roleArn],
         })
     );
 
@@ -314,6 +347,8 @@ export function buildConsolidatedHandlerFunction(
     // Grant auxiliary bucket access
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
 
+    grantExternalAssetBucketKmsKeys(fun);
+
     // Grant KMS permissions
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
@@ -323,5 +358,6 @@ export function buildConsolidatedHandlerFunction(
     // CDK Nag Suppressions
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

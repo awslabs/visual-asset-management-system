@@ -28,12 +28,22 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 | `wxyz`                   | Quaternion rotation                 | `"{\"w\": 1.0, \"x\": 0.0, \"y\": 0.0, \"z\": 0.0}"`      |
 | `matrix4x4`              | 4x4 transformation matrix           | `"[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]"`             |
 | `geopoint`               | GeoJSON Point                       | `"{\"type\": \"Point\", \"coordinates\": [-73.9, 40.7]}"` |
-| `geojson`                | Any valid GeoJSON                   | `"{\"type\": \"Polygon\", \"coordinates\": [...]}"`       |
+| `geojson`                | GeoJSON, nested at most 32 levels   | `"{\"type\": \"Polygon\", \"coordinates\": [...]}"`       |
 | `lla`                    | Latitude/Longitude/Altitude         | `"{\"lat\": 40.7, \"long\": -73.9, \"alt\": 100.0}"`      |
 | `json`                   | Arbitrary JSON                      | `"{\"custom\": \"data\"}"`                                |
 
 :::note[Values Are Always Strings]
 All metadata values are stored and transmitted as strings, regardless of type. The `metadataValueType` field indicates how the string should be interpreted and validated.
+:::
+
+:::note[GeoJSON Nesting Limit]
+A `geojson` or `geopoint` value may nest `GeometryCollection` members at most 32 levels deep. A deeper value is rejected with a `400` naming the limit, as is a value too deeply nested for the JSON parser to read. The same limit applies to the `geoJson` filter on [Search](search.md) and to the shapes indexed for geospatial search, so a value the metadata API accepts is a value search can match.
+:::
+
+:::note[Incomplete Records]
+A metadata record that carries no stored value, or no stored value type, is returned with that field as `null`. The record stays visible in the response along with its key. On a create or update, `null` in either field is read as the field not being supplied: `metadataValue` stores an empty value, and `metadataValueType` takes the default `"string"`. An item taken from a `GET` response can therefore be submitted back unchanged to complete the record.
+
+Completing a record does not bypass schema validation. Where a schema marks the field as required, a write that leaves its value empty is rejected — supply a value for that field in the same request.
 :::
 
 ---
@@ -46,18 +56,18 @@ Asset-level metadata is attached to an asset within a database.
 
 `GET /database/{databaseId}/assets/{assetId}/metadata`
 
-Retrieves all metadata items for the specified asset.
+Retrieves metadata items for the specified asset, one page at a time. When more records exist than `pageSize`, the response includes a `NextToken`; pass it as `startingToken` to retrieve the next page. Records are ordered consistently across pages.
 
 **Request Parameters:**
 
-| Parameter        | Location | Type    | Required | Description                                               |
-| ---------------- | -------- | ------- | -------- | --------------------------------------------------------- |
-| `databaseId`     | path     | string  | Yes      | Database identifier.                                      |
-| `assetId`        | path     | string  | Yes      | Asset identifier.                                         |
-| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `30000`.                |
-| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `3000`.                |
-| `startingToken`  | query    | string  | No       | Continuation token from a previous response.              |
-| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot. |
+| Parameter        | Location | Type    | Required | Description                                                                                       |
+| ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `databaseId`     | path     | string  | Yes      | Database identifier.                                                                              |
+| `assetId`        | path     | string  | Yes      | Asset identifier.                                                                                 |
+| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken`  | query    | string  | No       | Continuation token from a previous response.                                                      |
+| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
 
 **Response:**
 
@@ -80,9 +90,17 @@ Retrieves all metadata items for the specified asset.
             "metadataValueType": "xyz"
         }
     ],
-    "NextToken": "eyJ..."
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": "eyJ...",
+    "message": "Success"
 }
 ```
+
+The response always includes `restrictMetadataOutsideSchemas` (a boolean that is `true` when the database restricts metadata to schema-defined fields and at least one schema exists) and a `message` field.
+
+:::info[Schema Enrichment Fields]
+When a metadata schema applies to the entity, each metadata item is enriched with additional schema fields: `metadataSchemaName`, `metadataSchemaField`, `metadataSchemaRequired`, `metadataSchemaSequence`, `metadataSchemaDefaultValue`, `metadataSchemaDependsOn`, `metadataSchemaMultiFieldConflict`, and `metadataSchemaControlledListKeys`. These fields are omitted (or `null`) when no schema defines the item. This enrichment applies to the asset, file, database, and asset link metadata GET responses.
+:::
 
 **Error Responses:**
 
@@ -131,8 +149,8 @@ Adds new metadata items to an asset. Supports bulk creation of multiple items in
 | ------------------------------ | ------ | -------- | ------------------------------------------------------- |
 | `metadata`                     | array  | Yes      | List of metadata items. Must contain at least one item. |
 | `metadata[].metadataKey`       | string | Yes      | Metadata key (1-256 characters).                        |
-| `metadata[].metadataValue`     | string | Yes      | Metadata value as string.                               |
-| `metadata[].metadataValueType` | string | No       | Value type. Default: `"string"`.                        |
+| `metadata[].metadataValue`     | string | Yes      | Metadata value as string. `null` stores an empty value. |
+| `metadata[].metadataValueType` | string | No       | Value type. `null` or omitted: `"string"`.              |
 
 **Response:**
 
@@ -286,15 +304,16 @@ Retrieves metadata for a specific file within an asset.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                                                  |
-| --------------- | -------- | ------- | -------- | ---------------------------------------------------------------------------- |
-| `databaseId`    | path     | string  | Yes      | Database identifier.                                                         |
-| `assetId`       | path     | string  | Yes      | Asset identifier.                                                            |
-| `key`           | query    | string  | Yes      | Relative file path.                                                          |
-| `type`          | query    | string  | No       | `"metadata"` (default) or `"attribute"` to retrieve file attributes instead. |
-| `maxItems`      | query    | integer | No       | Maximum items to return.                                                     |
-| `pageSize`      | query    | integer | No       | Page size for pagination.                                                    |
-| `startingToken` | query    | string  | No       | Continuation token.                                                          |
+| Parameter        | Location | Type    | Required | Description                                                                                       |
+| ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `databaseId`     | path     | string  | Yes      | Database identifier.                                                                              |
+| `assetId`        | path     | string  | Yes      | Asset identifier.                                                                                 |
+| `filePath`       | query    | string  | Yes      | Relative file path.                                                                               |
+| `type`           | query    | string  | Yes      | `"metadata"` to retrieve file metadata, or `"attribute"` to retrieve file attributes.             |
+| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken`  | query    | string  | No       | Continuation token.                                                                               |
+| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
 
 **Response:**
 
@@ -307,18 +326,20 @@ Retrieves metadata for a specific file within an asset.
             "metadataValueType": "string"
         }
     ],
-    "NextToken": null
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": null,
+    "message": "Success"
 }
 ```
 
 **Error Responses:**
 
-| Status | Description                          |
-| ------ | ------------------------------------ |
-| `400`  | Invalid parameters or missing `key`. |
-| `403`  | Not authorized.                      |
-| `404`  | Asset or file not found.             |
-| `500`  | Internal server error.               |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid parameters or missing `filePath`. |
+| `403`  | Not authorized.                           |
+| `404`  | Asset or file not found.                  |
+| `500`  | Internal server error.                    |
 
 ---
 
@@ -339,7 +360,7 @@ Adds metadata items to a specific file.
 
 ```json
 {
-    "key": "/models/building.ifc",
+    "filePath": "/models/building.ifc",
     "type": "metadata",
     "metadata": [
         {
@@ -351,11 +372,11 @@ Adds metadata items to a specific file.
 }
 ```
 
-| Field      | Type   | Required | Description                              |
-| ---------- | ------ | -------- | ---------------------------------------- |
-| `key`      | string | Yes      | Relative file path.                      |
-| `type`     | string | No       | `"metadata"` (default) or `"attribute"`. |
-| `metadata` | array  | Yes      | List of metadata items.                  |
+| Field      | Type   | Required | Description                    |
+| ---------- | ------ | -------- | ------------------------------ |
+| `filePath` | string | Yes      | Relative file path.            |
+| `type`     | string | Yes      | `"metadata"` or `"attribute"`. |
+| `metadata` | array  | Yes      | List of metadata items.        |
 
 **Response:**
 
@@ -382,7 +403,7 @@ Updates metadata items for a specific file.
 
 ```json
 {
-    "key": "/models/building.ifc",
+    "filePath": "/models/building.ifc",
     "type": "metadata",
     "metadata": [
         {
@@ -394,6 +415,8 @@ Updates metadata items for a specific file.
     "updateType": "update"
 }
 ```
+
+`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`; `updateType` is `"update"` (default) or `"replace_all"`.
 
 **Response:**
 
@@ -420,11 +443,13 @@ Removes metadata items from a specific file.
 
 ```json
 {
-    "key": "/models/building.ifc",
+    "filePath": "/models/building.ifc",
     "type": "metadata",
     "metadataKeys": ["author"]
 }
 ```
+
+`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`.
 
 **Response:**
 
@@ -449,16 +474,16 @@ Database-level metadata is attached to a database and applies to the entire coll
 
 `GET /database/{databaseId}/metadata`
 
-Retrieves all metadata items for the specified database.
+Retrieves metadata items for the specified database, one page at a time.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                |
-| --------------- | -------- | ------- | -------- | ------------------------------------------ |
-| `databaseId`    | path     | string  | Yes      | Database identifier.                       |
-| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `30000`. |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`. |
-| `startingToken` | query    | string  | No       | Continuation token.                        |
+| Parameter       | Location | Type    | Required | Description                                                                                       |
+| --------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier.                                                                              |
+| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken` | query    | string  | No       | Continuation token.                                                                               |
 
 **Response:**
 
@@ -476,7 +501,9 @@ Retrieves all metadata items for the specified database.
             "metadataValueType": "date"
         }
     ],
-    "NextToken": null
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": null,
+    "message": "Success"
 }
 ```
 
@@ -605,16 +632,16 @@ Metadata can be attached to asset links (relationships between assets).
 
 `GET /asset-links/{assetLinkId}/metadata`
 
-Retrieves all metadata items for the specified asset link.
+Retrieves metadata items for the specified asset link, one page at a time.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                |
-| --------------- | -------- | ------- | -------- | ------------------------------------------ |
-| `assetLinkId`   | path     | string  | Yes      | Asset link identifier (UUID).              |
-| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `30000`. |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`. |
-| `startingToken` | query    | string  | No       | Continuation token.                        |
+| Parameter       | Location | Type    | Required | Description                                                                                       |
+| --------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `assetLinkId`   | path     | string  | Yes      | Asset link identifier (UUID).                                                                     |
+| `maxItems`      | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
+| `startingToken` | query    | string  | No       | Continuation token.                                                                               |
 
 **Response:**
 
@@ -627,7 +654,9 @@ Retrieves all metadata items for the specified asset link.
             "metadataValueType": "string"
         }
     ],
-    "NextToken": null
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": null,
+    "message": "Success"
 }
 ```
 
@@ -765,6 +794,300 @@ Returns a bulk operation response.
 
 ---
 
+## Metadata Schemas
+
+A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` accepts only metadata keys an applicable schema declares.
+
+A schema is scoped to one database and one entity type. Use `GLOBAL` as the `databaseId` for a schema that applies across every database. Schemas are authorized with the `metadataSchema` object type on `databaseId`, `metadataSchemaName`, and `metadataSchemaEntityType`.
+
+### Entity types
+
+| Entity type           | Applies to                                                                |
+| --------------------- | ------------------------------------------------------------------------- |
+| `databaseMetadata`    | Database-level metadata                                                   |
+| `assetMetadata`       | Asset-level metadata                                                      |
+| `fileMetadata`        | File-level metadata                                                       |
+| `fileAttribute`       | File attributes. Only the `string` value type is accepted on these fields |
+| `assetLinkMetadata`   | Asset-link metadata                                                       |
+
+### Field definitions
+
+A schema's `fields` object holds a `fields` array of 1 to 500 field definitions. Field key names must be unique within a schema.
+
+| Field                       | Type          | Required | Description                                                                                                                                                    |
+| --------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `metadataFieldKeyName`      | string        | Yes      | Field key name (1-256 chars). Matches the `metadataKey` of the metadata record it governs.                                                                      |
+| `metadataFieldValueType`    | string        | Yes      | One of the [supported value types](#supported-value-types). Accepted case-insensitively.                                                                        |
+| `required`                  | boolean       | No       | Whether a value must be supplied for this field. Defaults to `false`.                                                                                          |
+| `sequence`                  | number        | No       | Display order, 0-based; lower numbers appear first.                                                                                                            |
+| `dependsOnFieldKeyName`     | array[string] | No       | Field key names this field depends on, at most 500 entries of 256 characters each.                                                                              |
+| `controlledListKeys`        | array[string] | No       | Allowed values, at most 1,000 entries of 256 characters each. Required when `metadataFieldValueType` is `inline_controlled_list`, and rejected for other types. |
+| `defaultMetadataFieldValue` | string        | No       | Default value. Validated against `metadataFieldValueType`, and for a controlled list must be one of `controlledListKeys`.                                       |
+
+---
+
+### List metadata schemas
+
+Retrieves metadata schemas, optionally filtered by database and entity type.
+
+```
+GET /metadataschema
+```
+
+#### Query parameters
+
+| Parameter            | Type   | Required | Default | Description                                                                    |
+| -------------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
+| `databaseId`         | string | No       | `null`  | Return only the schemas scoped to this database. `GLOBAL` is accepted.          |
+| `metadataEntityType` | string | No       | `null`  | Return only the schemas for this entity type. Accepted case-insensitively.      |
+| `maxItems`           | number | No       | `30000` | Maximum number of items to return                                              |
+| `pageSize`           | number | No       | `3000`  | Number of items per page                                                       |
+| `startingToken`      | string | No       | `null`  | Pagination token from a previous response's `NextToken`                         |
+
+#### Response
+
+```json
+{
+    "Items": [
+        {
+            "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "databaseId": "architecture-db",
+            "metadataSchemaEntityType": "assetMetadata",
+            "schemaName": "Building record",
+            "fileKeyTypeRestriction": null,
+            "fields": {
+                "fields": [
+                    {
+                        "metadataFieldKeyName": "building_name",
+                        "metadataFieldValueType": "string",
+                        "required": true,
+                        "sequence": 0
+                    },
+                    {
+                        "metadataFieldKeyName": "review_status",
+                        "metadataFieldValueType": "inline_controlled_list",
+                        "required": false,
+                        "sequence": 1,
+                        "controlledListKeys": ["draft", "in_review", "approved"],
+                        "defaultMetadataFieldValue": "draft"
+                    }
+                ]
+            },
+            "enabled": true,
+            "dateCreated": "2026-03-15T10:30:00",
+            "dateModified": "2026-03-15T10:30:00",
+            "createdBy": "user@example.com",
+            "modifiedBy": "user@example.com"
+        }
+    ],
+    "NextToken": null
+}
+```
+
+`NextToken` is present only when more schemas remain.
+
+#### Error responses
+
+| Status | Description                            |
+| ------ | -------------------------------------- |
+| `400`  | Invalid parameters or pagination token |
+| `403`  | Not authorized                         |
+| `500`  | Internal server error                  |
+
+---
+
+### Get a metadata schema
+
+Retrieves a single metadata schema by its identifier.
+
+```
+GET /database/{databaseId}/metadataSchema/{metadataSchemaId}
+```
+
+#### Path parameters
+
+| Parameter          | Type   | Required | Description                                     |
+| ------------------ | ------ | -------- | ----------------------------------------------- |
+| `databaseId`       | string | Yes      | Database identifier. `GLOBAL` is accepted.      |
+| `metadataSchemaId` | string | Yes      | Metadata schema identifier                      |
+
+#### Response
+
+Returns a single schema object in the same format as the items in the list response.
+
+#### Error responses
+
+| Status | Description                 |
+| ------ | --------------------------- |
+| `400`  | Invalid path parameters     |
+| `403`  | Not authorized              |
+| `404`  | Metadata schema not found   |
+| `500`  | Internal server error       |
+
+---
+
+### Create a metadata schema
+
+Creates a metadata schema for one database and entity type.
+
+```
+POST /metadataschema
+```
+
+#### Request body
+
+| Field                      | Type    | Required | Description                                                                                                                                         |
+| -------------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`               | string  | Yes      | Database the schema applies to. Use `GLOBAL` for a schema that applies across every database. The database must exist.                               |
+| `metadataSchemaEntityType` | string  | Yes      | Entity type the schema governs. See [Entity types](#entity-types).                                                                                   |
+| `schemaName`               | string  | Yes      | Schema name (1-256 chars).                                                                                                                          |
+| `fields`                   | object  | Yes      | Field definitions. See [Field definitions](#field-definitions).                                                                                     |
+| `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each at most 10 characters. Accepted only for `fileMetadata` and `fileAttribute` entity types. |
+| `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                 |
+
+#### Request body example
+
+```json
+{
+    "databaseId": "architecture-db",
+    "metadataSchemaEntityType": "assetMetadata",
+    "schemaName": "Building record",
+    "enabled": true,
+    "fields": {
+        "fields": [
+            {
+                "metadataFieldKeyName": "building_name",
+                "metadataFieldValueType": "string",
+                "required": true,
+                "sequence": 0
+            },
+            {
+                "metadataFieldKeyName": "review_status",
+                "metadataFieldValueType": "inline_controlled_list",
+                "sequence": 1,
+                "controlledListKeys": ["draft", "in_review", "approved"],
+                "defaultMetadataFieldValue": "draft"
+            }
+        ]
+    }
+}
+```
+
+#### Response
+
+```json
+{
+    "success": true,
+    "message": "Metadata schema 'Building record' created successfully",
+    "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000"
+}
+```
+
+#### Error responses
+
+| Status | Description                                                                       |
+| ------ | --------------------------------------------------------------------------------- |
+| `400`  | Validation error, a `fileKeyTypeRestriction` on an unsupported entity type, or a `databaseId` that does not exist |
+| `403`  | Not authorized                                                                    |
+| `500`  | Internal server error                                                             |
+
+---
+
+### Update a metadata schema
+
+Updates a metadata schema. The schema to update is identified by `metadataSchemaId` in the request body; `databaseId` and `metadataSchemaEntityType` are fixed at creation and cannot be changed.
+
+```
+PUT /metadataschema
+```
+
+#### Request body
+
+At least one field other than `metadataSchemaId` must be provided. Supplying `fields` replaces the schema's entire field set.
+
+| Field                    | Type    | Required | Description                                                         |
+| ------------------------ | ------- | -------- | ------------------------------------------------------------------- |
+| `metadataSchemaId`       | string  | Yes      | Identifier of the schema to update                                  |
+| `schemaName`             | string  | No       | Updated schema name (1-256 chars)                                   |
+| `fields`                 | object  | No       | Replacement field definitions. See [Field definitions](#field-definitions). |
+| `fileKeyTypeRestriction` | string  | No       | Updated comma-delimited file extensions                             |
+| `enabled`                | boolean | No       | Toggle schema enforcement                                           |
+
+#### Response
+
+```json
+{
+    "success": true,
+    "message": "Metadata schema updated successfully",
+    "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "operation": "update",
+    "timestamp": "2026-03-16T14:20:00.000000"
+}
+```
+
+#### Error responses
+
+| Status | Description                                                                     |
+| ------ | ------------------------------------------------------------------------------- |
+| `400`  | Validation error, no updatable field supplied, or the schema does not exist      |
+| `403`  | Not authorized                                                                  |
+| `500`  | Internal server error                                                           |
+
+---
+
+### Delete a metadata schema
+
+Deletes a metadata schema.
+
+```
+DELETE /database/{databaseId}/metadataSchema/{metadataSchemaId}
+```
+
+#### Path parameters
+
+| Parameter          | Type   | Required | Description                                |
+| ------------------ | ------ | -------- | ------------------------------------------ |
+| `databaseId`       | string | Yes      | Database identifier. `GLOBAL` is accepted. |
+| `metadataSchemaId` | string | Yes      | Metadata schema identifier                 |
+
+#### Request body
+
+The request body is required and must confirm the deletion.
+
+| Field           | Type    | Required | Description                                  |
+| --------------- | ------- | -------- | -------------------------------------------- |
+| `confirmDelete` | boolean | Yes      | Must be `true`; the delete is rejected otherwise |
+
+```json
+{
+    "confirmDelete": true
+}
+```
+
+#### Response
+
+```json
+{
+    "success": true,
+    "message": "Metadata schema deleted successfully",
+    "metadataSchemaId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "operation": "delete",
+    "timestamp": "2026-03-16T14:20:00.000000"
+}
+```
+
+#### Error responses
+
+| Status | Description                                                                        |
+| ------ | ---------------------------------------------------------------------------------- |
+| `400`  | Invalid path parameters, `confirmDelete` not `true`, or the schema does not exist    |
+| `403`  | Not authorized                                                                     |
+| `500`  | Internal server error                                                              |
+
+---
+
 ## Bulk Operation Response Format
 
 All metadata create, update, and delete operations return a consistent bulk operation response:
@@ -811,3 +1134,12 @@ Bulk operations can partially succeed. Check both `successCount` and `failureCou
 | Maximum metadata records per entity | 500            | Maximum number of metadata key-value pairs per asset, file, database, or asset link. |
 | Maximum key length                  | 256 characters | Maximum length of a `metadataKey`.                                                   |
 | Maximum items per REPLACE_ALL       | 500            | Maximum metadata items in a single `replace_all` operation.                          |
+| Maximum `pageSize` and `maxItems`   | 1,000          | Largest value either metadata pagination parameter may carry on a read.              |
+
+:::note[Paging a metadata read]
+`pageSize` and `maxItems` each size a single response, and the page served is the smaller of the two. `pageSize` defaults to 100 and `maxItems` to 1,000, so a read with no pagination parameters returns 100 records. A value above the maximum in the table above is rejected with `400` rather than reduced to it, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. When records remain beyond the page, the response carries a `NextToken`; pass it as `startingToken` to read the next page, and repeat until no `NextToken` is returned — the whole set is reachable that way whatever the page size.
+:::
+
+:::note[Reserved metadata keys]
+`REINDEX_METADATA_RECORD` is reserved for VAMS internal use; a create or update that supplies it is refused. A key carrying the `VAMS_` prefix or a leading underscore is accepted and returned by every metadata read, and is excluded from search indexing — a key with a leading underscore is also absent from asset export output.
+:::

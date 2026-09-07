@@ -18,6 +18,7 @@ import {
     suppressCdkNagErrorsByGrantReadWrite,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -52,30 +53,7 @@ export function buildMetadataService(
                 ? { subnets: subnets }
                 : undefined,
 
-        environment: {
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            DATABASE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.databaseMetadataStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
-                storageResources.dynamo.fileAttributeStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            METADATA_SCHEMA_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
-            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetVersionsStorageTable.tableName,
-            ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
-        },
+        environment: {},
     });
 
     // Grant DynamoDB permissions
@@ -102,6 +80,7 @@ export function buildMetadataService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

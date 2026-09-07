@@ -1,12 +1,28 @@
+# Pipeline for the internal AWS GitLab CI/CD system. It publishes the documentation site to the
+# internal GitLab Pages host and includes an indexer template from an internal GitLab project, so it
+# runs nowhere else. A customer using GitLab should replace this file with their own pipeline rather
+# than adapt it; the `include` below will not resolve outside the internal instance.
+
 stages:
     - build
     - deploy
+    - index
+
+variables:
+    # README badge commit off. Set to "false" to let the indexer commit the badges —
+    # indexing, score, security and interfaces run either way.
+    SKIP_README_UPDATE: "true"
+
+include:
+    - project: "envision-engineering-amer/namer/automation-tools/agentic-pace"
+      ref: main
+      file: "/monticello/templates/indexer.yml"
 
 # Documentation build and deploy to GitLab Pages
 # Builds only the current branch's docs
 pages:
     stage: deploy
-    image: node:20-slim
+    image: node:22-slim
     variables:
         DOCS_URL: "https://aws-spatial-prototyping.pages.aws.dev"
     before_script:

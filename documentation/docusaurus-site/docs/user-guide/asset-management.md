@@ -49,7 +49,7 @@ The details pane header includes three action buttons:
 
 ### Tabbed Container
 
-The tabbed container sits below the details pane and contains five tabs: File Manager, Relationships, Workflows, Comments, and Versions. Each tab is described in detail in the sections that follow.
+The tabbed container sits below the details pane and contains five tabs: File Manager, Relationships, Executions, Comments, and Versions. Each tab is described in detail in the sections that follow.
 
 ### Metadata Section
 
@@ -73,6 +73,21 @@ To modify an asset's properties:
 | **Tags**             | Add or remove tags to categorize the asset.        |
 
 3. Select **Update** to save your changes. The page refreshes to display the updated properties.
+
+---
+
+## Asset History
+
+VAMS keeps a permanent history of each asset's lifecycle operations: creation, edits to the asset's properties, archiving, unarchiving, and permanent deletion. Each history record shows when the operation happened, who performed it, and a snapshot of the asset's properties after the operation. Changes made through S3 bucket-sync ingestion (assets auto-created or auto-restored from direct S3 uploads) are labeled with an S3 Sync origin, and records inferred by a deployment data migration are marked as migrated.
+
+To view an asset's history:
+
+1. Open the asset detail page and select the **File Manager** tab.
+2. Select the asset's root node at the top of the file tree.
+3. In the details panel, select the **(history)** link next to the **Type** field.
+4. The Asset History modal lists the operations newest first. Select an entry in the **Details** column to see the asset property snapshot for that operation. Use the pagination controls to load older records.
+
+History records persist after an asset is permanently deleted. If an asset is later created with the same asset ID, its history view includes the prior asset's records, providing a continuous audit trail for that ID.
 
 ---
 
@@ -252,7 +267,7 @@ Archiving a file moves it to lower-cost storage while retaining it in the file l
 
 To unarchive:
 
-1. Enable the **Show Archived** toggle in the File Manager to display archived files.
+1. Enable the **Show archived files** toggle at the bottom of the File Manager file tree to display archived files.
 2. Select the archived file.
 3. Select the **Unarchive** action.
 4. Confirm the operation.
@@ -407,13 +422,13 @@ Comments are tied to the asset, not to a specific version. All comments remain v
 
 ## Workflow Executions
 
-The **Workflows** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
+The **Executions** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
 
-![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260323_v2.5.png)
+![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
 
 ### Viewing Execution History
 
-1. Select the **Workflows** tab on the asset detail page.
+1. Select the **Executions** tab on the asset detail page.
 2. Executions are grouped by workflow, with each workflow showing its list of individual executions.
 3. Each execution displays:
     - The workflow name
@@ -423,14 +438,14 @@ The **Workflows** tab shows the execution history of all workflows that have bee
 
 ### Executing a Workflow from the Asset Page
 
-You can start a new workflow execution directly from the asset detail page:
+You can start a new workflow execution directly from the asset detail page, from either of two places:
 
-1. Select the **Execute Workflow** button above the workflows tab.
-2. Choose the workflow to run from the dropdown.
-3. Select the input file(s) for processing (or select the entire asset).
-4. Confirm the execution.
+-   **Executions tab** -- Select **Execute workflow** in the tab's toolbar.
+-   **File Manager tab** -- Select the files you want to process, then choose **Execute Workflow** from the **Automation** menu in the file details toolbar, beside **Export**. Launching from here pre-fills your file selection.
 
-The new execution appears in the workflow tab immediately with a **Running** status. The tab auto-refreshes to show status updates.
+Either entry point opens the same execution wizard, which asks for the input files, then the configuration for each pipeline step, then a review before launching. For a walkthrough of each stage, see [Executing workflows](pipelines-and-workflows.md#executing-workflows).
+
+The new execution appears in the Executions tab immediately with a **Running** status. The tab auto-refreshes to show status updates.
 
 ### Auto-Triggered Workflows
 
@@ -476,3 +491,4 @@ Asset operations can also be performed via the command line. See [CLI Asset Comm
 -   [Pipelines and Workflows](pipelines-and-workflows.md) -- Automating asset processing
 -   [Tags](tags.md) -- Organizing assets with tags
 -   [Subscriptions](subscriptions.md) -- Receiving change notifications
+-   [Automating VAMS](automating-vams.md) -- Scripting bulk asset operations from the command line

@@ -12,7 +12,7 @@ The tool orchestrates:
 2. **Constraint import** via `vamscli role constraint template import`, which sends the template to the server-side API for variable substitution, UUID generation, and bulk constraint creation
 3. **User assignment** via `vamscli role user create`
 
-Pre-built JSON templates are located in `documentation/permissionsTemplates/`. For detailed explanations of what each template provides (constraint matrices, design decisions, GLOBAL keyword usage, etc.), see [documentation/PermissionsGuide.md](../../documentation/PermissionsGuide.md).
+Pre-built JSON templates are located in `documentation/permissionsTemplates/`. For detailed explanations of what each template provides (constraint matrices, design decisions, GLOBAL keyword usage, etc.), see [Permissions (developer guide)](https://awslabs.github.io/visual-asset-management-system/developer/permissions).
 
 ## Prerequisites
 
@@ -132,6 +132,6 @@ The `--delete` flag deletes the role only. Since constraint IDs are server-gener
 
 ## Further Reading
 
--   **[PermissionsGuide.md](../../documentation/PermissionsGuide.md)** - Detailed constraint matrices, design decisions, GLOBAL keyword usage, and the full JSON template format reference
--   **[VamsCLI Role Management](../VamsCLI/docs/commands/role-management.md)** - CLI commands for roles, constraints, and template imports
+-   **[Permissions (developer guide)](https://awslabs.github.io/visual-asset-management-system/developer/permissions)** - Detailed constraint matrices, design decisions, GLOBAL keyword usage, and the full JSON template format reference
+-   **[VAMS CLI permission commands](https://awslabs.github.io/visual-asset-management-system/cli/commands/permissions)** - CLI commands for roles, constraints, and template imports
 -   **[documentation/permissionsTemplates/](../../documentation/permissionsTemplates/)** - Pre-built JSON template files

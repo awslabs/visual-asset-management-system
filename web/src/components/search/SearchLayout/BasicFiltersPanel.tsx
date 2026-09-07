@@ -19,6 +19,14 @@ import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
 import Synonyms from "../../../synonyms";
 
+/** Sort dropdown options case-insensitively by label so users get a predictable list. */
+const sortOptionsByLabel = <T extends { label?: string; value?: string }>(opts: T[]): T[] =>
+    [...opts].sort((a, b) =>
+        (a.label || a.value || "").localeCompare(b.label || b.value || "", undefined, {
+            sensitivity: "base",
+        })
+    );
+
 interface BasicFiltersPanelProps {
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
@@ -116,24 +124,26 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         }
     }, [searchResult, recordType, filters]);
 
-    // Build database options with result counts
-    const databaseOptions = databases.map((db: any) => {
-        let count = 0;
-        // Map through result aggregation to find doc_count for each database
-        if (searchResult?.aggregations?.str_databaseid?.buckets) {
-            const bucket = searchResult.aggregations.str_databaseid.buckets.find(
-                (b: any) => b.key === db.databaseId
-            );
-            if (bucket) {
-                count = bucket.doc_count;
+    // Build database options with result counts (alphabetized by database id)
+    const databaseOptions = sortOptionsByLabel(
+        databases.map((db: any) => {
+            let count = 0;
+            // Map through result aggregation to find doc_count for each database
+            if (searchResult?.aggregations?.str_databaseid?.buckets) {
+                const bucket = searchResult.aggregations.str_databaseid.buckets.find(
+                    (b: any) => b.key === db.databaseId
+                );
+                if (bucket) {
+                    count = bucket.doc_count;
+                }
             }
-        }
 
-        return {
-            label: `${db.databaseId} (${count} results)`,
-            value: db.databaseId,
-        };
-    });
+            return {
+                label: `${db.databaseId} (${count} results)`,
+                value: db.databaseId,
+            };
+        })
+    );
 
     // Build asset type options - use cache if available and we're in a filtered search
     const assetTypeOptions = (() => {
@@ -145,9 +155,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 
         // Use cache if we have it and current results are filtered
         if (cachedAssetTypes.length > 0 && !isNonFilteredSearch()) {
-            return cachedAssetTypes;
+            return sortOptionsByLabel(cachedAssetTypes);
         }
-        return currentOptions;
+        return sortOptionsByLabel(currentOptions);
     })();
 
     // Build file type options - use cache if available and we're in a filtered search
@@ -160,9 +170,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 
         // Use cache if we have it and current results are filtered
         if (cachedFileTypes.length > 0 && !isNonFilteredSearch()) {
-            return cachedFileTypes;
+            return sortOptionsByLabel(cachedFileTypes);
         }
-        return currentOptions;
+        return sortOptionsByLabel(currentOptions);
     })();
 
     // Build tag options - use cache if available and we're in a filtered search
@@ -177,9 +187,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 
         // Use cache if we have it and current results are filtered
         if (cachedTags.length > 0 && !isNonFilteredSearch()) {
-            return cachedTags;
+            return sortOptionsByLabel(cachedTags);
         }
-        return currentOptions;
+        return sortOptionsByLabel(currentOptions);
     })();
 
     // Get selected options for each filter

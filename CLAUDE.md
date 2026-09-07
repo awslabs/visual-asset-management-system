@@ -6,23 +6,21 @@ This is the root-level Claude Code steering document for VAMS. It is auto-loaded
 
 VAMS is an AWS-native Visual Asset Management System for managing, visualizing, and processing 3D assets, point clouds, CAD files, and other visual content. It deploys as a CloudFormation/CDK stack with:
 
--   **React frontend** (`web/`) -- Cloudscape UI, 17 viewer plugins for 3D/media
--   **Python Lambda backend** (`backend/`) -- Casbin ABAC/RBAC auth, DynamoDB, S3
--   **CDK TypeScript infrastructure** (`infra/`) -- 10 nested stacks, multi-partition support
--   **Python CLI tool** (`tools/VamsCLI/`) -- Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) -- 3D conversion, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict
+-   **React frontend** (`web/`) — Cloudscape UI, many viewer plugins for 3D/media
+-   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
+-   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
+-   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, and more
 
 ### **Version Info**
 
-| Component            | Version/Runtime                                                                                             |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| VAMS version         | (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)                                              |
-| Python (Lambda)      | 3.12                                                                                                        |
-| Python (development) | 3.13+                                                                                                       |
-| Node (Lambda)        | 20.x                                                                                                        |
-| React                | 17.0.2 (Vite build)                                                                                         |
-| Pydantic             | **1.10.7 (v1, NOT v2)** -- uses `@root_validator`, `@validator`, `class Config`, not v2's `model_validator` |
-| CDK                  | `aws-cdk-lib`                                                                                               |
+VAMS version: see `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`. Python 3.12 (Lambda), 3.13+ (dev). Node 22.x (Lambda). React 18.3 (Vite build). Pydantic **1.10.13 (v1, NOT v2)** — uses `@root_validator`, `@validator`, `class Config`. CDK: `aws-cdk-lib`.
+
+**Rolling the VAMS version** — the version string is duplicated across three files; update all of them together in the same change:
+
+1. Root `package.json` (`"version"` field)
+2. `tools/VamsCLI/vamscli/version.py` (both `__version__` and `CLI_VERSION`)
+3. `infra/config/config.ts` (`VAMS_VERSION` constant)
 
 ---
 
@@ -40,17 +38,31 @@ root/
 ├── infra/                     # CDK TypeScript infrastructure
 │   └── CLAUDE.md              # CDK development guide
 ├── tools/
-│   └── VamsCLI/               # Python CLI tool
-│       └── CLAUDE.md          # CLI development guide
+│   ├── VamsCLI/               # Python CLI tool
+│   │   └── CLAUDE.md          # CLI development guide
+│   ├── VamsMCP/               # MCP server exposing the VAMS API as agent tools (reuses vamscli)
+│   │   └── CLAUDE.md          # MCP development guide
+│   ├── VamsAgentSkill/        # Portable agent skill that operates VAMS via vamscli
+│   │   └── SKILL.md           # Canonical skill definition (see /vams-agent)
+│   ├── ExternalIntegrations/  # ArcGIS Pro connector, Isaac Sim integration
+│   └── permissionsSetup/      # Permission bootstrap scripts
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
+│   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
 │   ├── genAi/
-│   │   ├── cosmos/predict/    # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │   ├── nvidia/
+│   │   │   ├── cosmos/
+│   │   │   │   ├── 3/         # NVIDIA Cosmos 3 (omni generation)
+│   │   │   │   ├── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │   │   │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
+│   │   │   │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
+│   │   │   └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
 │   │   └── metadata3dLabeling/
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
-├── .clinerules/workflows/     # Detailed workflow docs (supplementary)
+│   └── CLAUDE.md              # Documentation development guide
+├── .kiro/steering/            # Detailed workflow docs (Kiro steering, supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
-└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.4_to_v2.5)
+└── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.5_to_v2.6)
 ```
 
 ---
@@ -60,7 +72,7 @@ root/
 ### **Request Flow**
 
 ```
-User → CloudFront/ALB → API Gateway V2 HttpApi
+User → CloudFront/ALB → API Gateway REST API (v1)
   → Custom Lambda Authorizer (JWT validation + IP check)
     → Lambda Handler (Casbin two-tier enforcement)
       → DynamoDB / S3
@@ -78,7 +90,7 @@ Cognito/External OAuth → ID Token → Custom Lambda Authorizer
 ### **Frontend Architecture**
 
 ```
-React 17 + Cloudscape → HashRouter → apiClient (fetch-based)
+React 18 + Cloudscape → HashRouter → apiClient (fetch-based)
   → Feature switches from /api/secure-config → conditional UI rendering
 ```
 
@@ -92,70 +104,15 @@ CDK config (infra/config/config.json)
 
 ### **Pipeline Architecture**
 
-VAMS supports three pipeline execution types: **Lambda** (sync or async invocation of a Lambda function), **SQS** (async message to an SQS queue), and **EventBridge** (async event to an EventBridge bus). SQS and EventBridge pipelines are async-only and support optional callback via Step Functions Task Tokens.
+Four creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event), and **DeadlineCloud** (AWS Deadline Cloud job). SQS and EventBridge are async-only with optional Step Functions Task Token callback. DeadlineCloud is async-only with a **mandatory** callback (`waitForCallback` must be `Enabled`), is built by `DeadlineCloudTaskBuilder` + the `deadlineCloudJobCallback` lambda, and is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` — accepted only in the commercial `aws` partition, and rejected at pipeline create when the deployment has not enabled it.
 
 ```
 S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge → AWS Batch containers (optional)
-  backendPipelines/{useCase}/lambda/   -- orchestration
+  backendPipelines/{useCase}/lambda/    -- orchestration
   backendPipelines/{useCase}/container/ -- processing
 ```
 
-#### **Pipeline S3 Output Paths**
-
-The workflow ASL generates several S3 paths passed to each pipeline step. Pipelines must use the correct path for each output type:
-
-| Path Variable                          | Bucket           | Purpose                                                         | Versioned |
-| -------------------------------------- | ---------------- | --------------------------------------------------------------- | --------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.X`) | Yes       |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level previews only (whole-asset representative image)    | Yes       |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                         | Yes       |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data    | No        |
-
-**Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
-
-**Rules for output path usage:**
-
--   **Always pass through** all output paths from the workflow payload in `vamsExecute` lambdas. Never hardcode empty strings for output paths — the workflow's process-output step relies on finding files at these locations.
--   **Use `outputS3AssetFilesPath`** for file-level outputs, including `.previewFile.X` thumbnail files generated by preview pipelines.
--   **Use `outputS3AssetPreviewPath`** only for asset-level preview images (not file-level previews).
--   **Use `inputOutputS3AssetAuxiliaryFilesPath`** only for temporary files during processing or for special non-versioned preview data (e.g., Potree octree viewer files) that the frontend reads directly from the auxiliary bucket.
--   The `constructPipeline` lambda should prefer the appropriate output path when provided, falling back to the auxiliary path only for direct/local invocations where workflow context is unavailable.
-
-**Preserving relative paths for asset-adjacent outputs:**
-
-When a pipeline writes output files that correspond to a specific input file (e.g., `.previewFile.X` thumbnails), the output **must preserve the input file's relative path within the asset**. The process-output step expects outputs at the same relative location as the input so it can move them to the correct final location in the asset bucket.
-
--   Asset files are stored at `{assetId}/{relative_path}/{filename}` — the relative path may include zero or more subdirectories between the asset ID and the filename.
--   The output paths (`outputS3AssetFilesPath`, etc.) point to the asset root: `s3://bucket/{assetId}/`.
--   Containers must include the relative subdirectory in the output S3 key: `{outputDir}{relative_subdir}/{filename}.previewFile.X`.
-
-```
-Input key:  xd130a6d6.../test/pump.e57
-Output dir: xd130a6d6.../
-
-✅ Correct output: xd130a6d6.../test/pump.e57.previewFile.gif
-❌ Wrong output:   xd130a6d6.../pump.e57.previewFile.gif  (relative path lost)
-```
-
-**`assetId` is a workflow state variable — thread it, don't derive it.** The `assetId` is passed as a top-level field in the workflow event payload. It must be captured in the `vamsExecute` lambda, forwarded to `constructPipeline`, included in the pipeline definition, and used directly in the container. Never attempt to reverse-engineer the asset ID from S3 path segments.
-
-To compute the relative subdirectory in container code using the explicit `assetId`:
-
-```python
-# assetId comes from the pipeline definition (threaded from workflow state)
-input_parts = stage_input.objectKey.split("/")
-asset_id_idx = input_parts.index(assetId)
-relative_subdir = "/".join(input_parts[asset_id_idx + 1:-1])  # "" if file is at asset root
-```
-
-**Pipeline state threading pattern** (applies to all pipelines, not just preview):
-
-```
-Workflow event (assetId, databaseId, paths, ...)
-  → vamsExecute lambda: capture assetId from event body, include in messagePayload
-    → constructPipeline lambda: read assetId from event, include in definition dict
-      → Container: read assetId from PipelineDefinition, use for relative path computation
-```
+See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` threading, and the new-pipeline checklist.
 
 ### **Deployment Modes**
 
@@ -171,20 +128,58 @@ Workflow event (assetId, databaseId, paths, ...)
 
 These are the critical patterns that span multiple directories. **Every developer must understand these.**
 
-### **Pattern 1: Adding a New API Endpoint (4-5 files)**
+### **Pattern 1: Adding a New API Endpoint (multiple files)**
 
 Adding a new API endpoint requires coordinated changes across multiple components:
 
-| Step                | File                                                         | What to do                                          |
-| ------------------- | ------------------------------------------------------------ | --------------------------------------------------- |
-| 1. Backend handler  | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler with Casbin enforcement    |
-| 2. Pydantic model   | `backend/backend/models/{domain}.py`                         | Define request/response models (Pydantic **v1**)    |
-| 3. Lambda builder   | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars, permissions, VPC config |
-| 4. API route        | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route                  |
-| 5. Frontend service | `web/src/services/APIService.ts`                             | Add API call method                                 |
-| 6. CLI command      | `tools/VamsCLI/vamscli/commands/{group}.py`                  | Add CLI command (if applicable)                     |
+| Step                      | File                                                          | What to do                                                                                                       |
+| ------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                         | Define the `ApiRoute` constant AND add it to the appropriate category group array                                |
+| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()`                              |
+| 3. Pydantic model         | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic **v1**)                                                                 |
+| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with env vars, permissions, VPC config                                                              |
+| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route (prefer `apiBuilder2`; the two API stacks stay split — see `infra/CLAUDE.md`) |
+| 6. Frontend service       | `web/src/services/APIService.ts`                              | Add API call method                                                                                              |
+| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable) — also add the endpoint path to `vamscli/constants.py` (Rule 7)                  |
+| 8. MCP server             | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it (see Pattern 7)                                                  |
+| 9. OpenAPI spec (docs)    | `documentation/VAMS_API.yaml`                                 | Add/update the path and its component schemas                                                                    |
+| 10. API reference (docs)  | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)                              |
 
-**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500.
+**Never** add an endpoint without updating all required files. A handler without a route is dead code; a route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a missing entry is invisible to constraint authoring and the CLI. **API documentation lives in two places — the OpenAPI `VAMS_API.yaml` AND the Docusaurus `api/{domain}.md` reference page — and both must be updated together.**
+
+### **Pattern 7: Backend → CLI → MCP / Connector Propagation Chain**
+
+The VAMS CLI, the VAMS MCP server, and the external connectors all sit downstream of the backend API. The MCP server imports `vamscli`'s `APIClient` and `ProfileManager` directly; the external connectors shell out to the `vamscli` **executable** and parse its `--json-output`. Changes therefore propagate in one direction and **each hop must be updated in the same change**:
+
+```
+backend API (apiRoutes.py + handler + model)
+  → tools/VamsCLI (constants.py → utils/api_client.py → commands/{group}.py)
+    ├─ tools/VamsMCP (vams_mcp/server.py tools, reusing the CLI APIClient method)
+    │    → tools/VamsAgentSkill/SKILL.md (only if an order-of-operations rule changes)
+    └─ tools/ExternalIntegrations (subprocess consumers of the CLI executable)
+         ├─ isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py
+         └─ arcgispro-connector-for-vams/Services/VamsCliService.cs + Models/VamsModels.cs
+```
+
+**Rules:**
+
+1. **Any change to a `vamscli` command or `APIClient` method requires reviewing the MCP server in the same change.** Renamed methods, changed parameters, new required arguments, and changed response shapes all break MCP tools silently — the MCP tool calls the CLI method directly, so a signature change surfaces only at agent runtime.
+2. **New `APIClient` methods that agents should be able to use get a matching MCP tool** in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section (read / `enable_writes` / `enable_destructive`), plus a unit test and a README tool-list entry. See `tools/VamsMCP/CLAUDE.md`.
+3. **Response-shape changes must be checked against MCP pagination.** `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. A handler that changes either one breaks the corresponding MCP tool without any error.
+4. **The agent skill (`tools/VamsAgentSkill/SKILL.md`) does not list commands** — it self-discovers them via `vamscli --help`, so ordinary command additions need no skill edit. Update it only when a _structural_ rule changes: entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating category.
+5. **Any change to a CLI command name, subcommand, option/flag, or `--json-output` response shape requires validating the external connectors in the same change.** Unlike the MCP server, the connectors are **not** Python importers of `APIClient` — they build argument strings and parse JSON keys, so nothing at build or import time catches a drift. A renamed flag surfaces as a non-zero CLI exit at connector runtime; a renamed or removed JSON key surfaces as a silently blank field, which is worse. Both must be checked:
+
+    - **IsaacSim** (`vams_cli_service.py`) — argument lists passed to `subprocess.run`, and the `@dataclass` field mappings (`item.get("jsonKey", ...)`) that parse each response.
+    - **ArcGIS Pro** (`Services/VamsCliService.cs`) — the interpolated argument strings, plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
+
+    Only map JSON keys that the specific command actually returns. `file list` items and the `file info` response are **different shapes** — a listing item carries `dateCreatedCurrentVersion` and no `contentType`/`lastModified`, while `file info` carries `contentType`/`lastModified` and no `dateCreatedCurrentVersion`. Mapping a key onto the wrong command yields a permanently empty value with no error.
+
+    In the ArcGIS models, a computed convenience property whose name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`) **must** carry `[JsonIgnore]`. The deserializer runs with `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata — failing the whole response, not just that field.
+
+6. **Roll the CLI version and MCP version together** when the MCP server's contract with the CLI changes. The MCP version is duplicated, so all three files move in the same change: `tools/VamsCLI/vamscli/version.py`, `tools/VamsMCP/pyproject.toml`, and `tools/VamsMCP/vams_mcp/__init__.py` (`__version__`). Bumping the package metadata without the importable `__version__` leaves a diagnostic that reports the running server version silently wrong.
+7. **A change to these rules lands in both steering families** (Rule 11). This pattern is restated for Claude Code in `tools/VamsCLI/CLAUDE.md` and `tools/VamsMCP/CLAUDE.md`, and for Kiro in the MCP propagation section of `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`. Editing the chain here without updating those leaves one agent scaffolding the old workflow.
+
+Reverse direction applies too: a change to the MCP server or a connector that reveals a missing or wrong `APIClient` method should be fixed in the CLI rather than worked around with raw requests in the consumer.
 
 ### **Pattern 2: Two-Tier Authorization**
 
@@ -202,55 +197,54 @@ if not enforcer.check_permission(object_type, resource_id, action):
     return {"statusCode": 403, "body": json.dumps({"error": "Forbidden"})}
 ```
 
+**System user:** The reserved user ID `SYSTEM_USER` is the official identity for all system-process actions (lambda cross-calls, pipeline workflow executions, bucket-sync ingestion, seeded `createdBy`/`modifiedBy` values, `changeUserId` provenance fallbacks). It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role so system actions pass both authorization tiers. Never introduce other variants (`SYSTEM`, `system`, etc.) — handlers compare against the exact string. See `backend/CLAUDE.md`.
+
 ### **Pattern 3: Configuration Flows CDK -> DynamoDB -> Frontend**
 
-1. CDK config (`infra/config/config.json`) drives deployment decisions
-2. CDK custom resource writes feature switches to DynamoDB at deploy time
-3. Frontend reads features from `/api/secure-config` at runtime
-4. Feature switches are defined in `infra/common/vamsAppFeatures.ts`
+CDK config (`infra/config/config.json`) drives deployment decisions; a CDK custom resource writes feature switches to DynamoDB at deploy time; the frontend reads features from `/api/secure-config` at runtime. Feature switches are defined in `infra/common/vamsAppFeatures.ts`.
 
 ```typescript
-// ✅ CORRECT - Feature switch in CDK
+// CDK: feature switch enum + push to DynamoDB in core stack
 export enum VAMS_APP_FEATURES {
     GOVCLOUD = "GOVCLOUD",
     LOCATIONSERVICES = "LOCATIONSERVICES",
     NEW_FEATURE = "NEW_FEATURE",
 }
-
-// Core stack pushes enabled features to DynamoDB
 if (props.config.app.newFeature.enabled) {
     this.enabledFeatures.push(VAMS_APP_FEATURES.NEW_FEATURE);
 }
 ```
 
 ```javascript
-// ✅ CORRECT - Frontend reads features at runtime
+// Frontend reads at runtime
 const config = appCache.getItem("config");
 if (config.featuresEnabled.includes("NEW_FEATURE")) {
     // Show feature-specific UI
 }
 ```
 
-### **Pattern 4: DynamoDB Table Names Are Environment Variables**
+### **Pattern 4: Resource Names Resolve via SSM Parameter Store**
 
-DynamoDB table names are **never** hardcoded. They are injected by CDK lambda builders as environment variables into every Lambda function.
+DynamoDB table names, non-asset S3 bucket names, and audit log group names are **never** hardcoded. Non-pipeline backend Lambdas resolve these from SSM Parameter Store at runtime, with environment variable overrides for development and testing.
 
 ```python
-# ✅ CORRECT - Read table name from environment
-import os
-ASSET_STORAGE_TABLE_NAME = os.environ["ASSET_STORAGE_TABLE_NAME"]
+# ✅ CORRECT - Resolve at module level
+from backend.common.resourceNames import get_table_name, ResourceKeys
 
-# ❌ INCORRECT - Never hardcode table names
+try:
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception:
+    logger.exception("Failed loading resource names")
+    raise
+
+# ❌ INCORRECT
 ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 ```
 
-```typescript
-// ✅ CORRECT - CDK lambda builder injects table names
-environment: {
-    ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-    DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-}
-```
+CDK publishes each resource name as an SSM parameter under `VAMS_RESOURCE_PARAM_PREFIX` (see `ResourceNamesBuilder` nested stack; Lambda env is set via `globalLambdaEnvironmentsAndPermissions`). Keys are defined in `infra/common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS.*`) and mirrored in `backend/backend/common/resourceNames.py` (`ResourceKeys`).
+
+**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
 
 ### **Pattern 5: Multi-Partition Support**
 
@@ -267,13 +261,7 @@ const arn = `arn:aws:s3:::my-bucket`; // VIOLATION - breaks in GovCloud (arn:aws
 
 ### **Pattern 6: GovCloud Constraints**
 
-When `config.app.govCloud.enabled` is true:
-
--   **No CloudFront** -- use ALB for static web distribution
--   **No Location Service** -- conditionally exclude
--   **FIPS endpoints required** -- use service-helper
--   **Certain VPC endpoints are conditional** -- check partition before creating
--   **No `unsafe-eval`** -- stricter CSP unless explicitly overridden
+When `config.app.govCloud.enabled` is true: no CloudFront (use ALB for static web distribution); no Location Service (conditionally exclude); FIPS endpoints required (use service-helper); certain VPC endpoints are conditional (check partition before creating); no `unsafe-eval` (stricter CSP unless explicitly overridden).
 
 ---
 
@@ -283,10 +271,10 @@ These rules apply project-wide. Violations will cause deployment failures, secur
 
 ### **Rule 1: Never Use Pydantic v2 Syntax**
 
-The backend uses Pydantic **1.10.7**. Using v2 syntax will fail at import time in Lambda.
+The backend uses Pydantic **1.10.13**. v2 syntax fails at import time in Lambda.
 
 ```python
-# ✅ CORRECT - Pydantic v1
+# ✅ v1
 from pydantic import BaseModel, Field, root_validator, validator
 
 class AssetRequest(BaseModel):
@@ -299,10 +287,9 @@ class AssetRequest(BaseModel):
     class Config:
         extra = "forbid"
 
-# ❌ INCORRECT - Pydantic v2 (will fail)
-from pydantic import model_validator  # DOES NOT EXIST in v1
-class AssetRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")  # v2 syntax, VIOLATION
+# ❌ v2 (will fail)
+from pydantic import model_validator             # not in v1
+model_config = ConfigDict(extra="forbid")        # v2 syntax, VIOLATION
 ```
 
 ### **Rule 2: Never Hardcode Table Names or ARNs**
@@ -322,29 +309,7 @@ if (config.app.newFeature.enabled && !config.app.newFeature.requiredSetting) {
 
 ### **Rule 4: CDK Nag Suppressions Must Be Justified**
 
-Every CDK Nag suppression requires a detailed reason explaining **why** it is acceptable in the VAMS context.
-
-```typescript
-// ✅ CORRECT
-NagSuppressions.addResourceSuppressions(
-    resource,
-    [
-        {
-            id: "AwsSolutions-IAM5",
-            reason: "Wildcard permissions required for dynamic S3 object access within VAMS asset buckets. Scope is limited to deployment-specific buckets.",
-        },
-    ],
-    true
-);
-
-// ❌ INCORRECT
-NagSuppressions.addResourceSuppressions(resource, [
-    {
-        id: "AwsSolutions-IAM5",
-        reason: "Suppressed", // VIOLATION - no justification
-    },
-]);
-```
+Every CDK Nag suppression requires a detailed reason explaining **why** it is acceptable in the VAMS context — e.g. "Wildcard permissions required for dynamic S3 object access within VAMS asset buckets. Scope is limited to deployment-specific buckets." A `reason: "Suppressed"` placeholder is a violation.
 
 ### **Rule 5: Use Custom Lambda Authorizer, Not Built-In**
 
@@ -372,74 +337,154 @@ The React app uses `HashRouter`, not `BrowserRouter`. All internal routes use ha
 
 ### **Rule 11: Keep CLAUDE.md Files Updated**
 
-When you make structural changes to the codebase, **you must update the relevant CLAUDE.md file(s)**. Structural changes include:
+Structural changes to the codebase require updating the relevant `CLAUDE.md` file(s): adding/removing handler domains, components, commands, nested stacks, or pipeline directories; new DynamoDB tables, S3 buckets, or environment variables; new API routes or CLI commands; new/removed viewer plugins; configuration-system changes (new fields, feature switches); or new dependencies that affect development patterns.
 
--   Adding or removing handler domains, components, commands, nested stacks, or pipeline directories
--   Adding new DynamoDB tables, S3 buckets, or environment variables
--   Adding new API routes or CLI commands
--   Adding or removing viewer plugins
--   Changing the configuration system (new config fields, feature switches)
--   Adding new dependencies that affect development patterns
+| Change area                                                    | Update this file                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| New backend handler/model domain                               | `backend/CLAUDE.md` (directory structure, handler list)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| New CDK nested stack or lambda builder                         | `infra/CLAUDE.md` (directory structure, stack list)                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| New frontend component/page/service                            | `web/CLAUDE.md` (directory structure, key files)                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| New CLI command group                                          | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| New/changed CLI command, option, or `--json-output` shape      | `tools/VamsMCP/vams_mcp/server.py` + `tools/VamsMCP/README.md` tool list; **and** the external connectors (`tools/ExternalIntegrations/isaacsim_vams_integration/.../vams_cli_service.py`, `tools/ExternalIntegrations/arcgispro-connector-for-vams/Services/VamsCliService.cs` + `Models/VamsModels.cs`) — they shell out to the CLI and parse its JSON, so nothing catches drift at build time (Pattern 7 rule 5); `tools/VamsAgentSkill/SKILL.md` only if an order-of-operations rule changed |
+| New MCP tool or MCP module                                     | `tools/VamsMCP/CLAUDE.md` (directory structure, tool sections), `tools/VamsMCP/README.md` (tool list, `autoApprove` sample)                                                                                                                                                                                                                                                                                                                                                                      |
+| Configuration system (new field, switch, changed default)      | `infra/CLAUDE.md`, `documentation/docusaurus-site/docs/deployment/configuration-reference.md`, and the **ConfigBuilder** component; then run `infra/test/config/configBuilderSync.test.ts`. The test guards only `schema.ts` fields + `defaults.ts` presets — new/changed `getConfig()` validation logic must be hand-ported into `validation.ts`, and added/changed/removed `getConfig()` auto-mutations into `derived.ts` (neither is test-covered)                                            |
+| New/changed S3 bucket, DynamoDB table, or CloudWatch log group | `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` — record removal policy (RETAIN vs DESTROY) and whether the resource has a custom/explicit name (custom-named resources can collide on redeploy). See `infra/CLAUDE.md` "Documentation Rule: Storage Resources and Log Groups"                                                                                                                               |
+| New pipeline                                                   | `backendPipelines/CLAUDE.md` (new-pipeline checklist), root `CLAUDE.md` (**both** the Project Overview pipeline list **and** the directory tree — the tree's glyphs assert which entry is a parent's last child), `documentation/docusaurus-site/docs/deployment/configuration-reference.md`                                                                                                                                                                                                     |
+| Cross-component pattern change                                 | `CLAUDE.md` root (cross-component patterns section)                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| New skill                                                      | `CLAUDE.md` root (Available Claude Code Skills table)                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
-**Which CLAUDE.md to update:**
+Update the directory structure tree, key files tables, and any affected rules or patterns; keep descriptions concise. Run `/refresh-steering-docs` for a comprehensive update.
 
-| Change area                            | Update this file                                                                                                              |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| New backend handler/model domain       | `backend/CLAUDE.md` (directory structure, handler list)                                                                       |
-| New CDK nested stack or lambda builder | `infra/CLAUDE.md` (directory structure, stack list)                                                                           |
-| New frontend component/page/service    | `web/CLAUDE.md` (directory structure, key files)                                                                              |
-| New CLI command group                  | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                 |
-| New pipeline                           | `CLAUDE.md` root (pipeline list), `documentation/docusaurus-site/docs/deployment/configuration-reference.md` (config options) |
-| Cross-component pattern change         | `CLAUDE.md` root (cross-component patterns section)                                                                           |
-| New skill                              | `CLAUDE.md` root (Available Claude Code Skills table)                                                                         |
+**Keep Kiro steering in sync (bidirectional).** The `.kiro/steering/` documents mirror the `CLAUDE.md` guidance for the Kiro agent. A change to any `CLAUDE.md` rule, pattern, or convention must land in the corresponding Kiro steering document in the same commit — and vice versa. Mapping:
 
-**What to update:** Update the directory structure tree, key files tables, and any affected rules or patterns. Keep descriptions concise. You can also run `/refresh-steering-docs` for a comprehensive update.
+The mapping covers every `CLAUDE.md` in the repository plus `tools/VamsAgentSkill/SKILL.md`; a new steering document gets a row here when it is created.
+
+| CLAUDE.md file                               | Corresponding Kiro steering document(s)                                                            |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `CLAUDE.md` (root)                           | The relevant workflow doc(s) for the changed area; cross-cutting rules go in all affected docs     |
+| `infra/CLAUDE.md`                            | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` |
+| `infra/lib/nestedStacks/pipelines/CLAUDE.md` | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md` (pipeline development section)                        |
+| `backend/CLAUDE.md`                          | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                               |
+| `backend/tests/CLAUDE.md`                    | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` (testing section)                             |
+| `backendPipelines/CLAUDE.md`                 | `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md` (pipeline development section)                        |
+| `web/CLAUDE.md`                              | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/WEB_FRONTEND.md`                     |
+| `web/e2e/CLAUDE.md`                          | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` (testing section)                                     |
+| `web/src/visualizerPlugin/CLAUDE.md`         | `.kiro/steering/WEB_FRONTEND.md` (viewer plugin section)                                           |
+| `tools/VamsCLI/CLAUDE.md`                    | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`                                                       |
+| `tools/VamsMCP/CLAUDE.md`                    | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` (MCP propagation section)                             |
+| `tools/VamsAgentSkill/SKILL.md`              | No Kiro mirror — the skill is agent-portable and self-discovers commands                           |
+| `documentation/CLAUDE.md`                    | `.kiro/steering/DOCUMENTATION_WORKFLOW.md`                                                         |
+
+### **Rule 12: Keep Claude Code Skills in Sync with Steering Documents**
+
+The skills in `.claude/commands/` scaffold work by restating steering-document rules, patterns, checklists, and file paths. When a steering document changes a rule, pattern, workflow, or file path that a skill references, update the affected skill(s) in the same change — and vice versa. A stale skill actively scaffolds outdated code.
+
+**Which skills depend on which steering content:**
+
+| Skill                          | Sensitive to changes in                                                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/add-api-endpoint`            | Root Pattern 1, `backend/CLAUDE.md` (handler/model patterns, apiRoutes), `infra/CLAUDE.md` (lambda builder, route registry, security helpers)                                         |
+| `/add-pipeline`                | `backendPipelines/CLAUDE.md` (output paths, assetId threading, lambda dirs), `infra/lib/nestedStacks/pipelines/CLAUDE.md` (pipeline nested stack pattern, VPC builder blocks, config) |
+| `/generate-permissions`        | Permission model docs, `documentation/permissionsTemplates/`, constraint fields in `backend/CLAUDE.md`                                                                                |
+| `/deploy-check`                | Root development commands (lint/prettier from repo root), config validation rules                                                                                                     |
+| `/update-docs`, `/verify-docs` | `documentation/CLAUDE.md` (writing style, source-to-doc mappings, dual API doc sources)                                                                                               |
+| `/update-changelog`            | Root git workflow / changelog format                                                                                                                                                  |
+| `/refresh-steering-docs`       | Root Rules 11–13                                                                                                                                                                      |
+| `/vams-agent`                  | `tools/VamsAgentSkill/SKILL.md` (canonical definition), VAMS entity/order-of-operations rules, `tools/VamsCLI` auth and permission commands                                           |
+
+### **Rule 13: Label a Temporary Test So It Can Be Found and Removed**
+
+A test written to prove one specific change landed is a different artifact from a test that holds a
+rule in place, and **the two are indistinguishable by reading them afterwards.** Both may scan source,
+both may assert an absence, and both may carry a careful docstring explaining why. So the distinction
+has to be recorded when the test is written — it cannot be reconstructed at release time.
+
+Mark a temporary test at the point of writing:
+
+| Stack                                                                    | Marker                                                             |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Python (`backend`, `backendPipelines`, `tools/VamsCLI`, `tools/VamsMCP`) | `@pytest.mark.temporary` on the test or its class                  |
+| TypeScript (`web`, `infra`)                                              | a `TEMPORARY-TEST` token in a comment directly above the `it(...)` |
+
+Add one line naming what it pins, so a later reader does not have to re-derive it:
+
+```python
+@pytest.mark.temporary  # pins the removal of the duplicated tag block in tagService.py
+```
+
+Finding them is then one command per stack, which is the whole point of the marker:
+
+```bash
+cd backend && python -m pytest -m temporary -q --collect-only     # also tools/VamsCLI, tools/VamsMCP
+grep -rn "TEMPORARY-TEST" web/src web/e2e infra/test
+```
+
+The marker is registered in `backend/pytest.ini`, `tools/VamsCLI/pyproject.toml`, and
+`tools/VamsMCP/pyproject.toml`. **`backend` and `tools/VamsCLI` run `--strict-markers`**, so an
+unregistered marker fails those suites outright rather than being ignored — register it before using
+it in a new Python test tree there. `backendPipelines` has no pytest configuration at all (which is
+why its existing `@pytest.mark.unit` is unregistered too), so a marker there only warns; `-m temporary`
+still selects correctly.
+
+**Which tests are temporary.** Ask whether a future edit could plausibly reintroduce what the test
+forbids:
+
+-   **Durable — do not mark, do not remove.** The forbidden thing is still writable, so the guard can
+    still fire for a good reason: a weaker TLS policy, a broader IAM wildcard, a `cdk-nag` suppression,
+    `'unsafe-inline'` in the base CSP, a mutating client call from a read-only path, a credential
+    reaching a synthesized template. Also durable: a positive or negative **control** for another
+    assertion, whose subject is deliberately a string that does not exist.
+-   **Temporary — mark it.** The test pins one past edit that nothing would reintroduce: a named file
+    that was deleted, a removed test seam, a specific dead branch, a comment string that was reworded.
+    It went green once, and its only remaining way to fail is an innocent refactor of the file it reads.
+
+:::warning[Absence of the literal does NOT identify a temporary test]
+The tempting shortcut — "the forbidden string appears nowhere in the source, so the test is spent" — is
+**wrong**, and it yields confident false positives. A forbid-forever guardrail also has zero
+occurrences; that absence is the guard succeeding, not the test expiring. `TLS13_1_3_2025_09`,
+`arn:aws:s3:::*`, and an `AwsSolutions-EKS1` suppression each appear nowhere precisely because a test
+forbids them. Judge by whether the construct is re-writable, never by counting occurrences.
+:::
+
+Scanning source is not the signal either: `backend/tests/common/test_userid_identity_normalization.py`
+walks the handler tree and fails on a route that does not normalize, which must keep holding forever.
 
 ---
 
 ## 🧰 **Development Commands**
 
-### **Frontend**
-
 ```bash
-cd web && npm install           # Install dependencies
-cd web && npm run start         # Dev server
-cd web && npm run build         # Production build
+# Frontend (web/)
+cd web && npm install
+cd web && npm run start                                    # Dev server
+cd web && npm run build                                    # Production build
+
+# Backend (backend/)
+cd backend && python -m pytest                             # All tests
+cd backend && python -m pytest tests/handlers/assets/ -v   # Specific handler tests
+
+# CDK (infra/)
+cd infra && npm install
+cd infra && npx cdk synth                                  # Synthesize CloudFormation
+cd infra && npx cdk diff                                   # Preview changes
+cd infra && npx cdk deploy --all --require-approval never  # Deploy to dev
+
+# CLI (tools/VamsCLI/)
+cd tools/VamsCLI && pip install -e .                       # Install in dev mode
+cd tools/VamsCLI && python -m pytest                       # Run CLI tests
+
+# MCP server (tools/VamsMCP/) — requires vamscli installed in the same environment
+cd tools/VamsMCP && pip install -e ../VamsCLI && pip install -e '.[dev]'
+cd tools/VamsMCP && python -m pytest                       # Run MCP tests (no live deployment needed)
+
+# Project-wide (run from repo root — targets web/src, infra/lib, infra/bin, infra/test)
+npm run lint
+npm run lint-fix
+npm run prettier-check
+npm run prettier-fix
 ```
 
-### **Backend**
-
-```bash
-cd backend && python -m pytest                              # All tests
-cd backend && python -m pytest tests/handlers/assets/ -v    # Specific handler tests
-```
-
-### **CDK Infrastructure**
-
-```bash
-cd infra && npm install         # Install dependencies
-cd infra && npx cdk synth       # Synthesize CloudFormation
-cd infra && npx cdk diff        # Preview changes
-cd infra && npx cdk deploy --all --require-approval never  # Deploy to dev environment
-```
-
-### **CLI**
-
-```bash
-cd tools/VamsCLI && pip install -e .    # Install in dev mode
-cd tools/VamsCLI && python -m pytest    # Run CLI tests
-```
-
-### **Project-Wide (run from repo root)**
-
-```bash
-npm run lint                    # Lint check (web/src + infra/lib + infra/bin + infra/test)
-npm run lint-fix                # Auto-fix lint issues
-npm run prettier-check          # Check formatting
-npm run prettier-fix            # Auto-fix formatting
-```
-
-> **Always run lint and prettier from the project root directory.** The root `package.json` scripts target `web/src`, `infra/lib`, `infra/bin`, and `infra/test` paths. Do not run these from individual subdirectories.
+> **Always run lint and prettier from the project root directory** — the root `package.json` scripts target the correct paths. Do not run these from subdirectories.
 
 ---
 
@@ -454,6 +499,7 @@ When implementing new features, follow the patterns in these files:
 | Lambda builder      | `infra/lib/lambdaBuilder/assetFunctions.ts`                  | Env vars, permissions, VPC config, KMS, CDK Nag                |
 | CDK nested stack    | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Route attachment, function integration, API Gateway setup      |
 | CLI command         | `tools/VamsCLI/vamscli/commands/roleUserConstraints.py`      | Click decorators, profile support, JSON output, error handling |
+| MCP tool            | `tools/VamsMCP/vams_mcp/server.py`                           | Tool decorators, gated write/destructive sections, pagination  |
 | API service         | `web/src/services/APIService.ts`                             | apiClient calls, request/response patterns                     |
 | Pipeline model      | `backend/backend/models/pipelines.py`                        | Pipeline Pydantic models, execution type enum, validation      |
 | Workflow model      | `backend/backend/models/workflows.py`                        | Workflow Pydantic models, Step Functions ASL generation        |
@@ -463,92 +509,56 @@ When implementing new features, follow the patterns in these files:
 
 ## 🔀 **Git Workflow**
 
--   **Branch naming**: `release/X.Y.Z` for releases, `feature/description` for features
--   **Current branch**: `release/2.X.0` based on version in (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)
--   **Main branch**: `main`
+-   **Branch naming**: `release/X.Y.Z` for releases, `feature/description` for features. Main branch is `main`.
+-   **Current branch**: `release/2.X.0` based on version in `infra/config/config.ts` and `tools/VamsCLI/vamscli/version.py`
 -   **Changelog format**: `standard-version` format in `CHANGELOG.md`
--   **Commit style**: Descriptive imperative mood ("Fix bugs", "Add cognito user management")
+-   **Commit style**: descriptive imperative mood ("Fix bugs", "Add cognito user management")
 
 ---
 
 ## 🔌 **Available Claude Code Skills**
 
-| Skill                    | Description                                                   |
-| ------------------------ | ------------------------------------------------------------- |
-| `/generate-permissions`  | Generate VAMS permission constraint JSON templates            |
-| `/add-api-endpoint`      | Scaffold a new backend API endpoint across all required files |
-| `/add-pipeline`          | Scaffold a new processing pipeline                            |
-| `/update-changelog`      | Generate changelog entries from git commits                   |
-| `/deploy-check`          | Pre-deployment validation checklist                           |
-| `/refresh-steering-docs` | Update CLAUDE.md directory structures and key file references |
-| `/update-docs`           | Update documentation pages based on recent code changes       |
-| `/verify-docs`           | Cross-check documentation accuracy against source code        |
+| Skill                    | Description                                                                                                                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/generate-permissions`  | Generate VAMS permission constraint JSON templates                                                                                                                                                       |
+| `/add-api-endpoint`      | Scaffold a new backend API endpoint across all required files                                                                                                                                            |
+| `/add-pipeline`          | Scaffold a new processing pipeline                                                                                                                                                                       |
+| `/update-changelog`      | Generate changelog entries from git commits                                                                                                                                                              |
+| `/deploy-check`          | Pre-deployment validation checklist                                                                                                                                                                      |
+| `/refresh-steering-docs` | Update CLAUDE.md directory structures and key file references                                                                                                                                            |
+| `/update-docs`           | Update documentation pages based on recent code changes                                                                                                                                                  |
+| `/verify-docs`           | Cross-check documentation accuracy against source code                                                                                                                                                   |
+| `/vams-agent`            | Operate a live VAMS deployment at runtime via `vamscli` (search, inspect, bulk-update, cross-link); self-discovers commands, read-only by default. Canonical definition: `tools/VamsAgentSkill/SKILL.md` |
 
 ---
 
 ## 📚 **Supplementary Documentation**
 
-For deep-dive workflows, see the detailed guides in `.clinerules/workflows/`:
+Deep-dive workflow guides in `.kiro/steering/`:
 
-| Document                                                    | Covers                                                                                  |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `.clinerules/workflows/CDK_DEVELOPMENT_WORKFLOW.md`         | CDK nested stacks, constructs, lambda builders, security patterns, pipeline development |
-| `.clinerules/workflows/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` | End-to-end API endpoint development across backend + CDK                                |
-| `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md`         | CLI commands, decorators, testing, profile support, JSON output                         |
+-   `CDK_DEVELOPMENT_WORKFLOW.md` — CDK nested stacks, constructs, lambda builders, security patterns, pipeline development
+-   `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md` — End-to-end API endpoint development across backend + CDK
+-   `CLI_DEVELOPMENT_WORKFLOW.md` — CLI commands, decorators, testing, profile support, JSON output
 
-For user-facing documentation:
+User-facing docs:
 
-| Document                                                                   | Covers                                                 |
-| -------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `documentation/docusaurus-site/docs/concepts/permissions-model.md`         | Permission system concepts and ABAC/RBAC configuration |
-| `documentation/docusaurus-site/docs/deployment/configuration-reference.md` | CDK deployment configuration reference                 |
-| `documentation/docusaurus-site/docs/developer/setup.md`                    | Development environment setup and patterns             |
-| `documentation/VAMS_API.yaml`                                              | OpenAPI specification for all endpoints                |
+-   `documentation/docusaurus-site/docs/concepts/permissions-model.md` — permissions concepts and ABAC/RBAC configuration
+-   `documentation/docusaurus-site/docs/deployment/configuration-reference.md` — CDK deployment configuration reference
+-   `documentation/docusaurus-site/docs/developer/setup.md` — development environment setup and patterns
+-   `documentation/VAMS_API.yaml` — OpenAPI specification for all endpoints
 
 ---
 
 ## 🔧 **Technology Stack Quick Reference**
 
-### **Frontend (`web/`)**
+Runtime versions are in the Project Overview version table.
 
-| Technology               | Usage                                                            |
-| ------------------------ | ---------------------------------------------------------------- |
-| React 17.0.2             | UI framework                                                     |
-| Cloudscape Design System | AWS UI component library                                         |
-| AWS Amplify v6           | Auth integration                                                 |
-| Custom apiClient         | Fetch-based API client with auto auth headers                    |
-| HashRouter               | Client-side routing                                              |
-| TypeScript               | All source `.tsx`/`.ts` (only `__mocks__/*.js` remain as JS)     |
-| Viewer plugins (17)      | Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, etc. |
-
-### **Backend (`backend/`)**
-
-| Technology            | Usage                                 |
-| --------------------- | ------------------------------------- |
-| Python 3.12           | Lambda runtime                        |
-| Pydantic 1.10.7       | Request/response validation (v1 only) |
-| Casbin                | ABAC/RBAC authorization engine        |
-| boto3                 | AWS SDK                               |
-| AWS Lambda Powertools | Logging, tracing                      |
-
-### **Infrastructure (`infra/`)**
-
-| Technology               | Usage                         |
-| ------------------------ | ----------------------------- |
-| AWS CDK (TypeScript)     | Infrastructure as code        |
-| 10 nested stacks         | Modular resource organization |
-| CDK Nag                  | Security compliance checks    |
-| API Gateway V2 HttpApi   | REST API layer                |
-| Custom Lambda Authorizer | Unified JWT + IP auth         |
-
-### **CLI (`tools/VamsCLI/`)**
-
-| Technology      | Usage                           |
-| --------------- | ------------------------------- |
-| Python 3.13+    | CLI runtime                     |
-| Click           | Command framework               |
-| Profiles        | Multi-environment configuration |
-| `--json-output` | Machine-readable output mode    |
+-   **Frontend (`web/`)**: Cloudscape Design System, AWS Amplify v6 (auth), custom fetch-based `apiClient` (auto auth headers), HashRouter, TypeScript throughout (`__mocks__/*.js` remain JS). Viewer plugins: Three.js, Needle Engine, Potree, Gaussian Splat, GLTF, USD, IFC/BIM.
+-   **Backend (`backend/`)**: Casbin ABAC/RBAC, boto3, AWS Lambda Powertools (logging, tracing). Pydantic v1 only.
+-   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 14 nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
+-   **CLI (`tools/VamsCLI/`)**: Click command framework, profile-based multi-environment config, `--json-output` for machine-readable output.
+-   **MCP server (`tools/VamsMCP/`)**: Model Context Protocol server (`mcp` SDK) exposing the VAMS API as agent tools over stdio. Stores no credentials — reuses the `vamscli` profile and `APIClient`. Write and destructive tools are gated off by default via `VAMS_ENABLE_WRITES` / `VAMS_ENABLE_DESTRUCTIVE`.
+-   **Agent skill (`tools/VamsAgentSkill/`)**: Portable skill for operating a live deployment through `vamscli`; self-discovers commands, read-only by default. Surfaced in Claude Code as `/vams-agent`.
 
 ---
 
@@ -556,20 +566,9 @@ For user-facing documentation:
 
 ### **Environment Variables (Backend)**
 
-All Lambda handlers receive these common environment variables from CDK lambda builders:
+Non-pipeline handlers receive `VAMS_RESOURCE_PARAM_PREFIX` (SSM prefix, e.g. `/{config.name}-{baseStackName}/resourceNames`) and resolve DynamoDB table names, auxiliary/artefacts bucket names, and audit log group names from SSM using `get_table_name`, `get_bucket_name`, `get_log_group_name` in `backend.common.resourceNames` (60-minute in-module cache; legacy env vars provide a break-glass path). **Pipeline Lambdas** in `backendPipelines/` are excluded from SSM resolution and continue to use legacy table-name env vars.
 
-```
-ASSET_STORAGE_TABLE_NAME          # DynamoDB: asset storage
-DATABASE_STORAGE_TABLE_NAME       # DynamoDB: database storage
-AUTH_TABLE_NAME                   # DynamoDB: auth entities
-CONSTRAINTS_TABLE_NAME            # DynamoDB: permission constraints
-USER_ROLES_TABLE_NAME             # DynamoDB: user-role mappings
-ROLES_TABLE_NAME                  # DynamoDB: role definitions
-S3_ASSET_AUXILIARY_BUCKET          # S3: auxiliary/staging bucket
-PRESIGNED_URL_TIMEOUT_SECONDS     # S3 presigned URL TTL
-```
-
-Domain-specific handlers receive additional env vars for their resources.
+All handlers additionally receive `AWS_REGION` (set by the Lambda runtime). `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** global — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the asset handlers that mint presigned URLs, and those handlers read it as `os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]` with no default. A new handler that needs it must set it in its own builder; copying the `os.environ[...]` idiom into a Lambda whose builder does not set it raises `KeyError` at module import, so every request 500s on cold start and CDK synth, lint, and env-patching unit tests all pass. The API Gateway authorizer Lambda also receives `COGNITO_AUTH_ENABLED` — the authorizer resolves the user's MFA status and passes it to handlers as the `vams:mfaEnabled` authorizer context value, so handler Lambdas make no Cognito calls. The authorizer likewise resolves the caller's roles from the user roles table (60-second per-user cache) and passes them as `vams:roles`, so roles are present for every auth mode — Cognito, external OAuth IDP, and API keys — and a role change takes effect without re-issuing a token. The Cognito pre-token-generation triggers populate only `vams:tokens` and `email`. Domain-specific handlers receive additional env vars for their resources (e.g. `SEND_EMAIL_FUNCTION_NAME` for notification handlers).
 
 ### **DynamoDB Access Pattern**
 
@@ -589,13 +588,13 @@ VAMS uses single-table design with composite keys. Common patterns:
 
 ## 🛡️ **Security Considerations**
 
-1. **All S3 buckets require TLS** -- enforced by bucket policy (deny `aws:SecureTransport=false`)
-2. **KMS encryption everywhere** -- DynamoDB, S3, SNS, all use shared KMS key
-3. **IAM least privilege** -- Lambda roles get only the permissions they need
-4. **CSP headers** -- Content Security Policy generated dynamically based on config
-5. **IP range restrictions** -- Optional IP-based access control via custom authorizer
-6. **No secrets in code** -- Use SSM parameters or Secrets Manager
-7. **CDK Nag enforcement** -- All stacks checked against AWS Solutions rules
+-   **S3 TLS enforced** — bucket policy denies `aws:SecureTransport=false`
+-   **KMS encryption everywhere** — DynamoDB, S3, SNS all use the shared KMS key
+-   **IAM least privilege** — Lambda roles get only the permissions they need
+-   **CSP headers** — dynamically generated from config
+-   **IP range restrictions** — optional, via the custom authorizer
+-   **No secrets in code** — use SSM parameters or Secrets Manager
+-   **CDK Nag enforcement** — all stacks checked against AWS Solutions rules
 
 ---
 
@@ -604,49 +603,34 @@ VAMS uses single-table design with composite keys. Common patterns:
 ### **Adding a New Feature Switch**
 
 1. Define constant in `infra/common/vamsAppFeatures.ts`
-2. Add config option in `infra/config/config.ts` ConfigPublic interface
-3. Add validation in `getConfig()` function
+2. Add config option in `infra/config/config.ts` `ConfigPublic` interface
+3. Add validation in `getConfig()`
 4. Push to `enabledFeatures` array in `infra/lib/core-stack.ts`
-5. Read in frontend from `/api/secure-config` response
-6. Gate UI components with feature check
+5. Read in frontend from `/api/secure-config` response and gate UI with a feature check
+6. Mirror the new option into the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/` — see its `README.md` for which files to touch: `schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm `infra/test/config/configBuilderSync.test.ts` passes. The sync test covers only `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts` or `derived.ts`, so when `getConfig()` validation logic changes you must hand-port the matching rule into `validation.ts`, and when `getConfig()` adds, changes, or **removes** an auto-mutation (an assignment that rewrites the operator's config, including any feature list that implies such a state) you must mirror that in `derived.ts`. Both rely on review, not the test, to stay in sync. A removed `getConfig()` auto-mutation left in `derived.ts` makes the builder keep rewriting the downloaded `config.json`.
 
 ### **Adding a New DynamoDB Table**
 
-1. Create table in `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`
-2. Export via `storageResources` interface
-3. Pass table name as env var in lambda builder
-4. Grant permissions (`grantReadData`, `grantReadWriteData`) in lambda builder
-5. Read table name from `os.environ` in backend handler
+1. Create table in `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` and export via `storageResources`
+2. Add constant to `ResourceKeys` in `backend/backend/common/resourceNames.py`
+3. Add matching entry to `RESOURCE_PARAM_KEYS.dynamoTables` in `infra/common/resourceParamKeys.ts`
+4. Add matching constant to `ResourceParamKeys` in `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (migration scripts resolve names from these SSM parameters)
+5. Register descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`
+6. Grant permissions (`grantReadData`, `grantReadWriteData`) in the lambda builder
+7. Resolve table name using `get_table_name(ResourceKeys.*)` at module level in the handler
+
+The same three-way constants update applies to new audit CloudWatch log groups. Deprecated tables retained for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 
 ### **Adding a New Viewer Plugin**
 
-1. Create viewer component in `web/src/components/viewers/`
-2. Register in viewer factory/registry
-3. Add file extension mapping
-4. Add any required npm dependencies to `web/package.json`
-5. If viewer needs `unsafe-eval`, check `allowUnsafeEvalFeatures` config
+1. Create viewer component in `web/src/components/viewers/` and register in the viewer factory/registry
+2. Add the file extension mapping
+3. Add any required npm dependencies to `web/package.json`
+4. If the viewer needs `unsafe-eval`, check `allowUnsafeEvalFeatures` config
 
 ### **Adding a New Processing Pipeline**
 
-1. Create directory under `backendPipelines/{useCase}/`
-2. Add Lambda handler in `lambda/` subdirectory. **Every pipeline `lambda/` directory MUST include:**
-    - `__init__.py` (package marker)
-    - `customLogging/__init__.py` (package marker)
-    - `customLogging/logger.py` (copy from any existing pipeline, e.g., `backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py`)
-      Without these files, Lambda will fail at import time with `No module named 'customLogging'`. The Lambda layer provides a fallback, but the local `customLogging/` package is required in each pipeline's code asset.
-3. Add container if needed in `container/` subdirectory
-4. Create CDK nested stack in `infra/lib/nestedStacks/pipelines/`
-5. Add pipeline config to `config.ts` under `pipelines` section
-6. Register in pipeline builder nested stack
-7. Add feature switch if pipeline is optional
-8. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** of these condition blocks in the VPC builder (search for `useSplatToolbox` to find them all):
-    - **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. Without this, the VPC has no private subnets and Batch compute environments will fail with "Resource subnets are required".
-    - **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints. Without this, Batch jobs cannot pull container images.
-    - **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable that controls whether the ECS VPC endpoint includes private subnets. Without this, the ECS agent on Batch instances cannot communicate with the ECS service.
-9. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
-10. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
-11. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.
-12. **Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`** with all new pipeline configuration options (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, and any pipeline-specific settings). Follow the existing format: `-   \`app.pipelines.{pipelineName}.{option}\` | default: {value} | #{description}`.
+See `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" for the authoritative checklist, S3 output-path conventions, and `assetId` threading pattern; `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Pipeline Nested Stack Pattern" covers the CDK side. In summary: create `backendPipelines/{useCase}/lambda/` (with the required `customLogging/` package) and optional `container/`, author the `vamsSchema/` bundle, add a CDK nested stack under `infra/lib/nestedStacks/pipelines/`, wire config into `config.ts`, register in the pipeline builder, add a feature switch if optional, and — for Batch/ECS/Fargate pipelines — add the flag to all three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Pass through all output paths in `vamsExecute`, use the correct output path in `constructPipeline`, preserve relative paths in container output, update `documentation/docusaurus-site/docs/deployment/configuration-reference.md` and the license entries in `NOTICE.md` + `documentation/docusaurus-site/docs/additional/notices.md`, and add the pipeline to this document's pipeline list and directory tree (Rule 11).
 
 ---
 
@@ -687,16 +671,23 @@ import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
 All backend handlers must return API Gateway-compatible responses:
 
 ```python
-# ✅ CORRECT - Consistent response format
 return {
     "statusCode": 200,
     "headers": {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*"
+        "Access-Control-Allow-Origin": "*",
     },
-    "body": json.dumps({"message": "Success", "data": result})
+    "body": json.dumps({"message": "Success", "data": result}),
 }
 ```
+
+### **Comment & Documentation Style (Match Surrounding Code)**
+
+Comments and documentation must be **commensurate with the surrounding material** — match the detail, density, and tone of the file you are editing.
+
+-   **Code comments**: Match the comment density and style already present. CDK stacks, for example, use brief single-line `//` notes and short `/** ... */` section headers. Describe **what** a piece of code is, not why it was added.
+-   **No changelog/process narration in code**: Never reference "upgrades", "new in vX", "added for", migrations, or the change request that prompted the edit. Comments should read as if the code had always been there — changelog narration belongs in `CHANGELOG.md`.
+-   **Documentation prose**: Match the concise, descriptive AWS-doc style of the page being edited (see `documentation/CLAUDE.md`). Describe how the system behaves. Do not introduce "requirement"/"must" checklists where the surrounding page uses descriptive prose, and do not reference "upgrades" unless the page is an upgrade/migration guide.
 
 ---
 
@@ -706,9 +697,10 @@ return {
 2. **Importing Pydantic v2 APIs** (`model_validator`, `ConfigDict`) -- use v1
 3. **Skipping Tier 2 auth checks** in backend handlers -- both tiers required
 4. **Using BrowserRouter** in frontend -- must use HashRouter
-5. **Hardcoding DynamoDB table names** -- always use env vars
+5. **Hardcoding DynamoDB table names** -- always resolve via `common.resourceNames`
 6. **Creating Lambda without CDK Nag suppression review** -- all resources must pass checks
 7. **Adding API routes without corresponding handler** -- causes 500 errors
 8. **Deploying features without feature switches** -- breaks conditional deployment
 9. **Using `HttpUserPoolAuthorizer`** -- must use custom Lambda authorizer
 10. **Skipping config validation in `getConfig()`** -- leads to silent deployment failures
+11. **Over-documenting or narrating changes in comments** -- match surrounding comment density; never reference "upgrades", "new in vX", or the prompting change request in source comments (see Comment & Documentation Style)

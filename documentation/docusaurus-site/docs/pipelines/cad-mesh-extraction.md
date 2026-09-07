@@ -7,23 +7,19 @@ The CAD/Mesh Metadata Extraction pipeline automatically extracts comprehensive m
 ### CAD Formats
 
 | Format | Extension       | Handler                 | Key Metadata                                                                             |
-| :----- | :-------------- | :---------------------- | :--------------------------------------------------------------------------------------- |
+| ------ | --------------- | ----------------------- | ---------------------------------------------------------------------------------------- |
 | STEP   | `.step`, `.stp` | CadQuery (Open CASCADE) | Geometry dimensions, assembly hierarchy, volumes, surface areas, shape statistics, units |
 | DXF    | `.dxf`          | CadQuery                | Layer information, 2D drawing data                                                       |
 
 ### Mesh Formats
 
 | Format | Extension | Handler | Key Metadata                                               |
-| :----- | :-------- | :------ | :--------------------------------------------------------- |
+| ------ | --------- | ------- | ---------------------------------------------------------- |
 | STL    | `.stl`    | Trimesh | Triangle count, vertex count, bounding box, model size     |
 | OBJ    | `.obj`    | Trimesh | Polygon count, vertex count, texture references, materials |
 | PLY    | `.ply`    | Trimesh | Vertex count, vertex colors, normals                       |
 | GLTF   | `.gltf`   | Trimesh | Shader info, animation data, texture references            |
 | GLB    | `.glb`    | Trimesh | Shader info, animation data, embedded textures             |
-| 3MF    | `.3mf`    | Trimesh | 3D printing metadata, units                                |
-| XAML   | `.xaml`   | Trimesh | Transform matrices, model size                             |
-| 3DXML  | `.3dxml`  | Trimesh | Dassault-specific metadata                                 |
-| DAE    | `.dae`    | Trimesh | Animation data, materials, scene hierarchy                 |
 | XYZ    | `.xyz`    | Trimesh | Point count, bounding box                                  |
 
 ## Architecture
@@ -71,7 +67,7 @@ This pipeline uses the **Lambda** execution type with synchronous invocation. Li
 ### CAD Files (STEP, DXF)
 
 | Category           | Fields                                                   |
-| :----------------- | :------------------------------------------------------- |
+| ------------------ | -------------------------------------------------------- |
 | Geometric details  | Dimensions (length, width, height), volume, surface area |
 | Assembly hierarchy | Component tree, relationships between parts              |
 | Materials          | Material names and properties (if embedded in the file)  |
@@ -82,7 +78,7 @@ This pipeline uses the **Lambda** execution type with synchronous invocation. Li
 ### Mesh Files (STL, OBJ, PLY, GLB, etc.)
 
 | Category        | Fields                                       |
-| :-------------- | :------------------------------------------- |
+| --------------- | -------------------------------------------- |
 | Geometry        | Triangle count, vertex count, polygon count  |
 | Bounding box    | Dimensions (X, Y, Z extents), model size     |
 | Textures        | Embedded or referenced texture information   |
@@ -112,7 +108,7 @@ Enable this pipeline in `infra/config/config.json`:
 ### Configuration Options
 
 | Option                                | Default | Description                                                                       |
-| :------------------------------------ | :------ | :-------------------------------------------------------------------------------- |
+| ------------------------------------- | ------- | --------------------------------------------------------------------------------- |
 | `enabled`                             | `false` | Deploy the metadata extraction pipeline infrastructure.                           |
 | `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow during CDK deployment.           |
 | `autoRegisterAutoTriggerOnFileUpload` | `true`  | Automatically trigger the pipeline when supported CAD or mesh files are uploaded. |
@@ -144,7 +140,7 @@ The pipeline produces file-level attribute files in the following JSON structure
 }
 ```
 
-The attribute file is uploaded to the metadata output path with the naming pattern `<original_filename>.attribute.json`. The VAMS workflow's process-output step reads this file and writes the attributes to the VAMS metadata system, making them searchable and visible in the web interface.
+The attribute file is uploaded to the metadata output path with the naming pattern `<asset_relative_path>.attribute.json`, so a file in a subdirectory of the asset keeps that subdirectory in its attribute file's path. The VAMS workflow's process-output step reads this file and writes the values as file attributes, making them searchable and visible in the web interface.
 
 ## Prerequisites
 
@@ -165,7 +161,7 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 ## Infrastructure Components
 
 | Resource                      | Service            | Purpose                            |
-| :---------------------------- | :----------------- | :--------------------------------- |
+| ----------------------------- | ------------------ | ---------------------------------- |
 | Container Lambda Function     | AWS Lambda         | Metadata extraction execution      |
 | Container Image               | Amazon ECR         | CadQuery + Trimesh container image |
 | Step Functions State Machine  | AWS Step Functions | Workflow orchestration             |
@@ -174,11 +170,22 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 ## Limitations
 
 | Constraint           | Details                                                                         |
-| :------------------- | :------------------------------------------------------------------------------ |
-| Maximum file size    | Limited by Lambda container `/tmp` storage (10 GB)                              |
+| -------------------- | ------------------------------------------------------------------------------- |
+| Maximum file size    | Bounded by function memory, not by disk -- see the note below                   |
 | Execution timeout    | 15 minutes (Lambda maximum)                                                     |
 | Read-only extraction | The pipeline reads metadata but does not modify the source file                 |
 | Format fidelity      | Metadata depth varies by format; some formats embed richer metadata than others |
+
+Two AWS Lambda quotas bound the largest file the pipeline can read:
+
+| Bound             | Value                                                                              | What it holds                                                        |
+| ----------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Function memory   | `LAMBDA_MEMORY_SIZE` (`infra/config/config.ts`)                                    | The whole model, parsed by the format handler                        |
+| Ephemeral storage | `CONVERSION_EPHEMERAL_STORAGE` (`conversionMeshCadMetadataExtractionFunctions.ts`) | The downloaded input and the small `metadata.json` written beside it |
+
+:::note[Memory is the binding constraint, not disk]
+Each format handler parses the whole file into memory, so the practical ceiling comes from the configured function memory. The ephemeral storage budget only has to be large enough that disk is not the limit reached first -- raising it past the memory bound moves where the failure happens rather than raising the supported file size.
+:::
 
 ## Related Resources
 

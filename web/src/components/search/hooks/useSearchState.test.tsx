@@ -1,0 +1,134 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// renderHook comes from @testing-library/react itself (v13+). The separate
+// @testing-library/react-hooks package is deprecated and does not support React 18.
+import { renderHook, act } from "@testing-library/react";
+import { useSearchState } from "./useSearchState";
+// The identity is built with the production helper, so the test cannot drift from the separator
+// the reducer actually uses (and carries no raw control byte of its own).
+import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
+
+const fileA = {
+    filename: "a.glb",
+    key: "x/a.glb",
+    isDirectory: false,
+    assetId: "x",
+    databaseId: "d",
+};
+const fileB = {
+    filename: "b.png",
+    key: "x/b.png",
+    isDirectory: false,
+    assetId: "x",
+    databaseId: "d",
+};
+
+describe("useSearchState viewer-selection slice", () => {
+    it("starts not in viewer-select mode with an empty selection", () => {
+        const { result } = renderHook(() => useSearchState());
+        expect(result.current.viewerSelectMode).toBe(false);
+        expect(result.current.viewerSelection).toEqual([]);
+    });
+
+    it("enters/exits mode and exit clears the selection", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.enterViewerSelectMode());
+        expect(result.current.viewerSelectMode).toBe(true);
+        act(() => result.current.addToViewerSelection([fileA as any]));
+        expect(result.current.viewerSelection).toHaveLength(1);
+        act(() => result.current.exitViewerSelectMode());
+        expect(result.current.viewerSelectMode).toBe(false);
+        expect(result.current.viewerSelection).toEqual([]);
+    });
+
+    it("dedups additions by key", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.addToViewerSelection([fileA as any, fileB as any]));
+        act(() => result.current.addToViewerSelection([fileA as any])); // duplicate
+        expect(result.current.viewerSelection.map((f) => f.key)).toEqual(["x/a.glb", "x/b.png"]);
+    });
+
+    it("PERSISTS the viewer selection across a new search result (setResult)", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.addToViewerSelection([fileA as any]));
+        act(() => result.current.setResult({ hits: { hits: [], total: { value: 0 } } } as any));
+        // selectedItems is cleared by SET_RESULT, but viewerSelection must survive:
+        expect(result.current.selectedItems).toEqual([]);
+        expect(result.current.viewerSelection.map((f) => f.key)).toEqual(["x/a.glb"]);
+    });
+
+    it("clearViewerSelection empties the running set but stays in mode", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.enterViewerSelectMode());
+        act(() => result.current.addToViewerSelection([fileA as any]));
+        act(() => result.current.clearViewerSelection());
+        expect(result.current.viewerSelection).toEqual([]);
+        expect(result.current.viewerSelectMode).toBe(true);
+    });
+});
+
+// A file is identified by database + asset + key. The same asset-relative path exists in many assets,
+// so two selected files can share a key while being different files — the reported symptom was that
+// selecting the second one appeared to do nothing.
+describe("useSearchState viewer-selection file identity", () => {
+    const sameKeyOtherAsset = {
+        filename: "a.glb",
+        key: "x/a.glb",
+        isDirectory: false,
+        assetId: "OTHER_ASSET",
+        databaseId: "d",
+    };
+    const sameKeyOtherDatabase = {
+        filename: "a.glb",
+        key: "x/a.glb",
+        isDirectory: false,
+        assetId: "x",
+        databaseId: "OTHER_DB",
+    };
+    const identify = (f: any) => `${f.databaseId}/${f.assetId}/${f.key}`;
+
+    it("keeps both when adding the same key from two different assets", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.addToViewerSelection([fileA as any]));
+        act(() => result.current.addToViewerSelection([sameKeyOtherAsset as any]));
+
+        expect(result.current.viewerSelection.map(identify)).toEqual([
+            "d/x/x/a.glb",
+            "d/OTHER_ASSET/x/a.glb",
+        ]);
+    });
+
+    it("keeps both when adding the same key and asset from two different databases", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.addToViewerSelection([fileA as any]));
+        act(() => result.current.addToViewerSelection([sameKeyOtherDatabase as any]));
+
+        expect(result.current.viewerSelection).toHaveLength(2);
+    });
+
+    it("still dedups a genuinely identical file", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.addToViewerSelection([fileA as any]));
+        act(() => result.current.addToViewerSelection([{ ...fileA } as any]));
+
+        expect(result.current.viewerSelection).toHaveLength(1);
+    });
+
+    it("setViewerSelection keeps same-key files from different assets", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.setViewerSelection([fileA as any, sameKeyOtherAsset as any]));
+
+        expect(result.current.viewerSelection).toHaveLength(2);
+    });
+
+    it("removeFromViewerSelection removes only the identified file", () => {
+        const { result } = renderHook(() => useSearchState());
+        act(() => result.current.setViewerSelection([fileA as any, sameKeyOtherAsset as any]));
+        act(() => result.current.removeFromViewerSelection(fileIdentity(fileA as any)));
+
+        expect(result.current.viewerSelection.map(identify)).toEqual(["d/OTHER_ASSET/x/a.glb"]);
+    });
+});

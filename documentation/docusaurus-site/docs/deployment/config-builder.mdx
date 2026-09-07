@@ -1,0 +1,39 @@
+---
+sidebar_position: 5
+title: Configuration builder
+---
+
+import ConfigBuilder from "@site/src/components/ConfigBuilder";
+
+# Configuration builder
+
+This interactive builder helps you assemble a valid VAMS deployment configuration
+(`infra/config/config.json`) without hand-editing deeply nested JSON. Pick a
+starting template, fill in the fields you need, and download the result.
+
+:::info[How to use]
+
+1. Choose a **starting template** — **Commercial**, **GovCloud**, or **EU Sovereign Cloud** —
+   to preset the common values for that deployment mode.
+2. Work through the sections. **Deployment basics** are shown first; less common
+   options live under each section's **Show advanced options** toggle.
+3. Watch the validation panel on the right. It mirrors the same cross-field checks
+   that `getConfig()` enforces at deploy time (for example, GovCloud requires ALB
+   instead of CloudFront, and external OAuth requires all of its fields).
+4. **Download `config.json`** (or copy it) and place it at `infra/config/config.json`.
+
+This builder is a helper, not a gate — you can download a partially-complete
+config to keep editing. Always run `cd infra && npx cdk synth` before deploying to
+confirm the final configuration.
+
+:::
+
+:::note[Field reference]
+
+For the authoritative description, type, and default of every field, see the
+[Configuration reference](configuration-reference.md). The builder mirrors that
+reference and the `ConfigPublic` interface in `infra/config/config.ts`.
+
+:::
+
+<ConfigBuilder />

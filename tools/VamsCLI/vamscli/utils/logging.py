@@ -1,6 +1,8 @@
 """Centralized logging utility for VamsCLI with file logging and verbose mode support."""
 
 import logging
+import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -14,6 +16,166 @@ from ..constants import (
     LOG_DIR_NAME, LOG_FILE_NAME, LOG_MAX_BYTES, LOG_BACKUP_COUNT,
     LOG_FORMAT, LOG_DATE_FORMAT, get_config_dir
 )
+
+
+REDACTED = '***REDACTED***'
+
+# Key fragments that mark a value as a credential. Compared against the key with separators
+# stripped and lowercased, so `refresh_token`, `refreshToken`, and `REFRESH-TOKEN` all match
+# `token`.
+#
+# Deliberately NOT the bare word "key": this CLI logs S3 object keys constantly (`s3Key`,
+# `objectKey`, `keyName`, `bucketExistingKey`), and redacting those would make the log useless for
+# the debugging it exists for. Credential-bearing key names are spelled out instead.
+_SENSITIVE_KEY_FRAGMENTS = (
+    'password',
+    'passwd',
+    'secret',
+    'token',          # access_token, refresh_token, id_token, token_override, idToken
+    'credential',
+    'apikey',         # apiKey, api_key, apiKeyValue
+    'authorization',
+    'signature',
+    'privatekey',
+    'cookie',
+)
+
+# Value-level backstop for credentials that arrive without a helpful key — for example when a
+# response has already been rendered to a string before it reaches a log call. Matches the shapes
+# VAMS actually issues rather than attempting to detect secrets generally.
+_SENSITIVE_VALUE_PATTERNS = (
+    re.compile(r'vams_[A-Za-z0-9_\-]{16,}'),                                  # VAMS API key
+    re.compile(r'eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+'),  # JWT (Cognito/OIDC)
+    re.compile(r'(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}'),                       # Bearer header value
+    re.compile(r'(?i)(X-Amz-Signature|X-Amz-Security-Token)=[^&\s\'"]+'),     # presigned URL secrets
+)
+
+_MAX_REDACT_DEPTH = 12
+
+# A key containing a sensitive fragment but ENDING in one of these describes a credential rather
+# than carrying one: `apiKeyId` and `apiKeyName` are identifiers, `tokenType` is "Bearer",
+# `credentialsSecretArn` is a pointer to a secret in Secrets Manager, `tokenCount` is a number.
+# Redacting those would cost real diagnostic value for no security gain.
+#
+# The match is on the ending, so it also covers a field added later with one of these suffixes.
+# `passwordHash` / `apiKeyHash` deliberately do NOT match and stay redacted — a hash is still
+# credential-derived material.
+_DESCRIPTOR_SUFFIXES = (
+    'id',
+    'ids',
+    'name',
+    'names',
+    'arn',
+    'arns',
+    'type',
+    'types',
+    'count',
+    'expiry',
+    'expiration',
+    'enabled',
+    'status',
+)
+
+# A key whose whole normalized form is one of these is a cursor into a paginated read rather than a
+# credential: the `--starting-token` / `--next-token` options carried by roughly two dozen command
+# groups, and the `startingToken` / `NextToken` they map onto in request parameters and response
+# bodies. A cursor is the one value needed to resume or to diagnose a pagination walk, so it stays in
+# the clear.
+#
+# The comparison is against the whole normalized name rather than a fragment, so `access_token`,
+# `refresh_token`, `id_token`, `token_override` and a bare `token` (`auth set-override --token`) are
+# unaffected, and a cursor spelled some other way stays redacted.
+_PAGINATION_CURSOR_KEYS = (
+    'startingtoken',
+    'nexttoken',
+)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    """True when a mapping key names a value that is itself a credential."""
+    if not isinstance(key, str):
+        return False
+    normalized = re.sub(r'[\s_\-]', '', key).lower()
+    if normalized in _PAGINATION_CURSOR_KEYS:
+        return False
+    if not any(fragment in normalized for fragment in _SENSITIVE_KEY_FRAGMENTS):
+        return False
+    # `apiKey`/`token`/`secret` on their own must stay redacted, so only treat a descriptive suffix
+    # as decisive when the key is more than the sensitive fragment itself.
+    if normalized.endswith(_DESCRIPTOR_SUFFIXES) and normalized not in _SENSITIVE_KEY_FRAGMENTS:
+        return False
+    return True
+
+
+# Names that must be redacted but carry no credential FRAGMENT: the fragment list deliberately omits
+# the bare word "key" (it is an Amazon S3 object key everywhere else in this CLI), and `authorizer`
+# names a token in the API-key payloads.
+_EXTRA_SENSITIVE_EXACT_KEYS = ('key', 'authorizer')
+
+
+def redact_mapping_for_log(mapping: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of a flat log mapping with credential-bearing entries replaced.
+
+    One predicate for every per-key log filter in this module. Each site used to keep its own exact
+    membership list (`key.lower() in ['password', 'token', 'secret', 'key']`), which missed the
+    parameter names the CLI actually declares — `new_password`, `old_password`, `token_override`,
+    `access_token` — while looking like it covered them. `_is_sensitive_key` matches on the
+    normalized fragment instead and still lets a pagination cursor and a descriptive name through.
+    """
+    safe: Dict[str, Any] = {}
+    for key, value in (mapping or {}).items():
+        if (isinstance(key, str) and key.lower() in _EXTRA_SENSITIVE_EXACT_KEYS) \
+                or _is_sensitive_key(key):
+            safe[key] = REDACTED
+        else:
+            safe[key] = redact_sensitive(value)
+    return safe
+
+
+def scrub_text(value: str) -> str:
+    """Replace credential-shaped substrings in already-rendered text."""
+    if not isinstance(value, str) or not value:
+        return value
+    for pattern in _SENSITIVE_VALUE_PATTERNS:
+        value = pattern.sub(REDACTED, value)
+    return value
+
+
+def redact_sensitive(obj: Any, _depth: int = 0) -> Any:
+    """
+    Return a copy of ``obj`` with credential values replaced by ``REDACTED``.
+
+    Redacts by key name (recursively through dicts and sequences) and additionally scrubs
+    credential-shaped substrings out of any string it passes, so a token still gets masked when it
+    arrives inside a message that was already rendered to text.
+
+    Never raises: logging must not be able to fail a command.
+    """
+    try:
+        if _depth > _MAX_REDACT_DEPTH:
+            return '***DEPTH_LIMIT***'
+        if isinstance(obj, dict):
+            return {
+                k: (REDACTED if _is_sensitive_key(k) else redact_sensitive(v, _depth + 1))
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (list, tuple, set)):
+            rendered = [redact_sensitive(v, _depth + 1) for v in obj]
+            return type(obj)(rendered) if isinstance(obj, (list, tuple)) else rendered
+        if isinstance(obj, str):
+            return scrub_text(obj)
+        return obj
+    except Exception:
+        # A redaction failure must never leak the original value, and must never break the command.
+        return '***REDACTION_ERROR***'
+
+
+def redact_to_text(obj: Any) -> str:
+    """Render ``obj`` for a log line with credentials removed."""
+    try:
+        return scrub_text(str(redact_sensitive(obj)))
+    except Exception:
+        return '***REDACTION_ERROR***'
 
 
 # Global logger instance
@@ -39,15 +201,60 @@ class ProfileContextFilter(logging.Filter):
 _context_filter = ProfileContextFilter()
 
 
+# Modes for the CLI's own on-disk artefacts. The log file carries redacted payloads but still every
+# URL, user id, profile name and error the CLI has seen, and the profile directory carries the live
+# refresh token, so both are owner-only. Shared with `utils/profile.py`.
+OWNER_ONLY_DIR_MODE = 0o700
+OWNER_ONLY_FILE_MODE = 0o600
+
+
+def restrict_path(path, mode: int):
+    """Narrow an existing path to ``mode``.
+
+    Best-effort: Windows reflects only the read-only bit, and a chmod is refused outright on some
+    mounted and network filesystems. Neither logging nor a profile write may fail a command over a
+    hardening step, so a failure is ignored.
+    """
+    try:
+        os.chmod(path, mode)
+    except Exception:
+        pass
+
+
+class _OwnerOnlyRotatingFileHandler(RotatingFileHandler):
+    """Rotating file handler whose log files stay readable only by their owner.
+
+    ``_open`` runs on the first open and again after every rollover, so the mode is reapplied to
+    each freshly created ``vamscli.log`` rather than once at startup. ``doRollover`` additionally
+    narrows the renamed backups: a rename carries the mode over on POSIX, but the CLI keeps up to
+    ``LOG_BACKUP_COUNT`` of them and the narrowing is stated for each one explicitly.
+    """
+
+    def _open(self):
+        stream = super()._open()
+        restrict_path(self.baseFilename, OWNER_ONLY_FILE_MODE)
+        return stream
+
+    def doRollover(self):
+        super().doRollover()
+        for index in range(1, (self.backupCount or 0) + 1):
+            backup = f"{self.baseFilename}.{index}"
+            if os.path.exists(backup):
+                restrict_path(backup, OWNER_ONLY_FILE_MODE)
+
+
 def get_log_dir() -> Path:
     """Get the global logs directory path."""
     return get_config_dir() / LOG_DIR_NAME
 
 
 def ensure_log_dir():
-    """Ensure the logs directory exists."""
+    """Ensure the logs directory exists and is readable only by its owner."""
     log_dir = get_log_dir()
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True, mode=OWNER_ONLY_DIR_MODE)
+    # `mode` applies only to a directory this call creates, so an already existing one — every
+    # machine that has run the CLI before — is narrowed here.
+    restrict_path(log_dir, OWNER_ONLY_DIR_MODE)
 
 
 def initialize_logging(verbose: bool = False):
@@ -77,7 +284,7 @@ def initialize_logging(verbose: bool = False):
     
     # Create rotating file handler
     log_file = get_log_dir() / LOG_FILE_NAME
-    file_handler = RotatingFileHandler(
+    file_handler = _OwnerOnlyRotatingFileHandler(
         log_file,
         maxBytes=LOG_MAX_BYTES,
         backupCount=LOG_BACKUP_COUNT,
@@ -117,13 +324,14 @@ def get_logger() -> logging.Logger:
 
 
 def _is_verbose_mode() -> bool:
-    """Check if verbose mode is enabled."""
-    global _verbose_mode
-    
-    # Also check sys.argv as fallback
-    if '--verbose' in sys.argv:
-        return True
-    
+    """Check if verbose mode is enabled.
+
+    Reads only the module global, which `initialize_logging()` sets from Click's parsed `--verbose`
+    (`main.py` registers the option and calls it on every invocation). Scanning `sys.argv` for the
+    literal instead would treat the string anywhere on the line as a request — including as an
+    option VALUE, so `vamscli search assets -q "--verbose"` turned on full request/response logging
+    — and would make any process whose argv happens to carry it verbose for its whole lifetime.
+    """
     return _verbose_mode
 
 
@@ -155,15 +363,11 @@ def log_command_start(command_name: str, args: Dict[str, Any] = None):
     logger = get_logger()
     set_context(command_name=command_name)
     
-    # Filter sensitive arguments
-    safe_args = {}
-    if args:
-        for key, value in args.items():
-            if key.lower() in ['password', 'token', 'secret', 'key', 'authorizer', 'authorization']:
-                safe_args[key] = '***REDACTED***'
-            else:
-                safe_args[key] = value
-    
+    # Filter sensitive arguments. `args` is the Click kwargs of the command, so the keys are its own
+    # option names: the shared predicate masks a credential option (`password`, `new_password`,
+    # `token_override`) and leaves a pagination cursor such as `starting_token` readable.
+    safe_args = redact_mapping_for_log(args) if args else {}
+
     logger.info(f"Command started: {command_name}")
     if safe_args:
         logger.debug(f"Command arguments: {safe_args}")
@@ -207,23 +411,20 @@ def log_api_request(method: str, url: str, headers: Dict[str, str] = None, body:
     """
     logger = get_logger()
     
-    # Filter sensitive headers
-    safe_headers = {}
-    if headers:
-        for key, value in headers.items():
-            if key.lower() in ['authorization', 'x-api-key', 'cookie']:
-                safe_headers[key] = '***REDACTED***'
-            else:
-                safe_headers[key] = value
-    
+    # Filter sensitive headers through the shared predicate: `X-Api-Key` normalizes to `apikey` and
+    # `Authorization`/`Cookie` match their own fragments, so an added credential header (say
+    # `X-Amz-Security-Token`) is covered without editing a list here.
+    safe_headers = redact_mapping_for_log(headers) if headers else {}
+
     # Enhanced logging with timestamp
     timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     logger.debug(f"[{timestamp}] API Request: {method} {url}")
     if safe_headers:
         logger.debug(f"[{timestamp}] Request headers: {safe_headers}")
     if body:
-        # Log full body to file (with truncation for very large bodies)
-        body_str = str(body)
+        # Log the request body to file with credentials removed. The log file is a rotating on-disk
+        # artifact, so a credential-shaped value in a body would persist well past the command.
+        body_str = redact_to_text(body)
         if len(body_str) > 10000:
             logger.debug(f"[{timestamp}] Request body: {body_str[:10000]}... (truncated, full length: {len(body_str)} chars)")
         else:
@@ -295,8 +496,11 @@ def log_api_response(status_code: int, response_data: Any = None, duration: floa
     logger.debug(f"[{timestamp}] API Response: {status_code}{duration_str}{performance_info}")
     
     if response_data:
-        # Log full response to file (with truncation for very large responses)
-        response_str = str(response_data)
+        # Log the response body to file with credentials removed. An `api-key create` response
+        # carries the one-time plaintext key and every upload/download response carries presigned
+        # Amazon S3 URLs, so an unredacted body would persist a live credential in a rotating
+        # on-disk artifact well past the command.
+        response_str = redact_to_text(response_data)
         if len(response_str) > 10000:
             logger.debug(f"[{timestamp}] Response body: {response_str[:10000]}... (truncated, full length: {len(response_str)} chars)")
         else:
@@ -393,13 +597,8 @@ def log_config_info(config: Dict[str, Any]):
     logger = get_logger()
     
     # Filter sensitive config values
-    safe_config = {}
-    for key, value in config.items():
-        if key.lower() in ['password', 'token', 'secret', 'key']:
-            safe_config[key] = '***REDACTED***'
-        else:
-            safe_config[key] = value
-    
+    safe_config = redact_mapping_for_log(config)
+
     logger.debug(f"Configuration: {safe_config}")
     
     if _is_verbose_mode():
@@ -516,16 +715,11 @@ def log_auth_diagnostic(auth_type: str, status: str, details: Dict[str, Any] = N
     # Log to file with full diagnostic information
     logger.info(f"[{timestamp}] Authentication: {auth_type} - {status}")
     if details:
-        # Filter sensitive information for logging
-        safe_details = {}
-        for key, value in details.items():
-            if key.lower() in ['password', 'token', 'secret', 'access_token', 'refresh_token', 'id_token']:
-                if isinstance(value, str) and len(value) > 10:
-                    safe_details[key] = f"{value[:4]}...{value[-4:]}"
-                else:
-                    safe_details[key] = '***REDACTED***'
-            else:
-                safe_details[key] = value
+        # Filter sensitive information for logging. Fully redacted rather than previewed as
+        # first-four/last-four: the widened predicate now also catches `password`-bearing names, and
+        # a preview of a password leaks more than it diagnoses. `tokenType` and `*_expiry` still
+        # survive, which is what identifies which credential was in play.
+        safe_details = redact_mapping_for_log(details)
         logger.debug(f"[{timestamp}] Auth details: {safe_details}")
     
     if error:
@@ -616,13 +810,8 @@ def log_config_diagnostic(config: Dict[str, Any], profile_name: str = None):
     timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     
     # Filter sensitive config values for logging
-    safe_config = {}
-    for key, value in config.items():
-        if key.lower() in ['password', 'token', 'secret', 'key']:
-            safe_config[key] = '***REDACTED***'
-        else:
-            safe_config[key] = value
-    
+    safe_config = redact_mapping_for_log(config)
+
     logger.debug(f"[{timestamp}] Configuration diagnostic: {safe_config}")
     
     if _is_verbose_mode():

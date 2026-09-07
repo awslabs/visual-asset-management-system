@@ -4,14 +4,16 @@ Metadata in VAMS provides a flexible, typed key-value system for attaching struc
 
 ## Entity types that support metadata
 
-Metadata can be attached to four entity types within VAMS. Each entity type has its own Amazon DynamoDB table and API endpoints, but they share a common metadata model.
+Metadata can be attached to four entity types within VAMS. Each entity type is stored separately, but they share a common metadata model.
 
-| Entity Type    | Description                                                                          | API Path                                                |
-| -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| **Database**   | Organization-level metadata attached to a database container.                        | `/database/{databaseId}/metadata`                       |
-| **Asset**      | Metadata attached to an asset within a database. Versioned alongside asset versions. | `/database/{databaseId}/assets/{assetId}/metadata`      |
-| **File**       | Metadata or attributes attached to individual files within an asset.                 | `/database/{databaseId}/assets/{assetId}/metadata/file` |
-| **Asset Link** | Metadata attached to a relationship between two assets.                              | `/asset-links/{assetLinkId}/metadata`                   |
+| Entity Type    | Description                                                                          |
+| -------------- | ------------------------------------------------------------------------------------ |
+| **Database**   | Organization-level metadata attached to a database container.                        |
+| **Asset**      | Metadata attached to an asset within a database. Versioned alongside asset versions. |
+| **File**       | Metadata or attributes attached to individual files within an asset.                 |
+| **Asset Link** | Metadata attached to a relationship between two assets.                              |
+
+Each entity type has its own set of API operations. See the [Metadata API](../api/metadata.md) reference.
 
 ## Metadata items
 
@@ -66,7 +68,7 @@ VAMS distinguishes between two kinds of data that can be attached to individual 
 File attributes only support the `string` value type. Attempting to create a file attribute with any other type will return a validation error.
 :::
 
-Both file metadata and file attributes are managed through the same API endpoint (`/database/{databaseId}/assets/{assetId}/metadata/file`), differentiated by a `type` query parameter set to `metadata` or `attribute`.
+File metadata and file attributes are managed through the same file-metadata operations, with the kind you are working on named in the request. See [File Metadata](../api/metadata.md#file-metadata) in the Metadata API reference.
 
 ## Metadata schemas
 
@@ -121,6 +123,22 @@ Schema validation is enforced when metadata is created or updated through the VA
 
 Databases can optionally restrict metadata to schema-defined fields only. When this restriction is enabled and at least one schema exists for the entity type, the API rejects metadata keys that are not defined in any applicable schema.
 
+### Required fields apply to existing records
+
+Required-field validation is evaluated against the complete metadata state of an entity, not only against the keys carried in the request. A field marked `required` therefore governs records that were written before the field was defined.
+
+When a field is added with `required: true`, or an existing field is changed from optional to required, VAMS rejects the next metadata create or update on any entity the schema covers that does not already hold a value for that field. The response reports which field is missing, for example `Schema validation failed: Required field 'projectCode' is missing`. A create or `update` operation is validated against the merged existing and incoming state, and a `replace_all` update against the submitted final state, so the rejection occurs even when the request changes only an unrelated key. A schema scoped to `GLOBAL` extends this behavior to entities in every database.
+
+Metadata editing on an affected entity resumes once the requirement is met. Three approaches achieve this:
+
+-   Supply the required field's value in the same request that carries the other metadata changes, for each affected entity.
+-   Give the schema field a `defaultMetadataFieldValue`. VAMS applies the default to any entity that has no value for the field, which satisfies the requirement without editing each record individually.
+-   Return the schema field to optional by clearing its `required` flag.
+
+:::warning[Marking an existing field required is retroactive]
+The VAMS web interface displays a warning when a schema edit changes an existing field from optional to required, naming the affected fields. A schema updated directly through the API returns no such warning and no count of the records that are now missing the field -- validate the change against the metadata already stored in the database before applying it.
+:::
+
 ## Metadata operations
 
 ### Create
@@ -142,19 +160,7 @@ Delete metadata items by specifying a list of `metadataKeys` to remove. At least
 
 ### Bulk operations
 
-All create, update, and delete operations support bulk payloads. The response includes detailed success and failure counts:
-
-```json
-{
-    "success": true,
-    "totalItems": 10,
-    "successCount": 9,
-    "failureCount": 1,
-    "successfulItems": ["key1", "key2", "..."],
-    "failedItems": [{ "key": "badKey", "error": "Validation failed" }],
-    "message": "Bulk operation completed with 1 failure(s)"
-}
-```
+All create, update, and delete operations accept bulk payloads. A bulk operation reports per-item outcomes rather than failing as a whole: the response carries the total item count, the success and failure counts, the keys that succeeded, and, for each key that failed, the reason it failed. A partial failure is therefore visible and correctable without repeating the items that succeeded. For the response fields, see [Bulk Operation Response Format](../api/metadata.md#bulk-operation-response-format).
 
 ## Record limits
 
@@ -168,14 +174,16 @@ This versioning also applies to file metadata and file attributes -- the snapsho
 
 ## Metadata in search
 
-VAMS indexes metadata into Amazon OpenSearch Service to enable full-text and filtered search. Metadata and attributes are stored as flat key-value objects with prefixed keys:
+VAMS indexes metadata into Amazon OpenSearch Service to enable full-text and filtered search. Metadata and attributes are each stored in one flat key-value object per record, under a field named for the source:
 
-| Prefix | Source                  | Example Key                                |
-| ------ | ----------------------- | ------------------------------------------ |
-| `MD_`  | Asset and file metadata | `MD_location`, `MD_classification`         |
-| `AB_`  | File attributes         | `AB_source_system`, `AB_processing_status` |
+| Field | Source                  | Indexed shape                                          |
+| ----- | ----------------------- | ------------------------------------------------------ |
+| `MD_` | Asset and file metadata | `"MD_": {"location": ..., "classification": ...}`      |
+| `AB_` | File attributes         | `"AB_": {"source_system": ..., "processing_status": ...}` |
 
-This prefix convention prevents key collisions between metadata and attributes that share the same name, and enables targeted search queries against either metadata or attributes.
+Keys are carried into those objects exactly as authored, with no prefix of their own. Keeping metadata and attributes in separate objects prevents key collisions between the two when they share a name, and lets a search target either one. Because each source occupies a single field, a deployment can introduce metadata keys freely without growing the index mapping.
+
+A search request may address a key by its bare name, so `location` and `MD_location` reach the same field. See [Search](../api/search.md) for the full set of accepted spellings.
 
 ## CSV import and export
 

@@ -25,7 +25,6 @@ import AssetDetailsPane from "./AssetDetailsPane";
 import TabbedContainer from "./TabbedContainer";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
-import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import { MetadataContainer } from "../metadataV2";
 import localforage from "localforage";
 import Synonyms from "../../synonyms";
@@ -43,8 +42,24 @@ export default function ViewAsset() {
     const navigate = useNavigate();
     const location = useLocation();
 
-    // Extract file path from navigation state if provided
-    const filePathToNavigate = (location.state as any)?.filePathToNavigate;
+    // Extract file path from URL query string OR navigation state. The
+    // query-param form (`?filePath=...`) lets users right-click → "Open in
+    // new tab" (or copy/share the URL) and still land on the right file
+    // inside the file manager — router state is lost on a fresh page load.
+    // Router state remains supported so existing in-app navigations (which
+    // pass `state: { filePathToNavigate }`) keep working without changes,
+    // and so callers can avoid polluting the address bar when they don't
+    // need a shareable link.
+    //
+    // Precedent: matches ViewFile's behavior, where the URL is the source
+    // of truth for file path / version. If both are provided, the query
+    // param wins so a deep link is always authoritative.
+    const filePathToNavigate = React.useMemo(() => {
+        const params = new URLSearchParams(location.search);
+        const fromQuery = params.get("filePath");
+        if (fromQuery) return fromQuery;
+        return (location.state as any)?.filePathToNavigate ?? undefined;
+    }, [location.search, location.state]);
 
     // State
     const [state, dispatch] = useReducer(assetDetailReducer, {
@@ -56,7 +71,6 @@ export default function ViewAsset() {
     const [assetLinks, setAssetLinks] = useState<any>({});
     const [openUpdateAsset, setOpenUpdateAsset] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
-    const [workflowOpen, setWorkflowOpen] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
     const [showApiError, setShowApiError] = useState(false);
     const [apiErrorType, setApiErrorType] = useState<AlertProps.Type>("error");
@@ -216,6 +230,35 @@ export default function ViewAsset() {
         [location.search, location.state, navigate]
     );
 
+    // Keep the URL `?filePath=` query param in lockstep with the file
+    // manager's selection so a refresh / share / new-tab open always
+    // reproduces the user's current view. Includes the asset root ("/"),
+    // since selecting the root folder is a meaningful navigation state
+    // for the file manager and should also survive a refresh.
+    //
+    // We use replace:true to avoid spamming browser history with one
+    // entry per click, and we no-op if the path is unchanged so React's
+    // strict-mode double-effects don't trigger redundant navigations.
+    const handleSelectedPathChange = useCallback(
+        (path: string | null) => {
+            const params = new URLSearchParams(location.search);
+            const current = params.get("filePath");
+            if (path === null) {
+                if (current === null) return;
+                params.delete("filePath");
+            } else {
+                if (current === path) return;
+                params.set("filePath", path);
+            }
+            const search = params.toString();
+            navigate(
+                { search: search ? `?${search}` : "" },
+                { replace: true, state: location.state }
+            );
+        },
+        [location.search, location.state, navigate]
+    );
+
     // Handle opening the update asset modal
     const handleOpenUpdateAsset = () => {
         setOpenUpdateAsset(true);
@@ -225,21 +268,6 @@ export default function ViewAsset() {
     const handleOpenDeleteModal = () => {
         setShowDeleteModal(true);
     };
-
-    // Handle opening the workflow selector modal
-    const handleExecuteWorkflow = () => {
-        setWorkflowOpen(true);
-    };
-
-    // State to trigger workflow tab refresh - this will be managed by TabbedContainer
-    const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
-
-    // Function to refresh the workflow tab - this will be called by WorkflowSelectorWithModal
-    // and will trigger TabbedContainer's callback
-    const refreshWorkflowTab = useCallback(() => {
-        console.log("ViewAsset: refreshWorkflowTab called, incrementing trigger");
-        setWorkflowRefreshTrigger((prev) => prev + 1);
-    }, []);
 
     return (
         <AssetDetailContext.Provider value={{ state, dispatch }}>
@@ -305,11 +333,9 @@ export default function ViewAsset() {
                                     assetName={asset?.assetName || ""}
                                     assetId={assetId || ""}
                                     databaseId={databaseId || ""}
-                                    onExecuteWorkflow={handleExecuteWorkflow}
-                                    onWorkflowExecuted={refreshWorkflowTab}
-                                    workflowExecutedTrigger={workflowRefreshTrigger}
                                     filePathToNavigate={filePathToNavigate}
                                     assetVersionId={selectedVersionId || undefined}
+                                    onSelectedPathChange={handleSelectedPathChange}
                                 />
 
                                 {/* Metadata - New MetadataV2 Component */}
@@ -343,14 +369,6 @@ export default function ViewAsset() {
                         }}
                     />
                 )}
-
-                <WorkflowSelectorWithModal
-                    assetId={assetId || ""}
-                    databaseId={databaseId || ""}
-                    open={workflowOpen}
-                    setOpen={setWorkflowOpen}
-                    onWorkflowExecuted={refreshWorkflowTab}
-                />
 
                 <AssetDeleteModal
                     visible={showDeleteModal}

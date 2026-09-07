@@ -13,7 +13,7 @@
  * permissions and limitations under the License.
  */
 
-import { Wafv2BasicConstruct, WAFScope } from "./constructs/wafv2-basic-construct";
+import { Wafv2BasicConstruct, WAFScope, WafPolicyConfig } from "./constructs/wafv2-basic-construct";
 import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
 
@@ -21,7 +21,9 @@ interface EnvProps {
     env?: cdk.Environment;
     stackName: string;
     wafScope?: WAFScope;
+    wafPolicy?: WafPolicyConfig;
     description: string;
+    synthesizer?: cdk.IStackSynthesizer;
 }
 
 export class CfWafStack extends cdk.Stack {
@@ -37,6 +39,7 @@ export class CfWafStack extends cdk.Stack {
         const wafv2CF = new Wafv2BasicConstruct(this, "Wafv2CF", {
             ...props,
             wafScope: props.wafScope,
+            wafPolicy: props.wafPolicy,
         });
 
         new cdk.aws_ssm.StringParameter(this, "waf_acl_arn", {

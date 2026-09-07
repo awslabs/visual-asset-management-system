@@ -7,6 +7,7 @@ import json
 import uuid
 import time
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from datetime import datetime, timedelta
 from botocore.config import Config
@@ -15,14 +16,33 @@ from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    UPLOAD_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_USER_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_UPLOAD,
+    VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+)
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    TEMPORARY_UPLOAD_PREFIX,
+    PREVIEW_PREFIX,
+)
+from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
+from common.dynamodb import to_update_expr
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
@@ -37,14 +57,23 @@ os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
 # Configure AWS clients with retry configuration
 region = os.environ['AWS_REGION']
 
+# Concurrency for parallel per-file S3 work (e.g. moving completed uploads from
+# the temporary to the final location). Bounds Lambda thread/memory use; the
+# client connection pool below is sized to match so threads don't block waiting
+# for a connection.
+MAX_PARALLEL_S3_WORKERS = 16
+
 # Standardized retry configuration merged with existing S3 config
 s3_config = Config(
-    signature_version='s3v4', 
+    signature_version='s3v4',
     s3={'addressing_style': 'path'},
     retries={
         'max_attempts': 5,
         'mode': 'adaptive'
-    }
+    },
+    # Match the pool to the worker count so parallel S3 calls don't queue on a
+    # too-small connection pool (botocore default is 10).
+    max_pool_connections=MAX_PARALLEL_S3_WORKERS
 )
 
 s3 = boto3.client('s3', region_name=region, config=s3_config)
@@ -57,25 +86,30 @@ logger = safeLogger(service_name="UploadFile")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
-TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
-PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
-allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+MAX_PARTS_PER_FILE = 10000  # S3 hard limit on parts per multipart upload object
+# Sample size for asset-type detection. This is a best-effort visibility
+# classification (empty vs. single-file vs. folder), not a correctness-critical
+# read, so it is intentionally capped rather than scanning the entire asset —
+# paging every object of a very large asset would add latency to the upload path.
+ASSET_TYPE_DETECTION_SAMPLE_SIZE = 1000
+allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
     large_file_processing_queue_url = os.environ.get("LARGE_FILE_PROCESSING_QUEUE_URL")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -91,7 +125,7 @@ def calculate_num_parts(file_size=None, num_parts=None, max_part_size=MAX_PART_S
     """Calculate the number of parts needed for a multipart upload"""
     if num_parts is not None:
         # User specified parts directly - validate against S3 limits but allow large part sizes
-        if num_parts > 10000:
+        if num_parts > MAX_PARTS_PER_FILE:
             raise ValueError("Number of parts cannot exceed 10,000 (S3 limit)")
         return num_parts
     elif file_size is not None:
@@ -253,10 +287,31 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def save_asset_details(asset_data):
-    """Save asset details to DynamoDB"""
+def update_asset_attributes(databaseId, assetId, updates):
+    """Update the named attributes of an existing asset record in DynamoDB.
+
+    Only the supplied attributes are written, so a field another writer changed while
+    the upload was in flight is not reverted. Conditional on the record still existing
+    so an asset removed during the upload is not recreated.
+    """
+    keys_map, values_map, expr = to_update_expr(updates)
     try:
-        asset_table.put_item(Item=asset_data)
+        asset_table.update_item(
+            Key={
+                'databaseId': databaseId,
+                'assetId': assetId
+            },
+            UpdateExpression=expr,
+            ExpressionAttributeNames=keys_map,
+            ExpressionAttributeValues=values_map,
+            ConditionExpression='attribute_exists(databaseId) AND attribute_exists(assetId)'
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {assetId} in database {databaseId} no longer exists, asset record not updated")
+            raise VAMSGeneralErrorResponse(f"Error saving asset.")
+        logger.exception(f"Error saving asset details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error saving asset.")
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
@@ -321,64 +376,24 @@ def delete_upload_details(uploadId, assetId):
         # Don't raise here, just log the error
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
-    """Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
-            return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
-            try:
-                s3.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3)
 
 def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""
     try:
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
-        
-        # List all objects with the specified prefix
-        response = s3.list_objects_v2(
-            Bucket=bucket,
-            Prefix=prefix,
-        )
-        
-        # Get the contents and filter out folder markers (objects ending with '/')
-        contents = response.get('Contents', [])
+
+        # Sample objects under the prefix to classify the asset (empty / single
+        # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
+        # best-effort visibility classification, so a sample is sufficient and
+        # avoids adding upload latency by scanning a very large asset in full.
+        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
         
         # Filter out archived files
         non_archived_files = []
@@ -452,9 +467,9 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id):
+def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id, extra_metadata=None):
     """Copy an object from one S3 location to another with replaced metadata
-    
+
     Args:
         source_bucket: Source S3 bucket name
         source_key: Source S3 object key
@@ -462,7 +477,8 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
         dest_key: Destination S3 object key
         database_id: Database ID to set in metadata
         asset_id: Asset ID to set in metadata
-        
+        extra_metadata: Optional dict of additional metadata fields to merge
+
     Returns:
         True if successful, False otherwise
     """
@@ -473,15 +489,22 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
             'Bucket': source_bucket,
             'Key': source_key
         }
-        
+
+        metadata = {
+            DATABASE_ID_METADATA_KEY: database_id,
+            ASSET_ID_METADATA_KEY: asset_id
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+
         extra_args = {
             'MetadataDirective': 'REPLACE',
-            'Metadata': {
-                "databaseid": database_id,
-                "assetid": asset_id
-            }
+            'Metadata': metadata,
+            # Grant the bucket owner full control so the finalized object written into a
+            # cross-account asset bucket is owned/readable by that account.
+            'ACL': 'bucket-owner-full-control'
         }
-        
+
         s3_resource.meta.client.copy(
             CopySource=copy_source,
             Bucket=dest_bucket,
@@ -501,6 +524,35 @@ def delete_s3_object(bucket, key):
     except Exception as e:
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
+
+def build_upload_change_metadata(user_id):
+    """Build the change-provenance metadata for a user-initiated upload.
+
+    Args:
+        user_id: Acting user id; ``None`` falls back to "SYSTEM_USER".
+
+    Returns:
+        Dict of vams-change* S3 metadata keys describing an "upload" change.
+    """
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
+    }
+
+def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
+    """Build change-provenance metadata for a workflow-execution output file.
+
+    Returns an empty dict when no workflow context is supplied so non-workflow
+    external uploads keep their default change source.
+    """
+    if not workflow_id and not execution_id:
+        return {}
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: change_user_id or "SYSTEM_USER",
+        VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: workflow_id or "",
+        VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
+    }
 
 def normalize_s3_path(asset_base_key, file_path):
     """
@@ -541,7 +593,7 @@ def is_preview_file(file_path: str) -> bool:
     Returns:
         True if the file is a preview file, False otherwise
     """
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def get_base_file_path(preview_file_path: str) -> str:
     """Extract base file path from preview file path
@@ -556,7 +608,7 @@ def get_base_file_path(preview_file_path: str) -> str:
         return preview_file_path
     
     # Split at .previewFile. and take the first part
-    return preview_file_path.split('.previewFile.')[0]
+    return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
 def validate_preview_files_with_base_files(files_in_request, asset_base_key, bucket_name):
     """Validate that all preview files in the request have corresponding base files
@@ -662,10 +714,10 @@ def validate_preview_file_extension(file_path: str) -> bool:
     """
     
     # Extract the extension after .previewFile.
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1].lower()
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1].lower()
         return extension in allowed_preview_extensions
-    
+
     # For direct assetPreview uploads, check the file extension
     file_extension = os.path.splitext(file_path)[1].lower()
     return file_extension in allowed_preview_extensions
@@ -691,7 +743,7 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
         prefix = f"{directory}/" if directory else ""
         
         # Create the pattern to match preview files for this base file
-        pattern = f"{filename}.previewFile."
+        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
         
         # List objects in the directory
         paginator = s3.get_paginator('list_objects_v2')
@@ -739,16 +791,17 @@ def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     return deleted_files
 
-def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str) -> bool:
+def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str, user_id: str = None) -> bool:
     """Create a zero-byte file in S3
-    
+
     Args:
         bucket_name: The S3 bucket name
         key: The S3 object key
         upload_id: The upload ID for metadata
         database_id: The database ID for metadata
         asset_id: The asset ID for metadata
-        
+        user_id: The acting user ID for provenance metadata (optional)
+
     Returns:
         True if successful, False otherwise
     """
@@ -758,10 +811,14 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
             Key=key,
             Body=b'',  # Empty content for zero-byte file
             ContentType='application/octet-stream',
+            # Grant the bucket owner full control so a zero-byte file written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control',
             Metadata={
-                "databaseid": database_id,
-                "assetid": asset_id,
-                "uploadid": upload_id,
+                DATABASE_ID_METADATA_KEY: database_id,
+                ASSET_ID_METADATA_KEY: asset_id,
+                UPLOAD_ID_METADATA_KEY: upload_id,
+                **build_upload_change_metadata(user_id),
             }
         )
         logger.info(f"Created zero-byte file: {key}")
@@ -951,7 +1008,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     uploadType = request_model.uploadType
     
     # Extract user ID and check rate limit
-    user_id = claims_and_roles.get("tokens", ["system"])[0]
+    user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
     
     if not check_user_rate_limit(user_id):
         # Return 429 Too Many Requests
@@ -985,23 +1042,6 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
         logger.info(f"Asset {assetId} already has a preview. The existing preview will be replaced.")
-        
-        # Validate file extensions before proceeding
-        for file in request_model.files:
-            if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-                raise VAMSGeneralErrorResponse(f"File provided has an unsupported file extension")
-            
-            # Additional validation for preview files
-            if uploadType == "assetPreview":
-                # Validate preview file extension
-                if not validate_preview_file_extension(file.relativeKey):
-                    raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
-            
-            # Check if this is a preview file in an assetFile upload
-            if uploadType == "assetFile" and is_preview_file(file.relativeKey):
-                # Validate preview file extension
-                if not validate_preview_file_extension(file.relativeKey):
-                    raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
     
     # Generate upload ID
     uploadId = f"y{str(uuid.uuid4())}"
@@ -1024,6 +1064,11 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
         
+        # Validate the extension of an asset preview and of a .previewFile. file
+        if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
+            if not validate_preview_file_extension(file.relativeKey):
+                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
             raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
@@ -1061,10 +1106,15 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 Bucket=bucket_name,
                 Key=temp_s3_key,
                 ContentType='application/octet-stream',
+                # Grant the bucket owner full control so an object uploaded into a
+                # cross-account asset bucket is owned/readable by that account. The
+                # ACL is set on the multipart upload; completed parts inherit it.
+                ACL='bucket-owner-full-control',
                 Metadata={
-                    "databaseid": databaseId,
-                    "assetid": assetId,
-                    "uploadid": uploadId,  # Store the overall uploadId in S3 metadata
+                    DATABASE_ID_METADATA_KEY: databaseId,
+                    ASSET_ID_METADATA_KEY: assetId,
+                    UPLOAD_ID_METADATA_KEY: uploadId,  # Store the overall uploadId in S3 metadata
+                    **build_upload_change_metadata(user_id),
                 }
             )
             s3_upload_id = resp['UploadId']
@@ -1118,7 +1168,20 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     assetId = request_model.assetId
     databaseId = request_model.databaseId
     uploadType = request_model.uploadType
-    
+
+    # Extract user ID for provenance
+    user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+
+    # Extract validated workflow provenance fields from request model
+    workflow_id = request_model.workflowId
+    workflow_execution_id = request_model.workflowExecutionId
+    change_user_id = request_model.changeUserId
+
+    # Build change metadata: prefer workflow provenance, fallback to upload provenance
+    change_metadata = build_workflow_change_metadata(change_user_id, workflow_id, workflow_execution_id)
+    if not change_metadata:
+        change_metadata = build_upload_change_metadata(change_user_id or user_id)
+
     # Get upload details from DynamoDB
     upload_details = get_upload_details(uploadId, assetId)
     
@@ -1158,23 +1221,27 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     except Exception as e:
         logger.warning(f"Failed to update upload status: {e}")
 
-    # Get bucket details from asset's bucketId
+    # Get bucket details from asset's bucketId. bucket_name is the DESTINATION (the asset's own
+    # bucket). source_bucket is where the tempKey files are read from: it equals bucket_name for a
+    # normal upload, but a workflow-execution completion stages its outputs in the VAMS default run
+    # bucket (request_model.sourceBucket), which can differ from the output asset's bucket.
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
-    
+    source_bucket = request_model.sourceBucket or bucket_name
+
     # Get database details to check file upload restrictions
     database = get_database_details(databaseId)
     if not database:
         raise VAMSGeneralErrorResponse("Database not found")
-    
+
     allowed_extensions = database.get('restrictFileUploadsToExtensions', '')
-    
+
     # Track file completion results
     file_results = []
     successful_files = []
     has_failures = False
-    
+
     # Process each file in the request
     for file in request_model.files:
         try:
@@ -1218,13 +1285,13 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 filename = os.path.basename(file.relativeKey)
                 final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
             
-            # Verify the file exists in S3
+            # Verify the file exists in S3 (in the SOURCE bucket, which may be the run bucket).
             try:
                 head_response = s3.head_object(
-                    Bucket=bucket_name,
+                    Bucket=source_bucket,
                     Key=file.tempKey
                 )
-                
+
                 # Get file size with error handling
                 file_size = 0
                 try:
@@ -1259,8 +1326,12 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 
                 if process_async:
                     logger.info(f"External file {file.relativeKey} ({file_size} bytes) will be processed asynchronously")
-                    
-                    # Create file info for SQS message
+
+                    # Create file info for SQS message. sourceBucketName is where the temp file is
+                    # read from (may differ from the destination bucketName for workflow outputs).
+                    # workflowId/workflowExecutionId carry the same change provenance the
+                    # synchronous move path stamps, so the async copy resolves the identical
+                    # change source.
                     file_info = {
                         "relativeKey": file.relativeKey,
                         "uploadIdS3": "external",
@@ -1268,10 +1339,14 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "tempS3Key": file.tempKey,
                         "finalS3Key": final_s3_key,
                         "bucketName": bucket_name,
+                        "sourceBucketName": source_bucket,
                         "databaseId": databaseId,
                         "assetId": assetId,
                         "uploadId": uploadId,
-                        "uploadType": uploadType
+                        "uploadType": uploadType,
+                        "changeUserId": change_user_id or user_id,
+                        "workflowId": workflow_id,
+                        "workflowExecutionId": workflow_execution_id
                     }
                     
                     # Try to queue the file for asynchronous processing with comprehensive error handling
@@ -1306,8 +1381,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 has_failures = True
                 continue
             
-            # Validate file content type
-            if not validateS3AssetExtensionsAndContentType(bucket_name, file.tempKey):
+            # Validate file content type (the temp file is in the source bucket).
+            if not validateS3AssetExtensionsAndContentType(source_bucket, file.tempKey):
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
                     uploadIdS3="external",
@@ -1335,7 +1410,12 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     try:
                         s3.head_object(Bucket=bucket_name, Key=base_file_key)
                     except ClientError as e:
-                        if e.response['Error']['Code'] == 'NoSuchKey':
+                        # head_object reports a missing key as '404'; 'NoSuchKey' is what get_object
+                        # raises (measured against S3). Matching 'NoSuchKey' alone made this branch
+                        # unreachable, so a genuinely missing base file took the generic
+                        # "Error verifying base file" path and the accurate message naming the missing
+                        # file was never emitted.
+                        if e.response['Error']['Code'] in ('404', 'NoSuchKey', 'NotFound'):
                             # Base file doesn't exist in S3 or in the current request
                             file_results.append(FileCompletionResult(
                                 relativeKey=file.relativeKey,
@@ -1421,9 +1501,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 # Mark invalid files as failed
                 for file_detail in successful_files[:]:
                     if file_detail['relativeKey'] in invalid_files:
-                        # Delete the uploaded file
-                        delete_s3_object(bucket_name, file_detail['temp_s3_key'])
-                        
+                        # Delete the staged temporary file (it lives in the source bucket)
+                        delete_s3_object(source_bucket, file_detail['temp_s3_key'])
+
                         # Update file result
                         for result in file_results:
                             if result.relativeKey == file_detail['relativeKey'] and result.success:
@@ -1448,42 +1528,58 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         largeFileAsynchronousHandling=has_async_files
                     )
     
-            # Copy successful files from temporary to final location
-    for file_detail in successful_files:
-        
-        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-        
-        # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
-        if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
-            # Get the base file path
-            base_file_path = get_base_file_path(file_detail['relativeKey'])
-            base_file_key = normalize_s3_path(asset_base_key, base_file_path)
-            
-            # Delete existing preview files
-            deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
-            if deleted_files:
-                logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
-        
-        copy_success = copy_s3_object(
-            bucket_name, 
-            file_detail['temp_s3_key'], 
-            bucket_name, 
-            file_detail['final_s3_key'],
-            databaseId,
-            assetId
-        )
-        
-        if not copy_success:
-            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-            # Update the file result to indicate copy failure
+            # Copy successful files from temporary to final location.
+    # Each file's move (optional preview cleanup + copy + temp delete) is an
+    # independent, order-independent set of S3 calls, so run them in parallel to
+    # keep multi-file completions within the Lambda runtime. The pure S3 work is
+    # threaded; result-list mutation is applied single-threaded afterward.
+    def _move_one_file(file_detail):
+        """Move a completed upload from temp to final. Returns (relativeKey, success)."""
+        try:
+            logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+
+            # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
+            if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
+                base_file_path = get_base_file_path(file_detail['relativeKey'])
+                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
+                if deleted_files:
+                    logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
+
+            copy_success = copy_s3_object(
+                source_bucket,
+                file_detail['temp_s3_key'],
+                bucket_name,
+                file_detail['final_s3_key'],
+                databaseId,
+                assetId,
+                extra_metadata=change_metadata
+            )
+
+            if not copy_success:
+                logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+                return file_detail['relativeKey'], False
+
+            # Delete the temporary source file after a successful copy (in the source bucket).
+            delete_s3_object(source_bucket, file_detail['temp_s3_key'])
+            return file_detail['relativeKey'], True
+        except Exception as e:
+            logger.exception(f"Error moving file {file_detail['relativeKey']} to final location: {e}")
+            return file_detail['relativeKey'], False
+
+    if successful_files:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(successful_files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            move_results = list(executor.map(_move_one_file, successful_files))
+
+        # Apply copy failures to the result list single-threaded (no shared-state races).
+        failed_keys = {rel_key for rel_key, ok in move_results if not ok}
+        if failed_keys:
             for result in file_results:
-                if result.relativeKey == file_detail['relativeKey'] and result.success:
+                if result.relativeKey in failed_keys and result.success:
                     result.success = False
                     result.error = "Failed to copy file to final location"
                     has_failures = True
-        else:
-            # Delete temporary file after successful copy
-            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
     
     # Update asset record based on upload type
     if uploadType == "assetFile" and any(f.success for f in file_results):
@@ -1500,7 +1596,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
-        save_asset_details(asset)
+        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']})
         
         # Send notification to subscribers
         send_subscription_email(databaseId, assetId)
@@ -1515,7 +1611,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             }
             
             # Save updated asset
-            save_asset_details(asset)
+            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
     try:
@@ -1584,7 +1680,10 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     assetId = request_model.assetId
     databaseId = request_model.databaseId
     uploadType = request_model.uploadType
-    
+
+    # Extract user ID for provenance
+    user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+
     # Get upload details from DynamoDB (just for basic validation)
     upload_details = get_upload_details(uploadId, assetId)
     
@@ -1688,8 +1787,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             if file.uploadIdS3 == "zero-byte":
                 # Create zero-byte file now during completion
                 logger.info(f"Creating zero-byte file {file.relativeKey} during completion")
-                
-                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId):
+
+                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId, user_id):
                     # Create file detail for zero-byte file
                     file_detail = {
                         'relativeKey': file.relativeKey,
@@ -1731,7 +1830,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
                 
                 # Create empty file in temporary location
-                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId):
+                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId, user_id):
                     file_detail = {
                         'relativeKey': file.relativeKey,
                         'temp_s3_key': temp_s3_key,
@@ -1817,7 +1916,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             
             if process_async:
                 logger.info(f"File {file.relativeKey} ({total_file_size} bytes) will be processed asynchronously")
-                
+
                 # Create file info for SQS message - DO NOT complete the multipart upload yet
                 file_info = {
                     "relativeKey": file.relativeKey,
@@ -1830,7 +1929,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "assetId": assetId,
                     "uploadId": uploadId,
                     "uploadType": uploadType,
-                    "totalFileSize": total_file_size
+                    "totalFileSize": total_file_size,
+                    "changeUserId": user_id
                 }
                 
                 # Try to queue the file for asynchronous processing
@@ -1889,7 +1989,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 
                 # Extract metadata
                 metadata = head_response.get('Metadata', {})
-                s3_upload_id = metadata.get('uploadid')
+                s3_upload_id = metadata.get(UPLOAD_ID_METADATA_KEY)
                 
                 # Get file size with error handling
                 file_size = 0
@@ -2032,7 +2132,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     try:
                         s3.head_object(Bucket=bucket_name, Key=base_file_key)
                     except ClientError as e:
-                        if e.response['Error']['Code'] == 'NoSuchKey':
+                        # head_object reports a missing key as '404'; 'NoSuchKey' is what get_object
+                        # raises (measured against S3). Matching 'NoSuchKey' alone made this branch
+                        # unreachable, so a genuinely missing base file took the generic
+                        # "Error verifying base file" path and the accurate message naming the missing
+                        # file was never emitted.
+                        if e.response['Error']['Code'] in ('404', 'NoSuchKey', 'NotFound'):
                             # Base file doesn't exist in S3 or in the current request
                             # Delete the uploaded file
                             delete_s3_object(bucket_name, temp_s3_key)
@@ -2154,39 +2259,54 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         largeFileAsynchronousHandling=has_async_files
                     )
     
-    # Copy successful files from temporary to final location
-    for file_detail in successful_files:
-        
-        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-        
-        copy_success = copy_s3_object(
-            bucket_name, 
-            file_detail['temp_s3_key'], 
-            bucket_name, 
-            file_detail['final_s3_key'],
-            databaseId,
-            assetId
-        )
-        
-        if not copy_success:
-            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-            # Update the file result to indicate copy failure
+    # Copy successful files from temporary to final location.
+    # Each file's move is independent and order-independent, so run them in
+    # parallel to keep multi-file completions within the Lambda runtime. The
+    # pure S3 work is threaded; result-list mutation is applied afterward.
+    change_metadata = build_upload_change_metadata(user_id)
+
+    def _move_one_file(file_detail):
+        """Move a completed upload from temp to final. Returns (relativeKey, success)."""
+        try:
+            logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+            copy_success = copy_s3_object(
+                bucket_name,
+                file_detail['temp_s3_key'],
+                bucket_name,
+                file_detail['final_s3_key'],
+                databaseId,
+                assetId,
+                extra_metadata=change_metadata
+            )
+            if not copy_success:
+                logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+                return file_detail['relativeKey'], False
+            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
+            return file_detail['relativeKey'], True
+        except Exception as e:
+            logger.exception(f"Error moving file {file_detail['relativeKey']} to final location: {e}")
+            return file_detail['relativeKey'], False
+
+    if successful_files:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(successful_files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            move_results = list(executor.map(_move_one_file, successful_files))
+
+        failed_keys = {rel_key for rel_key, ok in move_results if not ok}
+        if failed_keys:
             for result in file_results:
-                if result.relativeKey == file_detail['relativeKey'] and result.success:
+                if result.relativeKey in failed_keys and result.success:
                     result.success = False
                     result.error = "Failed to copy file to final location"
                     has_failures = True
-        else:
-            # Delete temporary file after successful copy
-            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
-    
+
     # Update asset record based on upload type
     if uploadType == "assetFile" and any(f.success for f in file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
-        
-        
+
+
         # Update asset type - ensure we're not overriding with None
         if assetType:
             asset['assetType'] = assetType
@@ -2195,7 +2315,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
         # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
-        save_asset_details(asset)
+        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']})
         
         # Send notification to subscribers
         send_subscription_email(databaseId, assetId)
@@ -2210,7 +2330,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             }
             
             # Save updated asset
-            save_asset_details(asset)
+            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
     try:
@@ -2306,8 +2426,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
         
-        # Determine which API to call based on path and method
-        if method == 'POST' and path == '/uploads':
+        # Determine which API to call based on the master API route definitions
+        if method == 'POST' and API_UPLOADS.matches(path):
             # Initialize Upload API
             request_model = parse(body, model=InitializeUploadRequestModel)
             
@@ -2318,11 +2438,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             asset["object__type"] = "asset"
             
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
+            # Fail closed: with no authenticated identity no authorization can be
+            # evaluated, so deny rather than fall through to the upload.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+
             # Process request
             response = initialize_upload(request_model, claims_and_roles)
             
@@ -2344,7 +2468,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             return success(body=response.dict())
             
-        elif method == 'POST' and '/uploads/' in path and path.endswith('/complete/external'):
+        elif method == 'POST' and API_UPLOAD_COMPLETE_EXTERNAL.matches(path):
             # External Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
                 return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)
@@ -2361,11 +2485,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             asset["object__type"] = "asset"
             
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
+            # Fail closed: with no authenticated identity no authorization can be
+            # evaluated, so deny rather than fall through to the upload.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+
             # Process request
             response = complete_external_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)
@@ -2374,7 +2502,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             else:
                 return success(body=response.dict())
             
-        elif method == 'POST' and '/uploads/' in path and path.endswith('/complete'):
+        elif method == 'POST' and API_UPLOAD_COMPLETE.matches(path):
             # Complete Upload API - Extract uploadId from path parameters
             if not event.get('pathParameters') or not event['pathParameters'].get('uploadId'):
                 return validation_error(body={'message': "Missing uploadId in path parameters"}, event=event)
@@ -2391,11 +2519,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             asset["object__type"] = "asset"
             
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
+            # Fail closed: with no authenticated identity no authorization can be
+            # evaluated, so deny rather than fall through to the upload.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+
             # Process request
             response = complete_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)
@@ -2409,7 +2541,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)
@@ -2421,8 +2553,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return {
                 'statusCode': 429,
                 'headers': {
-                    'Content-Type': 'application/json',
-                    'Cache-Control': 'no-cache, no-store',
+                    **commonHeaders(),
                     'Retry-After': '60'  # Suggest retry after 60 seconds
                 },
                 'body': json.dumps({'message': str(v)})

@@ -15,6 +15,7 @@ import * as Config from "../../../../../../config/config";
 import * as path from "path";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 
 export interface IsaacLabTrainingFunctionsProps {
     config: Config.Config;
@@ -74,6 +75,16 @@ export class IsaacLabTrainingFunctions extends Construct {
             record.bucket.grantRead(this.openPipelineFunction);
         });
 
+        // openPipeline rejects an input before the internal state machine starts, so it owns the
+        // external workflow token on that route -- nothing downstream exists yet to report for it.
+        this.openPipelineFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+            })
+        );
+
         // ExecuteBatchJob - internal function that submits Batch job
         this.executeBatchJobFunction = new lambda.Function(this, "ExecuteBatchJobFunction", {
             ...commonProps,
@@ -83,8 +94,16 @@ export class IsaacLabTrainingFunctions extends Construct {
             environment: {
                 BATCH_JOB_QUEUE: props.batchJobQueue.jobQueueName,
                 BATCH_JOB_DEFINITION: props.batchJobDefinition.jobDefinitionName,
+                // Orchestration bus for registering the submitted Batch job as an abortable
+                // sub-process
+                ORCHESTRATION_BUS_NAME:
+                    props.storageResources.eventBridge.orchestrationBus.eventBusName,
             },
         });
+
+        props.storageResources.eventBridge.orchestrationBus.grantPutEventsTo(
+            this.executeBatchJobFunction
+        );
 
         // Grant Batch permissions
         this.executeBatchJobFunction.addToRolePolicy(
@@ -135,5 +154,26 @@ export class IsaacLabTrainingFunctions extends Construct {
             code: lambda.Code.fromAsset(lambdaPath),
             // STATE_MACHINE_ARN will be added by the construct after SFN creation
         });
+
+        s3AssetBuckets.getS3AssetBucketRecords().forEach((record) => {
+            record.bucket.grantRead(this.vamsExecuteFunction);
+        });
+
+        // The workflow task waits on a callback token, so a failure in this lambda must be reported
+        // back to Step Functions instead of leaving the task pending until its timeout.
+        this.vamsExecuteFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+            })
+        );
+
+        // Apply standard per-Lambda CDK Nag suppressions (IAM4 execution roles, KMS wildcard)
+        suppressCdkNagLambda(this.openPipelineFunction);
+        suppressCdkNagLambda(this.executeBatchJobFunction);
+        suppressCdkNagLambda(this.closePipelineFunction);
+        suppressCdkNagLambda(this.handleErrorFunction);
+        suppressCdkNagLambda(this.vamsExecuteFunction);
     }
 }

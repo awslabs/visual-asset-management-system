@@ -90,10 +90,10 @@ function convertConstraintToNewFormat(constraint: any): any[] {
             S: new Date().toISOString(),
         },
         createdBy: {
-            S: "SYSTEM",
+            S: "SYSTEM_USER",
         },
         modifiedBy: {
-            S: "SYSTEM",
+            S: "SYSTEM_USER",
         },
     };
 
@@ -303,6 +303,38 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `7a_${roleNameIDClean}_web_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/executions",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `8_${roleNameIDClean}_web_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/auth/api-keys", //API key management page (user self-service mode)
+                                },
+                            },
+                        },
                     ],
                 },
                 description: {
@@ -391,7 +423,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "starts_with",
                                 },
                                 value: {
-                                    S: "/auth/routes", //Technically not needed as no authorization but including anyway
+                                    S: "/auth/routes", //Prefix also authorizes GET /auth/routes/api and /auth/routes/api/allowed (API route listing; these DO enforce authorization)
                                 },
                             },
                         },
@@ -619,22 +651,26 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
-                                    S: `15_${roleNameIDClean}_api_paths`,
-                                },
-                                operator: {
-                                    S: "starts_with",
-                                },
-                                value: {
-                                    S: "/buckets",
-                                },
-                            },
-                        },
+                        ...(props.config.app.addons.usePhysnaSync.enabled
+                            ? [
+                                  {
+                                      M: {
+                                          field: {
+                                              S: "route__path",
+                                          },
+                                          id: {
+                                              S: `16_${roleNameIDClean}_api_paths`,
+                                          },
+                                          operator: {
+                                              S: "starts_with",
+                                          },
+                                          value: {
+                                              S: "/addon/physna/viewer", //Physna viewer proxy (per-asset authorization is enforced server-side)
+                                          },
+                                      },
+                                  },
+                              ]
+                            : []),
                     ],
                 },
                 description: {
@@ -672,6 +708,86 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
+                    S: `initial_${roleNameIDClean}_deny_execution_logs`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_deny_execution_logs`,
+                },
+                criteriaOr: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `0_${roleNameIDClean}_execution_logs`,
+                                },
+                                operator: {
+                                    S: "ends_with",
+                                },
+                                value: {
+                                    S: "/logs",
+                                },
+                            },
+                        },
+                    ],
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `1_${roleNameIDClean}_execution_logs`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/workflows/executions/", //Scopes the /logs suffix to the execution logs route; "logs" is a legal pipeline/workflow/template/database/asset id
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Withhold the administrative execution logs route. A deny overrides the broader GET allow on /workflows.",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-deny-execution-logs`,
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "deny",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-deny-execution-logs`,
+                },
+                objectType: {
+                    S: "api",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
                     S: `initial_${roleNameIDClean}_allow_post_apis`,
                 },
                 constraintId: {
@@ -691,7 +807,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "starts_with",
                                 },
                                 value: {
-                                    S: "/auth/routes", //Technically not needed as no authorization but including anyway
+                                    S: "/auth/routes", //Prefix also authorizes GET /auth/routes/api and /auth/routes/api/allowed (API route listing; these DO enforce authorization)
                                 },
                             },
                         },
@@ -724,6 +840,26 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                                 value: {
                                     S: "/check-subscription",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `3_${roleNameIDClean}_api_paths_post`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    // The web app POSTs this on every sign-in to record the user's
+                                    // email and last-login. The GET is granted by the read-only
+                                    // constraint above; without the POST the write is denied and the
+                                    // user row never receives an email address.
+                                    S: "/auth/loginProfile",
                                 },
                             },
                         },
@@ -1177,6 +1313,114 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                 },
                 objectType: {
                     S: "tagType",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_allow_user_api_keys`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_user_api_keys`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}_user_api_keys_path`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/auth/user/api-keys", //User self-service API key management (restricted server-side to the user's own keys)
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow self-service API key management (own keys only) for basic read only user",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-get`,
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-post`,
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-put`,
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-user-api-keys-delete`,
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-user-api-keys`,
+                },
+                objectType: {
+                    S: "api",
                 },
             },
         ];

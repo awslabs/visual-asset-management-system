@@ -25,6 +25,14 @@ export interface AssetLinksData {
         parents: number;
         children: number;
     };
+    // Linked assets the read could not retrieve, counted apart from the unauthorized ones
+    unresolvedCounts?: {
+        related: number;
+        parents: number;
+        children: number;
+    };
+    // The children tree stopped at the depth or node ceiling
+    treeTruncated?: boolean;
     message?: string;
 }
 

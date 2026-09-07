@@ -33,69 +33,83 @@ This software includes third party software subject to the following copyrights:
 
 **Core Web Libraries (NPM)**
 
-| Package                             | Version        | License                 |
-| :---------------------------------- | :------------- | :---------------------- |
-| @aws-amplify/ui-react               | ^6.15.2        | Apache-2.0              |
-| @aws-sdk/client-s3                  | ^3.400.0       | Apache-2.0              |
-| @aws-sdk/lib-storage                | ^3.400.0       | Apache-2.0              |
-| @aws-sdk/s3-request-presigner       | ^3.400.0       | Apache-2.0              |
-| @badgateway/oauth2-client           | 2.4.2          | MIT                     |
-| @cloudscape-design/collection-hooks | ^1.0.19        | Apache-2.0              |
-| @cloudscape-design/components       | ^3.0.196       | Apache-2.0              |
-| @cloudscape-design/design-tokens    | ^3.0.8         | Apache-2.0              |
-| @dnd-kit/core                       | ^6.3.1         | MIT                     |
-| @dnd-kit/sortable                   | ^10.0.0        | MIT                     |
-| @dnd-kit/utilities                  | ^3.2.2         | MIT                     |
-| @mapbox/mapbox-gl-draw              | ^1.4.1         | ISC                     |
-| @maplibre/maplibre-gl-geocoder      | ^1.5.0         | MIT                     |
-| @turf/bbox                          | ^6.5.0         | MIT                     |
-| @turf/turf                          | ^6.5.0         | MIT                     |
-| @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0         | MIT                     |
-| @types/styled-components            | ^5.1.21        | MIT                     |
-| @types/three                        | ^0.180.0       | MIT                     |
-| @types/wicg-file-system-access      | 2020.9.6       | MIT                     |
-| arraybuffer-to-buffer               | ^0.0.7         | MIT                     |
-| aws-amplify                         | ^6.0.0         | Apache-2.0              |
-| axios                               | ^1.6.0         | MIT                     |
-| buffer                              | ^6.0.3         | MIT                     |
-| del-cli                             | ^5.0.0         | MIT                     |
-| dompurify                           | ^2.3.6         | (MPL-2.0 OR Apache-2.0) |
-| fast-xml-parser                     | ^4.2.5         | MIT                     |
-| fcs                                 | ^0.1.2         | MIT                     |
-| file-system-access                  | 1.0.4          | MIT                     |
-| geojson                             | ^0.5.0         | MIT                     |
-| jodit                               | ^4.0.0-beta.61 | MIT                     |
-| jodit-react                         | ^1.3.39        | MIT                     |
-| loader-utils                        | ^3.2.0         | MIT                     |
-| localforage                         | ^1.10.0        | Apache-2.0              |
-| maplibre-gl                         | ^5.8.0         | BSD-3-Clause            |
-| moment                              | ^2.29.4        | MIT                     |
-| papaparse                           | ^5.4.1         | MIT                     |
-| patch-package                       | ^6.4.7         | MIT                     |
-| postcss                             | ^8.4.31        | MIT                     |
-| postinstall-postinstall             | ^2.1.0         | MIT                     |
-| prop-types                          | ^15.8.1        | MIT                     |
-| react                               | ^17.0.2        | MIT                     |
-| react-data-grid                     | 7.0.0-beta.16  | MIT                     |
-| react-dom                           | ^17.0.2        | MIT                     |
-| react-error-boundary                | ^4.0.9         | MIT                     |
-| react-flow-renderer                 | ^9.6.11        | MIT                     |
-| react-folder-tree                   | ^5.1.1         | MIT                     |
-| react-loading-icons                 | ^1.1.0         | MIT                     |
-| react-map-gl                        | ^8.1.0         | MIT                     |
-| react-papaparse                     | ^3.18.1        | MIT                     |
-| react-pdf                           | ^10.1.0        | MIT                     |
-| react-router                        | ^6.0.0         | MIT                     |
-| react-router-dom                    | ^6.0.0         | MIT                     |
-| vite                                | ^6.2.0         | MIT                     |
-| react-syntax-highlighter            | ^15.5.0        | MIT                     |
-| sanitize-html                       | ^2.11.0        | MIT                     |
-| semver                              | ^7.5.2         | ISC                     |
-| styled-components                   | ^5.3.3         | MIT                     |
-| tough-cookie                        | ^4.1.3         | BSD-3-Clause            |
-| typescript                          | 4.4.4          | Apache-2.0              |
-| web-ifc                             | ^0.0.39        | MPL-2.0                 |
-| web-vitals                          | ^1.1.2         | Apache-2.0              |
+| Package                             | Version       | License                 |
+| :---------------------------------- | :------------ | :---------------------- |
+| @aws-amplify/ui-react               | ^6.15.2       | Apache-2.0              |
+| @aws-sdk/client-s3                  | ^3.700.0      | Apache-2.0              |
+| @aws-sdk/lib-storage                | ^3.700.0      | Apache-2.0              |
+| @aws-sdk/s3-request-presigner       | ^3.700.0      | Apache-2.0              |
+| @badgateway/oauth2-client           | 2.4.2         | MIT                     |
+| @cloudscape-design/collection-hooks | ^1.0.19       | Apache-2.0              |
+| @cloudscape-design/components       | ^3.0.196      | Apache-2.0              |
+| @cloudscape-design/design-tokens    | ^3.0.8        | Apache-2.0              |
+| @cloudscape-design/global-styles    | ^1.0.52       | Apache-2.0              |
+| @dnd-kit/core                       | ^6.3.1        | MIT                     |
+| @dnd-kit/sortable                   | ^10.0.0       | MIT                     |
+| @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
+| @hookform/resolvers                 | ^3.9.0        | MIT                     |
+| @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
+| @maplibre/maplibre-gl-geocoder      | ^1.5.0        | MIT                     |
+| @monaco-editor/react                | ^4.6.0        | MIT                     |
+| @radix-ui/react-context-menu        | ^2.2.2        | MIT                     |
+| @radix-ui/react-dialog              | ^1.1.2        | MIT                     |
+| @radix-ui/react-dropdown-menu       | ^2.1.2        | MIT                     |
+| @radix-ui/react-popover             | ^1.1.2        | MIT                     |
+| @radix-ui/react-tabs                | ^1.1.1        | MIT                     |
+| @radix-ui/react-tooltip             | ^1.1.3        | MIT                     |
+| @rjsf/core                          | ^5.21.2       | Apache-2.0              |
+| @rjsf/utils                         | ^5.21.2       | Apache-2.0              |
+| @rjsf/validator-ajv8                | ^5.21.2       | Apache-2.0              |
+| @tanstack/react-query               | ^5.59.0       | MIT                     |
+| @tanstack/react-table               | ^8.20.5       | MIT                     |
+| @turf/bbox                          | ^6.5.0        | MIT                     |
+| @turf/turf                          | ^6.5.0        | MIT                     |
+| @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0        | MIT                     |
+| @types/styled-components            | ^5.1.21       | MIT                     |
+| @types/three                        | ^0.180.0      | MIT                     |
+| @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
+| arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
+| autoprefixer                        | ^10.4.20      | MIT                     |
+| aws-amplify                         | ^6.0.0        | Apache-2.0              |
+| axios                               | ^1.6.0        | MIT                     |
+| buffer                              | ^6.0.3        | MIT                     |
+| dompurify                           | ^3.4.11       | (MPL-2.0 OR Apache-2.0) |
+| fast-xml-parser                     | ^5.9.0        | MIT                     |
+| fcs                                 | ^0.1.2        | MIT                     |
+| file-system-access                  | 1.0.4         | MIT                     |
+| geojson                             | ^0.5.0        | MIT                     |
+| jodit                               | 4.13.10       | MIT                     |
+| jodit-react                         | ^5.3.21       | MIT                     |
+| localforage                         | ^1.10.0       | Apache-2.0              |
+| maplibre-gl                         | ^5.8.0        | BSD-3-Clause            |
+| moment                              | ^2.29.4       | MIT                     |
+| papaparse                           | ^5.4.1        | MIT                     |
+| postcss                             | ^8.4.47       | MIT                     |
+| prop-types                          | ^15.8.1       | MIT                     |
+| react                               | ^18.3.1       | MIT                     |
+| react-data-grid                     | 7.0.0-beta.16 | MIT                     |
+| react-dom                           | ^18.3.1       | MIT                     |
+| react-error-boundary                | ^4.0.9        | MIT                     |
+| react-hook-form                     | ^7.53.0       | MIT                     |
+| react-loading-icons                 | ^1.1.0        | MIT                     |
+| react-map-gl                        | ^8.1.0        | MIT                     |
+| react-papaparse                     | ^3.18.1       | MIT                     |
+| react-pdf                           | ^10.1.0       | MIT                     |
+| react-router                        | ^7.18.2       | MIT                     |
+| react-router-dom                    | ^7.18.2       | MIT                     |
+| react-syntax-highlighter            | ^16.1.1       | MIT                     |
+| reactflow                           | ^11.11.4      | MIT                     |
+| sanitize-html                       | ^2.11.0       | MIT                     |
+| semver                              | ^7.5.2        | ISC                     |
+| styled-components                   | ^5.3.3        | MIT                     |
+| tailwindcss                         | ^3.4.14       | MIT                     |
+| tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
+| typescript                          | ^5.0.0        | Apache-2.0              |
+| vite                                | ^8.0.16       | MIT                     |
+| web-vitals                          | ^1.1.2        | Apache-2.0              |
+| zod                                 | ^3.23.8       | MIT                     |
+
+`jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
 
 ---
 
@@ -107,23 +121,33 @@ This software includes third party software subject to the following copyrights:
 
 **3D Visualization Libraries**
 
-| Package              | Version                                                      | License               |
-| :------------------- | :----------------------------------------------------------- | :-------------------- |
-| @babylonjs/core      | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)      | Apache-2.0            |
-| @babylonjs/loaders   | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)   | Apache-2.0            |
-| @needle-tools/engine | [3.x.x](https://www.npmjs.com/package/@needle-tools/engine)  | Apache-2.0 (Modified) |
-| cesium               | [1.118.0](https://github.com/CesiumGS/cesium)                | Apache-2.0            |
-| online-3d-viewer     | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
-| playcanvas           | [2.11.8](https://github.com/playcanvas/engine)               | MIT                   |
-| potree               | [develop-latest](https://github.com/potree/potree)           | BSD-2-Clause          |
-| three.js             | [0.182.0](https://threejs.org/)                              | MIT                   |
-| opencascade.js       | [2.0.0-beta.2](https://github.com/donalffons/opencascade.js) | LGPL-2.1\*            |
-| web-ifc              | [0.0.39](https://github.com/IFCjs/web-ifc)                   | MPL-2.0               |
-| draco                | [1.5.6](https://github.com/google/draco)                     | Apache-2.0            |
-| rhino3dm             | [7.15.0](https://github.com/mcneel/rhino3dm)                 | MIT                   |
-| pickr                | [1.8.2](https://github.com/Simonwep/pickr)                   | MIT                   |
+| Package                    | Version                                                      | License               |
+| :------------------------- | :----------------------------------------------------------- | :-------------------- |
+| @babylonjs/core            | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)      | Apache-2.0            |
+| @babylonjs/loaders         | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)   | Apache-2.0            |
+| @needle-tools/engine       | [3.x.x](https://www.npmjs.com/package/@needle-tools/engine)  | Apache-2.0 (Modified) |
+| @thatopen/components       | [3.4.6](https://github.com/ThatOpen/engine_components)       | MIT                   |
+| @thatopen/components-front | [3.4.3](https://github.com/ThatOpen/engine_components)       | MIT                   |
+| @thatopen/fragments        | [3.4.5](https://github.com/ThatOpen/engine_fragment)         | MIT                   |
+| camera-controls            | [3.1.2](https://github.com/yomotsu/camera-controls)          | MIT                   |
+| cesium                     | [1.118.0](https://github.com/CesiumGS/cesium)                | Apache-2.0            |
+| fflate                     | [0.8.2](https://github.com/101arrowz/fflate)                 | MIT                   |
+| online-3d-viewer           | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
+| playcanvas                 | [2.11.8](https://github.com/playcanvas/engine)               | MIT                   |
+| potree                     | [develop-latest](https://github.com/potree/potree)           | BSD-2-Clause          |
+| supersplat                 | [v2.27.4](https://github.com/playcanvas/supersplat)          | MIT                   |
+| three.js                   | [0.182.0](https://threejs.org/)                              | MIT                   |
+| opencascade.js             | [2.0.0-beta.2](https://github.com/donalffons/opencascade.js) | LGPL-2.1\*            |
+| web-ifc                    | [0.0.77](https://github.com/ThatOpen/engine_web-ifc)         | MPL-2.0\*\*           |
+| draco                      | [1.5.6](https://github.com/google/draco)                     | Apache-2.0            |
+| rhino3dm                   | [7.15.0](https://github.com/mcneel/rhino3dm)                 | MIT                   |
+| pickr                      | [1.8.2](https://github.com/Simonwep/pickr)                   | MIT                   |
+
+The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are built into the self-contained IFC/BIM viewer bundle declared in `web/customInstalls/thatopenwebifc/package.json`. `supersplat` is the PlayCanvas SuperSplat editor, cloned at the pinned tag by `web/customInstalls/supersplat/superSplatInstall.js`, built, and served from `web/public/viewers/supersplat`; that script also copies the upstream license text to `THIRD_PARTY_LICENSE_SUPERSPLAT.txt` beside the built viewer.
 
 \* **OpenCascade Technology (OCCT) License Note**: opencascade.js is an optional dependency that is dynamically loaded only when CAD format support is explicitly enabled for the Three.js viewer. The library provides support for STEP (.stp, .step), IGES (.iges), and BREP (.brep) file formats. LGPL-2.1 license terms apply only when this optional feature is enabled. The feature is disabled by default and must be explicitly enabled by organizations that choose to use it. The library is not bundled with VAMS and is loaded on-demand from a CDN when needed.
+
+\*\* **web-ifc License Note**: web-ifc is distributed under the MPL-2.0, which carries a file-level copyleft obligation on modified MPL-2.0 source files. VAMS consumes it as an unmodified dependency inside the IFC/BIM viewer bundle, so the obligation extends to that library's own files and not to VAMS source.
 
 ---
 
@@ -209,7 +233,7 @@ This software includes third party software subject to the following copyrights:
 | trimesh  | >=4.5.0  | MIT                 | Mesh loading (GLB, GLTF, OBJ, FBX, PLY, STL, DRC) |
 | numpy    | >=1.26.4 | BSD-3-Clause        | Numerical computing                               |
 | scipy    | >=1.14.0 | BSD-3-Clause        | Scientific computing (used by trimesh)            |
-| laspy    | >=2.5.4  | BSD-2-Clause        | LAS/LAZ point cloud format support                |
+| laspy    | >=2.5.4  | BSD-3-Clause        | LAS/LAZ point cloud format support                |
 | pye57    | >=0.4.17 | MIT                 | E57 point cloud format support                    |
 | cadquery | >=2.4.0  | Apache-2.0/LGPL-2.1 | STEP/STP CAD file tessellation                    |
 | imageio  | >=2.36.0 | BSD-2-Clause        | GIF/image I/O                                     |
@@ -218,6 +242,57 @@ This software includes third party software subject to the following copyrights:
 | open3d   | >=0.19.0 | MIT                 | PCD and FARO point cloud format support           |
 | usd-core | >=24.8   | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |
 | boto3    | >=1.35.0 | Apache-2.0          | AWS SDK for Python                                |
+
+### Coordinate Transform Pipeline
+
+**Coordinate Transform Pipeline Dependencies**
+
+| Name      | Version | License        | Notes                                    |
+| :-------- | :------ | :------------- | :--------------------------------------- |
+| pyproj    | >=3.6   | MIT            | Coordinate reference system reprojection |
+| numpy     | >=1.26  | BSD-3-Clause   | Numerical computing                      |
+| pye57     | >=0.4   | MIT            | E57 point cloud format support           |
+| laspy     | >=2.5   | BSD-3-Clause   | LAS/LAZ point cloud format support       |
+| open3d    | >=0.18  | MIT            | Point cloud I/O and processing           |
+| pyyaml    | >=6.0   | MIT            | Pipeline configuration parsing           |
+| structlog | >=24.0  | Apache-2.0/MIT | Structured logging                       |
+| boto3     | latest  | Apache-2.0     | AWS SDK for Python                       |
+
+**laspy License Notice**
+
+laspy is distributed under a 3-clause BSD license (BSD-3-Clause), a standard permissive license functionally equivalent to the MIT and Apache-2.0 licenses with no copyleft obligations:
+
+```
+Copyright (c) 2012, Grant Brown, grant.brown73 at gmail.com
+Copyright (c) 2012, Howard Butler, hobu.inc at gmail.com
+Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
+All rights reserved.
+```
+
+### Gaussian Splat Toolbox Pipeline
+
+**Gaussian Splat Toolbox Model Weights (shipped in the container image)**
+
+| Name                          | Version | License      | Notes                                                                     |
+| :---------------------------- | :------ | :----------- | :------------------------------------------------------------------------ |
+| U^2-Net (`u2net.pth`)         | latest  | Apache-2.0   | Background removal, default model; redistributed by backgroundremover     |
+| U^2-Net small (`u2netp.pth`)  | latest  | Apache-2.0   | Background removal, reduced-size variant                                  |
+| U^2-Net human segmentation    | latest  | Apache-2.0   | Human-subject segmentation (`u2net_human_seg.pth` and its ONNX form)      |
+| rembg                         | latest  | MIT          | Resolves and verifies the ONNX segmentation models the image ships        |
+| BiRefNet portrait             | latest  | MIT          | Portrait matting, opened alongside the human-segmentation ONNX model      |
+| SAM 2.1 hiera-large           | 2.1     | Apache-2.0   | Mask generation for object removal (`sam2.1_hiera_large.pt`)              |
+| torchvision model checkpoints | latest  | BSD-3-Clause | MobileNetV3, Faster R-CNN, VGG16 and AlexNet weights loaded via torch.hub |
+
+**Model Weight Distribution**
+
+These weights are downloaded during the container image build and ship inside the image, so a job needs
+no internet access to use background removal or object removal. Stable Diffusion XL, used by the
+object-erase path, is not shipped: it is fetched at run time and therefore needs egress from the job's
+subnets. The `u2net`, `u2netp` and `u2net_human_seg` weights are the U^2-Net models as redistributed by
+[backgroundremover](https://github.com/nadermx/backgroundremover) (MIT); the ONNX forms are resolved
+through [rembg](https://github.com/danielgatis/rembg) (MIT), which supplies each model's URL and
+verifies its checksum. The torchvision checkpoints come from `download.pytorch.org` and are named by
+content hash.
 
 ### Isaac Lab Training Pipeline
 
@@ -247,6 +322,12 @@ All rights reserved.
 ```
 
 ### NVIDIA Cosmos Predict Pipeline
+
+The deployable pipeline is v2.5, provisioned by `app.pipelines.useNvidiaCosmos`. The `Cosmos-Predict1`
+rows below cover the v1 container definition retained under
+`backendPipelines/genAi/nvidia/cosmos/predict/containerv1/` as a reference implementation; no
+configuration key deploys it. Its dependencies are listed because that definition ships in this
+repository, and anyone adapting it takes on the model-licence acceptance obligations directly.
 
 | Name                           | Version | License                   | Purpose                                                                    |
 | :----------------------------- | :------ | :------------------------ | :------------------------------------------------------------------------- |
@@ -290,13 +371,32 @@ All rights reserved.
 | boto3                     | latest  | Apache-2.0                | AWS SDK for Python                                            |
 | huggingface_hub           | latest  | Apache-2.0                | Model download from HuggingFace Hub                           |
 
+### NVIDIA Cosmos 3 Pipeline (omni)
+
+| Name                      | Version | License                   | Purpose                                                |
+| :------------------------ | :------ | :------------------------ | :----------------------------------------------------- |
+| NVIDIA cosmos-framework   | 3.0     | Apache-2.0                | Cosmos 3 omni framework (inference code + entrypoint)  |
+| Cosmos3-Nano              | 3.0     | OpenMDW-1.1               | 16B omnimodal world model, four-GPU sharded (~35GB)    |
+| Cosmos3-Super             | 3.0     | OpenMDW-1.1               | 64B omnimodal world model, multi-GPU (~133GB)          |
+| Cosmos3-Super-Text2Image  | 3.0     | OpenMDW-1.1               | 64B text-to-image model, multi-GPU (~133GB)            |
+| Cosmos3-Super-Image2Video | 3.0     | OpenMDW-1.1               | 64B image-to-video model, multi-GPU (~133GB)           |
+| NVIDIA Cosmos-Guardrail1  | 1.0     | NVIDIA Open Model License | Content safety blocklist and face filter (gated, ~1GB) |
+| NVIDIA Transformer Engine | 2.12.0  | Apache-2.0                | Optimized transformer computation (CUDA 12.8 build)    |
+| flash-attn                | 2.7.4   | BSD-3-Clause              | Flash attention (CUDA 12.8 build)                      |
+| torch                     | 2.10.0  | BSD-3-Clause              | Deep learning framework (CUDA 12.8 build)              |
+| iopath                    | 0.1.10  | MIT                       | File I/O abstraction used by the framework             |
+| boto3                     | latest  | Apache-2.0                | AWS SDK for Python                                     |
+| huggingface_hub           | latest  | Apache-2.0                | Model download from HuggingFace Hub                    |
+
+The Cosmos 3 pipeline container uses the NVIDIA CUDA 12.8.1 base image with cuDNN (`nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`). Cosmos 3 models are licensed under the [OpenMDW-1.1 License](https://openmdw.ai/license/1-1/); the gated `Cosmos-Guardrail1` model remains under the NVIDIA Open Model License.
+
 **Container Base Image**
 
 The Cosmos Predict Pipeline uses the NVIDIA NGC PyTorch container image (`nvcr.io/nvidia/pytorch:24.10-py3`) which is subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license).
 
 **NVIDIA Cosmos Attribution Requirement**
 
-Per the NVIDIA Open Model License, applications using NVIDIA Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. See the [NVIDIA Cosmos License](https://developer.nvidia.com/cosmos-license) for full terms.
+Applications using NVIDIA Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. This requirement applies under the [NVIDIA Open Model License](https://developer.nvidia.com/cosmos-license) for the Cosmos Predict, Reason, and Transfer models, and under the [OpenMDW-1.1 License](https://openmdw.ai/license/1-1/) for the Cosmos 3 models.
 
 **HuggingFace Model Access**
 

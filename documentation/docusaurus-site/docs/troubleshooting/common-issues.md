@@ -26,6 +26,54 @@ When redeploying with pipeline configuration changes, you may encounter AWS Clou
 This issue typically occurs only when toggling multiple pipelines simultaneously. Deploying pipeline changes incrementally can help avoid it.
 :::
 
+### Subnet or VPC Resource Deletion Failures
+
+When you disable a feature that required private or public subnets (for example, turning off a pipeline, the ALB public subnet, or reducing the Amazon OpenSearch Service availability zone count), AWS CloudFormation may fail to remove the now-unused subnets and their associated networking resources.
+
+**Symptoms:**
+
+-   `DELETE_FAILED` on subnet, route table, NAT gateway, or Elastic IP resources
+-   Errors stating a subnet has a dependency or that a network interface is still in use
+-   `UPDATE_ROLLBACK_FAILED` on the VPC nested stack after a configuration downgrade
+
+**Cause:**
+
+A subnet cannot be deleted while any elastic network interface (ENI) remains attached to it. VAMS attaches ENIs to subnets from several sources: interface VPC endpoints, NAT gateways, and—when `useGlobalVpc.useForAllLambdas` is enabled—every Lambda function placed in the VPC. When a feature is disabled, AWS CloudFormation attempts to delete the orphaned subnets before all dependent ENIs have detached, and the deletion fails. Changing the availability zone count or the set of subnet types also re-partitions the VPC CIDR, which compounds the issue because a subnet's CIDR cannot be changed in place.
+
+**Resolution:**
+
+Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs are removed before the subnets are deleted:
+
+1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
+    - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
+    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, ModelOps, RapidPipeline, point cloud / 3D thumbnail / GenAI labeling previews)
+    - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC (this releases the Lambda Hyperplane ENIs that most commonly block subnet deletion)
+    - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
+2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
+
+    ```bash
+    cd infra && cdk deploy --all --require-approval never
+    ```
+
+    If a Lambda ENI lingers (Lambda Hyperplane ENIs can take several minutes to detach after the function is removed from the VPC), wait for it to clear, or delete the orphaned ENI manually from the Amazon EC2 console (**Network Interfaces**, filter by the VPC, delete interfaces in the `available` state) before continuing.
+
+3. Re-enable the features you need in `infra/config/config.json`, including any new subnet or availability-zone configuration (for example, set `openSearch.useProvisioned.availabilityZoneCount` to `2` for a two-AZ Region such as `eusc-de-east-1`).
+4. Deploy again so the VPC is provisioned with the new subnet layout:
+
+    ```bash
+    cd infra && cdk deploy --all --require-approval never
+    ```
+
+5. If Amazon OpenSearch Service was disabled and re-enabled, re-index the search data. The domain is created empty, so run the re-index tool (or set `openSearch.reindexOnCdkDeploy = true` for one deployment). See [Reindexing OpenSearch](../developer/utilities/reindex.md).
+
+:::note[No data loss]
+Disabling Amazon OpenSearch Service and re-enabling it does not lose asset data. Search data is rebuilt from the authoritative Amazon DynamoDB tables and Amazon S3 buckets by the re-index process; only the search index itself is recreated.
+:::
+
+:::tip
+To minimize the chance of these failures, keep the availability zone count and subnet types stable across deployments. VAMS provisions a fixed AZ count per subnet type so that toggling individual pipelines does not add or remove subnets. The largest source of subnet churn is changing `openSearch.useProvisioned.availabilityZoneCount` or switching `useAlb.usePublicSubnet`, both of which change the subnet set.
+:::
+
 ### Docker Buildx Container Image Errors
 
 When deploying with AWS CDK using Docker, you may encounter errors related to container image builds, particularly `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
@@ -126,6 +174,29 @@ Verify that the KMS key policy includes the required principals. If using an ext
 -   `kms:GenerateDataKey`
 -   `kms:ReEncrypt*`
 
+### Amazon OpenSearch Provisioned Domain Update Failures
+
+Updating a provisioned Amazon OpenSearch Service domain can fail when the requested domain configuration is incompatible with the existing indexes.
+
+**Symptoms:**
+
+-   Stack enters `UPDATE_ROLLBACK_FAILED` referencing the OpenSearch domain and the indexer / search / reindexer resources
+-   Domain update rejected with `Cluster.Index.ReplicaCount: The following indices do not have multiples of 3 copies ... Index should have 3 or multiples of 3 copies including primary and replica for 3-AZ with Standby`
+
+**Cause:**
+
+Amazon OpenSearch Service Multi-AZ with Standby requires every index to have copies (primary plus replicas) in a multiple of three. VAMS enables Multi-AZ with Standby only when `availabilityZoneCount` is `3`, and in that case creates the asset and file indexes with two replicas (three copies). The error occurs when an **existing** domain that already holds single-copy indexes (a prior 2-AZ deployment) is switched to `availabilityZoneCount: 3` in place: AWS CloudFormation validates the new Standby domain configuration against the existing indexes before their replica count can be raised, and rejects it.
+
+**Resolution:**
+
+1. Recover the stuck stack: in the AWS CloudFormation console, choose **Continue update rollback** on the `UPDATE_ROLLBACK_FAILED` stack, skipping the OpenSearch domain and dependent indexer/search resources if prompted, so the stack returns to `UPDATE_ROLLBACK_COMPLETE`.
+2. To stay on the existing domain unchanged, set `app.openSearch.useProvisioned.availabilityZoneCount` back to `2` (the default) and redeploy: `cd infra && cdk deploy --all --require-approval never`.
+3. To move to a 3-AZ Multi-AZ-with-Standby domain, create it fresh: deploy once with OpenSearch disabled (`useProvisioned.enabled = false`) to remove the existing domain, then re-enable it with `availabilityZoneCount: 3` and deploy again. Run the reindex tool (or set `reindexOnCdkDeploy = true` for one deployment) to repopulate the new domain from source data — no asset data is lost.
+
+:::note
+A fresh 3-AZ domain is created as Multi-AZ with Standby with three data nodes and three copies of each index. A 2-AZ domain runs without Standby with two data nodes and a single copy. Leave `availabilityZoneCount` at its default of `2` to keep an existing domain unchanged.
+:::
+
 ---
 
 ## Web Application Issues
@@ -154,7 +225,7 @@ The Vite development server proxy handles most CSP issues automatically. If prob
 
 ### WASM-Based Viewers Not Loading
 
-Viewers that use WebAssembly (Needle USD Viewer, Three.js CAD Viewer, Cesium 3D Tileset Viewer) require specific HTTP headers to function.
+Viewers that use WebAssembly (Needle USD Viewer, Three.js CAD Viewer, Cesium 3D Tileset Viewer, ThatOpen IFC BIM Viewer, SuperSplat Editor) require specific HTTP headers to function.
 
 **Symptoms:**
 
@@ -168,7 +239,7 @@ WASM-based viewers require Cross-Origin Isolation headers (`Cross-Origin-Opener-
 -   **Amazon CloudFront deployment:** Headers are set automatically by the CloudFront distribution.
 -   **Application Load Balancer (ALB) deployment:** A front-end service worker attempts to set the headers. If your organization's security policy blocks service workers, WASM viewers will not function.
 
-For the Cesium 3D Tileset Viewer, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because CesiumJS requires runtime code generation for its rendering engine.
+For the Needle USD Viewer, the SuperSplat Editor, the ThatOpen IFC BIM Viewer, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
 
 ### Safari Limitations for WASM Viewers
 
@@ -235,7 +306,7 @@ Increasing rate limits raises the potential cost of Amazon API Gateway usage and
 
 ### Timeout on Large Operations
 
-Amazon API Gateway imposes a 29-second timeout on HTTP responses, while the underlying AWS Lambda function continues processing for up to 15 minutes.
+Amazon API Gateway returns a timeout once the configured integration timeout elapses (`app.api.apiGatewayRest.apiGatewayTimeoutTime`, 29 seconds by default), while the underlying AWS Lambda function continues processing for up to 15 minutes.
 
 **Symptoms:**
 
@@ -250,7 +321,9 @@ Amazon API Gateway imposes a 29-second timeout on HTTP responses, while the unde
 
 **Resolution:**
 
-For operations that may exceed 29 seconds, check your AWS Lambda function logs in Amazon CloudWatch to confirm whether the operation completed. The VamsCLI provides automatic pagination and retry logic that handles timeout scenarios for bulk operations.
+For operations that may exceed the integration timeout, check your AWS Lambda function logs in Amazon CloudWatch to confirm whether the operation completed. The VamsCLI provides automatic pagination and retry logic that handles timeout scenarios for bulk operations.
+
+Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
 
 ### Amazon OpenSearch Indexing Delays After Bulk Operations
 
@@ -304,6 +377,41 @@ Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instance
 1. Verify GPU instance type availability in your AWS Region (e.g., `g6e.2xlarge`, `g5.xlarge`).
 2. Request a service quota increase for the required instance types through the AWS Service Quotas console.
 3. For Isaac Lab Training, consider enabling the `keepWarmInstance` option to reduce cold start times at the cost of continuous compute charges.
+
+### Deadline Cloud Jobs Never Start and Workers Are Replaced Repeatedly
+
+A `DeadlineCloud` pipeline execution hangs, and the Deadline Cloud fleet keeps launching and discarding workers. The usual cause is the fleet role missing Amazon CloudWatch Logs write permission — the AWS managed `AWSDeadlineCloud-FleetWorker` policy does not include it.
+
+**Symptoms:**
+
+-   The VAMS execution stays in a running state until it times out, with no error reported by VAMS
+-   The farm, fleet, and queue all report `ACTIVE`, and the Deadline Cloud job was created successfully
+-   The job's task never leaves its pending state; jobs that are cancelled show `CANCELED` having never run
+-   The fleet's worker-not-responding alarm fires, and the fleet replaces its instance every few minutes
+-   The worker agent log records `AccessDeniedException` on `UpdateWorker` with `does not have sufficient access to perform CreateLogStream`
+
+**Resolution:**
+
+Add the two log actions to the fleet role, alongside the worker permissions it already holds:
+
+```json
+{
+    "Effect": "Allow",
+    "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+    "Resource": [
+        "arn:aws:logs:*:<account-id>:log-group:/aws/deadline/*",
+        "arn:aws:logs:*:<account-id>:log-group:/aws/deadline/*:log-stream:*"
+    ]
+}
+```
+
+Submit a job again and confirm its task reaches `SUCCEEDED`. A worker on a scale-to-zero fleet is created, runs, and is released quickly, so it may not be observable in `ListWorkers` between polls — the job's terminal status is the reliable signal, not catching the worker in a particular state.
+
+:::warning
+Because the alarm names worker responsiveness rather than an IAM permission, this reads as a capacity or instance-availability problem. Check the fleet role's log permissions before requesting quota increases or changing instance types.
+:::
+
+See [Configuration reference](../deployment/configuration-reference.md) for the full list of operator-supplied Deadline Cloud prerequisites.
 
 ### Pipeline Timeout vs. Workflow Timeout
 

@@ -9,11 +9,6 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as sqs from "aws-cdk-lib/aws-sqs";
-import * as lambda from "aws-cdk-lib/aws-lambda";
-import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
-import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -21,7 +16,6 @@ import {
     buildConstructPipelineFunction,
     buildOpenPipelineFunction,
     buildVamsExecutePcPotreeViewerPipelineFunction,
-    buildSqsExecutePcPotreeViewerPipelineFunction,
     buildPipelineEndFunction,
 } from "../lambdaBuilder/pcPotreeViewerFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
@@ -32,9 +26,13 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 export interface PcPotreeViewerConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -43,7 +41,7 @@ export interface PcPotreeViewerConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -84,8 +82,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 // Add permissions for all asset buckets from the global array
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
-                    // Ensure the prefix ends with a slash for proper path construction
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
@@ -98,7 +99,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -171,6 +172,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
             ],
         });
 
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
+
         /**
          * AWS Batch Job Definition & Compute Env for PDAL Container
          */
@@ -178,6 +184,8 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_PDAL",
             {
+                // Matches the 5-hour state machine timeout that encloses this job.
+                attemptDuration: cdk.Duration.hours(5),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -211,6 +219,10 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_Potree",
             {
+                // Matches the 5-hour state machine timeout that encloses this job. The Potree
+                // conversion is the second Batch job in the same state machine as the PDAL one, so
+                // both are bounded by that single timeout.
+                attemptDuration: cdk.Duration.hours(5),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -303,6 +315,22 @@ export class PcPotreeViewerConstruct extends NestedStack {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full taskTimeout. The handler reports the
+        // token for the errors it raises itself; this covers the failures where it never runs at all:
+        // the function timeout, an out-of-memory kill, an import failure, or an invoke fault that
+        // exhausts the task's service-exception retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         // batch job Potree Converter
         const potreeConverterBatchJob = new tasks.BatchSubmitJob(this, "PotreeConverterBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -360,6 +388,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "PcPotreeViewerProcessing-StateMachineLogGroup",
             {
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 logGroupName:
                     "/aws/vendedlogs/VAMSstateMachine-PreviewPcPotreeViewerPipeline" +
                     generateUniqueNameHash(
@@ -368,7 +397,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                         "PcPotreeViewerProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );
@@ -406,6 +435,8 @@ export class PcPotreeViewerConstruct extends NestedStack {
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -422,130 +453,36 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        if (
-            props.config.app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified === true
-        ) {
-            //Add subscription for each bucket to kick-off lambda function of pipeline (as the main pipeline execution action)
-            const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-            let index = 0;
-            for (const record of assetBucketRecords) {
-                const onS3ObjectCreatedQueue = new sqs.Queue(
-                    this,
-                    "pcPotreePipelineS3EventCreated-" + record.bucket,
-                    {
-                        queueName: `${props.config.name}-${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
-                        visibilityTimeout: cdk.Duration.seconds(360), // Corresponding function's is 300.
-                        encryption: props.storageResources.encryption.kmsKey
-                            ? sqs.QueueEncryption.KMS
-                            : sqs.QueueEncryption.SQS_MANAGED,
-                        encryptionMasterKey: props.storageResources.encryption.kmsKey,
-                        enforceSSL: true,
-                    }
-                );
-                onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
-
-                //Build Lambda SNS Execution Function (as an optional pipeline execution action)
-                const PcPotreeViewerPipelineSqsExecuteFunction =
-                    buildSqsExecutePcPotreeViewerPipelineFunction(
-                        this,
-                        props.lambdaCommonBaseLayer,
-                        props.storageResources.s3.assetAuxiliaryBucket,
-                        openPipelineFunction,
-                        record.bucket.bucketName,
-                        record.prefix,
-                        index,
-                        props.config,
-                        props.vpc,
-                        props.pipelineSubnets,
-                        props.storageResources.encryption.kmsKey
-                    );
-
-                //Add event notifications for syncing
-                if (record.snsS3ObjectCreatedTopic) {
-                    record.snsS3ObjectCreatedTopic.addSubscription(
-                        new SqsSubscription(onS3ObjectCreatedQueue)
-                    );
-                }
-
-                onS3ObjectCreatedQueue.grantConsumeMessages(
-                    PcPotreeViewerPipelineSqsExecuteFunction
-                );
-
-                // The functions poll the respective queues, which is populated by messages sent to the topic.
-                const esmPcCreated = new lambda.EventSourceMapping(
-                    this,
-                    `SQSEventSourceBucketSyncPCCreated-${index}`,
-                    {
-                        eventSourceArn: onS3ObjectCreatedQueue.queueArn,
-                        target: PcPotreeViewerPipelineSqsExecuteFunction,
-                        batchSize: 1, // Max configurable records w/o maxBatchingWindow.
-                        maxBatchingWindow: cdk.Duration.seconds(0), // Max configurable time to wait before function is invoked.
-                    }
-                );
-
-                // Due to cdk version upgrade, not all regions support tags for EventSourceMapping
-                // this line should remove the tags for regions that dont support it (govcloud currently not supported)
-                if (props.config.app.govCloud.enabled) {
-                    const cfnEsm = esmPcCreated.node.defaultChild as lambda.CfnEventSourceMapping;
-                    cfnEsm.addPropertyDeletionOverride("Tags");
-                }
-
-                index = index + 1;
-            }
-        }
-
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
         if (props.config.app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register E57, LAZ, LAS, PLY point cloud preview pipeline and workflow
-            new cdk.CustomResource(this, "PreviewPcPotreeViewerLasPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "preview-pc-potree-viewer-las-laz-e57-ply",
-                    pipelineDescription:
-                        "PotreeViewer Point Cloud Preview Pipeline - LAZ, LAS, E57, and PLY files using PDAL and PotreeConverter",
-                    pipelineType: "previewFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".octree",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "PcPotreeViewerRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "preview",
+                    "pcPotreeViewer",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: PcPotreeViewerPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    workflowId: "preview-pc-potree-viewer-las-laz-e57-ply",
-                    workflowDescription:
-                        "Automated workflow for LAZ, LAS, E57, and PLY point cloud preview generation using PotreeViewer Pipeline",
-                    autoTriggerOnFileExtensionsUpload:
-                        props.config.app.pipelines.usePreviewPcPotreeViewer
-                            .autoRegisterAutoTriggerOnFileUpload === true
-                            ? ".laz,.las,.e57,.ply"
-                            : "",
                 },
+                idOverrides: {
+                    pipelineId: "preview-pc-potree-viewer-las-laz-e57-ply",
+                    workflowId: "preview-pc-potree-viewer-las-laz-e57-ply",
+                },
+                triggerEnabled:
+                    props.config.app.pipelines.usePreviewPcPotreeViewer
+                        .autoRegisterAutoTriggerOnFileUpload === true,
             });
-
-            //Nag supression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
         }
 
         //Output VAMS Pipeline Execution Function name
@@ -558,17 +495,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
             PcPotreeViewerPipelineVamsExecuteFunction.functionName;
 
         //Nag Supressions
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
-                },
-            ],
-            true
-        );
-
         const reason =
             "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
 
@@ -581,7 +507,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -598,7 +524,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*PcPotreeViewerProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*PcPotreeViewerProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -615,7 +541,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -632,7 +558,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecutePreviewPcPotreeViewerPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecutePreviewPcPotreeViewerPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -645,7 +571,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -660,7 +586,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

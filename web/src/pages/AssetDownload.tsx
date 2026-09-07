@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "react-router";
 import { downloadAsset, fetchAsset } from "../services/APIService";
+import { generateBulkDownloadUrlMap } from "../services/FileOperationsService";
 import { FileTree } from "../components/filemanager/types/FileManagerTypes";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { useReducer, useState, useEffect } from "react";
@@ -104,7 +105,8 @@ const downloadSingleFile = async (
     dispatch: any,
     flattenHierarchy = false,
     assetVersionId?: string,
-    maxRetries = 3
+    maxRetries = 3,
+    prefetchedUrl?: string
 ): Promise<boolean> => {
     let retries = 0;
 
@@ -140,27 +142,35 @@ const downloadSingleFile = async (
             const fileHandle = await fileDirectoryHandle.getFileHandle(fileName, { create: true });
             const writable = await fileHandle.createWritable();
 
-            // Get download URL — use assetVersionId if provided, otherwise fall back to versionId
-            const response = await downloadAsset({
-                databaseId,
-                assetId,
-                key: file.keyPrefix,
-                versionId: file.versionId || "",
-                assetVersionId: assetVersionId,
-                downloadType: "assetFile",
-            });
+            // Use the bulk-prefetched URL on the first attempt; retries (and
+            // files without a prefetched URL) request a fresh one per file
+            let downloadUrl: string;
+            if (prefetchedUrl && retries === 0) {
+                downloadUrl = prefetchedUrl;
+            } else {
+                // Get download URL — use assetVersionId if provided, otherwise fall back to versionId
+                const response = await downloadAsset({
+                    databaseId,
+                    assetId,
+                    key: file.keyPrefix,
+                    versionId: file.versionId || "",
+                    assetVersionId: assetVersionId as any,
+                    downloadType: "assetFile",
+                });
 
-            if (response === false || !Array.isArray(response)) {
-                throw new Error("Invalid response from downloadAsset");
-            }
+                if (response === false || !Array.isArray(response)) {
+                    throw new Error("Invalid response from downloadAsset");
+                }
 
-            if (response[0] === false) {
-                throw new Error(`API Error: ${response[1]}`);
+                if (response[0] === false) {
+                    throw new Error(`API Error: ${response[1]}`);
+                }
+                downloadUrl = response[1];
             }
 
             // Download the file
             const responseFile = await axios({
-                url: response[1],
+                url: downloadUrl,
                 method: "GET",
                 responseType: "blob",
                 onDownloadProgress: (progressEvent) => {
@@ -238,6 +248,20 @@ const downloadFilesInParallel = async (
 ): Promise<void> => {
     const downloadQueue = new DownloadQueue(concurrencyLimit);
 
+    // Bulk-generate presigned URLs up front (one API call per 1500 files).
+    // All files resolve to their current version (or the selected asset
+    // version); any key missing from the bulk result falls back to a per-file
+    // URL request inside downloadSingleFile.
+    let urlByKey = new Map<string, string>();
+    if (files.length > 1) {
+        urlByKey = await generateBulkDownloadUrlMap(
+            databaseId,
+            assetId,
+            files.map((f) => f.keyPrefix),
+            assetVersionId
+        );
+    }
+
     // Create an array of promises for all file downloads
     const downloadPromises = files.map((file) =>
         downloadQueue.add(() =>
@@ -248,7 +272,9 @@ const downloadFilesInParallel = async (
                 directoryHandle,
                 dispatch,
                 flattenHierarchy,
-                assetVersionId
+                assetVersionId,
+                3,
+                urlByKey.get(file.keyPrefix)
             )
         )
     );
@@ -567,7 +593,12 @@ export default function AssetDownloadsPage() {
     const { state } = useLocation();
     const { databaseId, assetId } = useParams();
     const navigate = useNavigate();
-    const fileTree = state["fileTree"] as FileTree;
+    // `location.state` is null whenever this route is reached without an in-app navigation carrying it —
+    // a bookmark, a shared link, or simply a browser refresh. Indexing it directly threw
+    // "Cannot read properties of null (reading 'fileTree')" and the page died behind the error boundary,
+    // whose Reload button repeats the same stateless navigation, so the user could not recover at all.
+    // The next line already guarded `state?.assetName`, so the null case was anticipated one field over.
+    const fileTree = (state as { fileTree?: FileTree } | null)?.fileTree;
     const [assetName, setAssetName] = useState<string>((state?.assetName as string) || "");
     usePageTitle(databaseId, assetName || assetId, "Download");
     const [resume, setResume] = useState(true);
@@ -588,15 +619,19 @@ export default function AssetDownloadsPage() {
     const [flattenHierarchy, setFlattenHierarchy] = useState(true);
     const [selectedFolderName, setSelectedFolderName] = useState<string>("");
 
-    // Initialize table items
-    const fileUploadTableItems = convertFileTreeItemsToFileUploadTableItems(fileTree);
+    // Initialize table items. Falls back to an empty list when there is no tree, so every hook below
+    // still runs unconditionally — the "no state" case is handled by an early return after the hooks,
+    // which is the only placement that respects hook ordering.
+    const fileUploadTableItems = fileTree
+        ? convertFileTreeItemsToFileUploadTableItems(fileTree)
+        : [];
     const [fileUploadTableItemsState, dispatch] = useReducer(
         assetDownloadReducer,
         fileUploadTableItems
     );
 
     // Check for duplicate file names when in flatten mode
-    const flattenedFiles = flattenFileTree(fileTree);
+    const flattenedFiles = fileTree ? flattenFileTree(fileTree) : [];
     const duplicateFileNames = flattenHierarchy ? detectDuplicateFileNames(flattenedFiles) : [];
     const hasDuplicates = duplicateFileNames.length > 0;
 
@@ -613,6 +648,10 @@ export default function AssetDownloadsPage() {
 
     // Handle download
     const handleDownload = async () => {
+        // Unreachable without a tree — the early return above replaces the entire download UI, including
+        // the button that calls this. Guarded rather than asserted with `!`, so the type stays honest if
+        // that return is ever moved or removed.
+        if (!fileTree) return;
         setIsDownloading(true);
 
         try {
@@ -681,6 +720,32 @@ export default function AssetDownloadsPage() {
 
     const stats = getDownloadStats();
     const allComplete = isAllComplete();
+
+    // No router state means there is nothing to download: the folder tree is chosen in the file manager
+    // and handed over on navigation, so it cannot be reconstructed from the URL alone. Placed after every
+    // hook above, because an early return before them would change the hook order between renders.
+    // A link back to the asset is the actionable part — telling the user the page is unusable without
+    // saying where to go leaves them exactly as stuck as the crash did.
+    if (!fileTree) {
+        return (
+            <Box padding={{ top: "xs", horizontal: "l" }}>
+                <SpaceBetween direction="vertical" size="m">
+                    <Header variant="h2">Nothing selected to download</Header>
+                    <Box variant="p">
+                        This page downloads a folder chosen in the {Synonyms.Asset} file manager, so
+                        it cannot be opened directly, bookmarked, or reloaded. Open the{" "}
+                        {Synonyms.asset} and start the download from its Files tab.
+                    </Box>
+                    <Button
+                        variant="primary"
+                        onClick={() => navigate(`/databases/${databaseId}/assets/${assetId}`)}
+                    >
+                        Go to {Synonyms.Asset}
+                    </Button>
+                </SpaceBetween>
+            </Box>
+        );
+    }
 
     return (
         <Box padding={{ top: "xs", horizontal: "l" }}>

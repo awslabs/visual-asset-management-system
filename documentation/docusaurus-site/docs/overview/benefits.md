@@ -12,7 +12,7 @@ VAMS serves as a **single pane of glass** for an organization's spatial data sou
 
 ## Open-Source Extensibility
 
-As an open-source project, VAMS is designed to be adapted to your organization's specific requirements. The plugin-based architecture supports integration of new viewer plugins, upstream data sources (external S3 buckets, partner connectors), downstream consumers (knowledge graphs, processing services), and custom workflow pipelines — all without vendor lock-in.
+As an open-source project, VAMS is designed to be adapted to your organization's specific requirements. The plugin-based architecture supports integration of new viewer plugins, upstream data sources (external Amazon S3 buckets, partner connectors), downstream consumers (knowledge graphs, processing services), and custom workflow pipelines — all without vendor lock-in.
 
 ---
 
@@ -35,7 +35,7 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 17 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 20 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
@@ -49,7 +49,7 @@ VAMS includes 17 built-in viewer plugins that allow users to visualize a wide ra
 
 ## Automated Processing Pipelines
 
-VAMS provides a configurable pipeline and workflow system that automates common asset processing tasks. Pipelines execute as AWS Batch Fargate containers orchestrated by AWS Step Functions, with support for AWS Lambda, Amazon SQS, and Amazon EventBridge execution types.
+VAMS provides a configurable pipeline and workflow system that automates common asset processing tasks. AWS Step Functions orchestrates the steps of a workflow, and each step reaches its processing backend through one of four execution types -- AWS Lambda, Amazon SQS, Amazon EventBridge, or AWS Deadline Cloud. Container-based processing runs on AWS Batch Fargate, with licensed pipelines also available on Amazon ECS and Amazon EKS.
 
 -   **3D Conversion** -- Convert between 3D file formats using Trimesh and Blender
 -   **CAD/Mesh Metadata Extraction** -- Automatically extract geometric metadata from CAD and mesh files using CADQuery
@@ -104,14 +104,14 @@ VAMS is built from the ground up for deployment across AWS partitions and region
 
 -   Deploy to any AWS commercial region with Amazon CloudFront distribution
 -   Deploy to AWS GovCloud (US) regions with Application Load Balancer distribution and FIPS endpoint support
--   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services
+-   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
 
 -   Import existing VPCs and subnets for integration with organizational network architectures
 -   Multiple VAMS deployments in the same account using unique stack names and regions
 -   AWS WAF integration for web application firewall protection (optional)
 
 :::warning[Compliance Responsibility]
-VAMS is provided as near-production-grade at its default configuration. Consult with your organizational security team prior to production use, and review the [Security Considerations](../developer/setup.md) section for recommended hardening steps.
+VAMS is provided as near-production-grade at its default configuration. Consult with your organizational security team prior to production use, and review the [Security Recommendations](../architecture/security.md#security-recommendations) for recommended hardening steps.
 :::
 
 ---
@@ -124,6 +124,6 @@ VAMS is designed as an open, extensible platform that development teams can cust
 -   Plugin-based viewer architecture for adding custom visualization capabilities
 -   Pipeline and workflow system for integrating custom processing logic
 -   REST API layer for building custom applications and integrations
--   Addon framework (e.g., Garnet Framework) for connecting VAMS to external systems
+-   Addon framework (e.g., Garnet Framework, Physna Sync) for connecting VAMS to external systems
 -   CDK-based infrastructure for customizing deployment topology and AWS service configuration
 -   Configurable metadata schemas for adapting data models to domain-specific requirements

@@ -4,16 +4,14 @@
  */
 
 import React, { useEffect, useState, useMemo } from "react";
-import { Document, Page, pdfjs } from "react-pdf";
+import { Document, Page } from "react-pdf";
 import { Button, SpaceBetween, Box } from "@cloudscape-design/components";
+import * as awsui from "@cloudscape-design/design-tokens";
 import { downloadAsset } from "../../../services/APIService";
 import { ViewerPluginProps } from "../../core/types";
-
-// Configure PDF.js worker
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/build/pdf.worker.min.mjs",
-    import.meta.url
-).toString();
+// Configures the pdf.js worker as a side effect. Kept in its own module so `import.meta` does not
+// make this component unimportable under jest — see pdfWorker.ts.
+import "./pdfWorker";
 
 const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -60,7 +58,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                     databaseId: databaseId,
                     key: assetKey || "",
                     versionId: versionId,
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
 
@@ -69,7 +67,8 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                         console.error("Error downloading PDF file:", response);
                         throw new Error("Failed to download PDF file");
                     } else {
-                        console.log("Successfully loaded PDF URL:", response[1]);
+                        // Presigned URL — log the key, not the signed URL.
+                        console.log("Successfully loaded PDF file:", assetKey);
                         setFileUrl(response[1]);
                     }
                 } else {
@@ -132,7 +131,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
     if (error) {
         return (
             <Box textAlign="center" padding="xl">
-                <div style={{ color: "red" }}>Error: {error}</div>
+                <div style={{ color: awsui.colorTextStatusError }}>Error: {error}</div>
             </Box>
         );
     }
@@ -151,8 +150,8 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
             <div
                 style={{
                     padding: "10px",
-                    borderBottom: "1px solid #e0e0e0",
-                    backgroundColor: "#f5f5f5",
+                    borderBottom: `1px solid ${awsui.colorBorderDividerDefault}`,
+                    backgroundColor: awsui.colorBackgroundContainerHeader,
                     flexShrink: 0,
                 }}
             >
@@ -238,8 +237,13 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                             style={{
                                 width: "60px",
                                 padding: "4px",
-                                border: "1px solid #ccc",
+                                border: `1px solid ${awsui.colorBorderInputDefault}`,
                                 borderRadius: "4px",
+                                // A native input keeps the browser's own light background and dark
+                                // text whatever the page theme is, so in dark mode it reads as a
+                                // white box; setting only the border would leave that unchanged.
+                                backgroundColor: awsui.colorBackgroundInputDefault,
+                                color: awsui.colorTextBodyDefault,
                             }}
                         />
                     </div>
@@ -255,7 +259,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                     justifyContent: "center",
                     alignItems: "flex-start",
                     padding: "20px",
-                    backgroundColor: "#f9f9f9",
+                    backgroundColor: awsui.colorBackgroundLayoutMain,
                 }}
             >
                 <Document
@@ -269,7 +273,7 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
                     error={
                         <Box textAlign="center" padding="xl">
-                            <div style={{ color: "red" }}>
+                            <div style={{ color: awsui.colorTextStatusError }}>
                                 Failed to load PDF document. Please check if the file is valid.
                             </div>
                         </Box>
@@ -286,7 +290,9 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                         }
                         error={
                             <Box textAlign="center" padding="xl">
-                                <div style={{ color: "red" }}>Failed to load page {pageNumber}</div>
+                                <div style={{ color: awsui.colorTextStatusError }}>
+                                    Failed to load page {pageNumber}
+                                </div>
                             </Box>
                         }
                         renderTextLayer={false}
@@ -300,8 +306,8 @@ const PDFViewerComponent: React.FC<ViewerPluginProps> = ({
                 <div
                     style={{
                         padding: "10px",
-                        borderTop: "1px solid #e0e0e0",
-                        backgroundColor: "#f5f5f5",
+                        borderTop: `1px solid ${awsui.colorBorderDividerDefault}`,
+                        backgroundColor: awsui.colorBackgroundContainerHeader,
                         flexShrink: 0,
                     }}
                 >

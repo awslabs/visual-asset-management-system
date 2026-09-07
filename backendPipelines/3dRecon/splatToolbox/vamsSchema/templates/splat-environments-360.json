@@ -1,0 +1,44 @@
+{
+    "templateId": "splat-environments-360",
+    "templateName": "Environments (360 / spherical capture)",
+    "description": "Process 360/spherical videos (.zip, .mov, .mp4) into 3D Gaussian splat environments.",
+    "configFormat": "json",
+    "configBody": "{\"SPHERICAL_CAMERA\":true,\"RUN_RECON\":{{RUN_RECON}},\"RUN_TRAIN\":{{RUN_TRAIN}},\"CROP_OUTPUT_BOUNDS\":{{CROP_OUTPUT_BOUNDS}},\"CROP_MODE\":\"{{CROP_MODE}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Use for 360/spherical captures of full environments; the template enables the spherical-camera reconstruction path. The defaults run camera reconstruction and splat training over the input capture, which is what a new capture needs. \"Run camera reconstruction\" and \"Run splat training\" resume or export from a previous run's archive instead, and both require that archive in the input. \"Crop output bounds\" trims the exported splat to the scene bounds, and \"Crop mode\" selects how the bounds are computed.",
+    "tagSchema": [
+        {
+            "tagKey": "RUN_RECON",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Run camera reconstruction",
+            "description": "Recover camera poses from the input capture before training. Clear it to reuse poses already computed by an earlier run, which requires that run's COLMAP reconstruction archive or model archive in the input."
+        },
+        {
+            "tagKey": "RUN_TRAIN",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Run splat training",
+            "description": "Train the Gaussian splat model. Clear it to export from an already-trained model, which requires that model's archive (model.tar.gz) in the input; on a fresh capture there is nothing to export and the run fails."
+        },
+        {
+            "tagKey": "CROP_OUTPUT_BOUNDS",
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "label": "Crop output bounds",
+            "description": "Trim the exported splat to the reconstructed scene bounds, removing the sparse points that surround a capture."
+        },
+        {
+            "tagKey": "CROP_MODE",
+            "type": "enum",
+            "required": false,
+            "default": "environment",
+            "enumValues": ["rigid_body", "environment"],
+            "label": "Crop mode",
+            "description": "How the crop bounds are computed when \"Crop output bounds\" is set. environment keeps the surrounding scene; rigid_body fits a tight box around a single object."
+        }
+    ]
+}

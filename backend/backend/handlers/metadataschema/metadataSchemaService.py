@@ -3,7 +3,6 @@
 
 """Metadata Schema service handler for VAMS API - V2 implementation."""
 
-import os
 import boto3
 import json
 import base64
@@ -20,7 +19,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.metadataSchema import (
     GetMetadataSchemaRequestModel, GetMetadataSchemasRequestModel,
     CreateMetadataSchemaRequestModel, UpdateMetadataSchemaRequestModel,
@@ -46,10 +45,11 @@ claims_and_roles = {}
 
 # Load environment variables
 try:
-    metadata_schema_table_name = os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"]
-    database_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    metadata_schema_table_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -351,22 +351,30 @@ def create_metadata_schema(schema_data, claims_and_roles):
         Created schema operation response
     """
     try:
-        # Verify database exists
-        verify_database_exists(schema_data['databaseId'])
-        
-        # Check authorization
+        # Authorize before the database lookup below can disclose whether the database exists.
+        # verify_database_exists answers 400 for an absent database while the gate answers 403, so
+        # running it first hands a caller holding the POST route but no matching metadataSchema
+        # constraint a database-existence oracle over names the Casbin-filtered database listing
+        # would not have shown it, and drives a table read per probe. A metadataSchema is authorized
+        # on databaseId + metadataSchemaName + metadataSchemaEntityType
+        # (CONSTRAINT_OBJECT_TYPE_FIELDS), all of which the request supplies, so nothing has to be
+        # read to reach the same decision.
         auth_object = {
             "databaseId": schema_data['databaseId'],
             "metadataSchemaEntityType": schema_data['metadataSchemaEntityType'],
             "metadataSchemaName": schema_data['schemaName'],
             "object__type": "metadataSchema"
         }
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "POST"):
-                return authorization_error()
-        
+
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "POST"):
+            return authorization_error()
+
+        # Verify database exists
+        verify_database_exists(schema_data['databaseId'])
+
         # Generate unique ID
         metadata_schema_id = str(uuid.uuid4())
         
@@ -375,7 +383,7 @@ def create_metadata_schema(schema_data, claims_and_roles):
         
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         
         # Convert fields to JSON string for storage
         fields_json = json.dumps(schema_data['fields'])
@@ -443,10 +451,11 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
             "object__type": "metadataSchema"
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "POST"):  # Uses POST permission for updates
-                return authorization_error()
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "POST"):  # Uses POST permission for updates
+            return authorization_error()
         
         # Update the fields
         logger.info(f"Updating metadata schema {metadataSchemaId}")
@@ -471,7 +480,7 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         
         # Update metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         schema['dateModified'] = now
         schema['modifiedBy'] = username
         
@@ -516,10 +525,11 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles):
             "object__type": "metadataSchema"
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "DELETE"):
-                return authorization_error()
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "DELETE"):
+            return authorization_error()
         
         # Delete the schema
         logger.info(f"Deleting metadata schema {metadataSchemaId}")
@@ -606,10 +616,11 @@ def handle_get_request(event):
                     "metadataSchemaEntityType": schema.get('metadataSchemaEntityType', '')
                 }
                 
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce(auth_schema, "GET"):
-                        return authorization_error()
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if not casbin_enforcer.enforce(auth_schema, "GET"):
+                    return authorization_error()
                 
                 # Convert to response model
                 try:
@@ -635,7 +646,7 @@ def handle_get_request(event):
                 }
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Determine which query to use based on filters
             if request_model.databaseId and request_model.metadataEntityType:
@@ -716,13 +727,17 @@ def handle_post_request(event):
             request_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -767,13 +782,17 @@ def handle_put_request(event):
             update_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -842,13 +861,17 @@ def handle_delete_request(event):
             path_parameters['metadataSchemaId'],
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -890,7 +913,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

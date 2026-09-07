@@ -1,5 +1,6 @@
 """Tag management commands for VamsCLI."""
 
+import builtins
 import json
 import click
 from typing import Dict, Any, Optional, List
@@ -35,6 +36,22 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
             raise click.BadParameter(
                 f"Invalid JSON in file '{json_input}': file contains invalid JSON format"
             )
+
+
+def flatten_tag_input(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a single flat tag object for the tags API.
+
+    The API accepts one flat object per request ({tagName, description, tagTypeName}).
+    A legacy wrapped shape ({"tags": [ {...} ]}) is unwrapped to its first element so
+    previously documented JSON input continues to work.
+    """
+    # NOTE: this module defines a `list` command, so the builtin `list` name is shadowed
+    # here — use `builtins.list` for the isinstance check.
+    if isinstance(data, dict):
+        wrapped = data.get('tags')
+        if isinstance(wrapped, builtins.list) and wrapped:
+            return wrapped[0]
+    return data
 
 
 def format_tag_output(tag_data: Dict[str, Any], json_output: bool = False) -> str:
@@ -86,6 +103,25 @@ def format_tags_list_output(tags_data: List[Dict[str, Any]], json_output: bool =
     return '\n'.join(output_lines)
 
 
+def filter_tags_by_type(result: Dict[str, Any], tag_type: str) -> Dict[str, Any]:
+    """Narrow an enveloped tags response to one tag type, in place.
+
+    The `/tags` handler accepts no tagType query parameter, so this is the only place the filter can
+    be applied — and it has to be applied to the payload rather than in the CLI formatter, which
+    JSON mode never runs.
+    """
+    message = result.get('message') if isinstance(result, dict) else None
+    if not isinstance(message, dict):
+        return result
+    wanted = tag_type.lower()
+    message['Items'] = [
+        tag for tag in (message.get('Items') or [])
+        # The listing marks a required tag type with a trailing " [R]"; strip it before comparing.
+        if tag.get('tagTypeName', '').replace(' [R]', '').lower() == wanted
+    ]
+    return result
+
+
 @click.group()
 def tag():
     """Tag management commands."""
@@ -96,49 +132,53 @@ def tag():
 @click.option('--tag-name', help='Tag name')
 @click.option('--description', help='Tag description')
 @click.option('--tag-type-name', help='Tag type name')
+@click.option('--database', 'database_id', help='Scope the tag to this database (omit for a global tag)')
 @click.option('--json-input', help='JSON input file path or JSON string with tag data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def create(ctx: click.Context, tag_name: Optional[str], description: Optional[str], 
-          tag_type_name: Optional[str], json_input: Optional[str], json_output: bool):
+def create(ctx: click.Context, tag_name: Optional[str], description: Optional[str],
+          tag_type_name: Optional[str], database_id: Optional[str],
+          json_input: Optional[str], json_output: bool):
     """
     Create a new tag in VAMS.
-    
+
     This command creates a new tag with the specified name, description, and tag type.
     You can provide tag details via individual options or use --json-input for
-    complex data structures.
-    
+    complex data structures. Use --database to scope the tag to a database; omit it
+    for a global tag.
+
     Examples:
         vamscli tag create --tag-name "urgent" --description "Urgent priority" --tag-type-name "priority"
-        vamscli tag create --json-input '{"tags":[{"tagName":"urgent","description":"Urgent","tagTypeName":"priority"}]}'
+        vamscli tag create --tag-name "EquipID" --description "Equipment ID" --tag-type-name "custom" --database factory-db
+        vamscli tag create --json-input '{"tagName":"urgent","description":"Urgent","tagTypeName":"priority"}'
         vamscli tag create --json-input tags.json --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Build tag data
         if json_input:
-            # Use JSON input
-            tags_data = parse_json_input(json_input)
+            # Use JSON input (flat object; a legacy {"tags":[...]} wrapper is unwrapped)
+            tags_data = flatten_tag_input(parse_json_input(json_input))
         else:
             # Build from individual options
             if not all([tag_name, description, tag_type_name]):
                 raise click.BadParameter(
                     "All options (--tag-name, --description, --tag-type-name) are required when not using --json-input"
                 )
-            
+
             tags_data = {
-                'tags': [{
-                    'tagName': tag_name,
-                    'description': description,
-                    'tagTypeName': tag_type_name
-                }]
+                'tagName': tag_name,
+                'description': description,
+                'tagTypeName': tag_type_name
             }
-        
+            if database_id:
+                tags_data['databaseId'] = database_id
+
         output_status("Creating tag(s)...", json_output)
         
         # Create the tag(s)
@@ -146,7 +186,12 @@ def create(ctx: click.Context, tag_name: Optional[str], description: Optional[st
         
         def format_create_result(data):
             """Format create result for CLI display."""
-            return f"  Message: {data.get('message', 'Tags created')}"
+            lines = [f"  Message: {data.get('message', 'Tags created')}"]
+            # A create can succeed WITH advisories — most notably a global entry created
+            # over a name a database already uses. Silence would hide it.
+            for warning in data.get('warnings') or []:
+                lines.append(f"  Warning: {warning}")
+            return '\n'.join(lines)
         
         output_result(
             result,
@@ -185,72 +230,77 @@ def create(ctx: click.Context, tag_name: Optional[str], description: Optional[st
 @click.option('--tag-name', help='Tag name to update')
 @click.option('--description', help='New tag description')
 @click.option('--tag-type-name', help='New tag type name')
+@click.option('--database', 'database_id', help='Scope the tag to this database (omit for a global tag)')
 @click.option('--json-input', help='JSON input file path or JSON string with tag data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def update(ctx: click.Context, tag_name: Optional[str], description: Optional[str], 
-          tag_type_name: Optional[str], json_input: Optional[str], json_output: bool):
+def update(ctx: click.Context, tag_name: Optional[str], description: Optional[str],
+          tag_type_name: Optional[str], database_id: Optional[str],
+          json_input: Optional[str], json_output: bool):
     """
     Update an existing tag in VAMS.
-    
+
     This command updates an existing tag's description and/or tag type.
     You can update individual fields or use --json-input for complex updates.
-    
+    Use --database to target a tag scoped to a database; omit it for a global tag.
+
     Examples:
         vamscli tag update --tag-name "urgent" --description "Updated description"
+        vamscli tag update --tag-name "EquipID" --description "Updated" --database factory-db
         vamscli tag update --tag-name "urgent" --tag-type-name "new-priority"
-        vamscli tag update --json-input '{"tags":[{"tagName":"urgent","description":"Updated","tagTypeName":"priority"}]}'
+        vamscli tag update --json-input '{"tagName":"urgent","description":"Updated","tagTypeName":"priority"}'
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Build update data
         if json_input:
-            # Use JSON input
-            tags_data = parse_json_input(json_input)
+            # Use JSON input (flat object; a legacy {"tags":[...]} wrapper is unwrapped)
+            tags_data = flatten_tag_input(parse_json_input(json_input))
         else:
             # Build from individual options
             if not tag_name:
                 raise click.BadParameter(
                     "--tag-name is required when not using --json-input"
                 )
-            
+
             if not any([description, tag_type_name]):
                 raise click.BadParameter(
                     "At least one field must be provided for update. "
                     "Use --description, --tag-type-name, or --json-input."
                 )
-            
+
             # We need to get the current tag data first to preserve unchanged fields
             output_status("Retrieving current tag data...", json_output)
             current_tags = api_client.get_tags()
             current_tag = None
-            
+
             # Find the tag in the response
             tags_list = current_tags.get('message', {}).get('Items', [])
             for tag in tags_list:
                 if tag.get('tagName') == tag_name:
                     current_tag = tag
                     break
-            
+
             if not current_tag:
                 raise TagNotFoundError(f"Tag '{tag_name}' not found")
-            
+
             # Build update data with current values as defaults
             tags_data = {
-                'tags': [{
-                    'tagName': tag_name,
-                    'description': description or current_tag.get('description'),
-                    'tagTypeName': tag_type_name or current_tag.get('tagTypeName', '').replace(' [R]', '')
-                }]
+                'tagName': tag_name,
+                'description': description or current_tag.get('description'),
+                'tagTypeName': tag_type_name or current_tag.get('tagTypeName', '').replace(' [R]', '')
             }
-        
+
+        if database_id:
+            tags_data['databaseId'] = database_id
+
         # Get tag name for progress message
-        update_tag_name = tag_name if tag_name else tags_data.get('tags', [{}])[0].get('tagName', 'unknown')
+        update_tag_name = tag_name if tag_name else tags_data.get('tagName', 'unknown')
         output_status(f"Updating tag '{update_tag_name}'...", json_output)
         
         # Update the tag(s)
@@ -296,18 +346,21 @@ def update(ctx: click.Context, tag_name: Optional[str], description: Optional[st
 @tag.command()
 @click.argument('tag_name')
 @click.option('--confirm', is_flag=True, help='Confirm tag deletion')
+@click.option('--database', 'database_id', help='Scope the tag to this database (omit for a global tag)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def delete(ctx: click.Context, tag_name: str, confirm: bool, json_output: bool):
+def delete(ctx: click.Context, tag_name: str, confirm: bool, database_id: Optional[str], json_output: bool):
     """
     Delete a tag from VAMS.
-    
+
     This command permanently deletes a tag. The --confirm flag is required
-    to prevent accidental deletions.
-    
+    to prevent accidental deletions. Use --database to target a tag scoped to a
+    database; omit it for a global tag.
+
     Examples:
         vamscli tag delete urgent --confirm
+        vamscli tag delete EquipID --confirm --database factory-db
         vamscli tag delete urgent --confirm --json-output
     """
     # Setup/auth already validated by decorator
@@ -337,7 +390,7 @@ def delete(ctx: click.Context, tag_name: str, confirm: bool, json_output: bool):
         output_status(f"Deleting tag '{tag_name}'...", json_output)
         
         # Delete the tag
-        result = api_client.delete_tag(tag_name)
+        result = api_client.delete_tag(tag_name, database_id=database_id)
         
         def format_delete_result(data):
             """Format delete result for CLI display."""
@@ -367,57 +420,64 @@ def delete(ctx: click.Context, tag_name: str, confirm: bool, json_output: bool):
 
 @tag.command()
 @click.option('--tag-type', help='Filter tags by tag type')
+@click.option('--database', 'database_id', help='Show only tags scoped to this database (use --scope global/all for global tags)')
+@click.option('--scope', type=click.Choice(['global', 'all']), help='global = global tags only; all = every tag (admin)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, tag_type: Optional[str], json_output: bool):
+def list(ctx: click.Context, tag_type: Optional[str], database_id: Optional[str],
+         scope: Optional[str], json_output: bool):
     """
     List all tags in VAMS.
-    
+
     This command lists all available tags, optionally filtered by tag type.
-    
+    Use --database to list only the tags scoped to that database (global tags
+    are not included), or --scope to list only global tags (global) or every
+    tag (all).
+
     Examples:
         vamscli tag list
         vamscli tag list --tag-type priority
+        vamscli tag list --database factory-db
+        vamscli tag list --scope global
         vamscli tag list --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     output_status("Retrieving tags...", json_output)
-    
+
     # Get the tags
-    result = api_client.get_tags()
-    
+    result = api_client.get_tags(database_id=database_id, scope=scope)
+
+    # The tags API has no tagType query parameter, so the filter is applied here — in the command
+    # body, not in the CLI formatter. output_result never calls the formatter in JSON mode, so a
+    # formatter-side filter would leave --json-output consumers with the unfiltered superset.
+    if tag_type:
+        filter_tags_by_type(result, tag_type)
+
     def format_tags_result(data):
         """Format tags result for CLI display."""
-        # Extract tags from the response
-        tags_list = data.get('message', {}).get('Items', [])
-        
-        # Filter by tag type if specified
-        if tag_type:
-            filtered_tags = []
-            for tag in tags_list:
-                tag_type_name = tag.get('tagTypeName', '')
-                # Remove [R] indicator for comparison
-                clean_tag_type = tag_type_name.replace(' [R]', '')
-                if clean_tag_type.lower() == tag_type.lower():
-                    filtered_tags.append(tag)
-            tags_list = filtered_tags
-            
-            if not tags_list:
-                return f"No tags found for tag type '{tag_type}'."
-        
-        # Format for CLI display
+        message = data.get('message', {})
+        tags_list = message.get('Items', [])
+
+        if tag_type and not tags_list:
+            return f"No tags found for tag type '{tag_type}'."
+
         output = format_tags_list_output(tags_list, json_output)
-        
-        # Show pagination info if available
-        if data.get('message', {}).get('NextToken'):
-            output += "\n\nMore results available. Use pagination to see additional tags."
-        
+
+        # A NextToken means the listing hit the service's own 30,000-item bound. There is no
+        # continuation option to spend it on, and the two scoped forms drain their partition fully,
+        # so the advisory names those rather than a pagination flag that does not exist.
+        if message.get('NextToken'):
+            output += ("\n\nMore results available: this listing reached the service's item limit. "
+                       "Narrow it with --database <id> or --scope global, which return the whole "
+                       "scope.")
+
         return output
-    
+
     output_result(result, json_output, cli_formatter=format_tags_result)
+    return result
     return result

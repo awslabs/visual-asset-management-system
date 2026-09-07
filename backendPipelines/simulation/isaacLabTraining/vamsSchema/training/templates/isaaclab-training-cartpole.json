@@ -1,0 +1,51 @@
+{
+    "templateId": "isaaclab-training-cartpole",
+    "templateName": "Train (Cartpole, rsl_rl)",
+    "description": "Train an RL policy with Isaac Lab (Isaac-Cartpole-Direct-v0, rsl_rl, 4096 envs, 1500 iterations).",
+    "configFormat": "json",
+    "configBody": "{\"trainingConfig\":{\"mode\":\"train\",\"task\":\"{{TASK}}\",\"numEnvs\":{{NUM_ENVS}},\"maxIterations\":{{MAX_ITERATIONS}},\"rlLibrary\":\"{{RL_LIBRARY}}\",\"seed\":\"{{SEED}}\"}}",
+    "allowCustomEdit": true,
+    "inputInstructions": "The \"Isaac Lab task\" field names the environment to train, and must be a task the container's Isaac Lab installation registers. \"Parallel environments\" and \"Training iterations\" size the run and are what its cost follows. \"RL library\" selects the training script. Leave \"Random seed\" blank for a random seed, or set one to reproduce a run.",
+    "tagSchema": [
+        {
+            "tagKey": "TASK",
+            "type": "string",
+            "required": false,
+            "default": "Isaac-Cartpole-Direct-v0",
+            "label": "Isaac Lab task",
+            "description": "The Isaac Lab task id to train, for example Isaac-Cartpole-Direct-v0. It must be registered by the container's Isaac Lab installation or by a custom environment package supplied with the run."
+        },
+        {
+            "tagKey": "NUM_ENVS",
+            "type": "integer",
+            "required": false,
+            "default": 4096,
+            "label": "Parallel environments",
+            "description": "How many environments are simulated in parallel on the GPU. A higher count trains faster per iteration and uses more GPU memory."
+        },
+        {
+            "tagKey": "MAX_ITERATIONS",
+            "type": "integer",
+            "required": false,
+            "default": 1500,
+            "label": "Training iterations",
+            "description": "How many learning iterations to run. This is the main driver of the run's duration and GPU cost."
+        },
+        {
+            "tagKey": "RL_LIBRARY",
+            "type": "enum",
+            "required": false,
+            "default": "rsl_rl",
+            "enumValues": ["rsl_rl", "rl_games", "skrl"],
+            "label": "RL library",
+            "description": "The reinforcement-learning library whose Isaac Lab training script runs. The checkpoints a run writes are loadable by the same library, so an evaluation of this policy must select the same one."
+        },
+        {
+            "tagKey": "SEED",
+            "type": "string",
+            "required": false,
+            "label": "Random seed",
+            "description": "A whole number seeding the run's randomness, so the same task and settings reproduce the same policy. Leave it blank to let Isaac Lab choose a seed."
+        }
+    ]
+}

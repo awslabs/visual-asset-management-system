@@ -8,11 +8,18 @@ from botocore.exceptions import ClientError
 from ..logging import log
 from boto3.s3.transfer import TransferConfig
 from ..pipeline.extensions import split_large_file
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = log.get_logger()
 
-client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-s3 = boto3.resource('s3', region_name=os.getenv("AWS_REGION", "us-east-1"))
+client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
+s3 = boto3.resource('s3', region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
 
 
 def download(bucket_name, object_key, file_path):
@@ -186,19 +193,26 @@ def delete_all_path_contents(bucket_name: str, pathKey: str):
         #             }
         #         )
 
-        # get all other objects in bucket (non-verionsed?) - Final object sweep
-        response = client.list_objects_v2(Bucket=bucket_name, Prefix=pathKey)
-        if 'Contents' in response:
-            # map object ket from object list for multi object delete request
-            object_keys = map_object_keys(response["Contents"])
+        # get all other objects in bucket (non-verionsed?) - Final object sweep.
+        # Paginate the listing: a single page caps at 1,000 keys, and an octree or
+        # splat output routinely exceeds that, which would leave stale files behind
+        # when a preview is regenerated.
+        object_keys = []
+        paginator = client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket_name, Prefix=pathKey):
+            object_keys.extend(map_object_keys(page.get("Contents", [])))
+
+        if object_keys:
             logger.info(f"Deleting {len(object_keys)} Other Objects")
 
-            # delete objects from bucket path
-            client.delete_objects(
-                Bucket=bucket_name,
-                Delete={
-                    'Objects': object_keys,
-                })
+            # delete objects from bucket path, in batches of the 1,000-key
+            # delete_objects maximum
+            for i in range(0, len(object_keys), 1000):
+                client.delete_objects(
+                    Bucket=bucket_name,
+                    Delete={
+                        'Objects': object_keys[i:i + 1000],
+                    })
     except Exception as e:
         logger.exception(e)
         
@@ -217,11 +231,12 @@ def get_all_files_in_path(bucket, path):
         "Items": []
     }
 
-    response = client.list_objects_v2(Bucket=bucket, Prefix=path)
-    if 'Contents' in response:
+    # Paginate: a single page caps at 1,000 keys, so an asset holding more files than
+    # that would be only partially processed.
+    paginator = client.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket, Prefix=path):
         # map object from object list
-        keys = []
-        for o in response["Contents"]:
+        for o in page.get("Contents", []):
             result["Items"].append({
                 'key': o['Key'],
                 'relativePath': o['Key'].removeprefix(path)

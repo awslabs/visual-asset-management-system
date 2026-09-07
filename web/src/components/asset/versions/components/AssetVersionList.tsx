@@ -414,7 +414,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         {
             id: "createdBy",
             header: "Created By",
-            cell: (item: AssetVersion) => item.createdBy || "System",
+            cell: (item: AssetVersion) => item.createdBy || "SYSTEM_USER",
             sortingField: "createdBy",
         },
         {
@@ -600,6 +600,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                         />
                         <Button
                             iconName="refresh"
+                            variant="icon"
                             onClick={refreshVersions}
                             ariaLabel="Refresh versions"
                         />

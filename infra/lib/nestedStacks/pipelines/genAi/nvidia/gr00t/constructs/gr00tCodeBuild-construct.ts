@@ -15,6 +15,7 @@ import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../../config/config";
+import { contentImageTag } from "../../../../../../helper/containerImageTag";
 
 export interface Gr00tCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -79,17 +80,24 @@ export class Gr00tCodeBuildConstruct extends Construct {
                 exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env"],
             });
 
+            // Content-addressed image tag, supplied to the build and consumed at the pull site from
+            // this one literal so the two sides cannot name different images.
+            const imageTag = contentImageTag(sourceAsset.assetHash);
+
             // CodeBuild Project — runs in the same private VPC/subnets as pipeline Batch compute.
             // Private subnets have NAT Gateway egress for pulling Docker base images and cloning repos.
             const project = new codebuild.Project(this, `CodeBuild-${pipelineKey}`, {
                 description: `Build Gr00t ${pipelineKey} container image and push to ECR`,
                 environment: {
-                    buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+                    buildImage: Config.CODEBUILD_BUILD_IMAGE,
                     computeType: codebuild.ComputeType.LARGE,
                     privileged: true,
                     environmentVariables: {
                         ECR_REPO_URI: {
                             value: repository.repositoryUri,
+                        },
+                        IMAGE_TAG: {
+                            value: imageTag,
                         },
                         AWS_ACCOUNT_ID: {
                             value: account,
@@ -133,7 +141,7 @@ export class Gr00tCodeBuildConstruct extends Construct {
                 this,
                 `BuildTrigger-${pipelineKey}`,
                 {
-                    runtime: cdk.aws_lambda.Runtime.PYTHON_3_12,
+                    runtime: Config.LAMBDA_PYTHON_RUNTIME,
                     handler: "index.handler",
                     timeout: Duration.minutes(1),
                     code: cdk.aws_lambda.Code.fromInline(`
@@ -177,8 +185,8 @@ def handler(event, context):
                 },
             });
 
-            // Image URI: latest tag
-            const imageUri = `${repository.repositoryUri}:latest`;
+            // Image URI at the content-addressed tag the build pushes.
+            const imageUri = `${repository.repositoryUri}:${imageTag}`;
 
             /**
              * CDK Nag Suppressions

@@ -21,7 +21,7 @@ To create an asset, provide the following fields:
 | Field               | Required | Description                                                                                                                             |
 | ------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `databaseId`        | Yes      | The database this asset belongs to. 4-256 characters, must match an existing database.                                                  |
-| `assetId`           | No       | Unique identifier within the database. If omitted, VAMS generates one. Cannot contain forward slashes. Max 256 characters.              |
+| `assetId`           | No       | Unique identifier within the database. If omitted, VAMS generates one. ASCII characters only, cannot contain forward slashes, 2-255 characters. |
 | `assetName`         | Yes      | Human-readable display name. 1-256 characters, alphanumeric plus `-`, `_`, `.`, and spaces.                                             |
 | `description`       | Yes      | Describes the asset. 4-256 characters.                                                                                                  |
 | `isDistributable`   | Yes      | Boolean flag controlling whether files in this asset can be downloaded.                                                                 |
@@ -29,7 +29,7 @@ To create an asset, provide the following fields:
 | `bucketExistingKey` | No       | Optional. Points to an existing key in the database's Amazon S3 bucket to register as the asset's location without uploading new files. |
 
 :::info[Asset ID restrictions]
-The `assetId` cannot contain forward slashes (`/`) because it is used as an Amazon S3 prefix component. If you provide a custom `assetId`, choose a value that is unique within the database.
+The `assetId` cannot contain forward slashes (`/`) because it is used as an Amazon S3 prefix component. If you provide a custom `assetId`, choose a value that is unique within the database and made up of ASCII characters — two identifiers that render identically but differ in a non-ASCII character are two separate assets, which an operator reading an asset listing or an audit record cannot tell apart. The restriction applies where you name a new asset; an identifier already stored stays valid everywhere it is used, and an asset VAMS discovers in an external Amazon S3 bucket takes its identifier from the folder name it is found under.
 :::
 
 ### Example: creating an asset
@@ -133,12 +133,28 @@ Each asset can have a **preview image** that serves as a visual thumbnail or rep
 
 ## The isDistributable flag
 
-The `isDistributable` boolean controls whether files within an asset can be downloaded:
+The `isDistributable` boolean controls whether the content of an asset's files leaves VAMS:
 
--   When `true`, users with appropriate permissions can generate download URLs for the asset's files.
--   When `false`, download operations are blocked regardless of the user's role permissions.
+-   When `true`, users with appropriate permissions can generate download URLs for the asset's files, stream them, and view them in the visualizer.
+-   When `false`, the API refuses every operation that serves file content -- download URL generation, file streaming, and the auxiliary preview stream -- regardless of the user's role permissions.
 
 This flag provides content-level distribution control independent of the permission system.
+
+The flag governs file **content**, not the asset's existence. An asset marked as not distributable still appears in listings and search results, and its metadata, file listing, version history, and comments remain readable to users whose permissions allow it.
+
+### Behavior in the web interface
+
+The web application does not offer the actions the API refuses, so a user is not led to an error:
+
+-   The file manager omits the **Export** menu (file, folder, and multi-selection download and share-URL actions), the **View File** button, and the viewer popup links.
+-   The asset detail page omits the asset preview thumbnail and its enlarged view.
+-   The file view page renders the file's versions and metadata in place of the visualizer. This page is normally reached from the file manager, which offers no entry point to it for such an asset; opening a direct link to it is still permitted and shows the same versions and metadata.
+
+Setting the flag back to `true` restores all of these.
+
+:::note[Pipelines and workflows are unaffected]
+The flag governs distribution to callers of the API. Pipelines and workflows continue to read and write the asset's files during an execution: they are granted access to the asset's Amazon S3 buckets directly rather than through the download and streaming endpoints, so processing, conversion, preview generation, and output write-back all run normally for an asset marked as not distributable. Use the permission system to control which pipelines and workflows may run against an asset.
+:::
 
 ## Asset relationships and links
 

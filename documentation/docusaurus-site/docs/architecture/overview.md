@@ -16,7 +16,7 @@ graph TB
 
     subgraph VAMS Deployment
         CF["Amazon CloudFront<br/>or ALB"]
-        APIGW["Amazon API Gateway V2<br/>(HttpApi)"]
+        APIGW["Amazon API Gateway<br/>REST API (v1)"]
         AUTH["Custom Lambda Authorizer<br/>(JWT + IP Check)"]
         HANDLERS["Lambda Handlers<br/>(Casbin ABAC/RBAC)"]
         WORKFLOWS["AWS Step Functions<br/>(Pipeline Orchestration)"]
@@ -57,7 +57,7 @@ Every authenticated request to VAMS follows a consistent path through the system
 sequenceDiagram
     participant User
     participant Distribution as CloudFront / ALB
-    participant APIGW as API Gateway V2 HttpApi
+    participant APIGW as API Gateway REST API
     participant Authorizer as Custom Lambda Authorizer
     participant Handler as Lambda Handler
     participant DB as DynamoDB / S3
@@ -97,7 +97,7 @@ Security is enforced at every layer. The custom Lambda authorizer validates JWT 
 
 ### Multi-Partition Support
 
-VAMS is designed to run on commercial AWS and AWS GovCloud partitions. A partition-aware service helper generates correct ARNs, endpoints, and service principals for any target partition. No AWS partition strings, service endpoints, or regional URLs are hardcoded anywhere in the codebase.
+VAMS is designed to run on the commercial AWS, AWS GovCloud (US), and AWS European Sovereign Cloud partitions. A partition-aware service helper generates correct ARNs, endpoints, and service principals for any target partition. No AWS partition strings, service endpoints, or regional URLs are hardcoded anywhere in the codebase.
 
 ### Configuration-Driven Deployment
 
@@ -105,20 +105,21 @@ A centralized configuration system (`config.json`) controls which features, pipe
 
 ## Deployment Modes
 
-VAMS supports two deployment modes to accommodate different compliance and network isolation requirements.
+VAMS supports three deployment modes to accommodate different compliance and network isolation requirements.
 
-| Deployment Mode       | Web Distribution                      | API Access            | VPC      | Notes                                                                                                                      |
-| --------------------- | ------------------------------------- | --------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**    | Amazon CloudFront + Amazon S3         | Amazon API Gateway V2 | Optional | Default mode. Supports optional Amazon Location Service.                                                                   |
-| **AWS GovCloud (US)** | Application Load Balancer + Amazon S3 | Amazon API Gateway V2 | Required | No Amazon CloudFront. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
+| Deployment Mode                  | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                    |
+| -------------------------------- | ------------------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                   |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | Deploys with the GovCloud guardrails. No Amazon CloudFront. No Amazon Location Service. Region exposes two Availability Zones.                           |
 
-:::note[GovCloud Requirements]
-When deploying to AWS GovCloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.
+:::note[GovCloud and EU Sovereign Cloud Requirements]
+When deploying to AWS GovCloud (US) or the AWS European Sovereign Cloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.
 :::
 
 ## Architecture Diagram
 
-The following diagram provides a visual overview of the VAMS architecture across both commercial and GovCloud deployments.
+The following diagram provides a visual overview of the VAMS architecture across commercial and GovCloud/EU Sovereign Cloud deployments.
 
 ![VAMS Architecture Diagram](/img/Commercial-GovCloud-VAMS_Architecture.png)
 
@@ -133,12 +134,12 @@ graph TD
     Layers["LambdaLayers"]
     Storage["StorageResourcesBuilder<br/>(DynamoDB, S3, SNS, SQS, KMS)"]
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
-    API["ApiGatewayV2Amplify<br/>(HttpApi + Authorizer)"]
+    API["REST API Builder<br/>(SpecRestApi + Authorizer)"]
     APIBuilder["ApiBuilder<br/>(All API Route Wiring)"]
     StaticWeb["StaticWeb<br/>(CloudFront or ALB)"]
     Search["SearchBuilder<br/>(OpenSearch)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
-    Addons["AddonBuilder<br/>(Garnet Framework)"]
+    Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync)"]
     Location["LocationService<br/>(Conditional)"]
     Features["CustomFeatureEnabledConfig<br/>(Feature Flags to DynamoDB)"]
 

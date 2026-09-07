@@ -178,6 +178,9 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("relativePath")]
         public string RelativePath { get; set; } = string.Empty;
 
+        [JsonPropertyName("key")]
+        public string FileKey { get; set; } = string.Empty;
+
         [JsonPropertyName("size")]
         public long? Size { get; set; }
 
@@ -187,43 +190,109 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("isArchived")]
         public bool IsArchived { get; set; }
 
+        /// <summary>
+        /// The file's VAMS primary type. Requires a per-object metadata read, which a basic file
+        /// listing skips — a <c>file list --basic</c> item carries <c>primaryType: null</c>. Only the
+        /// file-info API populates it for the commands this connector runs.
+        /// </summary>
         [JsonPropertyName("primaryType")]
         public string PrimaryType { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Creation date of the file's current version. This is the date the file listing
+        /// returns; a listing carries no separate last-modified value.
+        /// </summary>
+        [JsonPropertyName("dateCreatedCurrentVersion")]
+        public string DateCreatedCurrentVersion { get; set; } = string.Empty;
+
+        /// <summary>
+        /// MIME type of the file. Only populated by the file-info API for a single file —
+        /// a file listing does not include it, so it is empty on listing entries.
+        /// </summary>
         [JsonPropertyName("contentType")]
         public string ContentType { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Last-modified timestamp. Only populated by the file-info API for a single file —
+        /// a file listing does not include it. Use <see cref="DateCreatedCurrentVersion"/>
+        /// for listing entries.
+        /// </summary>
         [JsonPropertyName("lastModified")]
         public string LastModified { get; set; } = string.Empty;
+
+        /// <summary>
+        /// S3 version id of the file's current version. Populated by NEITHER command this connector
+        /// runs: a basic file listing returns <c>versionId: null</c>, and the file-info response
+        /// carries version ids only inside its <c>versions[]</c> history, not at the top level. It is
+        /// always empty here.
+        /// </summary>
+        [JsonPropertyName("versionId")]
+        public string VersionId { get; set; } = string.Empty;
+
+        [JsonPropertyName("etag")]
+        public string ETag { get; set; } = string.Empty;
 
         [JsonPropertyName("storageClass")]
         public string StorageClass { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Path to this file's generated preview image. A basic file listing returns <c>""</c> for
+        /// every entry — preview resolution is one of the passes basic mode skips — so an empty value
+        /// means "not reported", not "no preview exists". <c>ImagePreviewViewModel</c> re-checks via
+        /// the file-info API before concluding a file has no preview.
+        /// </summary>
         [JsonPropertyName("previewFile")]
         public string PreviewFile { get; set; } = string.Empty;
 
-        // Compatibility properties for existing code
+        // Compatibility properties for existing code. Each carries [JsonIgnore]: the
+        // serializer runs with PropertyNameCaseInsensitive, so a computed property whose
+        // name matches a mapped JSON field (Key vs. the "key" field) is treated as a
+        // duplicate and throws InvalidOperationException while building the type's
+        // metadata — before any data is returned.
+        [JsonIgnore]
         public string Path => RelativePath;
-        public string Key => RelativePath; // Simplified
-        public string Type => PrimaryType ?? "unknown";
+
+        /// <summary>Full S3 key when the response supplies one, otherwise the asset-relative path.</summary>
+        [JsonIgnore]
+        public string Key => string.IsNullOrEmpty(FileKey) ? RelativePath : FileKey;
+
+        /// <summary>
+        /// The primary type, or "unknown" when the response did not report one. A basic listing sends
+        /// <c>null</c> and an older one omits the field, so both the null and the empty case have to
+        /// resolve to "unknown" — <c>?? "unknown"</c> alone leaves an omitted field as an empty
+        /// string, which prints as a blank type rather than an honest one.
+        /// </summary>
+        [JsonIgnore]
+        public string Type => string.IsNullOrEmpty(PrimaryType) ? "unknown" : PrimaryType;
+
+        /// <summary>Whether the response reported a primary type at all (a basic listing does not).</summary>
+        [JsonIgnore]
+        public bool HasPrimaryType => !string.IsNullOrEmpty(PrimaryType);
+
+        [JsonIgnore]
         public string State => IsArchived ? "archived" : "available";
-        public DateTime AddedAt
+
+        /// <summary>
+        /// Best available timestamp for the file: the current version's creation date from a
+        /// listing, falling back to lastModified when the entry came from the file-info API.
+        /// </summary>
+        [JsonIgnore]
+        public DateTime AddedAt => ParseTimestamp(DateCreatedCurrentVersion, LastModified);
+
+        /// <summary>
+        /// Best available modified timestamp: lastModified when present (file-info API),
+        /// otherwise the current version's creation date from a listing.
+        /// </summary>
+        [JsonIgnore]
+        public DateTime LastModifiedDateTime => ParseTimestamp(LastModified, DateCreatedCurrentVersion);
+
+        private static DateTime ParseTimestamp(string primary, string fallback)
         {
-            get
-            {
-                if (DateTime.TryParse(LastModified, out var date))
-                    return date;
-                return DateTime.MinValue;
-            }
-        }
-        public DateTime LastModifiedDateTime
-        {
-            get
-            {
-                if (DateTime.TryParse(LastModified, out var date))
-                    return date;
-                return DateTime.MinValue;
-            }
+            if (DateTime.TryParse(primary, out var parsed))
+                return parsed;
+            if (DateTime.TryParse(fallback, out parsed))
+                return parsed;
+            return DateTime.MinValue;
         }
     }
 

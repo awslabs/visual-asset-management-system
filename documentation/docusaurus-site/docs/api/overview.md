@@ -6,7 +6,7 @@ This section describes the VAMS REST API, which provides programmatic access to 
 
 ## Base URL
 
-All API endpoints are served through an Amazon API Gateway V2 HTTP API. The base URL is determined by your deployment and follows this format:
+All API endpoints are served through an Amazon API Gateway REST API. The base URL is determined by your deployment and follows this format:
 
 ```
 https://{api-id}.execute-api.{region}.amazonaws.com
@@ -53,7 +53,7 @@ Content-Type: application/json
 
 ## Common Response Format
 
-All API responses follow the API Gateway V2 proxy response format:
+All API responses follow the API Gateway proxy response format:
 
 ```json
 {
@@ -91,15 +91,14 @@ The `body` field contains a JSON-encoded string. When successful, the body conta
 
 VAMS uses standard HTTP status codes to indicate the result of an API request.
 
-| Status Code | Description                                                                                |
-| ----------- | ------------------------------------------------------------------------------------------ |
-| `200`       | The request succeeded.                                                                     |
-| `400`       | Bad request. The request contains invalid parameters or fails validation.                  |
-| `401`       | Unauthorized. The asset is not distributable (download-specific).                          |
-| `403`       | Forbidden. The authenticated user does not have permission for the requested action.       |
-| `404`       | Not found. The requested resource does not exist.                                          |
-| `500`       | Internal server error. An unexpected error occurred on the server.                         |
-| `503`       | Service unavailable. The requested feature is not enabled (e.g., Cognito user management). |
+| Status Code | Description                                                                                                                                                                       |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`       | The request succeeded.                                                                                                                                                            |
+| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled). |
+| `401`       | Unauthorized. The asset is not distributable (download-specific).                                                                                                                 |
+| `403`       | Forbidden. The authenticated user does not have permission for the requested action.                                                                                              |
+| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                    |
+| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                |
 
 ---
 
@@ -107,11 +106,23 @@ VAMS uses standard HTTP status codes to indicate the result of an API request.
 
 Many list endpoints support pagination using a token-based pattern. The following query parameters control pagination:
 
-| Parameter       | Type    | Default | Description                                                             |
-| --------------- | ------- | ------- | ----------------------------------------------------------------------- |
-| `maxItems`      | integer | `100`   | Maximum number of items to return in a single response.                 |
-| `pageSize`      | integer | `100`   | Number of items per page (equivalent to `maxItems` for most endpoints). |
-| `startingToken` | string  | --      | Base64-encoded continuation token from a previous response.             |
+| Parameter       | Type    | Description                                                             |
+| --------------- | ------- | ----------------------------------------------------------------------- |
+| `maxItems`      | integer | Maximum number of items to return in a single response.                 |
+| `pageSize`      | integer | Number of items per page (equivalent to `maxItems` for most endpoints). |
+| `startingToken` | string  | Base64-encoded continuation token from a previous response.             |
+
+Default and maximum values for `maxItems` and `pageSize` vary by listing:
+
+| Listing                                      | `maxItems` default | `pageSize` default            | Maximum                              |
+| -------------------------------------------- | ------------------ | ----------------------------- | ------------------------------------ |
+| Assets                                       | 30,000             | 3,000                         | None                                 |
+| Asset files                                  | 10,000             | 100 (1,500 with `basic=true`) | None                                 |
+| Metadata (asset, file, database, asset link) | 1,000              | 100                           | 1,000 for each                       |
+| Constraints                                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000 |
+| Roles, tags, and user roles                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000 |
+
+A listing with a maximum rejects a larger value with `400` rather than reducing it to the maximum, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. A listing with no maximum accepts the value as given. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size — the whole set is reachable by following it whatever the page size.
 
 ### Paginated Response
 
@@ -141,7 +152,7 @@ The API Gateway enforces rate limits to protect the system from excessive traffi
 | `globalRateLimit`  | 50 requests/second | Steady-state request rate across all clients.    |
 | `globalBurstLimit` | 100 requests       | Maximum burst capacity for short traffic spikes. |
 
-These values are configurable at deployment time through the `app.api.globalRateLimit` and `app.api.globalBurstLimit` configuration settings.
+These values are configurable at deployment time through the `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit` configuration settings.
 
 When rate limits are exceeded, the API returns an HTTP `429 Too Many Requests` response.
 
@@ -192,12 +203,20 @@ Version information can be retrieved from the `GET /api/version` endpoint:
 
 The VAMS API is organized into the following functional groups:
 
-| Category           | Description                                                 | Documentation                       |
-| ------------------ | ----------------------------------------------------------- | ----------------------------------- |
-| **Authentication** | Auth configuration, route authorization, user management    | [Authentication](authentication.md) |
-| **Assets**         | Asset CRUD, archive/unarchive, download                     | [Assets](assets.md)                 |
-| **Files**          | File listing, operations, upload, streaming                 | [Files](files.md)                   |
-| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links | [Metadata](metadata.md)             |
-| **Search**         | Full-text and structured search across assets and files     | [Search](search.md)                 |
-
-Additional endpoint groups not covered in detail here include databases, pipelines, workflows, tags, tag types, roles, user roles, comments, subscriptions, and asset links.
+| Category           | Description                                                                                  | Documentation                       |
+| ------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Authentication** | Authentication providers, runtime configuration, web route authorization, login profiles      | [Authentication](authentication.md) |
+| **Databases**      | Database CRUD and the bucket configurations a database is created against                    | [Databases](databases.md)           |
+| **Assets**         | Asset CRUD, archive/unarchive, download, export, history, single-call ingest                  | [Assets](assets.md)                 |
+| **Asset Versions** | Asset version creation, retrieval, revert, archive/unarchive                                 | [Asset Versions](asset-versions.md) |
+| **Files**          | File listing, operations, upload, streaming, preview management                               | [Files](files.md)                   |
+| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links, plus metadata schemas            | [Metadata](metadata.md)             |
+| **Search**         | Full-text and structured search across assets and files                                      | [Search](search.md)                 |
+| **Pipelines**      | Pipeline CRUD, configuration templates, and template tag schemas                              | [Pipelines](pipelines.md)           |
+| **Workflows**      | Workflow CRUD, triggers, and execution launch, listing, detail, logs, re-run, and abort        | [Workflows](workflows.md)           |
+| **Asset Links**    | Relationships between assets, with optional tags and tree views                               | [Asset Links](asset-links.md)       |
+| **Comments**       | Review comments attached to an asset version                                                 | [Comments](comments.md)             |
+| **Tags**           | Tags and tag types, global or scoped to a database                                           | [Tags](tags.md)                     |
+| **Subscriptions**  | Event subscriptions and notification opt-in                                                  | [Subscriptions](subscriptions.md)   |
+| **Authorization**  | Permission constraints, API route listings, roles, user-role assignments, Cognito users, API keys | [Authorization](auth.md)         |
+| **Add-ons**        | Endpoints contributed by optional add-ons                                                    | [Add-ons](addon.md)                 |

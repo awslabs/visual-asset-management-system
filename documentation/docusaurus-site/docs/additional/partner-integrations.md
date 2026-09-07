@@ -36,9 +36,10 @@ The Isaac Lab Training pipeline uses NVIDIA Isaac Sim container images, which ar
 
 ### Data Synchronization
 
-| Integration                                       | Purpose                                                       | License    | VAMS Component               |
-| ------------------------------------------------- | ------------------------------------------------------------- | ---------- | ---------------------------- |
-| [Garnet Framework](https://garnet-framework.dev/) | Push VAMS data changes to an external NGSI-LD knowledge graph | Apache-2.0 | Addon (`useGarnetFramework`) |
+| Integration                                       | Purpose                                                                                     | License                             | VAMS Component               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------- |
+| [Garnet Framework](https://garnet-framework.dev/) | Push VAMS data changes to an external NGSI-LD knowledge graph                               | Apache-2.0                          | Addon (`useGarnetFramework`) |
+| [Physna](https://physna.com/)                     | One-way sync of supported 3D/CAD files and metadata to a Physna tenant for geometric search | Commercial (Physna tenant required) | Addon (`usePhysnaSync`)      |
 
 The Garnet Framework integration allows VAMS to synchronize database, asset, and file changes to a Garnet Framework deployment in the same AWS account. This enables building knowledge graph representations of your visual asset data. Configuration requires specifying the Garnet API endpoint, API token, and Amazon SQS ingestion queue URL.
 
@@ -57,10 +58,10 @@ VAMS creates the following NGSI-LD entity types in the Garnet Framework:
 
 | Entity Type     | URN Format                                                     | Description                                |
 | --------------- | -------------------------------------------------------------- | ------------------------------------------ |
-| `VAMSDatabase`  | `urn:vams:database:\{databaseId\}`                             | Database entities with bucket associations |
-| `VAMSAsset`     | `urn:vams:asset:\{databaseId\}:\{assetId\}`                    | Asset entities with full metadata          |
-| `VAMSAssetLink` | `urn:vams:assetlink:\{assetLinkId\}`                           | Asset relationship entities                |
-| `VAMSFile`      | `urn:vams:file:\{databaseId\}:\{assetId\}:\{encodedFilePath\}` | File entities with Amazon S3 details       |
+| `VAMSDatabase`  | `urn:vams:database:{databaseId}`                             | Database entities with bucket associations |
+| `VAMSAsset`     | `urn:vams:asset:{databaseId}:{assetId}`                    | Asset entities with full metadata          |
+| `VAMSAssetLink` | `urn:vams:assetlink:{assetLinkId}`                           | Asset relationship entities                |
+| `VAMSFile`      | `urn:vams:file:{databaseId}:{assetId}:{encodedFilePath}` | File entities with Amazon S3 details       |
 
 #### Event flow
 
@@ -74,6 +75,36 @@ VAMS maintains bidirectional relationships between entities and includes all cus
 
 :::tip[Reindexing existing data]
 If you enable Garnet Framework integration on an existing VAMS deployment and need all current data indexed, use the reindex utility in the migration scripts (without clearing Amazon OpenSearch indexes) to trigger a full data reindex through the global notification queues. This reindexes all relevant VAMS data with the Garnet Framework.
+:::
+
+### Physna Sync
+
+The Physna Sync add-on performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
+
+Phase 1 implements VAMS-to-Physna sync only. Future phases will add bidirectional sync and additional in-VAMS UI surfaces.
+
+The Physna add-on also includes a **Physna Viewer** plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS for files that have been synced. A VAMS-authorized endpoint applies both authorization tiers and returns a Physna viewer token to the browser, which loads the viewer directly from Physna; the Physna client credentials stay in AWS Secrets Manager and are never sent to the browser. That token carries no asset scope, so Physna-hosted viewer access is flat across every synced database — see [Physna Viewer](../developer/physna-integration.md#physna-viewer) in the developer guide for the limitation and its side effects.
+
+#### What gets synchronized
+
+When the Physna Sync add-on is enabled:
+
+1. **Files** -- Files whose extensions match Physna's supported set are uploaded on creation and removed on deletion.
+2. **File metadata** -- Custom metadata and attributes attached to each file are sent alongside the upload and patched on subsequent metadata changes.
+3. **Asset metadata** -- Asset-level metadata changes trigger a re-sync of metadata on every Physna asset under the VAMS asset's folder. Physna assets that no longer correspond to a VAMS file are removed.
+
+#### Supported file types
+
+VAMS uploads 3D/CAD geometry formats, documents (`txt`, `pdf`), and images (`gif`, `jpeg`, `jpg`, `png`) to Physna for indexing and search. Files outside the supported set are silently skipped. The embedded **Physna Viewer** renders only the 3D/CAD geometry formats — documents and images are synced for search but shown through VAMS's own viewers. See [Physna Integration](../developer/physna-integration.md#supported-file-types) for the full extension lists.
+
+#### Event flow
+
+1. **Amazon S3 event notifications** for asset file uploads and deletions flow through Amazon SNS to a dedicated Amazon SQS queue consumed by the `physnaFileSync` Amazon Lambda function.
+2. **Amazon DynamoDB Streams** on file metadata, file attribute, and asset metadata tables flow through Amazon SNS to the `physnaFileSync` and `physnaAssetSync` queues.
+3. Each Lambda authenticates against Physna using OAuth2 client credentials stored in AWS Secrets Manager and calls the Physna API to create, update, or delete assets and their metadata.
+
+:::tip[Learn more]
+See [Physna Integration](../developer/physna-integration.md) for configuration, architecture diagrams, metadata precedence rules, and troubleshooting guidance.
 :::
 
 ---
@@ -141,6 +172,7 @@ VAMS Backend
   |
   |-- Addons
         |-- Amazon SQS --> Garnet Framework (Knowledge Graph)
+        |-- Amazon SQS --> Physna Sync (Geometric 3D Search)
 ```
 
 :::info

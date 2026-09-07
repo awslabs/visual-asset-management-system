@@ -4,8 +4,8 @@
 import os
 import boto3
 import json
-import gzip
 import base64
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
@@ -16,11 +16,16 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.apiRoutes import API_ASSET_EXPORT
+from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
+from common.dynamodb import query_all_items
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetExport import (
     AssetExportRequestModel,
     AssetExportResponseModel,
@@ -60,18 +65,20 @@ bucket_cache = {}
 
 # Load environment variables
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+    asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_auxiliary_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
     asset_links_function_name = os.environ["ASSET_LINKS_FUNCTION_NAME"]
     presigned_url_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -83,8 +90,30 @@ asset_links_metadata_table = dynamodb.Table(asset_links_metadata_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 # Constants
-COMPRESSION_THRESHOLD = 102400  # 100KB
-ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+# Export payloads at or below this size are returned inline as the JSON response body. Larger
+# payloads are staged in the asset auxiliary bucket and delivered by redirecting to a presigned
+# URL, the same delivery the download and stream APIs use. The REST API returns a Lambda response
+# carrying isBase64Encoded as literal text, so a compressed base64 body is not readable by a
+# client, and an inline body is additionally bounded by the 6 MB Lambda response limit.
+INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
+# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant is
+# scoped to this prefix (ASSET_EXPORT_STAGING_PREFIX in
+# infra/lib/lambdaBuilder/assetFunctions.ts), so the two values move together.
+EXPORT_STAGING_PREFIX = "assetExports/"
+ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
+# Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
+MAX_PARALLEL_EXPORT_WORKERS = 10
+# Concurrency cap for the per-file S3 calls within one asset. The two pools multiply, so an
+# export issues at most MAX_PARALLEL_EXPORT_WORKERS * MAX_PARALLEL_FILE_WORKERS concurrent
+# S3 calls. Bounds Lambda memory and thread usage; not a data cap.
+MAX_PARALLEL_FILE_WORKERS = 10
+# Per-call page size for the object-versions listing. A round-trip batch size, not a cap.
+S3_LISTING_PAGE_SIZE = 1000
+# Page cap for the asset-wide metadata and attribute reads. A query page is capped at 1 MB, so
+# this admits far more rows than an asset carries in practice while keeping the loop bounded.
+# Reaching it falls back to the per-file reads: an export that dropped the metadata of the rows
+# past the cap reads, to a consumer of the bundle, as metadata the files never had.
+ASSET_ROW_PREFETCH_MAX_PAGES = 25
 
 #######################
 # Utility Functions
@@ -145,12 +174,16 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
             raise VAMSGeneralErrorResponse("Asset not found")
         
         asset["object__type"] = "asset"
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(asset, operation):
-                raise VAMSGeneralErrorResponse("Not Authorized to access asset")
-        
+
+        # Fail closed: with no authenticated identity no authorization can be
+        # evaluated, so deny rather than return the asset.
+        if len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(asset, operation):
+            raise VAMSGeneralErrorResponse("Not Authorized to access asset")
+
         return asset
     except VAMSGeneralErrorResponse as e:
         raise e
@@ -158,13 +191,23 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         logger.exception(f"Error getting asset with permissions: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving asset")
 
-def create_pagination_token(last_index: int, asset_tree: List[Dict]) -> str:
-    """Create pagination token"""
+def create_pagination_token(last_index: int, asset_tree: List[Dict],
+                            file_resume_after_key: Optional[str] = None) -> str:
+    """Create pagination token
+
+    Args:
+        last_index: Index in the tree of the last asset this page finished.
+        asset_tree: The flattened tree, carried so later pages need no second tree read.
+        file_resume_after_key: Set when the page stopped part way through the NEXT asset's
+            files; that asset's listing resumes after this key.
+    """
     token_data = {
         'lastAssetIndex': last_index,
         'assetTree': asset_tree,
         'timestamp': datetime.utcnow().isoformat()
     }
+    if file_resume_after_key:
+        token_data['fileResumeAfterKey'] = file_resume_after_key
     json_str = json.dumps(token_data)
     return base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
 
@@ -177,28 +220,58 @@ def parse_pagination_token(token: str) -> Dict:
         logger.exception(f"Error parsing pagination token: {e}")
         raise VAMSGeneralErrorResponse("Invalid pagination token format")
 
-def compress_response(response_dict: Dict) -> Dict:
-    """Compress response if over threshold"""
-    json_str = json.dumps(response_dict)
-    
-    if len(json_str.encode('utf-8')) > COMPRESSION_THRESHOLD:
-        logger.info(f"Compressing response (size: {len(json_str.encode('utf-8'))} bytes)")
-        compressed = gzip.compress(json_str.encode('utf-8'))
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Content-Encoding': 'gzip'
+def stage_export_payload(payload_bytes: bytes, databaseId: str, assetId: str) -> str:
+    """Write an export payload to the auxiliary bucket and return a presigned URL for it"""
+    object_key = f"{EXPORT_STAGING_PREFIX}{databaseId}/{assetId}/{uuid.uuid4().hex}.json"
+    try:
+        s3_client.put_object(
+            Bucket=asset_auxiliary_bucket_name,
+            Key=object_key,
+            Body=payload_bytes,
+            ContentType='application/json'
+        )
+        return s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': asset_auxiliary_bucket_name,
+                'Key': object_key
             },
-            'body': base64.b64encode(compressed).decode('utf-8'),
-            'isBase64Encoded': True
-        }
-    else:
+            ExpiresIn=int(presigned_url_timeout)
+        )
+    except Exception as e:
+        logger.exception(f"Error staging export payload: {e}")
+        raise VAMSGeneralErrorResponse("Error preparing the export payload for download")
+
+def build_export_response(response_dict: Dict, databaseId: str, assetId: str) -> Dict:
+    """Return the export payload inline, or redirect to a presigned URL when it is too large"""
+    json_str = json.dumps(response_dict)
+    payload_bytes = json_str.encode('utf-8')
+
+    if len(payload_bytes) <= INLINE_RESPONSE_MAX_BYTES:
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json'},
+            'headers': commonHeaders(),
             'body': json_str
         }
+
+    logger.info(f"Staging export payload for presigned delivery (size: {len(payload_bytes)} bytes)")
+    presigned_url = stage_export_payload(payload_bytes, databaseId, assetId)
+
+    # 303 rather than 307: the export route is a POST, and 303 is the status that tells a client to
+    # fetch the result with a GET. A 307 preserves the method, so the client would re-POST to the
+    # presigned URL, which is signed for a GET and rejects it.
+    return {
+        'statusCode': 303,
+        'headers': {
+            **commonHeaders(),
+            'Location': presigned_url
+        },
+        'body': json.dumps({
+            'message': 'Export payload exceeds the inline response size and is available at the redirect target',
+            'presignedExportPayloadUrl': presigned_url,
+            'presignedExportPayloadExpiresIn': int(presigned_url_timeout)
+        })
+    }
 
 #######################
 # Asset Tree Functions
@@ -234,10 +307,13 @@ def get_asset_tree_via_lambda(databaseId: str, assetId: str, event: Dict, fetch_
             "requestContext": request_context
         }
         
-        logger.info(f"Invoking asset links service for tree retrieval (full_tree={fetch_entire_subtrees})")
-        logger.info(f"Lambda function name: {asset_links_function_name}")
-        logger.info(f"Payload: {json.dumps(payload)}")
-        
+        # Identifiers and flags only: the payload embeds the request context, whose authorizer
+        # block carries the caller's decoded token claims. Rendering it into the message puts
+        # them past safeLogger, whose redaction walks the log record's keys.
+        logger.info(
+            f"Invoking asset links service {asset_links_function_name} for tree retrieval of "
+            f"{databaseId}:{assetId} (full_tree={fetch_entire_subtrees})")
+
         response = lambda_client.invoke(
             FunctionName=asset_links_function_name,
             InvocationType='RequestResponse',
@@ -259,8 +335,8 @@ def get_asset_tree_via_lambda(databaseId: str, assetId: str, event: Dict, fetch_
         
         # Read and parse the response
         response_str = stream.read().decode("utf-8")
-        logger.info(f"Lambda response payload: {response_str}")
-        
+        logger.info(f"Asset links response payload size: {len(response_str)} bytes")
+
         json_response = json.loads(response_str)
         status_code = json_response.get('statusCode')
         
@@ -368,6 +444,36 @@ def batch_get_assets(asset_identifiers: List[Dict]) -> Dict[str, Dict]:
     
     return asset_details
 
+# How many metadata keys one aggregated log line names. Rule 9: a metadata key is an identifier,
+# so naming it is safe where rendering its value would not be -- but one asset can hold a great
+# many rows, and a line that grows with the data is the same volume problem in another shape. The
+# count is always reported in full.
+ABSENT_FIELD_LOG_KEY_SAMPLE = 25
+
+
+def log_absent_stored_fields(absent_keys_by_field: Dict[str, List[str]], subject: str) -> None:
+    """Report one entity's malformed stored metadata rows in one line per absent attribute.
+
+    An export is what a customer takes off the platform, so a row that could not be read in full
+    has to be findable afterwards. Reporting per row emitted a line for every legacy row of every
+    exported asset, so the log volume scaled with the export; the count, plus enough keys to begin
+    repairing them, is what an operator needs and neither requires a line per row.
+
+    Args:
+        absent_keys_by_field: Stored attribute name -> metadata keys of the rows that lack it.
+        subject: Identifiers of the entity the rows belong to.
+    """
+    for field_name in sorted(absent_keys_by_field):
+        keys = absent_keys_by_field[field_name]
+        if not keys:
+            continue
+        sample = [str(key) for key in keys[:ABSENT_FIELD_LOG_KEY_SAMPLE]]
+        remainder = len(keys) - len(sample)
+        more = f" (+{remainder} more)" if remainder > 0 else ""
+        logger.warning(
+            f"{len(keys)} stored metadata row(s) for {subject} carry no {field_name}; exported "
+            f"with that attribute null. Keys: {', '.join(sample)}{more}")
+
 def get_asset_metadata(databaseId: str, assetId: str) -> Dict:
     """Get asset-level metadata using new table structure"""
     try:
@@ -383,29 +489,208 @@ def get_asset_metadata(databaseId: str, assetId: str) -> Dict:
             ExpressionAttributeValues={':pkValue': {'S': composite_key}}
         )
         
-        # Deserialize and convert to dict
+        # Deserialize and convert to dict. Stored attributes are read with .get: a row written by
+        # an earlier release can carry no metadataValue, and subscripting one raised a KeyError the
+        # handler below answered with an empty dict -- so ONE such row exported the asset as though
+        # it held no metadata at all, which is what a consumer of the bundle would then believe. A
+        # row is kept with what it has and reported, matching the metadata GET, which returns an
+        # absent attribute as null rather than inventing a value for it.
+        #
+        # The stored value TYPE is carried out alongside the value rather than dropped, because the
+        # export bundle has to report it and cannot recover it later. Defaulting it at the bundle
+        # boundary labels a row of unknown type as 'string', which is a claim about the data that
+        # nothing checked -- see the asset-link path and assetVersions.get_asset_metadata_version,
+        # both of which report an absent type as null.
         metadata = {}
+        absent_keys_by_field = {}
         deserializer = TypeDeserializer()
         for item in response.get('Items', []):
             deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-            # Store as key-value pairs
-            metadata[deserialized['metadataKey']] = deserialized['metadataValue']
-        
+            metadata_key = deserialized.get('metadataKey')
+            if metadata_key is None:
+                logger.warning(
+                    f"Skipping a stored metadata row with no metadataKey for {databaseId}:{assetId}")
+                continue
+            for field_name in ('metadataValue', 'metadataValueType'):
+                if field_name not in deserialized:
+                    absent_keys_by_field.setdefault(field_name, []).append(metadata_key)
+            metadata[metadata_key] = {
+                'value': deserialized.get('metadataValue'),
+                'valueType': deserialized.get('metadataValueType'),
+            }
+
+        log_absent_stored_fields(absent_keys_by_field, f"{databaseId}:{assetId}")
         return metadata
     except Exception as e:
-        logger.warning(f"Error getting asset metadata for {assetId}: {e}")
+        logger.exception(f"Error reading asset metadata for {databaseId}:{assetId}: {e}")
         return {}
 
-def get_file_metadata(databaseId: str, assetId: str, relative_path: str) -> Dict:
-    """Get file-specific metadata using new table structure"""
+def deserialize_stored_rows(items: List[Dict]) -> List[Dict]:
+    """Convert low-level DynamoDB rows to plain dicts"""
+    deserializer = TypeDeserializer()
+    return [{k: deserializer.deserialize(v) for k, v in item.items()} for item in items]
+
+
+def build_metadata_block(rows: List[Dict], subject: str,
+                         absent_keys_by_field: Optional[Dict[str, List[str]]] = None) -> Dict:
+    """Build one entity's exported metadata block from its stored rows.
+
+    Read with .get, and carry the stored value type out alongside the value, for the same
+    reasons as the asset-level metadata above: one row lacking metadataValue used to empty the
+    file's whole metadata block in the exported bundle, and a type defaulted at the bundle
+    boundary asserts a type the row never had.
+
+    Args:
+        rows: Deserialized stored rows for one entity.
+        subject: Identifiers of the entity the rows belong to, for logging.
+        absent_keys_by_field: When supplied, the malformed rows accumulate here and the caller
+            reports them. An asset-wide read reports once for the asset instead of once per file
+            path, so the log volume does not grow with the asset's file count.
+    """
+    metadata = {}
+    report_here = absent_keys_by_field is None
+    if report_here:
+        absent_keys_by_field = {}
+    for deserialized in rows:
+        metadata_key = deserialized.get('metadataKey')
+        if metadata_key is None:
+            logger.warning(
+                f"Skipping a stored metadata row with no metadataKey for {subject}")
+            continue
+        for field_name in ('metadataValue', 'metadataValueType'):
+            if field_name not in deserialized:
+                absent_keys_by_field.setdefault(field_name, []).append(metadata_key)
+        metadata[metadata_key] = {
+            'value': deserialized.get('metadataValue'),
+            'valueType': deserialized.get('metadataValueType'),
+        }
+
+    if report_here:
+        log_absent_stored_fields(absent_keys_by_field, subject)
+    return metadata
+
+
+def build_attribute_block(rows: List[Dict]) -> Dict:
+    """Build one file's exported attribute block from its stored rows.
+
+    Handles both attributeKey and metadataKey field names for compatibility. The stored value
+    type is carried out with the value so the export bundle reports the row's own type instead
+    of defaulting it -- an absent type is null, as everywhere else.
+    """
+    attributes = {}
+    for deserialized in rows:
+        key = deserialized.get('attributeKey', deserialized.get('metadataKey'))
+        value = deserialized.get('attributeValue', deserialized.get('metadataValue'))
+        value_type = deserialized.get(
+            'attributeValueType', deserialized.get('metadataValueType'))
+        if key:
+            attributes[key] = {'value': value, 'valueType': value_type}
+
+    return attributes
+
+
+def query_asset_file_rows(table_name: str, databaseId: str, assetId: str) -> Optional[List[Dict]]:
+    """Read every stored row of one asset from the DatabaseIdAssetIdIndex GSI.
+
+    One paginated query reads a whole table's rows for the asset, so the read cost of an asset is
+    independent of how many files it holds.
+
+    Returns:
+        The asset's deserialized rows, or None when the row set could not be read in full --
+        the caller answers that by reading each file individually rather than exporting a
+        metadata block that is missing rows.
+    """
+    query_kwargs = {
+        'TableName': table_name,
+        'IndexName': 'DatabaseIdAssetIdIndex',
+        'KeyConditionExpression': '#pk = :pkValue',
+        'ExpressionAttributeNames': {'#pk': 'databaseId:assetId'},
+        'ExpressionAttributeValues': {':pkValue': {'S': f"{databaseId}:{assetId}"}}
+    }
+    items = []
+    pages = 0
+    try:
+        while True:
+            response = dynamodb_client.query(**query_kwargs)
+            items.extend(response.get('Items', []))
+            pages += 1
+            # Presence, not value: DynamoDB omits the key entirely on the final page.
+            if 'LastEvaluatedKey' not in response:
+                return deserialize_stored_rows(items)
+            if pages >= ASSET_ROW_PREFETCH_MAX_PAGES:
+                logger.warning(
+                    f"Asset-wide row read for {databaseId}:{assetId} stopped at the "
+                    f"{ASSET_ROW_PREFETCH_MAX_PAGES}-page cap with pages remaining; reading "
+                    f"the page's files individually instead")
+                return None
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.exception(
+            f"Error reading stored rows for {databaseId}:{assetId} from {table_name}: {e}")
+        return None
+
+
+def group_rows_by_file_path(rows: List[Dict]) -> Dict[str, List[Dict]]:
+    """Group an asset's stored rows by the filePath component of their composite key"""
+    grouped = {}
+    for deserialized in rows:
+        composite = deserialized.get('databaseId:assetId:filePath', '')
+        parts = composite.split(':', 2)
+        if len(parts) != 3:
+            continue
+        grouped.setdefault(parts[2], []).append(deserialized)
+    return grouped
+
+
+def prefetch_file_metadata(databaseId: str, assetId: str) -> Optional[Dict[str, Dict]]:
+    """Read an asset's file metadata in one query, keyed by asset-relative file path"""
+    rows = query_asset_file_rows(asset_file_metadata_table_name, databaseId, assetId)
+    if rows is None:
+        return None
+    absent_keys_by_field = {}
+    blocks = {
+        file_path: build_metadata_block(
+            path_rows, f"{databaseId}:{assetId}:{file_path}", absent_keys_by_field)
+        for file_path, path_rows in group_rows_by_file_path(rows).items()
+    }
+    log_absent_stored_fields(absent_keys_by_field, f"the files of {databaseId}:{assetId}")
+    return blocks
+
+
+def prefetch_file_attributes(databaseId: str, assetId: str) -> Optional[Dict[str, Dict]]:
+    """Read an asset's file attributes in one query, keyed by asset-relative file path"""
+    rows = query_asset_file_rows(file_attribute_table_name, databaseId, assetId)
+    if rows is None:
+        return None
+    return {
+        file_path: build_attribute_block(path_rows)
+        for file_path, path_rows in group_rows_by_file_path(rows).items()
+    }
+
+
+def get_file_metadata(databaseId: str, assetId: str, relative_path: str,
+                      prefetched: Optional[Dict[str, Dict]] = None) -> Dict:
+    """Get file-specific metadata using new table structure
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        relative_path: The asset-relative file path
+        prefetched: The asset's metadata blocks keyed by file path, as
+            prefetch_file_metadata returns them. Supplied, the block is an in-memory lookup
+            and no query is issued.
+    """
     try:
         # Ensure relative_path starts with /
         if not relative_path.startswith('/'):
             relative_path = '/' + relative_path
-        
+
+        if prefetched is not None:
+            return prefetched.get(relative_path, {})
+
         # Composite key for file metadata: databaseId:assetId:/path/to/file
         composite_key = f"{databaseId}:{assetId}:{relative_path}"
-        
+
         # Query using GSI
         response = dynamodb_client.query(
             TableName=asset_file_metadata_table_name,
@@ -414,31 +699,39 @@ def get_file_metadata(databaseId: str, assetId: str, relative_path: str) -> Dict
             ExpressionAttributeNames={'#pk': 'databaseId:assetId:filePath'},
             ExpressionAttributeValues={':pkValue': {'S': composite_key}}
         )
-        
-        # Deserialize and convert to dict
-        metadata = {}
-        deserializer = TypeDeserializer()
-        for item in response.get('Items', []):
-            deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-            # Store as key-value pairs
-            metadata[deserialized['metadataKey']] = deserialized['metadataValue']
-        
-        return metadata
+
+        return build_metadata_block(
+            deserialize_stored_rows(response.get('Items', [])),
+            f"{databaseId}:{assetId}:{relative_path}")
     except Exception as e:
-        logger.warning(f"Error getting file metadata for {relative_path}: {e}")
+        logger.exception(
+            f"Error reading file metadata for {databaseId}:{assetId}:{relative_path}: {e}")
         return {}
 
 
-def get_file_attributes(databaseId: str, assetId: str, relative_path: str) -> Dict:
-    """Get file attributes using new file attributes table"""
+def get_file_attributes(databaseId: str, assetId: str, relative_path: str,
+                        prefetched: Optional[Dict[str, Dict]] = None) -> Dict:
+    """Get file attributes using new file attributes table
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        relative_path: The asset-relative file path
+        prefetched: The asset's attribute blocks keyed by file path, as
+            prefetch_file_attributes returns them. Supplied, the block is an in-memory lookup
+            and no query is issued.
+    """
     try:
         # Ensure relative_path starts with /
         if not relative_path.startswith('/'):
             relative_path = '/' + relative_path
-        
+
+        if prefetched is not None:
+            return prefetched.get(relative_path, {})
+
         # Composite key for file attributes: databaseId:assetId:/path/to/file
         composite_key = f"{databaseId}:{assetId}:{relative_path}"
-        
+
         # Query using GSI
         response = dynamodb_client.query(
             TableName=file_attribute_table_name,
@@ -447,19 +740,8 @@ def get_file_attributes(databaseId: str, assetId: str, relative_path: str) -> Di
             ExpressionAttributeNames={'#pk': 'databaseId:assetId:filePath'},
             ExpressionAttributeValues={':pkValue': {'S': composite_key}}
         )
-        
-        # Deserialize and convert to dict
-        attributes = {}
-        deserializer = TypeDeserializer()
-        for item in response.get('Items', []):
-            deserialized = {k: deserializer.deserialize(v) for k, v in item.items()}
-            # Handle both attributeKey and metadataKey field names for compatibility
-            key = deserialized.get('attributeKey', deserialized.get('metadataKey'))
-            value = deserialized.get('attributeValue', deserialized.get('metadataValue'))
-            if key:
-                attributes[key] = value
-        
-        return attributes
+
+        return build_attribute_block(deserialize_stored_rows(response.get('Items', [])))
     except Exception as e:
         logger.warning(f"Error getting file attributes for {relative_path}: {e}")
         return {}
@@ -494,15 +776,16 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         # Create composite key for the table PK query (no IndexName needed)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
 
-        response = asset_file_versions_table.query(
+        # Page to exhaustion: a version snapshot can hold more files than fit in one
+        # 1 MB query page, and a partial list would drop files from the export.
+        items = query_all_items(
+            asset_file_versions_table,
             KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
         )
-        
-        items = response.get('Items', [])
-        
+
         if not items:
             return None
-        
+
         files = []
         for item in items:
             file_info = {
@@ -525,61 +808,138 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         logger.exception(f"Error getting asset file versions: {e}")
         return None
 
-def list_s3_files(bucket: str, prefix: str) -> List[Dict]:
-    """List all files in S3 bucket prefix"""
+def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
+                  start_after_key: Optional[str] = None,
+                  exclude_folders: bool = False) -> List[Dict]:
+    """List the current version of every object under an asset prefix
+
+    A single paginated list_object_versions walk carries VersionId inline for each key, so the
+    listing costs no per-object call (the pattern assetVersions.list_s3_files_with_versions
+    uses). Only the IsLatest content version of a key is returned, so a key whose latest entry is
+    a delete marker is not listed. primaryType lives in the object's own metadata and is filled
+    in separately.
+
+    Args:
+        bucket: The S3 bucket name
+        prefix: The asset's S3 key prefix
+        max_objects: Optional ceiling on the objects listed. One object beyond the ceiling is
+            returned when more remain, so a caller can tell a full page from the last one.
+        start_after_key: Resume the listing after this key, as returned by a previous page.
+        exclude_folders: Drop folder-marker rows (keys ending in '/') from the result, and do not
+            count them against `max_objects`. Set this when the caller is going to discard folders
+            anyway: a marker that is listed, counted, and then filtered out has spent a unit of the
+            caller's budget and returned nothing for it. Every asset prefix carries at least its own
+            root marker, which is why the export was returning exactly one fewer file than requested
+            at every page size.
+
+    Returns:
+        List of file dictionaries in S3 key order.
+    """
     files = []
-    
+
     try:
         if not prefix.endswith('/'):
             prefix = prefix + '/'
-            
-        paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get('Contents', []):
-                file_name = os.path.basename(obj['Key'])
-                is_folder = obj['Key'].endswith('/')
-                
-                relative_path = obj['Key']
+
+        list_kwargs = {'Bucket': bucket, 'Prefix': prefix, 'MaxKeys': S3_LISTING_PAGE_SIZE}
+        if start_after_key:
+            list_kwargs['KeyMarker'] = start_after_key
+
+        limit = None if max_objects is None else max_objects + 1
+        # Rows counted against `limit`. Tracked separately from len(files) because a listed row that
+        # the caller never receives as a file entry must not consume the caller's budget.
+        spending_count = 0
+
+        while True:
+            response = s3_client.list_object_versions(**list_kwargs)
+
+            for version in response.get('Versions', []):
+                # The current state of a key is its IsLatest entry; every other entry is an
+                # older version of a key already accounted for.
+                if not version.get('IsLatest'):
+                    continue
+
+                key = version['Key']
+                # KeyMarker is exclusive, so this only guards a resumed listing against
+                # repeating the key the previous page stopped on.
+                if start_after_key and key <= start_after_key:
+                    continue
+
+                is_folder = key.endswith('/')
+
+                # Dropped before the row is built, so it is neither returned nor counted against
+                # the limit below. Skipping it after the count is what produced the shortfall.
+                if is_folder and exclude_folders:
+                    continue
+
+                relative_path = key
                 if relative_path.startswith(prefix):
                     relative_path = relative_path[len(prefix):]
                     if not relative_path.startswith('/'):
                         relative_path = '/' + relative_path
-                
+
                 item = {
-                    'fileName': file_name,
-                    'key': obj['Key'],
+                    'fileName': os.path.basename(key),
+                    'key': key,
                     'relativePath': relative_path,
                     'isFolder': is_folder,
-                    'dateCreatedCurrentVersion': obj['LastModified'].isoformat(),
-                    'storageClass': obj.get('StorageClass', 'STANDARD')
+                    'dateCreatedCurrentVersion': version['LastModified'].isoformat(),
+                    'storageClass': version.get('StorageClass', 'STANDARD'),
+                    'versionId': version.get('VersionId', 'null'),
+                    'isArchived': False,
+                    'primaryType': None
                 }
-                
+
                 if not is_folder:
-                    item['size'] = obj['Size']
-                
-                # Get version ID
-                try:
-                    version_info = s3_client.head_object(Bucket=bucket, Key=obj['Key'])
-                    item['versionId'] = version_info.get('VersionId', 'null')
-                    item['isArchived'] = False
-                    
-                    # Get primaryType from metadata
-                    metadata = version_info.get('Metadata', {})
-                    primary_type = metadata.get('vams-primarytype', '')
-                    item['primaryType'] = primary_type if primary_type else None
-                    
-                except Exception as e:
-                    logger.warning(f"Error getting version info for {obj['Key']}: {e}")
-                    item['versionId'] = 'null'
-                    item['isArchived'] = False
-                    item['primaryType'] = None
-                
+                    item['size'] = version.get('Size')
+
                 files.append(item)
-                    
+
+                # The ceiling counts rows the CALLER will get a file entry for, not rows listed. A
+                # `.previewFile.` companion is listed (its base file's entry needs it) but folded into
+                # that entry, so counting it here starved the budget by one file per companion.
+                if spends_file_budget(item, include_folders=not exclude_folders):
+                    spending_count += 1
+
+                if limit is not None and spending_count >= limit:
+                    return files
+
+            if not response.get('IsTruncated'):
+                break
+
+            list_kwargs['KeyMarker'] = response.get('NextKeyMarker')
+            list_kwargs['VersionIdMarker'] = response.get('NextVersionIdMarker')
+
     except Exception as e:
         logger.exception(f"Error listing S3 files: {e}")
-    
+
     return files
+
+
+def enrich_files_with_primary_type(bucket: str, files: List[Dict]) -> None:
+    """Fill in each listed file's primaryType from its S3 object metadata
+
+    primaryType is stored in the object's user metadata, which no listing returns, so it takes
+    one HeadObject per file -- the only per-file S3 call the export makes. The calls run through
+    a bounded pool. Folder markers carry no primary type and are skipped.
+    """
+    targets = [file for file in files if not file['isFolder']]
+    if not targets:
+        return
+
+    def _read_primary_type(file_item):
+        try:
+            version_info = s3_client.head_object(Bucket=bucket, Key=file_item['key'])
+            metadata = version_info.get('Metadata', {})
+            primary_type = metadata.get(VAMS_PRIMARY_TYPE_METADATA_KEY, '')
+            file_item['primaryType'] = primary_type if primary_type else None
+        except Exception as e:
+            logger.warning(f"Error getting object metadata for {file_item['key']}: {e}")
+            file_item['primaryType'] = None
+
+    max_workers = min(MAX_PARALLEL_FILE_WORKERS, len(targets))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(executor.map(_read_primary_type, targets))
 
 def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[str]:
     """Generate presigned URL for file download"""
@@ -610,30 +970,45 @@ def get_asset_link_metadata(assetLinkId: str) -> Dict:
             KeyConditionExpression=Key('assetLinkId').eq(assetLinkId)
         )
         
+        # Stored attributes are read with .get: a row written by an earlier release can carry no
+        # metadataValue or metadataValueType, and subscripting either raised a KeyError the handler
+        # below answered with an empty dict -- so ONE such row exported the link as though it
+        # carried no metadata. Absent is reported as null, matching the metadata GET.
         metadata = {}
+        absent_keys_by_field = {}
         for item in response.get('Items', []):
-            metadata[item['metadataKey']] = {
-                'valueType': item['metadataValueType'],
-                'value': item['metadataValue']
+            metadata_key = item.get('metadataKey')
+            if metadata_key is None:
+                logger.warning(
+                    f"Skipping a stored asset link metadata row with no metadataKey for link "
+                    f"{assetLinkId}")
+                continue
+            for field_name in ('metadataValue', 'metadataValueType'):
+                if field_name not in item:
+                    absent_keys_by_field.setdefault(field_name, []).append(metadata_key)
+            metadata[metadata_key] = {
+                'valueType': item.get('metadataValueType'),
+                'value': item.get('metadataValue')
             }
-        
+
+        log_absent_stored_fields(absent_keys_by_field, f"asset link {assetLinkId}")
         return metadata
     except Exception as e:
-        logger.warning(f"Error getting asset link metadata for {assetLinkId}: {e}")
+        logger.exception(f"Error reading asset link metadata for link {assetLinkId}: {e}")
         return {}
 
 def is_preview_file(file_path: str) -> bool:
     """Determine if a file is a preview file based on its path"""
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def get_base_file_for_preview(preview_file_path: str) -> str:
     """Get the base file path for a preview file"""
-    return preview_file_path.split('.previewFile.')[0]
+    return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
 def is_allowed_preview_extension(file_path: str) -> bool:
     """Check if a preview file has an allowed extension"""
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1]
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1]
         return extension.lower() in ALLOWED_PREVIEW_EXTENSIONS
     return False
 
@@ -660,23 +1035,101 @@ def get_top_preview_file(preview_files: List[str], filter_extensions: bool = Tru
         # Return the first file without filtering
         return preview_files[0]
 
+def spends_file_budget(file: Dict, include_folders: bool = False) -> bool:
+    """Whether a listed row costs the caller one unit of `maxFiles`.
+
+    A row costs budget exactly when the caller gets a file entry back for it. Two kinds may not:
+
+    * **`.previewFile.` companions** never do. They ARE listed — `preview_lookup` needs them to
+      attach a `previewFile` to their base file's entry — but are then folded into that entry rather
+      than returned as files of their own.
+    * **folder markers** do only when the request asked for them. With `includeFolderFiles` false
+      they are excluded from the listing outright (`list_s3_files(exclude_folders=...)`) so they never
+      reach here; with it true they are returned as entries and legitimately cost budget.
+
+    `include_folders` must therefore track `request_model.includeFolderFiles` at every call site. A
+    predicate that excluded folders unconditionally let an `includeFolderFiles=True` page return more
+    rows than `maxFiles`, which the export's own tests caught.
+
+    MEASURED on a 4,100-file asset carrying one companion: `maxFiles=3` returned 2 and `maxFiles=10`
+    returned 9, the companion visible only as
+    `previewFile: /group000/sub0/part00000.glb.previewFile.png` on its base file's entry.
+
+    Both tests read the key alone, so this costs nothing and cannot page unboundedly: a companion
+    exists only alongside a base file, which bounds the uncounted rows at one per counted row.
+    """
+    if is_preview_file(file['key']):
+        return False
+    if file['isFolder']:
+        return include_folders
+    return True
+
+
+def row_count_for_budget(files: List[Dict], budget: int,
+                         include_folders: bool = False) -> int:
+    """How many listed ROWS to take so that `budget` budget-spending files are included.
+
+    The budget is counted in files the caller receives; the list is indexed in rows. Trailing rows
+    that spend nothing are pulled in with the file they belong to, which is what keeps a base file
+    and its previews together — a companion left behind would be dropped entirely, because the next
+    page holds no base file to attach it to.
+    """
+    if budget <= 0:
+        return 0
+    spent = 0
+    for index, file in enumerate(files):
+        if spends_file_budget(file, include_folders):
+            spent += 1
+            if spent == budget:
+                end = index + 1
+                while end < len(files) and not spends_file_budget(files[end], include_folders):
+                    end += 1
+                return end
+    return len(files)
+
+
+def cut_before_preview_group(files: List[Dict], cut: int) -> int:
+    """Move a truncation point back so a file is not separated from its preview files
+
+    A preview key is its base file's key plus the preview suffix, so S3 lists the previews
+    immediately after the file they belong to. A cut inside that run exports the base file with
+    no preview and drops the preview entirely, because the page that carries it holds no base
+    file to attach it to. Backing the cut up to the start of the run defers the whole group to
+    the next page. A cut that would leave the page with no files is kept as it is: an empty page
+    cannot advance the listing.
+    """
+    boundary = cut
+    while 0 < boundary < len(files) and is_preview_file(files[boundary]['key']):
+        boundary -= 1
+    return boundary if boundary > 0 else cut
+
 #######################
 # Main Export Logic
 #######################
 
-def apply_file_filters(files: List[Dict], request_model: AssetExportRequestModel) -> List[Dict]:
-    """Apply filtering to files based on request parameters"""
+def apply_file_filters(files: List[Dict], request_model: AssetExportRequestModel,
+                       defer_primary_type_filter: bool = False) -> List[Dict]:
+    """Apply filtering to files based on request parameters
+
+    Args:
+        files: The listed files
+        request_model: The parsed export request
+        defer_primary_type_filter: Skip the filter that selects on primaryType. Every other
+            filter reads only what the listing carries, so deferring this one leaves a set that
+            can be filtered before primaryType has been read for it.
+    """
     filtered_files = []
-    
+
     for file in files:
         # Filter 1: Exclude folders if not requested
         if file['isFolder'] and not request_model.includeFolderFiles:
             continue
-        
+
         # Filter 2: Include only files with primaryType if requested
-        if request_model.includeOnlyPrimaryTypeFiles and not file.get('primaryType'):
+        if (not defer_primary_type_filter and request_model.includeOnlyPrimaryTypeFiles
+                and not file.get('primaryType')):
             continue
-        
+
         # Filter 3: Filter by extensions if provided
         if request_model.fileExtensions and not file['isFolder']:
             file_ext = os.path.splitext(file['fileName'])[1].lower()
@@ -694,9 +1147,50 @@ def apply_file_filters(files: List[Dict], request_model: AssetExportRequestModel
 def process_asset_batch(
     asset_identifiers: List[Dict],
     request_model: AssetExportRequestModel,
-    claims_and_roles: Dict
-) -> List[Dict]:
-    """Process a batch of assets and gather all related data"""
+    claims_and_roles: Dict,
+    file_budget: Optional[int] = None,
+    start_after_key: Optional[str] = None
+) -> Tuple[List[Dict], Dict]:
+    """Process a batch of assets and gather all related data
+
+    Files are listed before any of them is read, so the page's file budget is spent on the
+    assets that fit it and an asset the page has no room for is never read at all. An asset
+    holding more files than the budget is exported across successive pages: its entry reports
+    files_truncated, and the returned page state names the key its listing resumes after.
+
+    Args:
+        asset_identifiers: The assets to process, in tree order
+        request_model: The parsed export request
+        claims_and_roles: The caller's claims
+        file_budget: Maximum files this page may export across the whole batch. None exports
+            every file of every asset in the batch.
+
+            Spent on LISTED rows. Folder markers are excluded from the listing when the request
+            does not ask for them, so `maxFiles=N` yields exactly N files for an ordinary request
+            — previously each asset's own root marker consumed a unit and was then filtered out,
+            costing exactly one file per asset at every page size.
+
+            Two filters still consume budget from rows they later drop, and neither can be moved
+            into the listing the way folders were:
+
+            * `fileExtensions` reads the key, so it COULD be applied at listing time, but doing so
+              makes the walk unbounded — an asset whose keys all fail the filter would be paged end
+              to end to fill one page. Left as is deliberately.
+            * `includeOnlyPrimaryTypeFiles` cannot be known from a listing at all; primaryType is
+              per-object metadata read by `enrich_files_with_primary_type` after the budget is
+              spent.
+
+            So a request carrying either of those may return fewer than `maxFiles` items. The
+            remainder is not lost — the continuation token carries it.
+        start_after_key: Resume the FIRST asset's file listing after this key. Only meaningful
+            when the batch holds the single asset a previous page stopped part way through.
+
+    Returns:
+        (exported assets in batch order, page state). Page state carries
+        'lastCompletedPosition' -- the batch position of the last asset the page finished, -1
+        when none did -- and 'resumeAfterKey', set when the last exported asset's file list is
+        partial.
+    """
 
     # Step 1: Batch get all asset details
     logger.info(f"Processing batch of {len(asset_identifiers)} assets")
@@ -705,36 +1199,138 @@ def process_asset_batch(
     # Step 2: Create enforcer once and run Casbin checks (sequential, CPU-bound)
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
-    authorized_assets = []  # (asset_info, asset) tuples for parallel I/O
-    processed_assets = []
+    authorized_assets = {}      # batch position -> (asset_info, asset) for parallel I/O
+    entries = {}                # batch position -> exported entry
+    resolved_positions = set()  # positions that consume no file budget: missing or unauthorized
 
-    for asset_info in asset_identifiers:
+    for position, asset_info in enumerate(asset_identifiers):
         asset_key = f"{asset_info['databaseId']}:{asset_info['assetId']}"
         asset = asset_details.get(asset_key)
 
         if not asset:
             logger.warning(f"Asset not found: {asset_info['assetId']}")
+            resolved_positions.add(position)
             continue
 
         asset["object__type"] = "asset"
         # Default deny: only authorize if enforcer exists AND grants access
         if casbin_enforcer and casbin_enforcer.enforce(asset, "GET"):
-            authorized_assets.append((asset_info, asset))
+            authorized_assets[position] = (asset_info, asset)
         else:
             logger.warning(f"Permission denied for asset {asset_info['assetId']}")
-            processed_assets.append({
+            resolved_positions.add(position)
+            entries[position] = {
                 'assetId': asset_info['assetId'],
                 'databaseId': asset_info['databaseId'],
                 'unauthorizedAsset': True
-            })
-            
-    # Step 3: Process authorized assets with parallelized I/O
-    def _process_single_asset(asset_tuple):
+            }
+
+    # Step 3: List each authorized asset's files, in batch position order and a worker-pool
+    # chunk at a time. Listing stops after the chunk that fills the file budget, so the page
+    # lists at most one chunk beyond what it can export.
+    def _list_single_asset(position):
+        """List one authorized asset's files (I/O-bound, suitable for threading)."""
+        asset_info, asset = authorized_assets[position]
+        bucket_details = get_default_bucket_details(asset['bucketId'])
+        asset_location_key = asset.get('assetLocation', {}).get('Key', '')
+        files = list_s3_files(
+            bucket_details['bucketName'],
+            asset_location_key,
+            max_objects=file_budget,
+            start_after_key=start_after_key if position == 0 else None,
+            # Folders the request is going to discard must not be counted against the budget the
+            # step below spends. Kept in step with `apply_file_filters` Filter 1: when folders ARE
+            # requested they are exported, so they legitimately cost budget.
+            exclude_folders=not request_model.includeFolderFiles
+        )
+        return bucket_details, files
+
+    listings = {}   # batch position -> (bucket_details, files)
+    positions_to_list = sorted(authorized_assets)
+    listed_file_count = 0
+
+    for chunk_start in range(0, len(positions_to_list), MAX_PARALLEL_EXPORT_WORKERS):
+        chunk = positions_to_list[chunk_start:chunk_start + MAX_PARALLEL_EXPORT_WORKERS]
+        with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
+            futures = {
+                executor.submit(_list_single_asset, position): position
+                for position in chunk
+            }
+            for future in as_completed(futures):
+                position = futures[future]
+                try:
+                    listings[position] = future.result()
+                except Exception as e:
+                    logger.exception(
+                        f"Error listing files for asset "
+                        f"{authorized_assets[position][0]['assetId']}: {e}")
+                    resolved_positions.add(position)
+
+        # Counted in budget-spending files, matching the ceiling the listing itself applies. Counting
+        # raw rows here stopped the listing loop early on an asset carrying companions, so a later
+        # asset the budget could still afford was never listed and silently deferred a page.
+        listed_file_count += sum(
+            sum(1 for file in listings[position][1]
+                if spends_file_budget(file, request_model.includeFolderFiles))
+            for position in chunk if position in listings)
+        if file_budget is not None and listed_file_count > file_budget:
+            break
+
+    # Step 4: Spend the file budget in batch position order. An asset is exported whole while
+    # the budget allows; the first asset that does not fit is truncated and ends the page, and
+    # an asset the remaining budget cannot start is left for the next page.
+    included = {}   # batch position -> (bucket_details, files, files_truncated)
+    remaining = file_budget
+    last_completed_position = -1
+    truncated_position = None
+    resume_after_key = None
+
+    for position in range(len(asset_identifiers)):
+        if position in resolved_positions:
+            last_completed_position = position
+            continue
+
+        listing = listings.get(position)
+        if listing is None:
+            # Not listed: the budget was already spent before this asset was reached.
+            break
+
+        if remaining is not None and remaining <= 0:
+            break
+
+        bucket_details, files = listing
+        # Both the fit test and the spend are in budget-SPENDING files rather than listed rows, so a
+        # `.previewFile.` companion — listed, but folded into its base file's entry rather than
+        # returned as a file — no longer costs the caller one of their `maxFiles`.
+        spending_files = sum(1 for file in files
+                             if spends_file_budget(file, request_model.includeFolderFiles))
+        files_truncated = remaining is not None and spending_files > remaining
+        if files_truncated:
+            # row_count_for_budget pulls each base file's trailing companions in with it, which is the
+            # same guarantee cut_before_preview_group provided by backing a cut up out of a preview
+            # run. It is applied afterwards anyway, so a cut that would still split a group is caught.
+            cut = row_count_for_budget(files, remaining, request_model.includeFolderFiles)
+            files = files[:cut_before_preview_group(files, cut)]
+            spending_files = sum(1 for file in files
+                                 if spends_file_budget(file, request_model.includeFolderFiles))
+
+        included[position] = (bucket_details, files, files_truncated)
+
+        if files_truncated:
+            truncated_position = position
+            resume_after_key = files[-1]['key']
+            break
+
+        if remaining is not None:
+            remaining -= spending_files
+        last_completed_position = position
+
+    # Step 5: Build the export entry for each included asset with parallelized I/O
+    def _process_single_asset(position):
         """Process a single authorized asset (I/O-heavy, suitable for threading)."""
-        asset_info, asset = asset_tuple
+        asset_info, asset = authorized_assets[position]
+        bucket_details, files, files_truncated = included[position]
         try:
-            # Get bucket details
-            bucket_details = get_default_bucket_details(asset['bucketId'])
             bucket_name = bucket_details['bucketName']
             bucket_prefix = bucket_details['baseAssetsPrefix']
 
@@ -746,19 +1342,28 @@ def process_asset_batch(
             asset_metadata = {}
             if request_model.includeAssetMetadata:
                 raw_metadata = get_asset_metadata(asset_info['databaseId'], asset_info['assetId'])
-                for key, value in raw_metadata.items():
-                    if not key.startswith('_'):
+                for key, stored in raw_metadata.items():
+                    if not key.startswith(HIDDEN_FIELD_PREFIX):
+                        # A row carrying no stored value is exported with its key and a null
+                        # value, so it stays visible instead of reading as absent. The type is
+                        # the row's own -- null when the row does not carry one, never defaulted.
+                        value = stored.get('value')
                         asset_metadata[key] = {
-                            'valueType': 'string',
-                            'value': str(value)
+                            'valueType': stored.get('valueType'),
+                            'value': None if value is None else str(value)
                         }
 
-            # Get files
             asset_location_key = asset.get('assetLocation', {}).get('Key', '')
-            files = list_s3_files(bucket_name, asset_location_key)
+
+            # Filter on what the listing carries, read the survivors' primaryType, then apply
+            # the one filter that selects on it. primaryType lives only in the object's own
+            # metadata, so a file another filter drops costs no read.
+            candidate_files = apply_file_filters(
+                files, request_model, defer_primary_type_filter=True)
+            enrich_files_with_primary_type(bucket_name, candidate_files)
 
             # Apply filters
-            filtered_files = apply_file_filters(files, request_model)
+            filtered_files = apply_file_filters(candidate_files, request_model)
 
             # Get file versions for version mismatch check
             file_versions = get_asset_file_versions(asset_info['databaseId'], asset['assetId'], current_version_id)
@@ -785,6 +1390,18 @@ def process_asset_batch(
                     preview_lookup[base_key] = []
                 preview_lookup[base_key].append(preview_file['key'])
 
+            # One asset-wide read each for metadata and attributes, keyed by file path, so the
+            # per-file blocks below are in-memory lookups rather than two queries per file. None
+            # means the row set could not be read in full and the per-file reads run instead.
+            prefetched_metadata = None
+            prefetched_attributes = None
+            if request_model.includeFileMetadata and any(
+                    not file['isFolder'] for file in base_files_list):
+                prefetched_metadata = prefetch_file_metadata(
+                    asset_info['databaseId'], asset_info['assetId'])
+                prefetched_attributes = prefetch_file_attributes(
+                    asset_info['databaseId'], asset_info['assetId'])
+
             # Process each base file
             export_files = []
             for file in base_files_list:
@@ -810,27 +1427,31 @@ def process_asset_batch(
                     raw_file_metadata = get_file_metadata(
                         asset_info['databaseId'],
                         asset_info['assetId'],
-                        file['relativePath']
+                        file['relativePath'],
+                        prefetched=prefetched_metadata
                     )
                     if raw_file_metadata:
-                        for key, value in raw_file_metadata.items():
-                            if not key.startswith('_'):
+                        for key, stored in raw_file_metadata.items():
+                            if not key.startswith(HIDDEN_FIELD_PREFIX):
+                                value = stored.get('value')
                                 file_metadata[key] = {
-                                    'valueType': 'string',
-                                    'value': str(value)
+                                    'valueType': stored.get('valueType'),
+                                    'value': None if value is None else str(value)
                                 }
 
                     raw_file_attributes = get_file_attributes(
                         asset_info['databaseId'],
                         asset_info['assetId'],
-                        file['relativePath']
+                        file['relativePath'],
+                        prefetched=prefetched_attributes
                     )
                     if raw_file_attributes:
-                        for key, value in raw_file_attributes.items():
-                            if not key.startswith('_'):
+                        for key, stored in raw_file_attributes.items():
+                            if not key.startswith(HIDDEN_FIELD_PREFIX):
+                                value = stored.get('value')
                                 file_attributes[key] = {
-                                    'valueType': 'string',
-                                    'value': str(value)
+                                    'valueType': stored.get('valueType'),
+                                    'value': None if value is None else str(value)
                                 }
 
                 # Generate presigned URL if requested (skip for archived files)
@@ -897,26 +1518,37 @@ def process_asset_batch(
                 'asset_version_comment': version_info.get('comment', '') if version_info else '',
                 'archived': asset.get('status') == 'archived',
                 'metadata': asset_metadata,
-                'files': export_files
+                'files': export_files,
+                'files_truncated': files_truncated
             }
 
         except Exception as e:
             logger.exception(f"Error processing asset {asset_info['assetId']}: {e}")
             return None
 
-    if authorized_assets:
-        max_workers = min(10, len(authorized_assets))
+    if included:
+        max_workers = min(MAX_PARALLEL_EXPORT_WORKERS, len(included))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(_process_single_asset, asset_tuple): asset_tuple
-                for asset_tuple in authorized_assets
+                executor.submit(_process_single_asset, position): position
+                for position in sorted(included)
             }
             for future in as_completed(futures):
                 result = future.result()
                 if result is not None:
-                    processed_assets.append(result)
+                    entries[futures[future]] = result
 
-    return processed_assets
+    # Positions past where the page stopped were resolved for authorization but not exported;
+    # the next page starts at the first of them.
+    limit_position = (truncated_position if truncated_position is not None
+                      else last_completed_position)
+    processed_assets = [entries[position] for position in sorted(entries)
+                        if position <= limit_position]
+
+    return processed_assets, {
+        'lastCompletedPosition': last_completed_position,
+        'resumeAfterKey': resume_after_key
+    }
 
 def export_assets(
     databaseId: str,
@@ -932,25 +1564,43 @@ def export_assets(
     # SINGLE ASSET MODE: Skip relationship fetching entirely
     if not request_model.fetchAssetRelationships:
         logger.info("Single asset mode - skipping relationship fetching")
-        
+
         # Only process the root asset
         asset_tree = [{
             'assetId': assetId,
             'databaseId': databaseId,
             'isRoot': True
         }]
-        
+
+        # An asset holding more files than one page's budget is exported over successive pages,
+        # each resuming its file listing where the last one stopped.
+        resume_after_key = None
+        if not is_first_page:
+            resume_after_key = parse_pagination_token(
+                request_model.startingToken).get('fileResumeAfterKey')
+
         # Process single asset
-        assets = process_asset_batch(asset_tree, request_model, claims_and_roles)
-        
+        assets, page_state = process_asset_batch(
+            asset_tree,
+            request_model,
+            claims_and_roles,
+            file_budget=request_model.maxFiles,
+            start_after_key=resume_after_key
+        )
+
+        next_token = None
+        if page_state['resumeAfterKey']:
+            next_token = create_pagination_token(
+                -1, asset_tree, file_resume_after_key=page_state['resumeAfterKey'])
+
         return {
             'assets': assets,
             'relationships': None,
-            'NextToken': None,
+            'NextToken': next_token,
             'totalAssetsInTree': 1,
             'assetsInThisPage': len(assets)
         }
-    
+
     if is_first_page:
         # FIRST PAGE: Get tree and relationships
         logger.info("First page request - retrieving asset tree")
@@ -1012,26 +1662,51 @@ def export_assets(
         
         # Process first batch
         start_idx = 0
-        end_idx = min(request_model.maxAssets, len(asset_tree))
-        
+        resume_after_key = None
+
     else:
         # SUBSEQUENT PAGE: Use stored tree from token
         logger.info("Subsequent page request - using stored tree")
         token_data = parse_pagination_token(request_model.startingToken)
         asset_tree = token_data['assetTree']
         start_idx = token_data['lastAssetIndex'] + 1
-        end_idx = min(start_idx + request_model.maxAssets, len(asset_tree))
+        resume_after_key = token_data.get('fileResumeAfterKey')
         relationships = None
-    
+
+    # A page resuming inside an asset carries that asset alone, so the rest of its files are
+    # exported before the page moves on to its siblings.
+    if resume_after_key:
+        end_idx = min(start_idx + 1, len(asset_tree))
+    else:
+        end_idx = min(start_idx + request_model.maxAssets, len(asset_tree))
+
     # Process assets in current batch
     batch_asset_ids = asset_tree[start_idx:end_idx]
-    assets = process_asset_batch(batch_asset_ids, request_model, claims_and_roles)
-    
-    # Create next token if more assets remain
+    assets, page_state = process_asset_batch(
+        batch_asset_ids,
+        request_model,
+        claims_and_roles,
+        file_budget=request_model.maxFiles,
+        start_after_key=resume_after_key
+    )
+
+    # Create next token if more assets, or more of the current asset's files, remain
     next_token = None
-    if end_idx < len(asset_tree):
-        next_token = create_pagination_token(end_idx - 1, asset_tree)
-    
+    if page_state['resumeAfterKey']:
+        # The last exported asset's file list is partial; the next page resumes in that asset.
+        next_token = create_pagination_token(
+            start_idx + page_state['lastCompletedPosition'], asset_tree,
+            file_resume_after_key=page_state['resumeAfterKey'])
+    elif page_state['lastCompletedPosition'] >= 0:
+        last_completed_index = start_idx + page_state['lastCompletedPosition']
+        if last_completed_index < len(asset_tree) - 1:
+            next_token = create_pagination_token(last_completed_index, asset_tree)
+    elif batch_asset_ids:
+        # No asset finished and none is resumable, so a token would repeat this page verbatim.
+        logger.error(
+            f"Export page starting at asset index {start_idx} finished no asset; returning it "
+            f"without a NextToken rather than a token that cannot advance")
+
     # Build response
     response = {
         'assets': assets,
@@ -1116,12 +1791,16 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
             event
         )
         
-        # Apply compression if needed
-        return compress_response(response_data)
+        # Deliver inline, or redirect to a presigned URL when the payload is too large
+        return build_export_response(
+            response_data,
+            path_params['databaseId'],
+            path_params['assetId']
+        )
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -1156,15 +1835,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route to appropriate handler based on path pattern
-        if method == 'POST' and '/export' in path:
+        # Route to appropriate handler based on the master API route definitions
+        if method == 'POST' and API_ASSET_EXPORT.matches(path):
             return handle_post_export(event, context)
         else:
             return validation_error(body={'message': "Invalid API path or method"}, event=event)
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

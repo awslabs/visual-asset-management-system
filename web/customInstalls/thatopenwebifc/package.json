@@ -1,0 +1,26 @@
+{
+    "name": "thatopenwebifc-viewer-bundle",
+    "version": "1.0.0",
+    "description": "That Open Engine (web-ifc) IFC/BIM viewer bundle for the VAMS dynamic viewer system",
+    "private": true,
+    "license": "Apache-2.0",
+    "dependencies": {
+        "@thatopen/components": "~3.4.6",
+        "@thatopen/components-front": "~3.4.3",
+        "@thatopen/fragments": "~3.4.5",
+        "camera-controls": "^3.1.2",
+        "fflate": "^0.8.2",
+        "three": "0.182.0",
+        "web-ifc": "0.0.77"
+    },
+    "optionalDependencies": {},
+    "devDependencies": {
+        "copy-webpack-plugin": "^14.0.0",
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4"
+    },
+    "scripts": {
+        "build": "webpack --mode production"
+    },
+    "comment": "Self-contained UMD bundle. web-ifc is MPL-2.0 (file-level copyleft) used here as an unmodified dependency; all @thatopen/* and three/camera-controls/fflate are MIT. three is bundled INSIDE this UMD (isolated from the app and the threejs customInstall) to guarantee a single three instance within the bundle."
+}

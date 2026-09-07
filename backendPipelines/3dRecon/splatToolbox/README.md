@@ -1,6 +1,6 @@
 # Splat Toolbox Pipeline
 
-The Splat Toolbox Pipeline enables 3D Gaussian Splatting reconstruction from images or videos within VAMS. This pipeline automatically pulls the latest container code from the [AWS Guidance for Open Source 3D Reconstruction Toolbox for Gaussian Splats](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) repository.
+The Splat Toolbox Pipeline enables 3D Gaussian Splatting reconstruction from images or videos within VAMS. This pipeline syncs its container code from a pinned commit of the [AWS Guidance for Open Source 3D Reconstruction Toolbox for Gaussian Splats](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) repository.
 
 ## Pipeline Components
 
@@ -16,7 +16,6 @@ The Splat Toolbox Pipeline enables 3D Gaussian Splatting reconstruction from ima
 -   **`openPipeline.py`** - Initiates pipeline execution from S3 events
 -   **`pipelineEnd.py`** - Handles pipeline completion and cleanup
 -   **`vamsExecuteSplatToolboxPipeline.py`** - VAMS API integration for manual execution
--   **`sqsExecuteSplatToolboxPipeline.py`** - SQS-triggered pipeline execution
 
 ### CDK Infrastructure (`../../infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/`)
 
@@ -51,13 +50,25 @@ The Splat Toolbox Pipeline enables 3D Gaussian Splatting reconstruction from ima
 
 ## Configuration Parameters
 
-Key pipeline parameters configurable via VAMS:
+Key pipeline parameters configurable via VAMS. A parameter takes effect only when it is a key of the
+container's `src/config.json`, which the upstream sync provides; a key absent from that file is
+reported on the container's log and otherwise ignored.
 
 -   `MODEL` - Splatting model type (splatfacto, splatfacto-big, etc.)
 -   `MAX_STEPS` - Training iterations
--   `SFM_SOFTWARE_NAME` - COLMAP or GLOMAP
+-   `RECON_SOFTWARE_NAME` - Reconstruction software (colmap, glomap, hloc, map_anything)
+-   `RUN_RECON` - Recover camera poses from the input capture before training
+-   `RUN_TRAIN` - Train the splat model
+-   `SPHERICAL_CAMERA` - Treat the input as a 360/spherical capture
 -   `REMOVE_BACKGROUND` - Background removal option
--   `GENERATE_SPLAT` - Enable splat file generation
+-   `CROP_OUTPUT_BOUNDS` - Trim the exported splat to the reconstructed scene bounds
+-   `CROP_MODE` - How the crop bounds are computed (rigid_body, environment)
+-   `ENABLE_SPZ` - Export the compressed SPZ splat format
+-   `ENABLE_SOG` - Export the SOG splat format
+
+`RUN_RECON`, `RUN_TRAIN`, `CROP_OUTPUT_BOUNDS` and `CROP_MODE` are declared as template tags on both
+shipped templates, so each is a field on the execute form. The rest are set by editing a template's
+configuration body.
 
 ## AWS Resources
 
@@ -69,11 +80,28 @@ Key pipeline parameters configurable via VAMS:
 
 ## Repository Sync
 
-The pipeline automatically syncs the latest container code from the upstream repository during CDK deployment. This ensures:
+The pipeline syncs its container code from the upstream repository during CDK deployment, at the commit
+recorded as `GITHUB_REPO_COMMIT_HASH` in `splatToolbox-construct.ts`. The sync verifies the checked-out
+commit matches that value, so the sources are reproducible across rebuilds and moving the pipeline to a
+newer upstream revision is a change to that constant. This:
 
--   Always uses the latest 3D reconstruction algorithms
--   Maintains compatibility with upstream improvements
--   Preserves VAMS-specific integration (entrypoint.sh)
+-   Fixes which 3D reconstruction algorithms the image is built from
+-   Preserves VAMS-specific integration (`__main__.py` plus the `vams_utils` package)
+
+### Third-party source pinning
+
+The pinned commit is upstream's own Dockerfile, and it fetches further third-party sources while the
+image builds. Most are pinned — cloned and then reset to a recorded commit, or fetched at a version tag —
+but some resolve to whatever the source serves at build time, so two builds of the same VAMS commit can
+produce different images.
+
+The Dockerfile is gitignored and rewritten on every synth, so that set is not visible in a diff. It is
+recorded instead in `RECORDED_UNPINNED_SOURCES`
+(`infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/dockerfilePinAudit.ts`), and the sync
+compares the synced Dockerfile against that record and fails the synth when it changes in either
+direction — a new unrecorded unpinned source, or a recorded one upstream has since pinned. The audit runs
+for any deployment that instantiates this pipeline; a deployment with the pipeline disabled never syncs
+and never audits.
 
 ## Usage
 

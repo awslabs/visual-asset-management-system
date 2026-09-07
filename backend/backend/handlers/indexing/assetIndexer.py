@@ -20,11 +20,14 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
+from common.indexing.geoLocation import build_geo_location
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -43,16 +46,16 @@ claims_and_roles = {}
 
 # Load environment variables with error handling
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
     opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Get SSM parameter values
@@ -172,6 +175,9 @@ def opensearch_operation_with_retry(operation_func: Callable, max_retries: int =
                     f"Rate limited (429) during {operation_name}, "
                     f"retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})"
                 )
+                # Backoff after an OpenSearch 429. Must be the last comment line before the
+                # call -- semgrep attaches `nosemgrep` to the next line only.
+                # nosemgrep: arbitrary-sleep
                 time.sleep(wait_time)
             else:
                 # Re-raise if not 429 or max retries reached
@@ -279,6 +285,44 @@ def normalize_metadata_value(value: str, value_type: Optional[str] = None) -> An
 # Utility Functions
 #######################
 
+def query_all_pages(table, **query_kwargs) -> List[Dict[str, Any]]:
+    """Query a table, following LastEvaluatedKey, and return every matching item.
+
+    A single DynamoDB query returns at most 1 MB of items, so a caller that reads
+    only the first page silently truncates the result set.
+    """
+    items: List[Dict[str, Any]] = []
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get('Items', []))
+
+        # DynamoDB omits LastEvaluatedKey on the last page, so the end of the walk is the key's
+        # ABSENCE. Reading its value instead never terminates against an under-stubbed reader,
+        # whose every ``get`` answers truthily.
+        if 'LastEvaluatedKey' not in response:
+            return items
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+def query_has_match(table, **query_kwargs) -> bool:
+    """Return True as soon as a page of a query yields an item.
+
+    DynamoDB applies a FilterExpression after the 1 MB read cap, so an existence
+    check decided from one page is a false negative whenever the matching item
+    sits beyond it -- an asset with thousands of links can return an empty first
+    page while the one link of the filtered type is on a later one.
+    """
+    while True:
+        response = table.query(**query_kwargs)
+        if response.get('Items'):
+            return True
+
+        # Paged on the key's ABSENCE, which is how DynamoDB signals the last page.
+        if 'LastEvaluatedKey' not in response:
+            return False
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
 def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
     """Get S3 bucket details from database"""
     try:
@@ -348,18 +392,19 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
         all_metadata = {}
         
         # Query assetFileMetadataStorageTable for metadata fields
-        response = asset_file_metadata_table.query(
+        items = query_all_pages(
+            asset_file_metadata_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType')
             
             # Skip system metadata records that conflict with OpenSearch field mappings
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue  # Skip this metadata, but continue processing others
             
@@ -380,12 +425,12 @@ def get_asset_version_info(database_id: str, asset_id: str) -> Dict[str, Any]:
     """Get current asset version information using the table PK (databaseId:assetId is now the table PK)"""
     try:
         composite_key = f"{database_id}:{asset_id}"
-        response = asset_versions_table.query(
+        items = query_all_pages(
+            asset_versions_table,
             KeyConditionExpression=Key('databaseId:assetId').eq(composite_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('isCurrentVersion').eq(True)
         )
 
-        items = response.get('Items', [])
         if items:
             # Should only be one current version, but take the first if multiple exist
             version_info = items[0]
@@ -408,37 +453,35 @@ def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, b
         asset_key = f"{database_id}:{asset_id}"
         
         # Check for children (where this asset is the 'from' in parentChild relationships)
-        children_response = asset_links_table.query(
+        has_children = query_has_match(
+            asset_links_table,
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('parentChild'),
         )
-        has_children = len(children_response.get('Items', [])) > 0
-        
+
         # Check for parents (where this asset is the 'to' in parentChild relationships)
-        parents_response = asset_links_table.query(
+        has_parents = query_has_match(
+            asset_links_table,
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('parentChild'),
         )
-        has_parents = len(parents_response.get('Items', [])) > 0
-        
+
         # Check for related assets (where this asset is in 'related' relationships)
-        related_from_response = asset_links_table.query(
+        has_related = query_has_match(
+            asset_links_table,
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('related'),
-        )
-        
-        related_to_response = asset_links_table.query(
+        ) or query_has_match(
+            asset_links_table,
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('related'),
         )
-        
-        has_related = (len(related_from_response.get('Items', [])) > 0 or 
-                      len(related_to_response.get('Items', [])) > 0)
-        
+
+
         return {
             'has_children': has_children,
             'has_parents': has_parents,
@@ -524,45 +567,88 @@ def build_asset_document(request: AssetIndexRequest, asset_details: Dict[str, An
     # Add metadata fields with MD_ prefix
     if asset_metadata:
         doc.add_metadata_fields(asset_metadata)
-    
+
+    # Derive geo_MD_location from metadata (location key takes priority over lat/lon/alt)
+    geo_shape = build_geo_location(asset_metadata)
+    if geo_shape is not None:
+        doc.geo_MD_location = geo_shape
+
     return doc
 
 #######################
 # OpenSearch Operations
 #######################
 
+def _is_invalid_geo_shape_error(error: Exception) -> bool:
+    """Detect OpenSearch's mapper_parsing_exception for an invalid geo_shape.
+
+    A degenerate polygon (self-intersecting, zero-area, coincident edges) drawn
+    in the metadata map editor surfaces as a 400 mapper_parsing_exception. We
+    don't want one bad geometry to block the rest of the document from being
+    indexed, so callers retry without the geo field.
+    """
+    msg = str(error)
+    return (
+        "mapper_parsing_exception" in msg
+        and ("invalid_shape_exception" in msg or "geo_shape" in msg)
+    )
+
+
 def index_asset_document(document: AssetDocumentModel) -> bool:
-    """Index an asset document in OpenSearch with retry logic for 429 errors"""
+    """Index an asset document in OpenSearch with retry logic for 429 errors.
+
+    If OpenSearch rejects the document because of a malformed geo_MD_location
+    shape (e.g. a self-intersecting polygon authored in the metadata map
+    editor), we retry once without the geo field so the rest of the document --
+    including MD_ metadata -- still lands in the index.
+    """
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
-        
+
         client = opensearch_manager.get_client()
 
         # Normalize databaseId for storage (addition of #deleted suffix if archived)
         normalized_database_id = document.str_databaseid
         if(document.bool_archived and "#deleted" not in normalized_database_id):
             normalized_database_id = f"{normalized_database_id}#deleted"
-        
+
         # Create document ID from key components
         doc_id = f"{normalized_database_id}#{document.str_assetid}"
-        
+
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)
-        
-        # Index the document with retry logic
-        response = opensearch_operation_with_retry(
-            lambda: client.index(
-                index=opensearch_asset_index,
-                id=doc_id,
-                body=doc_dict
-            ),
-            operation_name=f"index asset {doc_id}"
-        )
-        
+
+        try:
+            response = opensearch_operation_with_retry(
+                lambda: client.index(
+                    index=opensearch_asset_index,
+                    id=doc_id,
+                    body=doc_dict,
+                ),
+                operation_name=f"index asset {doc_id}",
+            )
+        except Exception as e:
+            if _is_invalid_geo_shape_error(e) and "geo_MD_location" in doc_dict:
+                bad_geo = doc_dict.pop("geo_MD_location", None)
+                logger.warning(
+                    f"OpenSearch rejected geo_MD_location for {doc_id}: {e}. "
+                    f"Retrying without the geo field. Bad shape: {bad_geo}"
+                )
+                response = opensearch_operation_with_retry(
+                    lambda: client.index(
+                        index=opensearch_asset_index,
+                        id=doc_id,
+                        body=doc_dict,
+                    ),
+                    operation_name=f"index asset {doc_id} (geo dropped)",
+                )
+            else:
+                raise
+
         logger.info(f"Indexed asset document: {doc_id}")
         return response.get('result') in ['created', 'updated']
-        
+
     except Exception as e:
         logger.exception(f"Error indexing asset document: {e}")
         return False
@@ -999,20 +1085,72 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[IndexOperati
 # Lambda Handler
 #######################
 
+def batch_item_identifier(record: Dict[str, Any]) -> Optional[str]:
+    """Return the partial-batch identifier for an event-source record.
+
+    An SQS record is identified by its messageId, a DynamoDB stream record by the
+    shard record's SequenceNumber. Returns None for a record that carries neither
+    (a hand-built or direct invocation), where partial-batch reporting does not
+    apply.
+    """
+    message_id = record.get('messageId')
+    if message_id:
+        return message_id
+
+    sequence_number = (record.get('dynamodb') or {}).get('SequenceNumber')
+    if sequence_number:
+        return sequence_number
+
+    return None
+
+
+def all_batch_item_failures(event) -> List[Dict[str, str]]:
+    """Identify every record in the event, for reporting a whole batch as failed.
+
+    Used when the failure is not attributable to one record. Re-processing an
+    already-indexed record is harmless (indexing is an upsert keyed by the
+    document id), so redriving the whole batch is the safe direction.
+    """
+    failures = []
+    if not isinstance(event, dict):
+        return failures
+    for record in (event.get('Records') or []):
+        identifier = batch_item_identifier(record)
+        if identifier:
+            failures.append({'itemIdentifier': identifier})
+    return failures
+
+
+def with_batch_item_failures(response, event, failures: List[Dict[str, str]]):
+    """Attach the partial-batch failure report to an event-source response.
+
+    A response that carries no `batchItemFailures` is a whole-batch SUCCESS to the
+    event-source mapping, so every exit path of an event-source invocation must
+    report, including the error ones.
+    """
+    if isinstance(event, dict) and 'Records' in event:
+        if failures:
+            logger.warning(f"Reporting {len(failures)} failed record(s) for redrive")
+        response['batchItemFailures'] = failures
+    return response
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset indexing operations"""
     global claims_and_roles
-    
+
     try:
         logger.info(f"Processing asset indexing event: {json.dumps(event, default=str)}")
-        
+
         results = []
-        
+        batch_item_failures: List[Dict[str, str]] = []
+
         # Handle different event sources
         if 'Records' in event:
             for record in event['Records']:
+                record_results_start = len(results)
                 event_source = record.get('eventSource', '')
-                
+
                 if event_source == 'aws:dynamodb':
                     # Determine which table based on event source ARN
                     source_arn = record.get('eventSourceARN', '')
@@ -1112,7 +1250,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
-        
+
+                if any(not r.success for r in results[record_results_start:]):
+                    identifier = batch_item_identifier(record)
+                    if identifier:
+                        batch_item_failures.append({'itemIdentifier': identifier})
+                    else:
+                        logger.warning(
+                            "Asset indexing failed for a record that carries no messageId or "
+                            "SequenceNumber; the failure cannot be reported for redrive"
+                        )
+
         else:
             # Direct invocation with AssetIndexRequest
             try:
@@ -1121,25 +1269,37 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 results.append(result)
             except ValidationError as v:
                 logger.exception(f"Validation error: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
-        
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
+
         # Summarize results
         successful = sum(1 for r in results if r.success)
         total = len(results)
-        
+
         response_body = {
             'message': f"Processed {successful}/{total} asset indexing operations successfully",
             'results': [r.dict() for r in results]
         }
-        
-        return success(body=response_body)
-        
+
+        # Partial-batch failure report. The event-source mapping redrives only the
+        # records whose indexing failed; without it a failed index write is deleted
+        # from the queue as if it had been processed.
+        return with_batch_item_failures(
+            success(body=response_body), event, batch_item_failures)
+
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return with_batch_item_failures(
+            validation_error(body={'message': validation_error_message(v)}, event=event),
+            event, all_batch_item_failures(event))
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return with_batch_item_failures(
+            general_error(body={'message': str(v)}, event=event),
+            event, all_batch_item_failures(event))
     except Exception as e:
         logger.exception(f"Internal error in asset indexer: {e}")
-        return internal_error(event=event)
+        # The failure is not attributable to one record, so the whole batch is
+        # reported: an error response without a failure report deletes every
+        # message in it.
+        return with_batch_item_failures(
+            internal_error(event=event), event, all_batch_item_failures(event))

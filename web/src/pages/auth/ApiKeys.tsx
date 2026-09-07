@@ -4,9 +4,12 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import TextContent from "@cloudscape-design/components/text-content";
@@ -14,15 +17,103 @@ import TextFilter from "@cloudscape-design/components/text-filter";
 import Grid from "@cloudscape-design/components/grid";
 import Modal from "@cloudscape-design/components/modal";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
-import { fetchApiKeys, deleteApiKey } from "../../services/APIService";
+import {
+    fetchApiKeys,
+    deleteApiKey,
+    fetchUserApiKeys,
+    deleteUserApiKey,
+    fetchAllowedApiRoutes,
+} from "../../services/APIService";
+import { appCache } from "../../services/appCache";
+import {
+    isApiRouteAllowed,
+    ALLOWED_API_ROUTES_CACHE_KEY,
+    ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
+} from "../../common/constants/authRoutes";
+import {
+    API_KEY_LISTING_PAGE_SIZE,
+    USER_API_KEY_MAX_EXPIRATION_DAYS,
+} from "../../common/constants/apiKeys";
 import CreateApiKey from "./CreateApiKey";
 import UpdateApiKey from "./UpdateApiKey";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
+export type ApiKeyManagementMode = "admin" | "user";
+
 export default function ApiKeys() {
     usePageTitle("API Keys");
-    const [reload, setReload] = useState(true);
+
+    // Available modes, resolved asynchronously from the allowed-API-routes
+    // list. Admin mode: GET /auth/api-keys allowed. User mode:
+    // GET /auth/user/api-keys allowed. The localStorage cache is preferred,
+    // but when it is empty/expired (e.g. this page loads before the login
+    // flow's fetch completes) the list is fetched directly rather than
+    // guessing -- guessing admin for a self-service-only user would render
+    // the wrong form and call the wrong API.
+    const [modesResolved, setModesResolved] = useState(false);
+    const [showAdminMode, setShowAdminMode] = useState(false);
+    const [showUserMode, setShowUserMode] = useState(false);
+    const showModeToggle = showAdminMode && showUserMode;
+    // Set when neither mode could be determined. The page then offers a retry instead of
+    // guessing a privilege level.
+    const [permissionsUnavailable, setPermissionsUnavailable] = useState(false);
+    const [resolveAttempt, setResolveAttempt] = useState(0);
+
+    const [mode, setMode] = useState<ApiKeyManagementMode>("admin");
+    const [reload, setReload] = useState(false);
     const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        const resolveModes = async () => {
+            let admin = isApiRouteAllowed("/auth/api-keys", "GET");
+            let user = isApiRouteAllowed("/auth/user/api-keys", "GET");
+            // Set only when the backend does not serve the allowed-routes listing at all,
+            // which is the one case with nothing to gate on.
+            let listingAbsent = false;
+            if (admin === null || user === null) {
+                // Cache unavailable -- fetch the allowed routes directly
+                try {
+                    const result = await fetchAllowedApiRoutes();
+                    if (result[0] === true && result[1]?.routes) {
+                        appCache.setItemWithExpiry(
+                            ALLOWED_API_ROUTES_CACHE_KEY,
+                            result[1],
+                            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
+                        );
+                        admin = isApiRouteAllowed("/auth/api-keys", "GET");
+                        user = isApiRouteAllowed("/auth/user/api-keys", "GET");
+                    } else if (result[2] === 404) {
+                        listingAbsent = true;
+                    }
+                } catch (err) {
+                    console.log("Error fetching allowed API routes:", err);
+                }
+            }
+            if (cancelled) return;
+            // The gate fails closed: a permission check that could not complete must not open
+            // the tenant-wide admin surface, which would render the admin form and call the
+            // admin API for a self-service-only user and leave them no way to their own keys.
+            // Only an absent listing (404) keeps the historical admin default.
+            const undeterminable = !listingAbsent && (admin === null || user === null);
+            const adminMode = listingAbsent || admin === true;
+            const userMode = user === true;
+            setPermissionsUnavailable(undeterminable);
+            setShowAdminMode(adminMode);
+            setShowUserMode(userMode);
+            setMode(adminMode ? "admin" : "user");
+            setModesResolved(!undeterminable);
+            if (undeterminable) {
+                setLoading(false);
+            } else {
+                setReload(true);
+            }
+        };
+        resolveModes();
+        return () => {
+            cancelled = true;
+        };
+    }, [resolveAttempt]);
     const [allItems, setAllItems] = useState<any[]>([]);
     const [selectedItems, setSelectedItems] = useState<any[]>([]);
     const [createOpen, setCreateOpen] = useState(false);
@@ -32,41 +123,90 @@ export default function ApiKeys() {
     const [error, setError] = useState<string | null>(null);
     const [filterText, setFilterText] = useState("");
 
-    const loadData = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        setSelectedItems([]);
-        try {
-            const result = await fetchApiKeys();
-            if (result === false || (Array.isArray(result) && result[0] === false)) {
-                const errorMsg = Array.isArray(result) ? result[1] : "Failed to fetch API keys";
-                setError(errorMsg);
+    // Server-side token paging: tokens[i] is the startingToken that fetches page i
+    // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
+    // NextToken, which is what Pagination's openEnd renders.
+    const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
+    const [hasMore, setHasMore] = useState(false);
+    const [currentPageIndex, setCurrentPageIndex] = useState(1);
+    const [loadedPages, setLoadedPages] = useState(1);
+
+    const loadPage = useCallback(
+        async (pageNumber: number, startingToken: string | undefined) => {
+            setLoading(true);
+            setError(null);
+            setSelectedItems([]);
+            try {
+                const fetchKeys = mode === "user" ? fetchUserApiKeys : fetchApiKeys;
+                const result = await fetchKeys({
+                    pageSize: API_KEY_LISTING_PAGE_SIZE,
+                    startingToken,
+                });
+                if (result === false || (Array.isArray(result) && result[0] === false)) {
+                    const errorMsg = Array.isArray(result) ? result[1] : "Failed to fetch API keys";
+                    setError(errorMsg);
+                    setAllItems([]);
+                    setHasMore(false);
+                } else {
+                    const items = Array.isArray(result) ? result : result?.Items || [];
+                    setAllItems(items);
+                    const nextToken = Array.isArray(result) ? undefined : result?.NextToken;
+                    setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
+                    if (nextToken) {
+                        setTokens((prev) => ({ ...prev, [pageNumber + 1]: nextToken }));
+                        setHasMore(true);
+                    } else {
+                        setHasMore(false);
+                    }
+                }
+            } catch (err: any) {
+                console.log(err);
+                setError(err?.message || "Unknown error");
                 setAllItems([]);
-            } else {
-                const items = Array.isArray(result) ? result : result?.Items || [];
-                setAllItems(items);
+                setHasMore(false);
+            } finally {
+                setLoading(false);
+                setReload(false);
             }
-        } catch (err: any) {
-            console.log(err);
-            setError(err?.message || "Unknown error");
-            setAllItems([]);
-        } finally {
-            setLoading(false);
-            setReload(false);
-        }
-    }, []);
+        },
+        [mode]
+    );
 
     useEffect(() => {
-        if (reload) {
-            loadData();
+        if (reload && modesResolved) {
+            // A reload always restarts the walk: the tokens held from a previous
+            // listing address rows that may no longer be there.
+            setTokens({});
+            setCurrentPageIndex(1);
+            setLoadedPages(1);
+            setHasMore(false);
+            loadPage(0, undefined);
         }
-    }, [reload, loadData]);
+    }, [reload, modesResolved, loadPage]);
+
+    // Reload when switching between admin and user modes
+    useEffect(() => {
+        if (modesResolved) {
+            setReload(true);
+        }
+    }, [mode, modesResolved]);
+
+    const handlePageChange = ({ detail }: any) => {
+        const newIndex = detail.currentPageIndex;
+        setCurrentPageIndex(newIndex);
+        loadPage(newIndex - 1, tokens[newIndex - 1]);
+    };
+
+    // Whether the listing spans more than the page shown. Only then are the filter and the
+    // column sorting narrower than the whole key set, so only then is it worth saying so.
+    const isPaging = hasMore || currentPageIndex > 1;
 
     const handleDelete = async () => {
         if (selectedItems.length !== 1) return;
         setDeleteInProgress(true);
         try {
-            const result = await deleteApiKey({ apiKeyId: selectedItems[0].apiKeyId });
+            const deleteFn = mode === "user" ? deleteUserApiKey : deleteApiKey;
+            const result = await deleteFn({ apiKeyId: selectedItems[0].apiKeyId });
             if (result && result[0] === true) {
                 setDeleteConfirmOpen(false);
                 setSelectedItems([]);
@@ -166,6 +306,44 @@ export default function ApiKeys() {
         },
     ];
 
+    // Nothing about the user's access could be established, so no key list and no actions are
+    // offered -- only a way to try the permission check again.
+    if (permissionsUnavailable) {
+        return (
+            <Box padding={{ top: "m", horizontal: "l" }}>
+                <Grid gridDefinition={[{ colspan: 12 }]}>
+                    <div>
+                        <TextContent>
+                            <h1>API Key Management</h1>
+                        </TextContent>
+                    </div>
+                </Grid>
+                <Grid gridDefinition={[{ colspan: 12 }]}>
+                    <Alert
+                        type="error"
+                        statusIconAriaLabel="Error"
+                        header="Could not determine your permissions"
+                        action={
+                            <Button
+                                onClick={() => {
+                                    setPermissionsUnavailable(false);
+                                    setLoading(true);
+                                    setResolveAttempt((attempt) => attempt + 1);
+                                }}
+                                data-testid="retry-resolve-api-key-modes-button"
+                            >
+                                Retry
+                            </Button>
+                        }
+                    >
+                        The permission check for API key management did not complete, so API keys
+                        cannot be shown. Retry, or reload the page.
+                    </Alert>
+                </Grid>
+            </Box>
+        );
+    }
+
     return (
         <>
             <Box padding={{ top: "m", horizontal: "l" }}>
@@ -176,6 +354,23 @@ export default function ApiKeys() {
                         </TextContent>
                     </div>
                 </Grid>
+                {showModeToggle && (
+                    <Grid gridDefinition={[{ colspan: 12 }]}>
+                        <Box padding={{ bottom: "s" }}>
+                            <SegmentedControl
+                                selectedId={mode}
+                                onChange={({ detail }) =>
+                                    setMode(detail.selectedId as ApiKeyManagementMode)
+                                }
+                                label="API key management mode"
+                                options={[
+                                    { text: "All Keys (Admin)", id: "admin" },
+                                    { text: "My Keys", id: "user" },
+                                ]}
+                            />
+                        </Box>
+                    </Grid>
+                )}
                 <Grid gridDefinition={[{ colspan: 12 }]}>
                     <Table
                         loading={loading}
@@ -186,6 +381,20 @@ export default function ApiKeys() {
                         selectedItems={selectedItems}
                         onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
                         sortingDisabled={false}
+                        pagination={
+                            <Pagination
+                                currentPageIndex={currentPageIndex}
+                                pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                                openEnd={hasMore}
+                                onChange={handlePageChange}
+                                disabled={loading}
+                                ariaLabels={{
+                                    nextPageLabel: "Next page of API keys",
+                                    previousPageLabel: "Previous page of API keys",
+                                    pageLabel: (pageNumber) => `Page ${pageNumber} of API keys`,
+                                }}
+                            />
+                        }
                         filter={
                             <div
                                 style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
@@ -208,25 +417,36 @@ export default function ApiKeys() {
                             <Header
                                 counter={
                                     filterText
-                                        ? `(${filteredItems.length}/${allItems.length})`
-                                        : `(${allItems.length})`
+                                        ? `(${filteredItems.length}/${allItems.length}${
+                                              hasMore ? "+" : ""
+                                          })`
+                                        : `(${allItems.length}${hasMore ? "+" : ""})`
+                                }
+                                description={
+                                    (mode === "user"
+                                        ? `Your own API keys. Keys require an expiration date no more than ${USER_API_KEY_MAX_EXPIRATION_DAYS} days from creation.`
+                                        : "All API keys across users.") +
+                                    (isPaging
+                                        ? " More keys than one page holds: the filter and column sorting apply to the page shown."
+                                        : "")
                                 }
                                 actions={
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Button
-                                            disabled={selectedItems.length !== 1}
+                                            disabled={!modesResolved || selectedItems.length !== 1}
                                             onClick={() => setEditOpen(true)}
                                         >
                                             Edit
                                         </Button>
                                         <Button
-                                            disabled={selectedItems.length !== 1}
+                                            disabled={!modesResolved || selectedItems.length !== 1}
                                             onClick={() => setDeleteConfirmOpen(true)}
                                         >
                                             Delete
                                         </Button>
                                         <Button
                                             variant="primary"
+                                            disabled={!modesResolved}
                                             onClick={() => setCreateOpen(true)}
                                             data-testid="create-api-key-button"
                                         >
@@ -235,7 +455,7 @@ export default function ApiKeys() {
                                     </SpaceBetween>
                                 }
                             >
-                                API Keys
+                                {mode === "user" ? "My API Keys" : "API Keys"}
                             </Header>
                         }
                         empty={
@@ -244,7 +464,12 @@ export default function ApiKeys() {
                                 <Box padding={{ bottom: "s" }} variant="p" color="inherit">
                                     No API keys have been created yet.
                                 </Box>
-                                <Button onClick={() => setCreateOpen(true)}>Create API Key</Button>
+                                <Button
+                                    disabled={!modesResolved}
+                                    onClick={() => setCreateOpen(true)}
+                                >
+                                    Create API Key
+                                </Button>
                             </Box>
                         }
                     />
@@ -258,7 +483,12 @@ export default function ApiKeys() {
                 )}
             </Box>
 
-            <CreateApiKey open={createOpen} setOpen={setCreateOpen} setReload={setReload} />
+            <CreateApiKey
+                open={createOpen}
+                setOpen={setCreateOpen}
+                setReload={setReload}
+                userMode={mode === "user"}
+            />
 
             {selectedItems.length === 1 && (
                 <UpdateApiKey
@@ -266,6 +496,7 @@ export default function ApiKeys() {
                     setOpen={setEditOpen}
                     setReload={setReload}
                     apiKey={selectedItems[0]}
+                    userMode={mode === "user"}
                 />
             )}
 

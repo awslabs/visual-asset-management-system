@@ -24,21 +24,56 @@ os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("REGION", "us-east-1")
 
-# Mock the customLogging.logger.safeLogger function
+# Mock the customLogging.logger.safeLogger function.
+#
+# The real safeLogger() returns an AWS Lambda Powertools `Logger`, so this stand-in has to accept
+# everything that object accepts or a handler that logs perfectly reasonably blows up inside a test.
+# Two ways that bit before:
+#
+#   * `debug` and `warn` were missing. The backend calls `logger.debug` 22 times and `logger.warn` 3
+#     times, so 25 call sites raised AttributeError as soon as a test reached one. The failure was
+#     order-dependent and therefore baffling: `handlers/authz/__init__.py:111` logs at debug level only
+#     on the "reuse cached enforcer" branch, and the enforcer cache is module-level global state — cold
+#     when the authz tests run alone (branch never taken, suite green) and warm in a full run once any
+#     earlier test has built an enforcer (branch taken, 27 failures in files that had not changed).
+#   * The methods took exactly `(self, message)`. Powertools is routinely called as
+#     `logger.info(msg, extra={...})`, which a single-positional signature rejects.
+#
+# So: every level the real Logger exposes, each accepting arbitrary args. A mock that is narrower than
+# the thing it replaces turns ordinary logging into a test failure at a distance from its cause.
 class MockSafeLogger:
-    def __init__(self, service=None, service_name=None):
+    def __init__(self, service=None, service_name=None, **kwargs):
         self.service = service_name if service_name is not None else service
-        
-    def info(self, message):
+
+    def debug(self, *args, **kwargs):
         pass
-        
-    def warning(self, message):
+
+    def info(self, *args, **kwargs):
         pass
-        
-    def error(self, message):
+
+    def warning(self, *args, **kwargs):
         pass
-        
-    def exception(self, message):
+
+    # Powertools keeps the deprecated alias; the backend still uses it in three places.
+    def warn(self, *args, **kwargs):
+        pass
+
+    def error(self, *args, **kwargs):
+        pass
+
+    def critical(self, *args, **kwargs):
+        pass
+
+    def exception(self, *args, **kwargs):
+        pass
+
+    def append_keys(self, **kwargs):
+        pass
+
+    def remove_keys(self, keys=None):
+        pass
+
+    def set_correlation_id(self, value=None):
         pass
 
 # Create a mock safeLogger function that returns a MockSafeLogger instance
@@ -52,10 +87,29 @@ sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
-sys.modules['common.validators'] = MagicMock()
-sys.modules['common.validators'].validate = lambda params: (True, "")
+# common.validators is registered as the REAL module further below (after
+# common.s3PathPatterns, which it imports). A bare MagicMock here would resolve
+# its pattern constants (e.g. bucket_existing_key_pattern) to MagicMocks, which
+# pydantic v1 then passes to re.compile(regex=...) at model-class-definition time,
+# crashing collection of any test that imports models.assetsV3.
 sys.modules['common.dynamodb'] = MagicMock()
-sys.modules['common.dynamodb'].get_asset_object_from_id = lambda asset_id: {"assetId": asset_id}
+
+
+def _mock_get_asset_object_from_id(database_id=None, asset_id=None):
+    """Stand-in for common.dynamodb.get_asset_object_from_id.
+
+    Mirrors the real two-argument signature ``(database_id, asset_id)``. The stub
+    previously took a single argument while every caller passes two
+    (``get_asset_object_from_id(None, assetId)``), so any test reaching one of those
+    call sites raised TypeError rather than exercising the handler - which is why the
+    suite could not see whether a caller handles a None return. The real function
+    returns None when the assetId resolves to nothing, so a test covering that path
+    patches this to return None.
+    """
+    return {"assetId": asset_id}
+
+
+sys.modules['common.dynamodb'].get_asset_object_from_id = _mock_get_asset_object_from_id
 sys.modules['common.constants'] = MagicMock()
 sys.modules['common.constants'].STANDARD_JSON_RESPONSE = {
     "statusCode": 200,
@@ -68,6 +122,197 @@ sys.modules['common.constants'].STANDARD_JSON_RESPONSE = {
     },
     "body": ""
 }
+# s3MetadataKeys is pure constants (no AWS deps), so load the REAL module by path
+# rather than a MagicMock. A bare MagicMock for `common` cannot resolve the
+# `from common.s3MetadataKeys import ...` submodule import at collection time.
+import importlib.util as _s3mk_importlib_util
+_s3mk_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.s3MetadataKeys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 's3MetadataKeys.py')
+)
+_s3mk_module = _s3mk_importlib_util.module_from_spec(_s3mk_spec)
+_s3mk_spec.loader.exec_module(_s3mk_module)
+sys.modules['common.s3MetadataKeys'] = _s3mk_module
+# s3PathPatterns is pure constants (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.s3PathPatterns',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 's3PathPatterns.py')
+)
+_s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
+_s3pp_spec.loader.exec_module(_s3pp_module)
+sys.modules['common.s3PathPatterns'] = _s3pp_module
+# validators is pure (re + json + common.s3PathPatterns, registered above; no AWS
+# deps), so load the REAL module by path. Its regex pattern CONSTANTS must be real
+# strings: models (e.g. assetsV3) pass them to pydantic v1 Field(regex=...), which
+# re.compile()s them at class-definition time -- a MagicMock there crashes collection.
+# The validate() dispatcher is the REAL one: handlers bind it at import, so replacing it with a
+# permissive stub made every handler test fail open — a handler that skipped or mis-declared an
+# input check still passed. Tests that need validation bypassed should patch it locally.
+_validators_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.validators',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'validators.py')
+)
+_validators_module = _s3mk_importlib_util.module_from_spec(_validators_spec)
+_validators_spec.loader.exec_module(_validators_module)
+sys.modules['common.validators'] = _validators_module
+# `common` is a MagicMock package, so bind the real submodule as an attribute too so
+# `from common import validators` resolves the real module rather than a mock attribute.
+sys.modules['common'].validators = _validators_module
+# dynamoDbMetadataKeys is pure constants (no AWS deps), so load the REAL module
+# by path rather than a MagicMock (same approach as s3MetadataKeys above).
+_ddbmk_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.dynamoDbMetadataKeys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'dynamoDbMetadataKeys.py')
+)
+_ddbmk_module = _s3mk_importlib_util.module_from_spec(_ddbmk_spec)
+_ddbmk_spec.loader.exec_module(_ddbmk_module)
+sys.modules['common.dynamoDbMetadataKeys'] = _ddbmk_module
+# batchItemFailures is pure dict/list arithmetic over an event (no AWS deps), so load the REAL module
+# for the same reason as the two above. It MUST be registered here: `common` is a MagicMock, which is
+# not a package, so `from common.batchItemFailures import ...` in a handler raises
+# "No module named 'common.batchItemFailures'; 'common' is not a package" at collection — a failure that
+# names the importing handler rather than this file.
+_bif_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.batchItemFailures',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'batchItemFailures.py')
+)
+_bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
+_bif_spec.loader.exec_module(_bif_module)
+sys.modules['common.batchItemFailures'] = _bif_module
+sys.modules['common'].batchItemFailures = _bif_module
+# `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
+# REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
+# a handler does `from common.dynamodb import query_all_items` at import time, so it captures
+# whatever this attribute is THEN. Left as a MagicMock attribute, every paged read in
+# assetVersions, assetLinksService, createAssetLink, assetFiles and assetExportService returns a
+# MagicMock; `MagicMock.__iter__` yields nothing, so the caller sees an empty list, the table stub is
+# never read, and a test written to prove the loop reaches page two passes its own stub zero times
+# and asserts against `[]`. That failure names the handler, not the mock, which is why it cost a full
+# wave-end run to attribute.
+#
+# Safe against an under-stubbed table: the real helper decides on `'LastEvaluatedKey' not in
+# response`, and `MagicMock.__contains__` is False, so a bare mock reader is read exactly once and
+# the loop ends rather than spinning.
+_real_ddb_spec = _s3mk_importlib_util.spec_from_file_location(
+    '_real_common_dynamodb_for_query_all_items',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'dynamodb.py')
+)
+_real_ddb_module = _s3mk_importlib_util.module_from_spec(_real_ddb_spec)
+_real_ddb_spec.loader.exec_module(_real_ddb_module)
+sys.modules['common.dynamodb'].query_all_items = _real_ddb_module.query_all_items
+# validate_pagination_info MUTATES the query-parameter dict to fill maxItems/pageSize/startingToken,
+# and its callers then subscript those keys. A MagicMock stand-in accepts the call and fills nothing,
+# so the next line raises KeyError and the handler answers 500 — a failure that reads as a paging
+# defect in the handler. The real helper is pure dict arithmetic with no AWS dependency.
+sys.modules['common.dynamodb'].validate_pagination_info = _real_ddb_module.validate_pagination_info
+# The paginator-budget ceilings are plain ints that handlers import at module level and then compare
+# against with min(). A MagicMock attribute raises `'<' not supported between instances of MagicMock
+# and int` inside the handler, which reads as a paging defect there rather than as a mock gap. Bound
+# from the real module so a test asserting a bounded PaginationConfig sees the deployed number.
+sys.modules['common.dynamodb'].MAX_PAGINATION_MAX_ITEMS = _real_ddb_module.MAX_PAGINATION_MAX_ITEMS
+sys.modules['common.dynamodb'].MAX_PAGINATION_PAGE_SIZE = _real_ddb_module.MAX_PAGINATION_PAGE_SIZE
+# query_has_match is the existence-check half of the same pair, and needs binding for the same reason
+# and with a sharper consequence: it returns a BOOL, so a MagicMock stand-in returns a truthy mock and
+# every existence check answers "yes". The Garnet indexers import it at module level
+# (`from common.dynamodb import query_all_items, query_has_match`), unlike the indexing indexers, which
+# define their own copy — so only the Garnet suite was exposed, and it read every relationship flag as
+# the same shared mock object rather than True/False.
+#
+# It was ALSO an ordering dependency, which is the part worth keeping in mind: the Garnet paging suite
+# passed in a full run and failed 7 of 19 when run alone, because the value this attribute holds at the
+# moment a module executes `from common.dynamodb import ...` depends on what has already run. A suite
+# that is the sole coverage for a finding must not depend on its neighbours being collected first.
+sys.modules['common.dynamodb'].query_has_match = _real_ddb_module.query_has_match
+# apiRoutes is pure constants (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_apir_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.apiRoutes',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'apiRoutes.py')
+)
+_apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
+_apir_spec.loader.exec_module(_apir_module)
+sys.modules['common.apiRoutes'] = _apir_module
+# The execution/pipeline/workflow helpers live in the common.workflows subpackage.
+# `common` is a MagicMock, so register a REAL package object for `common.workflows`
+# (and bind it as an attribute on the mock `common`) before loading its submodules,
+# so `from common.workflows import X` / `from common.workflows.X import Y` resolve the
+# real code rather than MagicMock attributes.
+_cw_pkg = __import__('types').ModuleType('common.workflows')
+_cw_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'workflows')]
+sys.modules['common.workflows'] = _cw_pkg
+sys.modules['common'].workflows = _cw_pkg
+# executionRecords is pure helpers (no AWS deps), so load the REAL module by path
+# rather than a MagicMock (same approach as s3MetadataKeys above).
+_execrec_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.workflows.executionRecords',
+    os.path.join(_cw_pkg.__path__[0], 'executionRecords.py')
+)
+_execrec_module = _s3mk_importlib_util.module_from_spec(_execrec_spec)
+_execrec_spec.loader.exec_module(_execrec_module)
+sys.modules['common.workflows.executionRecords'] = _execrec_module
+# Bind the real module as an attribute on the package so `from common.workflows import
+# executionRecords` resolves the real submodule.
+_cw_pkg.executionRecords = _execrec_module
+# executionOutputs is pure helpers too (imports only common.workflows.executionRecords;
+# boto3 clients are injected by callers, none constructed at import). Load the REAL module.
+_execout_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.workflows.executionOutputs',
+    os.path.join(_cw_pkg.__path__[0], 'executionOutputs.py')
+)
+_execout_module = _s3mk_importlib_util.module_from_spec(_execout_spec)
+_execout_spec.loader.exec_module(_execout_module)
+sys.modules['common.workflows.executionOutputs'] = _execout_module
+_cw_pkg.executionOutputs = _execout_module
+# stepfunctions_builder is a pure ASL builder (imports only json + typing, no AWS
+# side effects at import), so load the REAL module by path rather than a MagicMock.
+# This makes the per-test stubs in the workflow tests harmless no-ops and removes a
+# test-collection-order dependency.
+_sfb_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.workflows.stepfunctions_builder',
+    os.path.join(_cw_pkg.__path__[0], 'stepfunctions_builder.py')
+)
+_sfb_module = _s3mk_importlib_util.module_from_spec(_sfb_spec)
+_sfb_spec.loader.exec_module(_sfb_module)
+sys.modules['common.workflows.stepfunctions_builder'] = _sfb_module
+# Bind the real submodule as an attribute too so `from common.workflows import
+# stepfunctions_builder` / `from common.workflows.stepfunctions_builder import X` resolve real code.
+_cw_pkg.stepfunctions_builder = _sfb_module
+# s3 is a simple validation module with no AWS side effects at import, but it is not
+# in the root conftest mock layer. Load the mock s3 module by path so tests that import
+# handlers which depend on common.s3 can collect cleanly.
+_s3_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.s3',
+    os.path.join(os.path.dirname(__file__), 'mocks', 'common', 's3.py')
+)
+_s3_module = _s3mk_importlib_util.module_from_spec(_s3_spec)
+_s3_spec.loader.exec_module(_s3_module)
+sys.modules['common.s3'] = _s3_module
+# resourceNames resolves table/bucket/log-group names (env-var override first, SSM
+# second). Handlers import it at module level, so it must be resolvable at collection
+# time. Load the REAL module by path — its boto3 ssm client is created lazily and the
+# conftest env vars satisfy the override path, so no AWS call happens during tests.
+_rn_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.resourceNames',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'resourceNames.py')
+)
+_rn_module = _s3mk_importlib_util.module_from_spec(_rn_spec)
+_rn_spec.loader.exec_module(_rn_module)
+sys.modules['common.resourceNames'] = _rn_module
+# handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
+# Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
+if 'handlers' not in sys.modules:
+    sys.modules['handlers'] = MagicMock()
+if 'handlers.assets' not in sys.modules:
+    _h_assets = MagicMock()
+    _h_assets.__name__ = 'handlers.assets'
+    _h_assets.__package__ = 'handlers.assets'
+    sys.modules['handlers.assets'] = _h_assets
+_h_assetVersions = MagicMock()
+_h_assetVersions.validate_asset_version_exists = MagicMock()
+_h_assetVersions.get_all_asset_versions = MagicMock()
+_h_assetVersions.get_asset_metadata_version = MagicMock()
+sys.modules['handlers.assets.assetVersions'] = _h_assetVersions
 # Load the real mock customLogging package (tests/mocks/customLogging) instead of a bare
 # MagicMock. A bare MagicMock has no real submodules, so any handler that does
 # `from customLogging.auditLogging import ...` at import time fails collection with

@@ -246,6 +246,14 @@ export function mergeFiles(
                         update.dateCreatedCurrentVersion || newNode.dateCreatedCurrentVersion;
                     newNode.size = update.size !== undefined ? update.size : newNode.size;
                     newNode.keyPrefix = update.key || newNode.keyPrefix;
+                    newNode.changeSource =
+                        update.changeSource !== undefined
+                            ? update.changeSource
+                            : newNode.changeSource;
+                    newNode.changeUserId =
+                        update.changeUserId !== undefined
+                            ? update.changeUserId
+                            : newNode.changeUserId;
                 }
             }
 
@@ -401,6 +409,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                     isPermanentlyDeleted: fileKey.isPermanentlyDeleted,
                     primaryType: fileKey.primaryType,
                     previewFile: fileKey.previewFile,
+                    changeSource: fileKey.changeSource,
+                    changeUserId: fileKey.changeUserId,
                 });
             } else {
                 // For nested files, find or create parent directories
@@ -476,6 +486,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                     isPermanentlyDeleted: fileKey.isPermanentlyDeleted,
                     primaryType: fileKey.primaryType,
                     previewFile: fileKey.previewFile,
+                    changeSource: fileKey.changeSource,
+                    changeUserId: fileKey.changeUserId,
                 });
             }
 
@@ -682,7 +694,7 @@ export async function downloadFile(
             databaseId: databaseId,
             key: keyPrefix,
             versionId: assetVersionId ? "" : versionId,
-            assetVersionId: assetVersionId,
+            assetVersionId: assetVersionId as any,
             downloadType: "assetFile",
         });
 

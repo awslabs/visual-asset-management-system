@@ -557,23 +557,34 @@ class VamsConnectorExtension(omni.ext.IExt):
         db_id = self._selected_db.database_id
         asset_id = self._selected_asset.asset_id
 
-        # Fetch workflows from GLOBAL + selected database
-        all_wfs, seen = [], set()
+        # Fetch workflows from GLOBAL + selected database. Disabled workflows are listed too, so an
+        # empty panel can say WHY it is empty: a denied or expired request, a database with no
+        # workflows, and a database whose workflows are all disabled are three different situations
+        # that a swallowed error renders identically.
+        all_wfs, seen, load_errors, unrunnable = [], set(), [], 0
         for qdb in ["GLOBAL"] + ([db_id] if db_id != "GLOBAL" else []):
             try:
-                for wf in self._connector.list_workflows(qdb):
-                    key = (wf.workflow_id, wf.database_id)
-                    if key not in seen:
-                        seen.add(key)
-                        all_wfs.append(wf)
-            except VamsCliError:
-                pass
+                listed = self._connector.list_workflows(qdb, include_unrunnable=True)
+            except VamsCliError as e:
+                load_errors.append(f"{qdb}: {e}")
+                continue
+            for wf in listed:
+                key = (wf.workflow_id, wf.database_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if wf.is_runnable:
+                    all_wfs.append(wf)
+                else:
+                    unrunnable += 1
         self._workflows = all_wfs
 
+        execution_error = None
         try:
             self._workflow_executions = self._connector.list_workflow_executions(db_id, asset_id)
-        except VamsCliError:
+        except VamsCliError as e:
             self._workflow_executions = []
+            execution_error = str(e)
 
         self._selected_workflow = None
         self._wf_stack.clear()
@@ -581,11 +592,22 @@ class VamsConnectorExtension(omni.ext.IExt):
             ui.Label(self._wf_header_text(), height=20, style={"font_size": 13})
             ui.Label(f"  Fetched from: GLOBAL, {db_id}", height=16,
                      style={"font_size": 10, "color": 0xFF888888})
+            for message in load_errors:
+                ui.Label(f"  Error: {message}", height=18,
+                         style={"font_size": 11, "color": 0xFFDD6644})
             if not self._workflows:
-                ui.Label("  No workflows found.", height=20, style={"color": 0xFF888888})
+                if load_errors:
+                    ui.Label("  Workflow list unavailable - see the error(s) above.",
+                             height=20, style={"color": 0xFF888888})
+                elif unrunnable:
+                    ui.Label(f"  {unrunnable} workflow(s) found, all disabled.",
+                             height=20, style={"color": 0xFF888888})
+                else:
+                    ui.Label("  No workflows found.", height=20, style={"color": 0xFF888888})
             else:
                 for wf in self._workflows:
-                    desc = f"{wf.workflow_id} - {wf.description}" if wf.description else wf.workflow_id
+                    label = wf.workflow_name or wf.workflow_id
+                    desc = f"{label} - {wf.description}" if wf.description else label
                     with ui.HStack(height=24, spacing=HORIZONTAL_SPACING):
                         ui.Button(
                             f"  {desc}",
@@ -594,6 +616,9 @@ class VamsConnectorExtension(omni.ext.IExt):
                         )
                         ui.Label(wf.database_id, width=80,
                                  style={"font_size": 10, "color": 0xFF777777})
+                if unrunnable:
+                    ui.Label(f"  {unrunnable} disabled workflow(s) not shown.",
+                             height=16, style={"font_size": 10, "color": 0xFF888888})
 
             ui.Spacer(height=4)
             with ui.HStack(height=22, spacing=HORIZONTAL_SPACING):
@@ -601,8 +626,13 @@ class VamsConnectorExtension(omni.ext.IExt):
                          height=20, style={"font_size": 13})
                 ui.Button("Refresh", width=60, height=20,
                           clicked_fn=lambda: _defer(self._refresh_wf_panel))
+            if execution_error:
+                ui.Label(f"  Error: {execution_error}", height=18,
+                         style={"font_size": 11, "color": 0xFFDD6644})
             if not self._workflow_executions:
-                ui.Label("  No executions.", height=20, style={"color": 0xFF888888})
+                ui.Label("  Execution history unavailable." if execution_error
+                         else "  No executions.",
+                         height=20, style={"color": 0xFF888888})
             else:
                 with ui.HStack(height=16):
                     ui.Label("  Status", width=85, style={"font_size": 10, "color": 0xFF666666})
@@ -620,7 +650,14 @@ class VamsConnectorExtension(omni.ext.IExt):
                         ui.Label(fk, width=90, style={"font_size": 11, "color": 0xFFAAAAAA})
                         ui.Label(ex.start_date or "", style={"font_size": 10, "color": 0xFF777777})
 
-        self._set_status(f"{len(self._workflows)} workflow(s), {len(self._workflow_executions)} execution(s)")
+        status = (f"{len(self._workflows)} workflow(s), "
+                  f"{len(self._workflow_executions)} execution(s)")
+        problems = load_errors + ([execution_error] if execution_error else [])
+        if problems:
+            status = f"{status} - error: {problems[0]}"
+        elif not self._workflows and unrunnable:
+            status = f"{status}, {unrunnable} disabled"
+        self._set_status(status)
 
     def _show_wf_execute(self, wf):
         if not self._selected_db or not self._selected_asset:
@@ -629,27 +666,46 @@ class VamsConnectorExtension(omni.ext.IExt):
         asset_id = self._selected_asset.asset_id
         asset_name = self._selected_asset.asset_name
         self._selected_workflow = wf
-        desc = wf.description or wf.workflow_id
+        desc = wf.workflow_name or wf.description or wf.workflow_id
         self._wf_stack.clear()
         with self._wf_stack:
             ui.Label(f"  Execute: {desc}", height=20, style={"font_size": 13})
             ui.Label(f"  Asset: {asset_name}", height=18, style={"font_size": 11, "color": 0xFF999999})
-            ui.Button("  Run on Entire Asset", height=26,
-                      clicked_fn=lambda: _defer(lambda: self._execute_wf(wf, db_id, asset_id, None)))
 
-            non_folders = [f for f in self._files
+            takes_input_files = wf.input_file_arity != "none"
+            if not takes_input_files:
+                ui.Label("  This workflow takes no input files and is run from the VAMS web UI.",
+                         height=20, style={"font_size": 11, "color": 0xFF888888})
+            elif wf.allows_whole_asset:
+                ui.Button("  Run on Entire Asset", height=26,
+                          clicked_fn=lambda: _defer(lambda: self._execute_wf(wf, db_id, asset_id, None)))
+            else:
+                ui.Label("  This workflow runs on a single file, not a whole asset.",
+                         height=20, style={"font_size": 11, "color": 0xFF888888})
+
+            # A file the workflow's inputFileFilters reject is a hard execute error, so it gets no
+            # Run button — the same reason arity 'none' and a refused whole-asset scope get none.
+            non_folders = [(f, (f.relative_path or f.file_name).strip("/")) for f in self._files
                            if not f.is_folder and (f.relative_path or f.file_name).strip("/")]
-            if non_folders:
-                ui.Label("  Or run on a file:", height=18,
-                         style={"font_size": 11, "color": 0xFF888888})
-                for f in non_folders:
-                    fkey = (f.relative_path or f.file_name).strip("/")
+            runnable = [(f, fkey) for f, fkey in non_folders if wf.allows_file(fkey)]
+            excluded_count = len(non_folders) - len(runnable)
+            if takes_input_files and runnable:
+                ui.Label("  Or run on a file:" if wf.allows_whole_asset else "  Run on a file:",
+                         height=18, style={"font_size": 11, "color": 0xFF888888})
+                for f, fkey in runnable:
                     with ui.HStack(height=22, spacing=HORIZONTAL_SPACING):
                         ui.Label(f"    {fkey}", style={"font_size": 12})
                         ui.Button("Run", width=40,
                                   clicked_fn=lambda k=fkey: _defer(
                                       lambda: self._execute_wf(wf, db_id, asset_id, k)
                                   ))
+            elif takes_input_files and non_folders and not wf.allows_whole_asset:
+                ui.Label("  No file in this asset passes this workflow's input-file filters.",
+                         height=20, style={"font_size": 11, "color": 0xFF888888})
+            if takes_input_files and excluded_count and runnable:
+                ui.Label(f"    {excluded_count} file(s) excluded by this workflow's "
+                         "input-file filters.",
+                         height=16, style={"font_size": 10, "color": 0xFF888888})
             ui.Spacer(height=4)
             ui.Button("  Back to workflow list", height=22,
                       clicked_fn=lambda: _defer(self._refresh_wf_panel),
@@ -657,14 +713,15 @@ class VamsConnectorExtension(omni.ext.IExt):
 
     def _execute_wf(self, wf, db_id, asset_id, file_key):
         target = file_key or "entire asset"
-        self._set_status(f"Executing {wf.description or wf.workflow_id} on {target}...")
+        label = wf.workflow_name or wf.description or wf.workflow_id
+        self._set_status(f"Executing {label} on {target}...")
         try:
             result = self._connector.execute_workflow(
                 database_id=db_id, asset_id=asset_id,
                 workflow_id=wf.workflow_id, workflow_database_id=wf.database_id,
                 file_key=file_key,
             )
-            self._set_status(f"Workflow started: {result.get('message', '?')}")
+            self._set_status(f"Workflow started: {result.get('executionId', '?')}")
         except VamsCliError as e:
             self._set_status(f"Workflow error: {e}")
 

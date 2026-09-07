@@ -433,13 +433,66 @@ class TestSetupCommand:
             
             assert result.exit_code == 0
             assert 'Setting up VamsCLI with base URL: https://vams.mycompany.com' in result.output
-            assert '✓ Extracted API Gateway URL: https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com' in result.output
             assert 'Setup completed successfully!' in result.output
-            
-            # Verify the saved configuration includes both base_url and api_gateway_url
+
+            # Verify the saved configuration includes both base_url and api_gateway_url.
+            #
+            # The deployment reports a STAGE-LESS execute-api URL (the `api` field above), and the
+            # stored value is the stage-inclusive form. Amazon API Gateway reads the first path
+            # segment as the stage name, so a request built from the bare host asks for a stage named
+            # after the route -- `<host>/database` -- and is answered 403 {"message": "Forbidden"}
+            # before any authorizer or handler runs. That is indistinguishable from a permission
+            # denial, and `auth login` still succeeds because it talks to Amazon Cognito directly and
+            # never reaches this URL, so the misconfiguration surfaces only as an unexplained 403 on
+            # every command.
             saved_config = mocks['profile_manager'].save_config.call_args[0][0]
             assert saved_config['base_url'] == 'https://vams.mycompany.com'
-            assert saved_config['api_gateway_url'] == 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com'
+            assert saved_config['api_gateway_url'] == (
+                'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/api'
+            )
+            # The change is reported rather than applied silently, so an operator can see which URL
+            # the CLI will actually use.
+            assert '/api' in result.output
+
+    def test_setup_from_a_web_front_stores_the_reported_stage_inclusive_url_unchanged(
+        self, cli_runner, cli_command_mocks
+    ):
+        """The paired arm: an operator who supplies the website URL, not the API Gateway URL.
+
+        This is the normal path and it must not be disturbed by the stage normalization above. A
+        front (Amazon CloudFront, or an ALB on a deployment that has no CloudFront) serves
+        `/api/amplify-config`, and the deployment reports its execute-api URL WITH the stage already
+        present -- measured against a live deployment:
+
+            GET https://<front>/api/amplify-config
+              -> {"api": "https://<id>.execute-api.<region>.amazonaws.com/api/", ...}
+
+        So the stored value needs no substitution, and applying one would corrupt a working profile.
+        """
+        with cli_command_mocks as mocks:
+            mocks['api_client'].check_version.return_value = {
+                'match': True, 'cli_version': '1.0.0', 'api_version': '1.0.0'
+            }
+            mocks['api_client'].get_amplify_config.return_value = {
+                'region': 'us-west-2',
+                'api': 'https://1ecvpmvrj8.execute-api.us-west-2.amazonaws.com/api/',
+                'cognitoUserPoolId': 'us-west-2_test',
+                'cognitoAppClientId': 'test-client-id'
+            }
+            mocks['profile_manager'].has_config.return_value = False
+
+            with patch('click.DateTime'):
+                result = cli_runner.invoke(cli, ['setup', 'https://vams.mycompany.com'])
+
+            assert result.exit_code == 0
+            saved_config = mocks['profile_manager'].save_config.call_args[0][0]
+            # Only the trailing slash is removed; the stage is already correct and is left alone.
+            assert saved_config['api_gateway_url'] == (
+                'https://1ecvpmvrj8.execute-api.us-west-2.amazonaws.com/api'
+            )
+            # And no substitution is reported, because none was needed. Without this the test would
+            # pass even if the normalizer had appended a second '/api'.
+            assert 'stage-less' not in result.output
 
 
 class TestAuthCommands:
@@ -459,7 +512,7 @@ class TestAuthCommands:
         """Test auth login command help."""
         result = cli_runner.invoke(cli, ['auth', 'login', '--help'])
         assert result.exit_code == 0
-        assert 'Authenticate with VAMS using Cognito or token override' in result.output
+        assert 'Authenticate with VAMS using Cognito or a token override' in result.output
         assert '--username' in result.output
         assert '--password' in result.output
         assert '--save-credentials' in result.output
@@ -514,10 +567,51 @@ class TestAuthCommands:
             assert 'Feature switches updated' in result.output
             
             # Verify API calls
-            mock_authenticator.authenticate.assert_called_once_with('test@example.com', 'password123')
+            mock_authenticator.authenticate.assert_called_once_with(
+                'test@example.com', 'password123', new_password=None, interactive=True
+            )
             mocks['profile_manager'].save_auth_profile.assert_called_once()
             mocks['api_client'].call_login_profile.assert_called_once_with('test@example.com')
     
+    def test_auth_login_profile_failure_does_not_block_secure_config(self, cli_runner, auth_command_mocks):
+        """A non-auth login-profile failure must not stop the rest of auth.
+
+        Feature switches (secure-config) should still be fetched and login should
+        still succeed when call_login_profile raises a non-AuthenticationError.
+        """
+        with auth_command_mocks as mocks:
+            mock_authenticator = Mock()
+            mock_authenticator.authenticate.return_value = {
+                'access_token': 'test-token',
+                'refresh_token': 'test-refresh',
+                'expires_in': 3600
+            }
+
+            # Login profile fails for a non-auth reason (e.g. transient API error)
+            mocks['api_client'].call_login_profile.side_effect = APIError("login profile unavailable")
+            mocks['api_client'].get_secure_config.return_value = {
+                'raw': 'FEATURE1,FEATURE2',
+                'enabled': ['FEATURE1', 'FEATURE2']
+            }
+
+            with patch('vamscli.commands.auth.get_authenticator', return_value=mock_authenticator), \
+                 patch('click.prompt', return_value='password123'):
+
+                result = cli_runner.invoke(cli, [
+                    'auth', 'login',
+                    '-u', 'test@example.com'
+                ])
+
+            # Auth still succeeds despite the login-profile failure
+            assert result.exit_code == 0
+            assert '✓ Cognito authentication successful!' in result.output
+            # The profile failure is surfaced as a warning, not a hard stop
+            assert 'Could not refresh user profile' in result.output
+            # Secure-config fetch still ran and persisted
+            mocks['api_client'].get_secure_config.assert_called_once()
+            mocks['profile_manager'].save_feature_switches.assert_called_once()
+            assert 'Feature switches updated' in result.output
+
     def test_auth_login_no_setup(self, cli_runner, auth_no_setup_mocks):
         """Test auth login without setup."""
         with auth_no_setup_mocks as mocks:
@@ -760,6 +854,29 @@ class TestAuthCommands:
             mocks['profile_manager'].save_override_token.assert_called_once()
             mocks['api_client'].call_login_profile.assert_called_once_with('test@example.com')
     
+    def test_auth_set_override_profile_failure_does_not_block_secure_config(self, cli_runner, auth_command_mocks):
+        """A non-auth login-profile failure in set-override must not skip secure-config."""
+        with auth_command_mocks as mocks:
+            mocks['api_client'].call_login_profile.side_effect = APIError("login profile unavailable")
+            mocks['api_client'].get_secure_config.return_value = {
+                'raw': 'FEATURE1',
+                'enabled': ['FEATURE1']
+            }
+
+            result = cli_runner.invoke(cli, [
+                'auth', 'set-override',
+                '-u', 'test@example.com',
+                '--token', 'override-token-123'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Override token saved successfully!' in result.output
+            assert 'Could not validate token with user profile' in result.output
+            # Secure-config fetch still ran despite the login-profile failure
+            mocks['api_client'].get_secure_config.assert_called_once()
+            mocks['profile_manager'].save_feature_switches.assert_called_once()
+            assert 'Feature switches updated' in result.output
+
     def test_auth_set_override_no_setup(self, cli_runner, auth_no_setup_mocks):
         """Test auth set-override without setup."""
         with auth_no_setup_mocks as mocks:
@@ -824,6 +941,29 @@ class TestAuthCommands:
             mocks['profile_manager'].save_override_token.assert_called_once_with('override-token-123', 'test@example.com', None)
             mocks['api_client'].call_login_profile.assert_called_once_with('test@example.com')
     
+    def test_auth_login_token_override_profile_failure_does_not_block_secure_config(self, cli_runner, auth_command_mocks):
+        """A non-auth login-profile failure in token-override login must not skip secure-config."""
+        with auth_command_mocks as mocks:
+            mocks['api_client'].call_login_profile.side_effect = APIError("login profile unavailable")
+            mocks['api_client'].get_secure_config.return_value = {
+                'raw': 'FEATURE1',
+                'enabled': ['FEATURE1']
+            }
+
+            result = cli_runner.invoke(cli, [
+                'auth', 'login',
+                '--user-id', 'test@example.com',
+                '--token-override', 'override-token-123'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Token override authentication successful!' in result.output
+            assert 'Could not validate token with user profile' in result.output
+            # Secure-config fetch still ran despite the login-profile failure
+            mocks['api_client'].get_secure_config.assert_called_once()
+            mocks['profile_manager'].save_feature_switches.assert_called_once()
+            assert 'Feature switches updated' in result.output
+
     def test_auth_login_token_override_with_expiration(self, cli_runner, auth_command_mocks):
         """Test auth login with token override and expiration."""
         with auth_command_mocks as mocks:

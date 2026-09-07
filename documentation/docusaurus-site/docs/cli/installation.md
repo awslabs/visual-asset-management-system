@@ -36,15 +36,25 @@ Ensure your system meets the following requirements:
     ```
 
 :::tip[Virtual Environment]
-It is recommended to install VamsCLI inside a Python virtual environment to avoid dependency conflicts:
+It is recommended to install VamsCLI inside a Python virtual environment to avoid dependency conflicts. Either `venv` or `conda` works:
 
 ```bash
+# venv
 python -m venv venv
 source venv/bin/activate    # Linux/macOS
 venv\Scripts\activate       # Windows
 pip install -e .
+
+# conda
+conda create -n vamscli python=3.13
+conda activate vamscli
+pip install -e .
 ```
 
+:::
+
+:::note[Installing without a virtual environment]
+If you install outside a virtual environment and lack permission to write to the system site-packages, install into your user site with `pip install --user .`. If the `vamscli` command is not found afterward, ensure Python's script directory is on your `PATH`, or invoke the CLI with `python -m vamscli`.
 :::
 
 ### Install from Pre-built Wheel
@@ -69,7 +79,9 @@ pip install build
 python -m build
 ```
 
-This creates files in the `dist/` directory: `vamscli-X.X.X-py3-none-any.whl` (wheel) and `vamscli-X.X.X.tar.gz` (source distribution).
+This creates files in the `dist/` directory: `vamscli-X.X.X-py3-none-any.whl` (wheel) and `vamscli-X.X.X.tar.gz` (source distribution). To rebuild from scratch, remove the previous artifacts first with `rm -rf build/ dist/ *.egg-info/`.
+
+For detailed contributor guidance — code quality tooling, testing, command architecture, and the release process — see [VamsCLI Development](development.md).
 
 ### Uninstalling VamsCLI
 
@@ -89,6 +101,12 @@ pip install -e .
 ```
 
 The `pip install -e .` command links to the source directory, so in most cases pulling new code automatically updates the CLI. Re-running the install command ensures any new dependencies are resolved.
+
+If you installed from a wheel rather than from source, upgrade by installing the new wheel with `--upgrade`:
+
+```bash
+pip install --upgrade path/to/vamscli-X.X.X-py3-none-any.whl
+```
 
 ## Profile Management
 
@@ -226,21 +244,13 @@ export VAMS_CLI_INITIAL_RETRY_DELAY=2.0
 vamscli assets list -d my-database --auto-paginate
 ```
 
-## UTF-8 Terminal Requirements
+## Terminal Encoding
 
-VamsCLI uses Unicode characters for status indicators in CLI output. If you see encoding errors, ensure your terminal supports UTF-8.
+VamsCLI uses Unicode characters for status indicators in CLI output. It writes UTF-8 on standard output and standard error regardless of the system code page, so commands succeed on any terminal and when output is redirected to a file or piped to another process. No environment variable is required.
 
 ### Windows
 
-Use one of the following approaches:
-
--   **Windows Terminal** (recommended) -- UTF-8 by default
--   **VS Code integrated terminal** -- UTF-8 by default
--   **Legacy Command Prompt** -- Set the environment variable before running VamsCLI:
-
-    ```bash
-    set PYTHONIOENCODING=utf-8
-    ```
+Windows Terminal and the Visual Studio Code integrated terminal display the status indicators as intended. A legacy Command Prompt using a raster font may draw an unsupported character as a box or a question mark; this affects only how the character is drawn, and the command still completes and reports the same exit code.
 
 ### macOS and Linux
 

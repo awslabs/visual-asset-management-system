@@ -1,6 +1,10 @@
 # NVIDIA Cosmos Reason Pipeline
 
-The NVIDIA Cosmos Reason pipeline is a Vision Language Model (VLM) that analyzes video and image content to generate text-based analysis, captions, descriptions, and structured reasoning. Unlike video generation models, Cosmos Reason reads visual content and produces detailed text output.
+The NVIDIA Cosmos Reason pipeline is a Vision Language Model (VLM) that analyzes video content to generate text-based analysis, captions, descriptions, and structured reasoning. Unlike video generation models, Cosmos Reason reads visual content and produces detailed text output.
+
+:::note[Video input only]
+The model itself reads still images, but the pipeline accepts video only. The upstream Cosmos Reason utilities fail when writing an image input back out after inference, so an image run would load the model, complete its reasoning, and then fail. Restricting the input formats reports that up front instead of after a GPU run.
+:::
 
 :::info[Cosmos Reason v2]
 VAMS supports the **Cosmos-Reason2** model family with 2B and 8B parameter variants. Both provide spatial-temporal reasoning capabilities based on the Qwen3-VL architecture.
@@ -16,7 +20,7 @@ VAMS supports the **Cosmos-Reason2** model family with 2B and 8B parameter varia
 | **Configuration flag**      | `app.pipelines.useNvidiaCosmos.modelsReason.reason2B.enabled`              |
 | **Configuration flag**      | `app.pipelines.useNvidiaCosmos.modelsReason.reason8B.enabled`              |
 | **Execution type**          | Lambda (asynchronous with callback)                                        |
-| **Supported input formats** | `.mp4`, `.mov`, `.avi` (video), `.jpg`, `.jpeg`, `.png` (image)            |
+| **Supported input formats** | `.mp4`, `.mov` (video)                                                      |
 | **Output**                  | JSON file with structured text analysis stored at `outputS3AssetFilesPath` |
 | **Timeout**                 | 8 hours (AWS Batch job), 8 hours (VAMS workflow task token)                |
 
@@ -68,7 +72,7 @@ aws codebuild batch-get-builds --ids <build-id>
 ```
 
 :::warning[CodeBuild Internet Access]
-CodeBuild runs in the same private VPC subnets used by the Cosmos pipeline Batch compute environments. These private subnets require a NAT Gateway for internet egress, which is automatically provisioned when the Cosmos pipeline is enabled. For GovCloud deployments, organizations should validate that CodeBuild is configured with the correct private VPC settings for their environment.
+CodeBuild runs in the same private VPC subnets used by the Cosmos pipeline Batch compute environments. These private subnets require a NAT Gateway for internet egress, which is automatically provisioned when the Cosmos pipeline is enabled. For GovCloud and EU Sovereign Cloud deployments, organizations should validate that CodeBuild is configured with the correct private VPC settings for their environment.
 :::
 
 :::warning[Docker Hub Rate Limiting]
@@ -107,7 +111,7 @@ graph LR
 
 1. **Model Download and Caching (First Run Only)** -- On the first pipeline execution, the container downloads the Cosmos-Reason2 model from HuggingFace to Amazon EFS. Model size depends on variant: 2B model (~5GB), 8B model (~16GB). Subsequent runs reuse the cached models from EFS with S3 backup.
 
-2. **Video/Image Analysis (AWS Batch on GPU Instances)** -- The container loads the model from Amazon EFS using vLLM inference engine, processes the input video or image with the user-provided or default prompt, and generates structured text analysis. The analysis includes captions, descriptions, temporal event localization (with timestamps for video), spatial-temporal reasoning, and physics understanding.
+2. **Video Analysis (AWS Batch on GPU Instances)** -- The container loads the model from Amazon EFS using vLLM inference engine, processes the input video with the user-provided or default prompt, and generates structured text analysis. The analysis includes captions, descriptions, temporal event localization (with timestamps for video), spatial-temporal reasoning, and physics understanding.
 
 3. **Output Processing** -- The container writes a structured JSON file to the `outputS3AssetFilesPath` in the asset bucket. The VAMS workflow process-output step registers the output file with the asset, making it visible as a file in VAMS.
 
@@ -122,7 +126,7 @@ You must accept the NVIDIA Cosmos Reason model license on HuggingFace before usi
 
     | Model                                                                       | Purpose                         | License                   | HuggingFace URL                                         |
     | --------------------------------------------------------------------------- | ------------------------------- | ------------------------- | ------------------------------------------------------- |
-    | [nvidia/Cosmos-Reason2-2B](https://huggingface.co/nvidia/Cosmos-Reason2-2B) | 2B VLM for video/image analysis | NVIDIA Open Model License | [Link](https://huggingface.co/nvidia/Cosmos-Reason2-2B) |
+    | [nvidia/Cosmos-Reason2-2B](https://huggingface.co/nvidia/Cosmos-Reason2-2B) | 2B VLM for video analysis | NVIDIA Open Model License | [Link](https://huggingface.co/nvidia/Cosmos-Reason2-2B) |
     | [nvidia/Cosmos-Reason2-8B](https://huggingface.co/nvidia/Cosmos-Reason2-8B) | 8B VLM for deeper reasoning     | NVIDIA Open Model License | [Link](https://huggingface.co/nvidia/Cosmos-Reason2-8B) |
 
 -   **HuggingFace Token** -- Generate a Read access token from your HuggingFace account settings. The token must be associated with the account that has been granted access to the models listed above. Store the token value directly in the `huggingFaceToken` field of the CDK configuration (shared with Cosmos Predict pipelines) -- it will be securely stored in AWS Secrets Manager during deployment.
@@ -171,35 +175,35 @@ Add the following to your `config.json` under `app.pipelines.useNvidiaCosmos.mod
 | `huggingFaceToken`                           | `""`                               | HuggingFace Read access token value (e.g., `hf_xxxx`). CDK automatically stores this in AWS Secrets Manager during deployment. Shared across all Cosmos pipelines (Predict, Reason, Transfer).                                                                                                    |
 | `useWarmInstances`                           | `false`                            | When `true`, keeps GPU instances running when idle for instant pipeline starts. When `false`, scales to zero after job completion and incurs ~5-10 minute cold start. **Warning:** Warm instances incur continuous compute costs (~$5.67/hr per g5.12xlarge). Shared across all Cosmos pipelines. |
 | `warmInstanceCount`                          | `1`                                | Number of warm GPU instances to keep running when `useWarmInstances` is `true`. Shared across all Cosmos pipelines.                                                                                                                                                                               |
-| `modelsReason.reason2B.enabled`              | `false`                            | Enable the Cosmos-Reason2-2B model for video/image analysis with text output.                                                                                                                                                                                                                     |
+| `modelsReason.reason2B.enabled`              | `false`                            | Enable the Cosmos-Reason2-2B model for video analysis with text output.                                                                                                                                                                                                                     |
 | `modelsReason.reason2B.autoRegisterWithVAMS` | `true`                             | Automatically register the pipeline and workflow with VAMS at deploy time.                                                                                                                                                                                                                        |
 | `modelsReason.reason2B.instanceTypes`        | `["g6e.12xlarge", "g5.12xlarge"]`  | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Requires 24GB+ VRAM.                                                                                                                                                                                                         |
 | `modelsReason.reason2B.maxVCpus`             | `192`                              | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                                                                                                                                              |
-| `modelsReason.reason8B.enabled`              | `false`                            | Enable the Cosmos-Reason2-8B model for video/image analysis with improved reasoning quality.                                                                                                                                                                                                      |
+| `modelsReason.reason8B.enabled`              | `false`                            | Enable the Cosmos-Reason2-8B model for video analysis with improved reasoning quality.                                                                                                                                                                                                      |
 | `modelsReason.reason8B.autoRegisterWithVAMS` | `true`                             | Automatically register the pipeline and workflow with VAMS at deploy time.                                                                                                                                                                                                                        |
 | `modelsReason.reason8B.instanceTypes`        | `["g6e.12xlarge", "g6e.24xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Requires 32GB+ VRAM per GPU. g5 instances (A10G, 24GB) are not supported for the 8B model.                                                                                                                                   |
 | `modelsReason.reason8B.maxVCpus`             | `192`                              | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                                                                                                                                              |
 
 ## Cosmos Reason
 
-NVIDIA Cosmos Reason is a Vision Language Model (VLM) that reads video and image content and produces text-based analysis. It is based on the Qwen3-VL architecture and provides spatial-temporal reasoning, physics understanding, and embodied reasoning capabilities.
+NVIDIA Cosmos Reason is a Vision Language Model (VLM) that reads video content and produces text-based analysis. It is based on the Qwen3-VL architecture and provides spatial-temporal reasoning, physics understanding, and embodied reasoning capabilities.
 
 **Key Differences from Cosmos Predict:**
 
-| Feature              | Cosmos Predict                      | Cosmos Reason                               |
-| -------------------- | ----------------------------------- | ------------------------------------------- |
-| **Model Type**       | World generation (diffusion/flow)   | Vision Language Model (VLM)                 |
-| **Input**            | Text or image/video                 | Video or image                              |
-| **Output**           | Generated video file (MP4)          | Text analysis (JSON)                        |
-| **Use Case**         | Content generation, synthesis       | Content understanding, analysis, captioning |
-| **Inference Engine** | NVIDIA Transformer Engine           | vLLM                                        |
-| **GPU Requirements** | 24GB+ (2B), 40GB+ (14B) for Predict | 24GB+ (2B), 32GB+ (8B) for Reason           |
+| Feature              | Cosmos Predict                      | Cosmos Reason                                                                |
+| -------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
+| **Model Type**       | World generation (diffusion/flow)   | Vision Language Model (VLM)                                                  |
+| **Input**            | Text or image/video                 | Video only (the model reads still images; the pipeline does not accept them) |
+| **Output**           | Generated video file (MP4)          | Text analysis (JSON)                                                         |
+| **Use Case**         | Content generation, synthesis       | Content understanding, analysis, captioning                                  |
+| **Inference Engine** | NVIDIA Transformer Engine           | vLLM                                                                         |
+| **GPU Requirements** | 24GB+ (2B), 40GB+ (14B) for Predict | 24GB+ (2B), 32GB+ (8B) for Reason                                            |
 
 ### Input Prompt
 
-The text prompt controls what type of analysis the model should perform. The prompt can be set via the `COSMOS_REASON_PROMPT` file metadata key or passed in the workflow `inputParameters` as `{"prompt": "your prompt text"}`.
+The text prompt controls what type of analysis the model should perform. The prompt can be set as the selected template's `PROMPT` tag on the execute screen, or as the `COSMOS_REASON_PROMPT` metadata key on the file or the asset.
 
-**Prompt Priority:** `COSMOS_REASON_PROMPT` file metadata > `inputParameters` prompt > default prompt ("Caption the video in detail.")
+**Prompt Priority:** template `PROMPT` tag > `COSMOS_REASON_PROMPT` file metadata > `COSMOS_REASON_PROMPT` asset metadata > default prompt ("Caption the video in detail.")
 
 **Default Prompt:** If no prompt is provided, the pipeline uses: _"Caption the video in detail."_
 
@@ -207,7 +211,7 @@ The text prompt controls what type of analysis the model should perform. The pro
 
 -   "Caption the video in detail."
 -   "Describe the actions and events occurring in this video with timestamps."
--   "Analyze the spatial relationships between objects in this image."
+-   "Analyze the spatial relationships between objects in this video."
 -   "Explain the physics principles demonstrated in this video."
 -   "Provide a detailed description of the scene, including temporal events and spatial layout."
 
@@ -288,6 +292,18 @@ The models are cached on Amazon EFS (shared with Cosmos Predict pipelines) with 
 The Amazon EFS file system is shared across all VAMS Cosmos pipelines (Predict, Reason, Transfer). The total storage footprint depends on which pipelines are enabled. Monitor Amazon EFS costs and consider setting lifecycle policies for long-term cost optimization.
 :::
 
+:::warning[The Amazon S3 model cache bucket is RETAINED]
+Enabling this pipeline creates an Amazon S3 model cache bucket in addition to the Amazon EFS file system.
+It uses a `RETAIN` removal policy, so it and its contents **survive `cdk destroy`** and require a manual
+delete — unlike the EFS file system, which is removed with the stack. Cached weights make it one of the
+largest buckets in a deployment, and it occupies one of the account's Amazon S3 bucket slots (100 by
+default) until deleted.
+
+The bucket is auto-named, so a retained copy does **not** block a redeploy. See
+[AWS resources](../architecture/aws-resources.md#amazon-s3-buckets) for the full inventory and
+[Uninstall the solution](../deployment/uninstall.md#step-2-delete-s3-buckets) for the cleanup steps.
+:::
+
 ## Warm vs Cold Instances
 
 The `useWarmInstances` configuration option controls whether AWS Batch compute instances remain running when idle. This setting is shared across all Cosmos pipelines (Predict, Reason, Transfer).
@@ -312,14 +328,14 @@ Keeping warm instances running incurs continuous compute costs. A single g5.12xl
 
 ## Metadata Reference
 
-The Cosmos Reason pipeline uses metadata keys to configure the analysis prompt. All metadata must be set on **file-level metadata** (not asset metadata) because Reason operates on a specific video or image file.
+The Cosmos Reason pipeline uses metadata keys to configure the analysis prompt. All metadata must be set on **file-level metadata** (not asset metadata) because Reason operates on a specific video file.
 
 | Metadata Key           | Scope             | Description                                                                                                                     | Default                          |
 | ---------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `COSMOS_REASON_PROMPT` | **File metadata** | Analysis prompt describing what to analyze or caption. Set on the **specific video/image file** that the pipeline will process. | `"Caption the video in detail."` |
+| `COSMOS_REASON_PROMPT` | **File metadata** | Analysis prompt describing what to analyze or caption. Set on the **specific video file** that the pipeline will process. | `"Caption the video in detail."` |
 
 :::warning[File metadata only]
-The `COSMOS_REASON_PROMPT` must be set as **file-level metadata** on the specific video or image file you want to analyze. Setting it on asset-level metadata will NOT work -- the pipeline reads from `fileMetadata` in the VAMS metadata structure, not `assetMetadata`.
+The `COSMOS_REASON_PROMPT` must be set as **file-level metadata** on the specific video file you want to analyze. Setting it on asset-level metadata will NOT work -- the pipeline reads from `fileMetadata` in the VAMS metadata structure, not `assetMetadata`.
 :::
 
 **Prompt examples for different use cases:**
@@ -352,11 +368,11 @@ If the pipeline fails to download models from HuggingFace:
 
 ### Invalidating model cache (force re-download)
 
-If a model has been updated on HuggingFace or the cached version on Amazon EFS is corrupted, you can force the pipeline to re-download the model by adding `INVALIDATE_COSMOS_MODELS` to the pipeline's input parameters:
+If a model has been updated on HuggingFace or the cached version on Amazon EFS is corrupted, you can force the pipeline to re-download the model by setting `INVALIDATE_COSMOS_MODELS` to `"true"` in the template configuration the run uses:
 
-1. In the VAMS UI, edit the pipeline's input parameters to include `{"INVALIDATE_COSMOS_MODELS": "true"}`.
+1. Set the value for one run only -- on the execute screen, choose the template and edit its configuration body so it reads `"INVALIDATE_COSMOS_MODELS": "true"`. Alternatively, edit the template itself under Pipeline Templates to change the value for every subsequent run.
 2. Run the pipeline. The cached model on Amazon EFS and Amazon S3 will be deleted and re-downloaded from HuggingFace.
-3. After the run completes successfully, remove the `INVALIDATE_COSMOS_MODELS` parameter to resume using the fast EFS cache path.
+3. If you changed the template rather than overriding it for one run, set the value back to `"false"` afterwards to resume using the fast EFS cache path.
 
 :::warning
 Invalidating the model cache triggers a full re-download of the model weights from HuggingFace. This increases the pipeline execution time.

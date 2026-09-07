@@ -859,16 +859,19 @@ def create_constraint(ctx: click.Context, constraint_id: str, name: Optional[str
             {"field": "assetType", "operator": "equals", "value": "model"}
         ],
         "groupPermissions": [
-            {"groupId": "admin", "permission": "read", "permissionType": "allow"}
+            {"groupId": "admin", "permission": "GET", "permissionType": "allow"}
         ],
         "userPermissions": [
-            {"userId": "user@example.com", "permission": "write", "permissionType": "allow"}
+            {"userId": "user@example.com", "permission": "PUT", "permissionType": "allow"}
         ]
     }
-    
+
+    "permission" is an HTTP method: GET, PUT, POST or DELETE. Any other value, including
+    "read" or "write", is rejected with a 400. "permissionType" is "allow" or "deny".
+
     Examples:
         vamscli role constraint create -c my-constraint --json-input constraint.json
-        vamscli role constraint create -c my-constraint --json-input '{"name":"Test","description":"Test constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"read","permissionType":"allow"}]}'
+        vamscli role constraint create -c my-constraint --json-input '{"name":"Test","description":"Test constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"GET","permissionType":"allow"}]}'
     """
     # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
@@ -959,10 +962,13 @@ def update_constraint(ctx: click.Context, constraint_id: str, name: Optional[str
     This command updates an existing constraint in VAMS. Due to the complexity of
     constraint data (criteria, permissions), it's recommended to use --json-input
     for updating constraints. The update replaces the entire constraint.
-    
+
+    "permission" is an HTTP method: GET, PUT, POST or DELETE. Any other value, including
+    "read" or "write", is rejected with a 400. "permissionType" is "allow" or "deny".
+
     Examples:
         vamscli role constraint update -c my-constraint --json-input constraint.json
-        vamscli role constraint update -c my-constraint --json-input '{"name":"Updated","description":"Updated constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"read","permissionType":"allow"}]}'
+        vamscli role constraint update -c my-constraint --json-input '{"name":"Updated","description":"Updated constraint","objectType":"asset","criteriaAnd":[{"field":"databaseId","operator":"equals","value":"db1"}],"groupPermissions":[{"groupId":"admin","permission":"GET","permissionType":"allow"}]}'
         vamscli role constraint update -c my-constraint --name "Updated Name" --description "Updated Description"
     """
     # Setup/auth already validated by decorator
@@ -1140,6 +1146,69 @@ def delete_constraint(ctx: click.Context, constraint_id: str, confirm: bool, jso
             helpful_message="Check for dependencies or contact your administrator."
         )
         raise click.ClickException(str(e))
+
+
+@constraint.command('permission-objects')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def constraint_permission_objects(ctx: click.Context, json_output: bool):
+    """
+    List the constraint permission objects: object types and their valid fields,
+    the criteria operators, the permissions, and the permission types.
+
+    Returns the deployment's master mapping used when authoring constraints
+    (objectType, criteria field, operator, permission, and permissionType values).
+
+    Examples:
+        vamscli role constraint permission-objects
+        vamscli role constraint permission-objects --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    output_status("Retrieving constraint permission objects...", json_output)
+
+    try:
+        result = api_client.list_constraint_permission_objects()
+        object_types = result.get('objectTypes', [])
+        output_result(
+            result,
+            json_output,
+            success_message=f"Found {len(object_types)} constraint object type(s)",
+            cli_formatter=format_constraint_permission_objects_output
+        )
+    except (ConstraintNotFoundError, InvalidConstraintDataError) as e:
+        output_error(e, json_output, error_type="Constraint Error")
+        raise click.ClickException(str(e))
+
+
+def format_constraint_permission_objects_output(result):
+    """Format constraint object types, operators, permissions, and permission types."""
+    object_types = result.get('objectTypes', [])
+    operators = result.get('operators', [])
+    permissions = result.get('permissions', [])
+    permission_types = result.get('permissionTypes', [])
+    if not object_types:
+        return "No constraint object types found."
+
+    lines = ["Object Types:"]
+    for ot in object_types:
+        field_labels = ', '.join(f.get('label', f.get('value', '')) for f in ot.get('fields', []))
+        lines.append(f"  {ot.get('value', ''):16s} {ot.get('label', '')}")
+        lines.append(f"      fields: {field_labels}")
+    if operators:
+        lines.append("Operators:")
+        lines.append("  " + ', '.join(o.get('value', '') for o in operators))
+    if permissions:
+        lines.append("Permissions:")
+        lines.append("  " + ', '.join(p.get('value', '') for p in permissions))
+    if permission_types:
+        lines.append("Permission Types:")
+        lines.append("  " + ', '.join(p.get('value', '') for p in permission_types))
+    return '\n'.join(lines)
 
 
 # ============================================================================

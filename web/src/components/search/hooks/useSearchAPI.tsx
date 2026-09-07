@@ -40,7 +40,8 @@ export const useSearchAPI = () => {
                         key === "_rectype" ||
                         key === "bool_archived" ||
                         key === "date_lastmodified_filter" ||
-                        key === "num_filesize_filter"
+                        key === "num_filesize_filter" ||
+                        key === "geo_filter"
                     )
                         return;
 
@@ -143,11 +144,15 @@ export const useSearchAPI = () => {
                     }
                 }
 
-                // Add database filter if specified
+                // Add database filter if specified, targeting the `.keyword` subfield for an EXACT
+                // match. str_databaseid is analyzed, so a phrase on the analyzed field matches the
+                // adjacent tokens [smoke, db] — which "smoke-db-2" ([smoke, db, 2]) also contains, and
+                // a database-locked search then returned assets from another database. It stays a
+                // query_string because the backend's SearchFilterModel requires that key.
                 if (databaseId) {
                     filters.push({
                         query_string: {
-                            query: `(str_databaseid:("${databaseId}"))`,
+                            query: `str_databaseid.keyword:"${databaseId}"`,
                         },
                     });
                 }
@@ -282,6 +287,7 @@ export const useSearchAPI = () => {
                     includeHighlights: true,
                     explainResults: searchQuery.filters.showResultExplanation || false,
                     includeArchived: includeArchived, // Include archived items if bool_archived filter is set
+                    geoSearch: searchQuery.filters.geo_filter || undefined,
                 };
 
                 console.log("Search API request body:", body);

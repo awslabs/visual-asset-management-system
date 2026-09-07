@@ -6,11 +6,11 @@ This page provides a comprehensive catalog of Visual Asset Management System (VA
 
 ## Web Interface Features
 
-The VAMS web interface is a React 17 application built with Vite and the AWS Cloudscape Design System. It provides a complete browser-based experience for asset management and visualization.
+The VAMS web interface is a React 18 application built with Vite and the AWS Cloudscape Design System. It provides a complete browser-based experience for asset management and visualization.
 
 ### Viewer Plugins
 
-VAMS includes 17 built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
+VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -50,7 +50,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **API key management** -- Create, update, and delete API keys with user ID impersonation for application-to-application integration
 -   **Role management** -- Create and manage roles with two-tier permission constraints
 -   **Permission constraint management** -- Define, import, and manage ABAC/RBAC constraints with bulk JSON template import
--   **Pipeline management** -- Create, edit, and delete processing pipelines with execution type selection (Lambda, SQS, EventBridge)
+-   **Pipeline management** -- Create, edit, and delete processing pipelines with execution type selection (Lambda, SQS, EventBridge, DeadlineCloud)
 -   **Workflow management** -- Design multi-step processing workflows with pipeline chaining
 -   **Metadata schema management** -- Define and manage metadata schemas for assets, files, databases, and asset links
 
@@ -58,7 +58,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 
 ## API Features
 
-VAMS exposes a REST API through Amazon API Gateway V2 HttpApi, secured by a custom Lambda authorizer.
+VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda authorizer.
 
 ### Core API Capabilities
 
@@ -93,10 +93,10 @@ VAMS exposes a REST API through Amazon API Gateway V2 HttpApi, secured by a cust
 
 ### API Access Patterns
 
--   **Streaming downloads** via `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` with optional `?versionId=` and `?assetVersionId=` query parameters
+-   **Streaming downloads** with HTTP range-request support, optionally pinned to a specific file or asset version through the `versionId`, `assetVersionId`, and `assetVersionIdAlias` query parameters -- see [Files API](../api/files.md#stream-asset-file)
 -   **Presigned URL downloads** for large file transfers
--   **Pagination** using `NextToken`-based continuation for list endpoints
--   **Bulk constraint import** via `POST /auth/constraintsTemplateImport` with JSON templates and server-side variable substitution
+-   **Pagination** using `NextToken`-based continuation for list endpoints -- see [API Overview](../api/overview.md#pagination)
+-   **Bulk constraint import** from JSON templates with server-side variable substitution -- see [Import constraint template](../api/auth.md#import-constraint-template) and [Permission templates](../developer/permissions.md#permission-templates)
 
 ---
 
@@ -104,28 +104,11 @@ VAMS exposes a REST API through Amazon API Gateway V2 HttpApi, secured by a cust
 
 The VamsCLI is a Python-based command line tool built on the Click framework. It supports profile-based multi-environment configuration and machine-readable JSON output.
 
-### Command Groups
+### Coverage
 
-| Command Group     | Commands                                      | Description                                  |
-| ----------------- | --------------------------------------------- | -------------------------------------------- |
-| `assets`          | list, get, create, delete, download           | Asset lifecycle operations                   |
-| `asset-links`     | list, create, delete                          | Cross-database asset relationship management |
-| `asset-version`   | list, get, create, update, archive, unarchive | Asset version management                     |
-| `database`        | list, get, create, delete                     | Database lifecycle operations                |
-| `file`            | list, upload, download, delete, copy, move    | File operations with chunked upload          |
-| `metadata`        | get, update                                   | Metadata read and write                      |
-| `metadata-schema` | list, get, create, update, delete             | Metadata schema management                   |
-| `search`          | assets, files                                 | Search assets and files                      |
-| `tag`             | list, create, delete                          | Tag management                               |
-| `tag-type`        | list, create, delete                          | Tag type management                          |
-| `pipeline`        | list, get                                     | Pipeline information                         |
-| `workflow`        | list, get, execute                            | Workflow management and execution            |
-| `role-constraint` | list, create, delete, template import         | Permission constraint management             |
-| `user`            | list, add, update, remove, reset-password     | Amazon Cognito user management               |
-| `auth`            | features                                      | Authentication feature queries               |
-| `apikey`          | list, create, update, delete                  | API key management                           |
-| `profile`         | list, create, delete, use                     | Multi-environment profile management         |
-| `setup`           | configure                                     | Initial CLI configuration                    |
+The CLI covers the same ground as the web interface: setup and authentication, profiles, feature queries, databases, assets, asset versions, asset links, files, directory synchronization, tags and tag types, metadata and metadata schemas, search, pipelines and their configuration templates, workflows and triggers, executions, roles and permission constraints, Amazon Cognito users, API keys, and a set of industry-specific commands for bill-of-materials assembly, PLM XML import, and spatial GLB combination.
+
+For the full list of command groups and every command in each, see the [Command Reference](../cli/command-reference.md).
 
 ### CLI Capabilities
 
@@ -133,7 +116,7 @@ The VamsCLI is a Python-based command line tool built on the Click framework. It
 -   **JSON output mode** -- Use `--json-output` flag for machine-readable output in automation scripts
 -   **Chunked file upload** -- Large file uploads with progress monitoring and retry logic
 -   **Bulk operations** -- Efficient batch processing of assets, files, and metadata
--   **Permission template import** -- Import JSON constraint templates with `vamscli role-constraint template import`
+-   **Permission template import** -- Import JSON constraint templates to provision a role's full constraint matrix in one step
 -   **CI/CD integration** -- Headless operation mode for build pipeline integration
 
 ---
@@ -164,7 +147,7 @@ The VamsCLI is a Python-based command line tool built on the Click framework. It
 
 ### Search Indexing
 
--   **Dual-index architecture** -- Separate Amazon OpenSearch indexes for assets (`vams-assets-v2`) and files (`vams-files-v2`)
+-   **Dual-index architecture** -- Separate Amazon OpenSearch indexes for assets (`vams-assets-v3`) and files (`vams-files-v3`)
 -   **Event-driven indexing** -- Amazon SNS and Amazon SQS-based automatic index synchronization on asset and file changes
 -   **Preview file indexing** -- `str_previewfilekey` and `str_assetlocationkey` fields in search indexes for optimized UI rendering
 -   **Re-index on deploy** -- Optional `reindexOnCdkDeploy` flag for full index rebuild during deployment
@@ -175,39 +158,60 @@ The VamsCLI is a Python-based command line tool built on the Click framework. It
 
 ### Execution Types
 
-Pipelines support three execution types for integration with different processing backends:
+Pipelines support four execution types for integration with different processing backends:
 
-| Execution Type  | Invocation                                        | Callback Support                              | Use Case                               |
-| --------------- | ------------------------------------------------- | --------------------------------------------- | -------------------------------------- |
-| **Lambda**      | Synchronous or asynchronous AWS Lambda invocation | Yes (native)                                  | Lightweight processing tasks           |
-| **SQS**         | Asynchronous message to an Amazon SQS queue       | Optional (via AWS Step Functions Task Tokens) | External processing system integration |
-| **EventBridge** | Asynchronous event to an Amazon EventBridge bus   | Optional (via AWS Step Functions Task Tokens) | Event-driven architecture integration  |
+| Execution Type    | Invocation                                                 | Callback Support                              | Use Case                               |
+| ----------------- | ---------------------------------------------------------- | --------------------------------------------- | -------------------------------------- |
+| **Lambda**        | Synchronous or asynchronous AWS Lambda invocation          | Yes (native)                                  | Lightweight processing tasks           |
+| **SQS**           | Asynchronous message to an Amazon SQS queue                | Optional (via AWS Step Functions Task Tokens) | External processing system integration |
+| **EventBridge**   | Asynchronous event to an Amazon EventBridge bus            | Optional (via AWS Step Functions Task Tokens) | Event-driven architecture integration  |
+| **DeadlineCloud** | Asynchronous job submission to an AWS Deadline Cloud queue | Required (via AWS Step Functions Task Tokens) | Render farm and batch job submission   |
+
+:::note[Deadline Cloud availability]
+The Deadline Cloud execution type requires `app.pipelines.deadlineCloudExecutionTypeEnabled` and deploys only in the commercial AWS partition. It is unavailable in AWS GovCloud and AWS European Sovereign Cloud deployments.
+:::
 
 ### Built-In Pipelines
 
-VAMS includes twelve built-in processing pipelines, each deployable through configuration flags:
+VAMS includes twenty-four built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
 
-| Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
-| ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| 3D Conversion Basic          | `useConversion3dBasic`                   | Format conversion using Trimesh and Blender                                                                                                                                                   | Enabled  |
-| CAD/Mesh Metadata Extraction | `useConversionCadMeshMetadataExtraction` | Geometric metadata extraction using CADQuery                                                                                                                                                  | Disabled |
-| Point Cloud Potree Viewer    | `usePreviewPcPotreeViewer`               | Potree octree generation for browser streaming                                                                                                                                                | Disabled |
-| Gaussian Splat Toolbox       | `useSplatToolbox`                        | 3D Gaussian splat generation from media files                                                                                                                                                 | Disabled |
-| GenAI Metadata 3D Labeling   | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling via Amazon Bedrock                                                                                                                                               | Disabled |
-| 3D Preview Thumbnail         | `usePreview3dThumbnail`                  | Animated GIF or static image preview generation                                                                                                                                               | Disabled |
-| NVIDIA Cosmos Predict        | `useNvidiaCosmos.modelsPredict`          | GPU-accelerated video generation from text or image/video using NVIDIA Cosmos-Predict1 (v1) and Cosmos-Predict2.5 (v2.5) world foundation models with 7B (v1), 2B, and 14B (v2.5) model sizes | Disabled |
-| NVIDIA Cosmos Reason         | `useNvidiaCosmos.modelsReason`           | Vision Language Model for video/image analysis generating text-based captions, descriptions, and reasoning with Cosmos-Reason2 (2B, 8B) models                                                | Disabled |
-| NVIDIA Cosmos Transfer       | `useNvidiaCosmos.modelsTransfer`         | Video transformation with control signal conditioning using Cosmos-Transfer2.5-2B for style transfer and content transformation                                                               | Disabled |
-| RapidPipeline (ECS/EKS)      | `useRapidPipeline`                       | Licensed spatial data optimization                                                                                                                                                            | Disabled |
-| VNTANA ModelOps              | `useModelOps`                            | Licensed ModelOps optimization                                                                                                                                                                | Disabled |
-| NVIDIA Isaac Lab Training    | `useIsaacLabTraining`                    | Reinforcement learning training and evaluation                                                                                                                                                | Disabled |
+| Pipeline                                | Config Flag                                       | Description                                                                                                              | Default  |
+| --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- |
+| 3D Basic Conversion                     | `useConversion3dBasic`                            | Format conversion between 3D mesh formats using Trimesh                                                                  | Enabled  |
+| CAD/Mesh Metadata Extraction            | `useConversionCadMeshMetadataExtraction`          | File-level geometric metadata extraction using Trimesh and CADQuery                                                      | Disabled |
+| Coordinate Transform                    | `useConversionCoordinateTransform`                | Point cloud coordinate reference system reprojection using PDAL and pyproj                                               | Disabled |
+| Point Cloud Potree Viewer               | `usePreviewPcPotreeViewer`                        | Potree octree generation for browser streaming                                                                           | Disabled |
+| 3D Preview Thumbnail                    | `usePreview3dThumbnail`                           | Animated GIF or static image preview generation                                                                          | Disabled |
+| 3D Gaussian Splat Toolbox               | `useSplatToolbox`                                 | 3D Gaussian splat generation from images and video                                                                       | Disabled |
+| GenAI 3D Metadata Labeling              | `useGenAiMetadata3dLabeling`                      | AI-powered asset metadata labeling via Amazon Bedrock                                                                    | Disabled |
+| NVIDIA Cosmos Text-to-World 2B v2       | `useNvidiaCosmos.modelsPredict.text2world2B_v2`   | Video generation from text prompts using Cosmos-Predict2.5 2B                                                            | Disabled |
+| NVIDIA Cosmos Text-to-World 14B v2      | `useNvidiaCosmos.modelsPredict.text2world14B_v2`  | High-quality video generation from text prompts using Cosmos-Predict2.5 14B                                              | Disabled |
+| NVIDIA Cosmos Video-to-World 2B v2      | `useNvidiaCosmos.modelsPredict.video2world2B_v2`  | Video generation from video and text input using Cosmos-Predict2.5 2B                                                    | Disabled |
+| NVIDIA Cosmos Video-to-World 14B v2     | `useNvidiaCosmos.modelsPredict.video2world14B_v2` | High-quality video generation from video and text input using Cosmos-Predict2.5 14B                                      | Disabled |
+| NVIDIA Cosmos Reason 2B                 | `useNvidiaCosmos.modelsReason.reason2B`           | Vision Language Model for video analysis and captioning using Cosmos-Reason2 2B                                | Disabled |
+| NVIDIA Cosmos Reason 8B                 | `useNvidiaCosmos.modelsReason.reason8B`           | Vision Language Model for video analysis and reasoning using Cosmos-Reason2 8B                                 | Disabled |
+| NVIDIA Cosmos Transfer 2B               | `useNvidiaCosmos.modelsTransfer.transfer2B`       | Style and content transfer with control signal conditioning using Cosmos-Transfer2.5 2B                                  | Disabled |
+| NVIDIA Cosmos 3 Nano (16B)              | `useNvidiaCosmos3.modelsOmni.nano16B`             | Omnimodal world-model generation using Cosmos3-Nano 16B                                                                  | Disabled |
+| NVIDIA Cosmos 3 Super (64B)             | `useNvidiaCosmos3.modelsOmni.super64B`            | Omnimodal world-model generation using Cosmos3-Super 64B                                                                 | Disabled |
+| NVIDIA Cosmos 3 Super Text2Image (64B)  | `useNvidiaCosmos3.modelsOmni.superText2Image64B`  | Image generation from text prompts using Cosmos3-Super 64B                                                               | Disabled |
+| NVIDIA Cosmos 3 Super Image2Video (64B) | `useNvidiaCosmos3.modelsOmni.superImage2Video64B` | Video generation from an image and text prompt using Cosmos3-Super 64B                                                   | Disabled |
+| NVIDIA Gr00t N1.5 3B Fine-Tuning        | `useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B`      | Fine-tuning of the GR00T-N1.5-3B embodied AI model on LeRobot robot manipulation datasets, with LoRA or full fine-tuning | Disabled |
+| Isaac Lab RL Training                   | `useIsaacLabTraining`                             | Reinforcement learning policy training using NVIDIA Isaac Lab                                                            | Disabled |
+| Isaac Lab RL Evaluation                 | `useIsaacLabTraining`                             | Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab                                             | Disabled |
+| RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                              | Disabled |
+| RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                              | Disabled |
+| VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                    | Disabled |
+
+:::note[Model variant flags]
+A model variant flag takes effect only when its family flag is also enabled: `useNvidiaCosmos.enabled` for the Cosmos Predict, Reason, and Transfer variants, `useNvidiaCosmos3.enabled` for the Cosmos 3 variants, and `useNvidiaGr00t.enabled` for the Gr00t variant.
+:::
 
 ### Pipeline Capabilities
 
 -   **Auto-registration** -- Pipelines can auto-register with VAMS on deployment via CDK custom resources
 -   **Auto-trigger on upload** -- Configurable automatic pipeline execution when new files are uploaded
 -   **Workflow chaining** -- Chain multiple pipelines into multi-step workflows orchestrated by AWS Step Functions
--   **Custom pipeline support** -- Register custom pipelines using Lambda, SQS, or EventBridge execution types
+-   **Custom pipeline support** -- Register custom pipelines using the Lambda, SQS, EventBridge, or DeadlineCloud execution types
 
 :::note[VPC Requirement]
 Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` to be set to `true`. VPC endpoints for AWS Batch, Amazon ECR, and Amazon ECR Docker are automatically created when pipelines are enabled.
@@ -219,14 +223,14 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 ### Deployment Options
 
-| Feature                       | Configuration                        | Description                                                                 |
-| ----------------------------- | ------------------------------------ | --------------------------------------------------------------------------- |
-| **Amazon CloudFront**         | `useCloudFront.enabled`              | Default web distribution with AWS-managed TLS certificate                   |
-| **CloudFront Custom Domain**  | `useCloudFront.customDomain`         | Custom domain with ACM certificate and optional Amazon Route 53 hosted zone |
-| **Application Load Balancer** | `useAlb.enabled`                     | Alternative web distribution for GovCloud and VPC-isolated deployments      |
-| **VPC**                       | `useGlobalVpc.enabled`               | Shared VPC with configurable CIDR range or external VPC import              |
-| **VPC Endpoints**             | `useGlobalVpc.addVpcEndpoints`       | Automatic VPC endpoint creation for all required AWS services               |
-| **External VPC Import**       | `useGlobalVpc.optionalExternalVpcId` | Import existing VPC with isolated, private, and public subnets              |
+| Feature                       | Configuration                        | Description                                                                                 |
+| ----------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| **Amazon CloudFront**         | `useCloudFront.enabled`              | Default web distribution with AWS-managed TLS certificate                                   |
+| **CloudFront Custom Domain**  | `useCloudFront.customDomain`         | Custom domain with ACM certificate and optional Amazon Route 53 hosted zone                 |
+| **Application Load Balancer** | `useAlb.enabled`                     | Alternative web distribution for GovCloud, EU Sovereign Cloud, and VPC-isolated deployments |
+| **VPC**                       | `useGlobalVpc.enabled`               | Shared VPC with configurable CIDR range or external VPC import                              |
+| **VPC Endpoints**             | `useGlobalVpc.addVpcEndpoints`       | Automatic VPC endpoint creation for all required AWS services                               |
+| **External VPC Import**       | `useGlobalVpc.optionalExternalVpcId` | Import existing VPC with isolated, private, and public subnets                              |
 
 ### Security
 
@@ -254,17 +258,20 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 VAMS uses a feature flag system to conditionally enable capabilities at deployment time. Feature flags are persisted to Amazon DynamoDB and read by the web interface at runtime.
 
-| Feature Flag                    | Description                                                        |
-| ------------------------------- | ------------------------------------------------------------------ |
-| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                             |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (CesiumJS, Needle USD) |
-| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views          |
-| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution               |
-| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                       |
-| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                            |
-| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                            |
-| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                      |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                           |
+| Feature Flag                    | Description                                                                                                                                                          |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                       |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats)                                                   |
+| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
+| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
+| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |
+| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                              |
+| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                              |
+| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                        |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Indicates Amazon Cognito with OIDC federation                                                                                                                        |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                             |
+| `PHYSNA_ADDON`                  | Enables Physna add-on frontend features (viewer plugin, future Physna-powered UI surfaces). Emitted automatically when `app.addons.usePhysnaSync.enabled` is `true`. |
+| `DEADLINECLOUD_PIPELINES`       | Enables the AWS Deadline Cloud pipeline execution type in the web interface. Emitted automatically when `app.pipelines.deadlineCloudExecutionTypeEnabled` is `true`. |
 
 ### Additional Configuration
 
@@ -274,4 +281,4 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 -   **Metadata schema auto-loading** -- Control which default metadata schemas are loaded on deployment
 -   **External asset buckets** -- Register existing Amazon S3 buckets with VAMS for asset management
 -   **Custom Amazon S3 bucket policies** -- Additional bucket policy statements via `s3AdditionalBucketPolicyConfig.json`
--   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization
+-   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search

@@ -20,8 +20,8 @@ GET /subscriptions
 
 | Parameter       | Type   | Required | Default | Description                             |
 | --------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`      | number | No       | `100`   | Maximum number of items to return       |
-| `pageSize`      | number | No       | `100`   | Number of items per page                |
+| `maxItems`      | number | No       | `10000` | Maximum number of items to return       |
+| `pageSize`      | number | No       | `10000` | Number of items per page                |
 | `startingToken` | string | No       | `null`  | Pagination token from previous response |
 
 ### Response
@@ -103,6 +103,7 @@ VAMS resolves each subscriber's email from their user profile. If a subscriber d
 | ------ | --------------------------------------------------------------------------- |
 | `400`  | Invalid fields, subscriber already exists, or subscriber has no valid email |
 | `403`  | Not authorized to modify subscriptions for this asset                       |
+| `404`  | Asset not found                                                             |
 | `500`  | Internal server error                                                       |
 
 ---
@@ -144,6 +145,7 @@ Same structure as [Create a subscription](#create-a-subscription). The full subs
 | ------ | ------------------------------------------------------- |
 | `400`  | Subscription does not exist or invalid subscriber email |
 | `403`  | Not authorized                                          |
+| `404`  | Asset not found                                         |
 | `500`  | Internal server error                                   |
 
 ---
@@ -190,6 +192,7 @@ DELETE /subscriptions
 | ------ | ---------------------- |
 | `400`  | Subscription not found |
 | `403`  | Not authorized         |
+| `404`  | Asset not found        |
 | `500`  | Internal server error  |
 
 ---
@@ -246,12 +249,12 @@ DELETE /unsubscribe
 
 ### Request body
 
-| Field         | Type   | Required | Description                            |
-| ------------- | ------ | -------- | -------------------------------------- |
-| `eventName`   | string | Yes      | Event type                             |
-| `entityName`  | string | Yes      | Entity type                            |
-| `entityId`    | string | Yes      | Asset ID                               |
-| `subscribers` | array  | Yes      | Array of subscriber user IDs to remove |
+| Field         | Type   | Required | Description                                                                        |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
+| `eventName`   | string | Yes      | Event type                                                                         |
+| `entityName`  | string | Yes      | Entity type                                                                        |
+| `entityId`    | string | Yes      | Asset ID                                                                           |
+| `subscribers` | array  | Yes      | Array of subscriber user IDs. Only the first user ID in the array is unsubscribed. |
 
 ### Request body example
 

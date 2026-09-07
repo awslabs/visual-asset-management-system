@@ -13,6 +13,10 @@
 # testing
 /coverage
 
+# Playwright run artifacts (traces, videos, failure screenshots)
+/test-results
+/playwright-report
+
 # production
 /build
 /dist

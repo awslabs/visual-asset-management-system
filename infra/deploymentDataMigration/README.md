@@ -190,6 +190,14 @@ For example, the v2.1 to v2.2 upgrade scripts are located in `infra/deploymentDa
 
 Refer to the version-specific migration instructions for details on how to run these scripts.
 
+### SSM Resource-Name Lookup (v2.6+ migrations)
+
+Deployments publish their DynamoDB table names, non-asset S3 bucket names, deprecated migration-only table names, and selected Lambda function names as SSM parameters under a deployment-unique base prefix, exposed by the core stack output `ResourceNamesSSMParamPrefixOutput`. Migration scripts targeting v2.6+ deployments resolve resource names through the shared utility `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (`SsmResourceLookup` + `ResourceParamKeys`) instead of requiring operators to copy each physical name into the migration config. The operator fills in only the base prefix (and region/profile); explicit per-resource config values remain supported as optional overrides via `resolve_with_override()`.
+
+Migration scripts for upgrades **to versions before v2.6** (v2.4 to v2.5 and earlier) keep their explicit-name configs, because the source deployments do not publish the SSM parameters. The reindex utility (`tools/reindex_utility.py`) also keeps its explicit inputs since it serves those earlier upgrade paths; v2.6+ migration scripts resolve names via `SsmResourceLookup` and pass them to it.
+
+When a new DynamoDB table, audit log group, or migration-consumed Lambda function is added to the deployment, add the matching constant to `ResourceParamKeys` in `ssm_resource_lookup.py` alongside the `infra/common/resourceParamKeys.ts` and `backend/backend/common/resourceNames.py` entries.
+
 ### Migration Script Template Outline
 
 Migration script templates for A/B deployments can be found at `./infra/deploymentDataMigration/config/`.
@@ -200,6 +208,10 @@ VAMS Upgrade Templates are described below. Copy the template to a new configura
 -   VAMS 1.X -> 2.0 - `MigrationSchema_v1.X_to_v2.0.template.json`
 -   VAMS 2.0 -> 2.0 - `MigrationSchema_v2.1_to_v2.1.template.json`
 -   VAMS 2.1 -> 2.2 - See the [v2.1 to v2.2 Migration README](./v2.1_to_v2.2/upgrade/v2.1_to_v2.2_migration_README.md)
+-   VAMS 2.2 -> 2.3 - See the [v2.2 to v2.3 Migration README](./v2.2_to_v2.3/upgrade/v2.2_to_v2.3_migration_README.md)
+-   VAMS 2.3 -> 2.4 - See the [v2.3 to v2.4 Migration README](./v2.3_to_v2.4/upgrade/v2.3_to_v2.4_migration_README.md)
+-   VAMS 2.4 -> 2.5 - See the [v2.4 to v2.5 Migration README](./v2.4_to_v2.5/upgrade/v2.4_to_v2.5_migration_README.md)
+-   VAMS 2.5 -> 2.6 - See the [v2.5 to v2.6 Migration README](./v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md).
 
 ### Script Notes
 

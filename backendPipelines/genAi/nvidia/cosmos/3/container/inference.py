@@ -1,0 +1,304 @@
+"""
+Cosmos 3 Inference Wrapper
+
+Builds a cosmos-framework sample-argument JSON file and invokes the framework
+inference entrypoint. Handles single-GPU (Nano) via `python -m
+cosmos_framework.scripts.inference` and multi-GPU (Super) via `torchrun`.
+
+The five Cosmos 3 checkpoints are all served from the one cosmos-framework
+repo; the variant is selected by --checkpoint-path and the task by the
+sample-arg `model_mode`.
+"""
+
+import json
+import logging
+import os
+import collections
+import subprocess
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# CWD must be the repo root so the framework can find internal modules
+COSMOS_REPO_DIR = "/opt/cosmos-framework"
+SAMPLE_PATH = "/tmp/cosmos3_sample.json"
+
+# Map VAMS variant -> cosmos-framework checkpoint name + default model_mode
+VARIANT_CHECKPOINT = {
+    "nano": "Cosmos3-Nano",
+    "super": "Cosmos3-Super",
+    "super-text2image": "Cosmos3-Super-Text2Image",
+    "super-image2video": "Cosmos3-Super-Image2Video",
+}
+VARIANT_DEFAULT_MODE = {
+    "nano": "text2video",
+    "super": "text2video",
+    "super-text2image": "text2image",
+    "super-image2video": "image2video",
+}
+# The launch mode follows the RESERVED GPU count, not the variant. A variant name says nothing about
+# how many GPUs the job was given, and pinning one to a single GPU capped it at a single device's
+# memory: a 16B checkpoint in bf16 is roughly 32 GiB of weights, which leaves little of an L40S's
+# 44.4 GiB usable capacity for activations, so a long enough sequence cannot fit however large the
+# instance is. Sharding the parameters across the devices the job already holds is what makes the
+# remaining capacity available.
+
+# Only the general-purpose omni checkpoints can perform control-signal transfer.
+# The task-specialized Super checkpoints (text2image, image2video) do not.
+TRANSFER_CAPABLE_VARIANTS = {"nano", "super"}
+
+# Control-signal transfer runs on the framework's video2video model_mode.
+TRANSFER_MODEL_MODE = "video2video"
+# Supported control-signal types (cosmos-framework transfer controls).
+TRANSFER_CONTROL_TYPES = ("edge", "blur", "depth", "seg", "wsm")
+
+
+def build_sample(
+    model_mode: str,
+    prompt: Optional[str],
+    negative_prompt: str,
+    num_frames: int,
+    guidance: Optional[float],
+    seed: int,
+    input_file_path: Optional[str],
+    control_blocks: Optional[dict] = None,
+    control_guidance: Optional[float] = None,
+) -> dict:
+    """Build the cosmos-framework sample-argument dict.
+
+    control_blocks, when provided, is a mapping of control type ->
+    {"weight": float[, "control_path": str]} for control-signal transfer
+    (one entry = single control, multiple = multi-control blend).
+    """
+    sample = {
+        "model_mode": model_mode,
+        "prompt": prompt or "",
+        "num_frames": num_frames,
+        "seed": seed,
+    }
+    if negative_prompt:
+        sample["negative_prompt"] = negative_prompt
+    if guidance is not None:
+        sample["guidance"] = guidance
+    # Modes that consume an input image/video
+    if input_file_path and model_mode in ("image2video", "video2video"):
+        sample["vision_path"] = input_file_path
+    # Control-signal transfer: attach one block per control type. A block with
+    # a control_path uses a pre-computed control video; without one the
+    # framework auto-computes the signal from vision_path.
+    if control_blocks:
+        for control_type, block in control_blocks.items():
+            sample[control_type] = block
+        if control_guidance is not None:
+            sample["control_guidance"] = control_guidance
+    return sample
+
+
+# Enough lines to carry a Python traceback plus the output that preceded it. Bounded because a job that
+# prints a progress line per step would otherwise grow this process's memory for the whole run, and the
+# failure message needs the END of the output, not all of it.
+_TAIL_LINES = 80
+# A single line can be arbitrarily long (a full command echo, a serialized tensor shape), so the line
+# bound above is only a real memory bound with a per-line one beside it.
+_TAIL_LINE_CHARS = 2000
+
+
+def _run_streaming(cmd, env=None, cwd=None, tail_lines=_TAIL_LINES):
+    """Run `cmd`, streaming its output onward while keeping a bounded copy of the tail.
+
+    Returns `(returncode, tail_text)`.
+
+    `subprocess.run(check=True)` with no capture leaves the child writing straight to the inherited
+    stdout, so its output reaches CloudWatch but this process never sees it -- and the exception raised
+    on failure can then only report the exit code. That message is what lands in the VAMS execution
+    record, so an operator reading the record was told "exit code 1" for a cause the child had already
+    printed in full.
+
+    `capture_output=True` would hand this process the text, but only once the child has exited: `run()`
+    returns nothing before then, so a multi-hour job would log NOTHING while it ran and a hang would be
+    undiagnosable. It does NOT deadlock -- `run()` drains through `communicate()`, which reads both pipes
+    concurrently; measured at 1.2 MB with no stall. What deadlocks is `Popen(stdout=PIPE)` followed by
+    `wait()` with no reader, which is why the loop below reads before it waits.
+
+    So: one pipe, drained incrementally as the child writes, which keeps the live log and still leaves
+    this process holding the tail. stderr is merged into stdout because with two pipes and a single
+    reader the unread pipe is exactly the one that fills.
+    """
+    tail = collections.deque(maxlen=tail_lines)
+    proc = subprocess.Popen(  # nosemgrep: dangerous-subprocess-use-audit
+        cmd, env=env, cwd=cwd,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )  # nosemgrep: dangerous-subprocess-use-audit
+    try:
+        for raw in iter(lambda: proc.stdout.readline(), b""):
+            # errors="replace": container output can carry non-UTF-8 bytes, and a decode error must not
+            # abort a run whose real work already succeeded.
+            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            # Forwarded to this process's stdout so CloudWatch still receives the child's output
+            # unchanged -- the whole point is to ADD an in-process copy, not to reroute the log.
+            print(line, flush=True)
+            if line.strip():
+                tail.append(line[:_TAIL_LINE_CHARS])
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+        proc.wait()
+    return proc.returncode, "\n".join(tail)
+
+
+def run_inference(
+    variant: str,
+    task_mode: str,
+    prompt: Optional[str],
+    negative_prompt: str,
+    num_frames: int,
+    guidance: Optional[float],
+    seed: int,
+    input_file_path: Optional[str],
+    output_dir: str,
+    hf_home: str,
+    hf_token: Optional[str],
+    num_gpus: int,
+    disable_guardrails: bool = True,
+    control_blocks: Optional[dict] = None,
+    control_guidance: Optional[float] = None,
+) -> str:
+    """Run Cosmos 3 inference for the given variant/task.
+
+    When task_mode == "transfer", control_blocks carries the control-signal
+    conditioning (single or multi-control) and inference runs on the
+    video2video model_mode.
+    """
+    checkpoint = VARIANT_CHECKPOINT.get(variant)
+    if not checkpoint:
+        raise ValueError(f"Unknown Cosmos 3 variant: {variant}")
+
+    is_transfer = task_mode == "transfer"
+    if is_transfer:
+        model_mode = TRANSFER_MODEL_MODE
+    else:
+        model_mode = task_mode or VARIANT_DEFAULT_MODE.get(variant, "text2video")
+
+    # Validate inputs by mode
+    if model_mode in ("text2image", "text2video") and (not prompt or not prompt.strip()):
+        raise ValueError(f"{model_mode} requires a non-empty prompt")
+    if model_mode in ("image2video", "video2video") and not input_file_path:
+        raise ValueError(f"{model_mode} requires an input file")
+    if is_transfer and not control_blocks:
+        raise ValueError("transfer requires at least one control block")
+    # For input-file modes without a prompt, use a generic continuation prompt
+    effective_prompt = prompt
+    if model_mode in ("image2video", "video2video") and (not prompt or not prompt.strip()):
+        effective_prompt = "Continue the scene from the input"
+
+    sample = build_sample(
+        model_mode=model_mode,
+        prompt=effective_prompt,
+        negative_prompt=negative_prompt,
+        num_frames=num_frames,
+        guidance=guidance,
+        seed=seed,
+        input_file_path=input_file_path,
+        control_blocks=control_blocks if is_transfer else None,
+        control_guidance=control_guidance if is_transfer else None,
+    )
+
+    sample_path = Path(SAMPLE_PATH)
+    sample_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(sample_path, "w") as f:
+        json.dump(sample, f, indent=2)
+
+    logger.info(f"Cosmos 3 sample written to {sample_path}:")
+    logger.info(json.dumps(sample, indent=2))
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    is_single_gpu = num_gpus <= 1
+
+    if is_single_gpu:
+        cmd = [
+            "python", "-u", "-m", "cosmos_framework.scripts.inference",
+            "--parallelism-preset=latency",
+            "-i", str(sample_path),
+            "-o", output_dir,
+            "--checkpoint-path", checkpoint,
+            "--seed", str(seed),
+        ]
+    else:
+        cmd = [
+            "torchrun", f"--nproc-per-node={num_gpus}",
+            "-m", "cosmos_framework.scripts.inference",
+            "--parallelism-preset=throughput",
+            f"--dp-shard-size={num_gpus}",
+            "--dp-replicate-size=1",
+            "--cp-size=1",
+            "--cfgp-size=1",
+            "-i", str(sample_path),
+            "-o", output_dir,
+            "--checkpoint-path", checkpoint,
+            "--seed", str(seed),
+        ]
+
+    if disable_guardrails:
+        cmd.append("--no-guardrails")
+        logger.info("Guardrails DISABLED (--no-guardrails)")
+
+    env = os.environ.copy()
+    env["HF_HOME"] = hf_home
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    if hf_token:
+        env["HF_TOKEN"] = hf_token
+    # Control-signal transfer partitions the sequence into control ranges whose
+    # lengths become unbacked symints under torch.compile; on Ada (L40S / sm_89)
+    # NATTEN's cutlass-fmha backend cannot resolve the resulting data-dependent
+    # shape guard and aborts. Running the transfer path eagerly sidesteps the
+    # torch._dynamo guard. This is applied on ALL GPUs (not just Ada) so transfer
+    # works regardless of the instance type the operator selects: eager execution
+    # is always correct, and on H100/H200 it only forgoes a compile optimization
+    # the FNA backend would otherwise use.
+    if is_transfer:
+        env["TORCH_COMPILE_DISABLE"] = "1"
+        env["TORCHDYNAMO_DISABLE"] = "1"
+        logger.info("Transfer mode: torch.compile disabled (eager) for cross-GPU compatibility (avoids the NATTEN cutlass symint guard on Ada GPUs)")
+
+    logger.info("Running Cosmos 3 inference:")
+    logger.info(f"  Variant: {variant} (checkpoint={checkpoint}, mode={model_mode})")
+    if is_transfer:
+        logger.info(f"  Transfer controls: {list(control_blocks.keys())}")
+    logger.info(f"  Single-GPU: {is_single_gpu} (num_gpus={num_gpus})")
+    logger.info(f"  Command: {' '.join(cmd)}")
+
+    returncode, output_tail = _run_streaming(cmd, env=env, cwd=COSMOS_REPO_DIR)
+    if returncode != 0:
+        # The tail goes in the RAISED message, not only the log: this exception's text is
+        # what the workflow records as the execution's error, and that record was
+        # previously the one place the cause did not appear.
+        logger.error(
+            f"Inference failed with exit code {returncode}. Last output:\n{output_tail}"
+        )
+        raise RuntimeError(
+            f"Inference failed with exit code {returncode}. Last output:\n{output_tail}"
+        )
+    logger.info("Inference completed successfully")
+    return output_dir
+
+
+def generate_preview_gif(video_path: str, output_path: str, duration: int = 2, fps: int = 10, width: int = 320) -> str:
+    """Generate preview GIF from video using ffmpeg."""
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-t", str(duration),
+        "-vf", f"fps={fps},scale={width}:-1",
+        "-loop", "0",
+        str(output_path),
+    ]
+    logger.info(f"Generating preview GIF: {video_path} -> {output_path}")
+    result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
+        cmd, check=True, capture_output=True, text=True
+    )
+    logger.info("Preview GIF generated successfully")
+    return str(output_path)

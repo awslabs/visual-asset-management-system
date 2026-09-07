@@ -14,7 +14,36 @@ import {
     TextContent,
 } from "@cloudscape-design/components";
 import JoditEditor from "jodit-react";
+import sanitizeHtml from "sanitize-html";
 import Synonyms from "../../../../synonyms";
+
+// Tags/attributes the comment editor toolbar can produce
+const commentSanitizeOptions: sanitizeHtml.IOptions = {
+    allowedTags: [
+        "b",
+        "strong",
+        "i",
+        "em",
+        "s",
+        "del",
+        "strike",
+        "u",
+        "ul",
+        "ol",
+        "li",
+        "a",
+        "p",
+        "br",
+        "span",
+    ],
+    allowedAttributes: {
+        a: ["href", "target", "rel"],
+    },
+    allowedSchemes: ["http", "https", "mailto"],
+    transformTags: {
+        a: sanitizeHtml.simpleTransform("a", { rel: "noopener noreferrer" }, true),
+    },
+};
 
 // Define the type for showMessage prop
 type ShowMessageFunction = (props: {
@@ -83,8 +112,15 @@ export default function VersionComments(props: VersionCommentsProps) {
         showCharsCounter: false,
         showWordsCounter: false,
         showXPathInStatusbar: false,
+        // Jodit defaults width to 'auto' (content-sized), so without this the editor does not fill
+        // the edit dialog. Same setting as the comment-entry editor in CommentsTab.
+        width: "100%",
         maxWidth: "auto",
         placeholder: "",
+        // The 'source' (HTML source-view) plugin lazy-loads ACE + js-beautify from cdnjs, which the
+        // VAMS CSP blocks. The comment editor has no source button, so disable the plugin to keep
+        // all script loading same-origin (no external CDN reach).
+        disablePlugins: ["source"],
         buttons: [
             "bold",
             "italic",
@@ -171,13 +207,27 @@ export default function VersionComments(props: VersionCommentsProps) {
         showLoading(true);
 
         try {
-            await updateComment({
+            const response = await updateComment({
                 assetId,
                 assetVersionIdAndCommentId: commentToEdit["assetVersionId:commentId"],
                 body: {
                     commentBody: editedContent,
                 },
             });
+            // updateComment resolves with [false, message] for a rejected request — a body over
+            // the API's length limit, a caller who does not own the comment — so the failure never
+            // reaches the catch below and has to be read off the result.
+            if (response[0] === false) {
+                const reason = response[1] || "Unknown error";
+                showMessage({
+                    type: "error",
+                    message: `Unable to edit ${Synonyms.comment}: ${reason}`,
+                    dismissible: true,
+                });
+                setEditVisible(false);
+                setReload(true);
+                return;
+            }
             showMessage({
                 type: "success",
                 message: `${Synonyms.Comment} updated successfully`,
@@ -238,7 +288,12 @@ export default function VersionComments(props: VersionCommentsProps) {
                                 </div>
                                 <div
                                     className="commentBody"
-                                    dangerouslySetInnerHTML={{ __html: comment.commentBody }}
+                                    dangerouslySetInnerHTML={{
+                                        __html: sanitizeHtml(
+                                            comment.commentBody,
+                                            commentSanitizeOptions
+                                        ),
+                                    }}
                                 ></div>
                                 {userId === comment.commentOwnerUsername && (
                                     <div className="commentActions">

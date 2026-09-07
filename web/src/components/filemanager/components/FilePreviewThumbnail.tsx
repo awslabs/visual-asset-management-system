@@ -57,7 +57,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                     assetId,
                     key: fileKey,
                     versionId: "",
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     // nosemgrep: useless-ternary
                     downloadType: isPreviewFile ? "assetFile" : "assetFile", // Using "assetFile" for both regular files and preview files
                 });

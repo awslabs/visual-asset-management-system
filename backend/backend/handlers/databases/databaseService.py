@@ -2,67 +2,75 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 import base64
 import boto3
-from boto3.dynamodb.conditions import Key
+from botocore.config import Config
+from boto3.dynamodb.conditions import Attr, Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
 # Configure AWS clients
-dynamodb = boto3.resource('dynamodb')
-dbClient = boto3.client('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dbClient = boto3.client('dynamodb', config=retry_config)
 deserializer = TypeDeserializer()
 logger = safeLogger(service_name="DatabaseService")
 
 # Load environment variables
 try:
-    db_database = os.environ.get("DATABASE_STORAGE_TABLE_NAME")
-    workflow_database = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME")
-    pipeline_database = os.environ.get("PIPELINE_STORAGE_TABLE_NAME")
-    asset_database = os.environ.get("ASSET_STORAGE_TABLE_NAME")
-    s3_asset_buckets_table = os.environ.get("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME")
-    
-    if not all([db_database, workflow_database, pipeline_database, asset_database, s3_asset_buckets_table]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    from common.resourceNames import ResourceKeys, get_table_name
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    asset_database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
+# The DynamoDB page size the listing scans with when the caller asks for none. validate_pagination_info
+# seeds an absent pageSize from its max-items default, so the listing's own page size is supplied to it.
+BUCKETS_DEFAULT_PAGE_SIZE = 3000
 
 #######################
 # Utility Functions
 #######################
 
+def has_active_entity(table_name, database_id):
+    """Whether a database owns at least one non-archived row in a pipeline/workflow table. Archived
+    rows stay in the database's partition (soft delete sets archived=true), so they are filtered out
+    server-side; the query pages to exhaustion because DynamoDB applies a Limit before the filter."""
+    table = dynamodb.Table(table_name)
+    query_params = {
+        'KeyConditionExpression': Key('databaseId').eq(database_id),
+        'FilterExpression': Attr('archived').not_exists() | Attr('archived').eq(False),
+    }
+    while True:
+        db_response = table.query(**query_params)
+        if db_response.get('Count', 0) > 0:
+            return True
+        if 'LastEvaluatedKey' not in db_response:
+            return False
+        query_params['ExclusiveStartKey'] = db_response['LastEvaluatedKey']
+
 def check_workflows(database_id):
     """Check if database has active workflows"""
-    table = dynamodb.Table(workflow_database)
-    db_response = table.query(
-        KeyConditionExpression=Key('databaseId').eq(database_id),
-        ScanIndexForward=False,
-        Limit=1
-    )
-    return db_response['Count'] > 0
+    return has_active_entity(workflow_database, database_id)
 
 def check_pipelines(database_id):
     """Check if database has active pipelines"""
-    table = dynamodb.Table(pipeline_database)
-    db_response = table.query(
-        KeyConditionExpression=Key('databaseId').eq(database_id),
-        ScanIndexForward=False,
-        Limit=1
-    )
-    return db_response['Count'] > 0
+    return has_active_entity(pipeline_database, database_id)
 
 def check_assets(database_id):
     """Check if database has active assets"""
@@ -247,12 +255,15 @@ def update_database(database_id, update_data, claims_and_roles=None):
         if not database:
             raise VAMSGeneralErrorResponse("Database not found")
         
-        # Check authorization
+        # Check authorization. The empty-token and absent-claims cases deny explicitly rather than
+        # skipping the check: without an authenticated identity there is nothing to evaluate, and
+        # falling through would reach the put_item below unauthorized (backend/CLAUDE.md Rule 4).
         database.update({"object__type": "database"})
-        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(database, "PUT"):
-                raise VAMSGeneralErrorResponse("Access denied")
+        if not claims_and_roles or len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Access denied")
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(database, "PUT"):
+            raise VAMSGeneralErrorResponse("Access denied")
         
         # If defaultBucketId is being updated, verify it exists
         if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
@@ -453,7 +464,7 @@ def update_database_handler(event, path_parameters, body, claims_and_roles):
             request_model = parse(body, model=UpdateDatabaseRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Update database
         result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)
@@ -490,10 +501,7 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result.statusCode,
-            headers={
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache, no-store',
-                },
+            headers=commonHeaders(),
             body=json.dumps({'message': result.message})
         )
     except VAMSGeneralErrorResponse as v:
@@ -503,13 +511,26 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
         logger.exception(f"Error in delete_database_handler: {e}")
         return internal_error(event=event)
 
-def get_buckets(event, query_params, claims_and_roles=None):
-    """Get all S3 bucket configurations with pagination"""
+
+def get_buckets(query_params, claims_and_roles=None):
+    """Get all S3 bucket configurations with pagination.
+
+    Authorization is Tier 1 only. `bucket` is not one of the constraint objectTypes, so no
+    per-bucket constraint can be authored and this listing applies no entity-level filter: a role
+    that holds the api route receives every registered bucket. The route grant is therefore the
+    whole gate, and the shipped permission templates and the seeded default role constraints grant
+    it to administrator roles alone. A deployment rewrites the seeded default role constraints, but
+    it does not reconcile constraints authored within it, so a role built from an earlier template
+    keeps its grant until that constraint is re-authored or the template re-imported.
+
+    `claims_and_roles` is accepted for call-shape parity with the other listings in this module;
+    there is no entity-level check for it to run.
+    """
     try:
         # Parse query parameters
         request_model = GetBucketsRequestModel(
             maxItems=int(query_params.get('maxItems', 10000)),
-            pageSize=int(query_params.get('pageSize', 3000)),
+            pageSize=int(query_params.get('pageSize', BUCKETS_DEFAULT_PAGE_SIZE)),
             startingToken=query_params.get('startingToken')
         )
         
@@ -534,20 +555,13 @@ def get_buckets(event, query_params, claims_and_roles=None):
         items = []
         for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            
-            # # Add object type for authorization
-            # deserialized_document.update({
-            #     "object__type": "bucket"
-            # })
-            
-            # if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-            #     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            #     if casbin_enforcer.enforce(deserialized_document, "GET"):
+
             # Convert to model
             bucket_model = BucketModel(
                 bucketId=deserialized_document.get('bucketId'),
                 bucketName=deserialized_document.get('bucketName', ''),
-                baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', '')
+                baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', ''),
+                isDefault=bool(deserialized_document.get('isDefault', False))
             )
             items.append(bucket_model)
 
@@ -560,6 +574,10 @@ def get_buckets(event, query_params, claims_and_roles=None):
             result.NextToken = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
         
         return result
+    except VAMSGeneralErrorResponse:
+        # A malformed pagination token carries its own caller-facing message; the catch-all below
+        # would replace it with a generic one.
+        raise
     except Exception as e:
         logger.exception(f"Error getting buckets: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting buckets.")
@@ -568,8 +586,10 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
     """Handler for GET /buckets"""
     try:
         # Validate pagination parameters
+        query_parameters = query_parameters if query_parameters is not None else {}
+        query_parameters.setdefault('pageSize', BUCKETS_DEFAULT_PAGE_SIZE)
         validate_pagination_info(query_parameters)
-        
+
         # Get buckets
         buckets = get_buckets(query_parameters, claims_and_roles)
         return success(body=buckets.dict())
@@ -586,17 +606,18 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database service API"""
+    normalize_event(event)
     logger.info(event)
-    
+
     try:
         # Get path and query parameters
         path_parameters = event.get('pathParameters', {}) or {}
         query_parameters = event.get('queryStringParameters', {}) or {}
-        
+
         # Get HTTP method and path
         http_method = event['requestContext']['http']['method']
         path = event['requestContext']['http']['path']
-        
+
         # Get claims and roles
         claims_and_roles = request_to_claims(event)
         
@@ -610,14 +631,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route request to appropriate handler based on path and method
-        if path.endswith('/database'):
+        # Route request to appropriate handler based on the master API route definitions
+        if API_DATABASE.matches(path):
             # Route: /database
             if http_method == 'GET':
                 return get_databases_handler(event, query_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
-        elif '/database/' in path and path_parameters.get('databaseId'):
+        elif API_DATABASE_BY_ID.matches(path) and path_parameters.get('databaseId'):
             # Route: /database/{databaseId}
             if http_method == 'GET':
                 return get_database_handler(event, path_parameters, query_parameters, claims_and_roles)
@@ -645,7 +666,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return delete_database_handler(event, path_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
-        elif path.endswith('/buckets'):
+        elif API_BUCKETS.matches(path):
             # Route: /buckets
             if http_method == 'GET':
                 return get_buckets_handler(event, query_parameters, claims_and_roles)

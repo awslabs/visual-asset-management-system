@@ -5,10 +5,13 @@
 
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { Config } from "../../../../config/config";
+import { cognitoWebClientUpdateParameters } from "../../auth/constructs/cognito-web-native-construct";
 
 /* eslint-disable @typescript-eslint/no-empty-interface */
 export interface CustomCognitoConfigConstructProps {
     name: string;
+    config: Config;
     clientId: string;
     userPoolId: string;
     callbackUrls: string[];
@@ -55,6 +58,10 @@ export class CustomCognitoConfigConstruct extends Construct {
                         AllowedOAuthFlowsUserPoolClient: true,
                         CallbackURLs: props.callbackUrls,
                         LogoutURLs: props.logoutUrls,
+                        // updateUserPoolClient replaces the whole client configuration, so the token
+                        // lifetimes and authentication flows the client was created with are sent
+                        // back with the sign-in URLs. Omitting them reverts each to a Cognito default.
+                        ...cognitoWebClientUpdateParameters(props.config),
                     },
                     physicalResourceId: cdk.custom_resources.PhysicalResourceId.of(
                         `${props.userPoolId}-${props.clientId}`

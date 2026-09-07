@@ -4,7 +4,8 @@
 """Metadata models for VAMS - Centralized metadata handling across all entity types."""
 
 from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import Field
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from enum import Enum
 import json
 import re
@@ -41,6 +42,226 @@ class UpdateType(str, Enum):
     REPLACE_ALL = "replace_all"
 
 
+# The value type a metadata item takes when none is supplied. Named so the field default and the
+# validator that resolves an unsupplied value cannot drift apart.
+DEFAULT_METADATA_VALUE_TYPE = MetadataValueType.STRING
+
+
+# Request-size limits.
+# Maximum metadata items accepted in a single create/update request. Mirrors
+# MAX_METADATA_RECORDS_PER_ENTITY in the metadata handlers: an entity holds at most
+# that many records, so a longer list could never be stored in full. Bounding it
+# here stops the per-item value validation from running unbounded work first.
+MAX_METADATA_ITEMS_PER_REQUEST = 500
+# Maximum metadata keys accepted in a single delete request. Each key costs one
+# read plus one delete, so this bounds the per-request fan-out to the same ceiling.
+MAX_METADATA_KEYS_PER_REQUEST = 500
+# Maximum length of a single metadata value. DynamoDB caps a whole item at 400 KB,
+# so a longer value could not be written regardless of this limit. Deliberately
+# generous so large GeoJSON geometries, 4x4 matrices, and JSON blobs stay valid.
+MAX_METADATA_VALUE_LENGTH = 400000
+# Maximum length of a caller-supplied pagination token. Tokens this service issues
+# are a base64 offset of a handful of bytes.
+MAX_PAGINATION_TOKEN_LENGTH = 4096
+# Largest value either metadata pagination parameter may carry. pageSize and maxItems both
+# size a single response, so the same bound covers each, and the metadata handlers serve the
+# smaller of the two. A larger value is refused rather than quietly reduced: a caller asking
+# for more than one response can hold learns that from the answer instead of reading a
+# shortened page as the complete set. The metadata handlers import this bound, so the model
+# constraint and the handler ceiling are the same value, and it matches the maximum the shared
+# maxItems / pageSize parameters declare in documentation/VAMS_API.yaml. The whole set past one
+# page stays reachable through NextToken.
+MAX_METADATA_PAGE_SIZE = 1000
+# Defaults for the two metadata pagination parameters. maxItems is the per-response ceiling; the
+# smaller pageSize is the slice served, so a metadata panel takes a handful of small pages rather
+# than one large one and the NextToken walk is exercised by an ordinary read.
+DEFAULT_METADATA_MAX_ITEMS = 1000
+DEFAULT_METADATA_PAGE_SIZE = 100
+# Maximum length of an asset version id. Version ids are generated as decimal
+# counters ("1", "2", ...); this leaves ample room for an alias-length value.
+MAX_ASSET_VERSION_ID_LENGTH = 64
+# Maximum length of an asset-relative file path. The path is concatenated with the
+# asset's S3 prefix to form an object key, and S3 caps a key at 1024 characters.
+MAX_FILE_PATH_LENGTH = 1024
+# Deepest GeometryCollection nesting a GeoJSON value may carry. Geometry validation recurses
+# once per level, as do the indexer's finiteness walk and member strip, so an unbounded value
+# exhausts the interpreter stack instead of being refused: json.loads parses a few hundred
+# levels out of a few kilobytes, well inside the length a stored metadata value may take.
+# GeoJSON discourages nesting collections at all, so real geometries sit at one or two levels.
+# The indexer, the search models and the web mirror all consume this one bound so what the API
+# accepts and what reaches the index cannot drift apart.
+MAX_GEOJSON_NESTING_DEPTH = 32
+
+
+# GeoJSON geometry types that VAMS accepts for the GEOJSON metadata value type.
+# Mirrors the OpenSearch geo_shape mapping accepted on the asset/file indexes.
+_VALID_GEOJSON_GEOMETRY_TYPES = {
+    "Point",
+    "MultiPoint",
+    "LineString",
+    "MultiLineString",
+    "Polygon",
+    "MultiPolygon",
+    "GeometryCollection",
+}
+
+
+def _validate_lon_lat(coord: Any, label: str) -> None:
+    """Range check a single [lon, lat] (or [lon, lat, alt]) coordinate."""
+    if not isinstance(coord, (list, tuple)) or len(coord) < 2:
+        raise ValueError(f"{label} must be a [lon, lat] coordinate pair")
+    lon, lat = coord[0], coord[1]
+    if not isinstance(lon, (int, float)) or not isinstance(lat, (int, float)):
+        raise ValueError(f"{label} must contain numeric lon/lat values")
+    if lon < -180 or lon > 180:
+        logger.info(f"{label} rejected: longitude {lon} out of range")
+        raise ValueError(f"{label} longitude must be between -180 and 180")
+    if lat < -90 or lat > 90:
+        logger.info(f"{label} rejected: latitude {lat} out of range")
+        raise ValueError(f"{label} latitude must be between -90 and 90")
+
+
+def _validate_linear_ring(ring: Any, label: str) -> None:
+    """Validate a single GeoJSON linear ring.
+
+    OpenSearch's geo_shape rejects degenerate or self-intersecting rings with
+    'invalid_shape_exception', which causes the whole document index call to
+    fail. We pre-empt that here so a write to the metadata API surfaces a clear
+    400 instead of silently dropping the metadata at index time.
+
+    Checks:
+      - The ring is a list of >= 4 positions.
+      - First and last position are identical (ring closure).
+      - No consecutive duplicate vertices.
+      - The first vertex does not repeat anywhere in the middle of the ring
+        (a common failure mode -- the metadata picker sees the user click the
+        starting vertex again, treats that as a vertex, and produces a self-
+        intersecting ring).
+      - At least 3 unique vertices.
+    """
+    if not isinstance(ring, list) or len(ring) < 4:
+        raise ValueError(
+            f"{label} must contain at least 4 positions (3 unique + closing)"
+        )
+    for i, pos in enumerate(ring):
+        _validate_lon_lat(pos, f"{label}[{i}]")
+    first = ring[0]
+    last = ring[-1]
+    if first[0] != last[0] or first[1] != last[1]:
+        raise ValueError(
+            f"{label} must be closed: first and last positions must be identical"
+        )
+    for i in range(1, len(ring)):
+        prev = ring[i - 1]
+        curr = ring[i]
+        if prev[0] == curr[0] and prev[1] == curr[1]:
+            raise ValueError(
+                f"{label} contains consecutive duplicate vertex at index {i}"
+            )
+    # A mid-ring duplicate of the first vertex creates a self-intersecting ring
+    # (this is exactly what OpenSearch rejects with 'edges adjacent to ... coincide').
+    for i in range(1, len(ring) - 1):
+        if ring[i][0] == first[0] and ring[i][1] == first[1]:
+            raise ValueError(
+                f"{label} closes prematurely at index {i}; the starting vertex "
+                f"may only appear at the beginning and end of the ring"
+            )
+    unique = {tuple(p[:2]) for p in ring[:-1]}
+    if len(unique) < 3:
+        raise ValueError(f"{label} must have at least 3 unique vertices")
+
+
+def _validate_geometry(geom: Any, label: str = "geometry", depth: int = 1) -> None:
+    """Recursively validate a GeoJSON Geometry object's structure and coordinates.
+
+    `depth` counts the geometries walked so far, one per GeometryCollection level. A value
+    nested past MAX_GEOJSON_NESTING_DEPTH is refused before the recursion reaches it, so a
+    hand-crafted geometry surfaces as a 400 rather than exhausting the interpreter stack.
+    """
+    # The label is omitted deliberately: at this point it carries one ".geometries[i]" segment
+    # per level walked, so naming the depth says everything the label would.
+    if depth > MAX_GEOJSON_NESTING_DEPTH:
+        raise ValueError(
+            f"geometries are nested more than {MAX_GEOJSON_NESTING_DEPTH} levels deep"
+        )
+    if not isinstance(geom, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    g_type = geom.get("type")
+    if g_type not in _VALID_GEOJSON_GEOMETRY_TYPES:
+        raise ValueError(
+            f"{label} type is not a supported GeoJSON geometry type "
+            f"(expected one of: {', '.join(sorted(_VALID_GEOJSON_GEOMETRY_TYPES))})"
+        )
+    if g_type == "GeometryCollection":
+        geometries = geom.get("geometries")
+        if not isinstance(geometries, list) or not geometries:
+            raise ValueError(f"{label} GeometryCollection must contain a non-empty geometries array")
+        for i, sub in enumerate(geometries):
+            _validate_geometry(sub, f"{label}.geometries[{i}]", depth + 1)
+        return
+
+    coords = geom.get("coordinates")
+    if coords is None:
+        raise ValueError(f"{label} must contain coordinates")
+
+    if g_type == "Point":
+        _validate_lon_lat(coords, f"{label}.coordinates")
+    elif g_type == "MultiPoint" or g_type == "LineString":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array")
+        for i, c in enumerate(coords):
+            _validate_lon_lat(c, f"{label}.coordinates[{i}]")
+        if g_type == "LineString" and len(coords) < 2:
+            raise ValueError(f"{label} LineString needs at least 2 positions")
+    elif g_type == "MultiLineString":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array")
+        for i, line in enumerate(coords):
+            if not isinstance(line, list) or len(line) < 2:
+                raise ValueError(f"{label}.coordinates[{i}] needs at least 2 positions")
+            for j, c in enumerate(line):
+                _validate_lon_lat(c, f"{label}.coordinates[{i}][{j}]")
+    elif g_type == "Polygon":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array of rings")
+        for i, ring in enumerate(coords):
+            _validate_linear_ring(ring, f"{label}.coordinates[{i}]")
+    elif g_type == "MultiPolygon":
+        if not isinstance(coords, list) or not coords:
+            raise ValueError(f"{label}.coordinates must be a non-empty array of polygons")
+        for i, polygon in enumerate(coords):
+            if not isinstance(polygon, list) or not polygon:
+                raise ValueError(f"{label}.coordinates[{i}] must be a non-empty array of rings")
+            for j, ring in enumerate(polygon):
+                _validate_linear_ring(ring, f"{label}.coordinates[{i}][{j}]")
+
+
+def _validate_geojson_value(parsed: Any, label: str = "GeoJSON") -> None:
+    """Validate a parsed GeoJSON value -- accepts Geometry, Feature, or FeatureCollection."""
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} value must be a JSON object")
+    g_type = parsed.get("type")
+    if g_type == "Feature":
+        geom = parsed.get("geometry")
+        if geom is None:
+            raise ValueError(f"{label} Feature must contain a geometry")
+        _validate_geometry(geom, f"{label}.geometry")
+        return
+    if g_type == "FeatureCollection":
+        features = parsed.get("features")
+        if not isinstance(features, list) or not features:
+            raise ValueError(f"{label} FeatureCollection must contain a non-empty features array")
+        for i, feat in enumerate(features):
+            if not isinstance(feat, dict) or feat.get("type") != "Feature":
+                raise ValueError(f"{label}.features[{i}] must be a GeoJSON Feature")
+            geom = feat.get("geometry")
+            if geom is None:
+                raise ValueError(f"{label}.features[{i}] must contain a geometry")
+            _validate_geometry(geom, f"{label}.features[{i}].geometry")
+        return
+    _validate_geometry(parsed, label)
+
+
 def validate_metadata_value_common(value: str, value_type: MetadataValueType) -> str:
     """Common validation function for metadata values
     
@@ -63,7 +284,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
     # First check if the type is valid
     valid_types = [e.value for e in MetadataValueType]
     if value_type not in valid_types:
-        raise ValueError(f"Invalid metadata value type: {value_type}. Supported types are: {', '.join(valid_types)}")
+        raise ValueError(f"Invalid metadata value type. Supported types are: {', '.join(valid_types)}")
     
     # STRING type requires no additional validation
     if value_type == MetadataValueType.STRING:
@@ -96,7 +317,10 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
     elif value_type == MetadataValueType.JSON:
         try:
             json.loads(value)
-        except json.JSONDecodeError:
+        # A deeply nested value exhausts the parser's stack, which surfaces as RecursionError
+        # rather than as a decode error. Every parse guard below reads it the same way: a value
+        # the parser cannot get through is not a value this type accepts.
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'json'")
             
     elif value_type == MetadataValueType.XYZ:
@@ -113,7 +337,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
                 if not isinstance(xyz_data[key], (int, float)):
                     raise ValueError(f"XYZ coordinate '{key}' must be a number")
                     
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'xyz'")
             
     elif value_type == MetadataValueType.WXYZ:
@@ -130,7 +354,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
                 if not isinstance(wxyz_data[key], (int, float)):
                     raise ValueError(f"WXYZ coordinate '{key}' must be a number")
                     
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'wxyz'")
             
     elif value_type == MetadataValueType.MATRIX4X4:
@@ -153,31 +377,35 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
                     if not isinstance(element, (int, float)):
                         raise ValueError(f"MATRIX4X4 element at [{i}][{j}] must be a number")
                         
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'matrix4x4'")
             
     elif value_type == MetadataValueType.GEOPOINT:
         try:
-            # Use GeoJSON library for validation
-            geojson_obj = geojson.loads(value)
             json_obj = json.loads(value)
-            
-            # Check if it's a valid GeoJSON Point
-            if json_obj.get('type') != 'Point':
-                raise ValueError("GEOPOINT type must be 'Point'")
-                
-        except (json.JSONDecodeError, ValueError) as e:
-            if "GEOPOINT" in str(e):
-                raise e
+        except (json.JSONDecodeError, RecursionError) as e:
             raise ValueError(f"GEOPOINT validation failed: {str(e)}")
-            
+        if not isinstance(json_obj, dict):
+            raise ValueError("GEOPOINT value must be a JSON object")
+        if json_obj.get("type") != "Point":
+            raise ValueError("GEOPOINT type must be 'Point'")
+        try:
+            # Reuse the shared geometry validator so coordinate range checks apply.
+            _validate_geometry(json_obj, label="GEOPOINT")
+        except ValueError as e:
+            raise ValueError(f"GEOPOINT validation failed: {str(e)}")
+
     elif value_type == MetadataValueType.GEOJSON:
         try:
-            # Use GeoJSON library for validation
-            geojson_obj = geojson.loads(value)
-            # geojson.loads() will raise an exception if it's not valid GeoJSON
-            
-        except (json.JSONDecodeError, ValueError) as e:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, RecursionError) as e:
+            raise ValueError(f"GEOJSON validation failed: {str(e)}")
+        try:
+            # Validate Geometry / Feature / FeatureCollection structure plus coordinate
+            # ranges and linear-ring integrity. Pre-empts OpenSearch's
+            # 'invalid_shape_exception' by rejecting self-intersecting rings here.
+            _validate_geojson_value(parsed, label="GEOJSON")
+        except ValueError as e:
             raise ValueError(f"GEOJSON validation failed: {str(e)}")
             
     elif value_type == MetadataValueType.LLA:
@@ -210,13 +438,13 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
             if not isinstance(alt, (int, float)):
                 raise ValueError("LLA altitude must be a number")
                 
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             raise ValueError(f"metadataValue must be valid JSON for type 'lla'")
     
     else:
         # This should never be reached due to the check at the beginning,
         # but included as a safety measure
-        raise ValueError(f"Unsupported metadata value type: {value_type}")
+        raise ValueError("Unsupported metadata value type")
     
     return value
 
@@ -226,20 +454,66 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
 #######################
 
 class MetadataItemModel(BaseModel, extra='ignore'):
-    """Single metadata item with key, value, and type"""
+    """Single metadata item with key, value, and type
+
+    A stored metadata record can carry no value and no value type, and every metadata GET reports
+    each of those as null so the record stays visible and repairable. Clients round-trip a GET
+    response back into a write body, so an explicit null on either field is read here as the field
+    not being supplied: metadataValue becomes the empty string and metadataValueType takes
+    DEFAULT_METADATA_VALUE_TYPE. Both results are already reachable -- an empty value is accepted
+    by validate_metadata_value_common so optional fields may be blank, and omitting the value type
+    resolves to the same default -- so the accepted input widens without widening what is stored.
+
+    The annotations stay non-optional: the coercion is a pre-validator, so the parsed item always
+    carries a concrete str and a concrete MetadataValueType and every caller reading
+    metadataValueType.value is unaffected. Schema enforcement is downstream and unchanged: the
+    coerced empty value is still empty, so a schema-required field holding one is still refused by
+    validate_metadata_against_schema.
+    """
     metadataKey: str = Field(..., min_length=1, max_length=256, description="Metadata key")
-    metadataValue: str = Field(..., description="Metadata value as string")
-    metadataValueType: MetadataValueType = Field(default=MetadataValueType.STRING, description="Type of metadata value")
+    metadataValue: str = Field(..., max_length=MAX_METADATA_VALUE_LENGTH, description="Metadata value as string")
+    metadataValueType: MetadataValueType = Field(
+        default=DEFAULT_METADATA_VALUE_TYPE, description="Type of metadata value")
+
+    @validator('metadataKey')
+    def reject_reserved_metadata_record_key(cls, v):
+        """Refuse a system-owned metadata record key.
+
+        The reindexer's marker record (common/dynamoDbMetadataKeys.py) shares its DynamoDB
+        primary key with a user record carrying the same metadataKey, so a record written under
+        that name is overwritten and then deleted by the next reindex touch. The check is on
+        write only: a record stored by an earlier release stays readable and deletable.
+
+        The VAMS_ / _ internal field prefixes are accepted -- such a key is stored and returned
+        by every metadata GET, and is excluded only from OpenSearch field extraction (and, for
+        the leading underscore, from asset export output).
+        """
+        from common.dynamoDbMetadataKeys import is_excluded_metadata_record
+
+        if is_excluded_metadata_record(v):
+            logger.info(f"metadataKey {v} rejected: reserved for VAMS internal records")
+            raise ValueError("metadataKey is reserved for VAMS internal use")
+        return v
+
+    @validator('metadataValue', pre=True)
+    def unsupplied_metadata_value_reads_as_empty(cls, v):
+        """Read an explicit null metadataValue as the empty string."""
+        if v is None:
+            return ""
+        return v
 
     @validator('metadataValueType', pre=True)
     def normalize_and_validate_metadata_value_type(cls, v):
         """Convert metadataValueType to lowercase and validate it's a valid enum value"""
+        if v is None:
+            # Read as the field not being supplied, which takes the field's default.
+            return DEFAULT_METADATA_VALUE_TYPE
         if isinstance(v, str):
             v_lower = v.lower()
             # Check if the lowercase value is a valid enum value
             valid_types = [e.value for e in MetadataValueType]
             if v_lower not in valid_types:
-                raise ValueError(f"Invalid metadataValueType '{v}'. Supported types are: {', '.join(valid_types)}")
+                raise ValueError(f"Invalid metadataValueType. Supported types are: {', '.join(valid_types)}")
             return v_lower
         return v
 
@@ -297,14 +571,14 @@ class AssetLinkMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting asset link metadata"""
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
 
 class CreateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating asset link metadata (single or bulk)"""
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_metadata_list(cls, values):
@@ -316,7 +590,7 @@ class CreateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating asset link metadata (single or bulk)"""
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -341,13 +615,27 @@ class UpdateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting asset link metadata"""
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_metadata_keys_list(cls, values):
-        """Validate metadataKeys list has at least one item"""
+        """Validate metadataKeys list has at least one item and each key is bounded"""
+        from common.validators import validate
+
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 
@@ -409,15 +697,15 @@ class AssetMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting asset metadata"""
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
-    assetVersionId: Optional[str] = Field(None, description="Optional asset version ID to retrieve metadata snapshot")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
+    assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
 
 
 class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating asset metadata (single or bulk)"""
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_metadata_list(cls, values):
@@ -429,7 +717,7 @@ class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating asset metadata (single or bulk)"""
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -454,13 +742,27 @@ class UpdateAssetMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting asset metadata"""
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_metadata_keys_list(cls, values):
-        """Validate metadataKeys list has at least one item"""
+        """Validate metadataKeys list has at least one item and each key is bounded"""
+        from common.validators import validate
+
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 
@@ -523,12 +825,12 @@ class FileMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting file metadata or attributes"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
-    assetVersionId: Optional[str] = Field(None, description="Optional asset version ID to retrieve metadata snapshot")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
+    assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
 
     @root_validator
     def validate_fields(cls, values):
@@ -561,9 +863,9 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
 
 class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating file metadata or attributes (single or bulk)"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_fields(cls, values):
@@ -606,9 +908,9 @@ class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating file metadata or attributes (single or bulk)"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -664,9 +966,9 @@ class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting file metadata or attributes"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_fields(cls, values):
@@ -697,7 +999,18 @@ class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
         # Validate metadataKeys list has at least one item
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
-        
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 
@@ -756,14 +1069,14 @@ class DatabaseMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting database metadata"""
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
+    maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
 
 class CreateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating database metadata (single or bulk)"""
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_metadata_list(cls, values):
@@ -775,7 +1088,7 @@ class CreateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating database metadata (single or bulk)"""
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -800,13 +1113,27 @@ class UpdateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting database metadata"""
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_metadata_keys_list(cls, values):
-        """Validate metadataKeys list has at least one item"""
+        """Validate metadataKeys list has at least one item and each key is bounded"""
+        from common.validators import validate
+
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 

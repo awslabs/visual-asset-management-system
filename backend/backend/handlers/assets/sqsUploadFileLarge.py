@@ -14,7 +14,23 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
-from common.s3 import validateS3AssetExtensionsAndContentType
+from common.dynamodb import to_update_expr
+from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    UPLOAD_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_USER_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_UPLOAD,
+    VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+)
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+)
 from models.common import VAMSGeneralErrorResponse
 
 # Configure AWS clients with retry configuration
@@ -32,21 +48,71 @@ lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
-TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'
-PREVIEW_PREFIX = 'previews/'
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
-allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+# uploadIdS3 sentinels. "zero-byte" marks a file the processor must materialize itself;
+# "external" marks a file an external producer already wrote in full at the temporary key,
+# so neither has a real S3 multipart upload to complete or abort.
+ZERO_BYTE_UPLOAD_ID = "zero-byte"
+EXTERNAL_UPLOAD_ID = "external"
+# Sample size for asset-type detection. This is a best-effort visibility
+# classification (empty vs. single-file vs. folder), not a correctness-critical
+# read, so it is intentionally capped rather than scanning the entire asset —
+# paging every object of a very large asset would add latency to the upload path.
+ASSET_TYPE_DETECTION_SAMPLE_SIZE = 1000
+allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
 asset_table = dynamodb.Table(asset_storage_table_name)
+
+
+def build_upload_change_metadata(user_id):
+    """Build change-provenance metadata for an uploaded file version."""
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
+    }
+
+
+def build_workflow_change_metadata(user_id, workflow_id, execution_id):
+    """Build change-provenance metadata for a workflow-execution output file.
+
+    Returns an empty dict when no workflow context is supplied so non-workflow
+    uploads keep their default change source.
+    """
+    if not workflow_id and not execution_id:
+        return {}
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
+        VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: workflow_id or "",
+        VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
+    }
+
+
+def resolve_change_metadata(file_info: Dict[str, Any]) -> Dict[str, str]:
+    """Resolve the change-provenance metadata for a queued file.
+
+    Workflow provenance wins when the queuing handler supplied a workflow context;
+    otherwise the file is attributed to a user upload.
+    """
+    user_id = file_info.get('changeUserId')
+    change_metadata = build_workflow_change_metadata(
+        user_id,
+        file_info.get('workflowId'),
+        file_info.get('workflowExecutionId')
+    )
+    if not change_metadata:
+        change_metadata = build_upload_change_metadata(user_id)
+    return change_metadata
 
 
 def validate_sqs_message(message_data: Dict[str, Any], correlation_id: str = None) -> bool:
@@ -132,18 +198,19 @@ def validate_sqs_message(message_data: Dict[str, Any], correlation_id: str = Non
         logger.exception(f"Error validating SQS message{correlation_suffix}: {e}")
         return False
 
-def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str) -> bool:
+def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str, change_metadata: Dict[str, str] = None) -> bool:
     """
     Create a zero-byte file in S3.
     Ported from uploadFile.py.
-    
+
     Args:
         bucket_name: The S3 bucket name
         key: The S3 object key
         upload_id: The upload ID for metadata
         database_id: The database ID for metadata
         asset_id: The asset ID for metadata
-        
+        change_metadata: Change-provenance metadata for the new object version
+
     Returns:
         True if successful, False otherwise
     """
@@ -153,10 +220,14 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
             Key=key,
             Body=b'',  # Empty content for zero-byte file
             ContentType='application/octet-stream',
+            # Grant the bucket owner full control so a zero-byte file written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control',
             Metadata={
-                "databaseid": database_id,
-                "assetid": asset_id,
-                "uploadid": upload_id,
+                DATABASE_ID_METADATA_KEY: database_id,
+                ASSET_ID_METADATA_KEY: asset_id,
+                UPLOAD_ID_METADATA_KEY: upload_id,
+                **(change_metadata or build_upload_change_metadata(None))
             }
         )
         logger.info(f"Created zero-byte file: {key}")
@@ -196,14 +267,14 @@ def is_preview_file(file_path: str) -> bool:
     Returns:
         True if the file is a preview file, False otherwise
     """
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
-def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, 
-                   database_id: str, asset_id: str) -> bool:
+def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str,
+                   database_id: str, asset_id: str, change_metadata: Dict[str, str] = None) -> bool:
     """
     Copy an object from one S3 location to another with replaced metadata.
     Ported from uploadFile.py.
-    
+
     Args:
         source_bucket: Source S3 bucket name
         source_key: Source S3 object key
@@ -211,7 +282,8 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
         dest_key: Destination S3 object key
         database_id: Database ID to set in metadata
         asset_id: Asset ID to set in metadata
-        
+        change_metadata: Change-provenance metadata for the new object version
+
     Returns:
         True if successful, False otherwise
     """
@@ -222,15 +294,19 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             'Bucket': source_bucket,
             'Key': source_key
         }
-        
+
         extra_args = {
             'MetadataDirective': 'REPLACE',
             'Metadata': {
-                "databaseid": database_id,
-                "assetid": asset_id
-            }
+                DATABASE_ID_METADATA_KEY: database_id,
+                ASSET_ID_METADATA_KEY: asset_id,
+                **(change_metadata or build_upload_change_metadata(None))
+            },
+            # Grant the bucket owner full control so the finalized object written into a
+            # cross-account asset bucket is owned/readable by that account.
+            'ACL': 'bucket-owner-full-control'
         }
-        
+
         s3_resource.meta.client.copy(
             CopySource=copy_source,
             Bucket=dest_bucket,
@@ -255,12 +331,12 @@ def validate_preview_file_extension(file_path: str) -> bool:
         True if the file has an allowed extension, False otherwise
     """
     import os
-    
+
     # Extract the extension after .previewFile.
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1].lower()
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1].lower()
         return extension in allowed_preview_extensions
-    
+
     # For direct assetPreview uploads, check the file extension
     file_extension = os.path.splitext(file_path)[1].lower()
     return file_extension in allowed_preview_extensions
@@ -287,17 +363,17 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
         asset_base_key = asset.get('assetLocation', {}).get('Key', f"{asset_id}/")
         asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {asset_id}: {asset_type}")
-        
+
         # Update asset type - ensure we're not overriding with None
         if asset_type:
             asset['assetType'] = asset_type
         elif 'assetType' not in asset or not asset.get('assetType'):
             asset['assetType'] = 'none'
         # If asset already has a type and asset_type is None, keep the existing type
-        
+
         # Save updated asset
-        save_asset_details(asset)
-        
+        update_asset_attributes(database_id, asset_id, {'assetType': asset['assetType']})
+
         # Send notification to subscribers
         send_subscription_email(database_id, asset_id)
         
@@ -323,13 +399,12 @@ def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key:
             return
         
         # Update asset with preview location
-        asset['previewLocation'] = {
-            'Key': final_s3_key
-        }
-        
-        # Save updated asset
-        save_asset_details(asset)
-        
+        update_asset_attributes(database_id, asset_id, {
+            'previewLocation': {
+                'Key': final_s3_key
+            }
+        })
+
         logger.info(f"Updated asset {asset_id} with preview location: {final_s3_key}")
         
     except Exception as e:
@@ -359,17 +434,37 @@ def get_asset_details(database_id: str, asset_id: str) -> Dict[str, Any]:
         logger.exception(f"Error getting asset details: {e}")
         return None
 
-def save_asset_details(asset_data: Dict[str, Any]):
-    """
-    Save asset details to DynamoDB.
-    Ported from uploadFile.py.
-    
+def update_asset_attributes(database_id: str, asset_id: str, updates: Dict[str, Any]):
+    """Update the named attributes of an existing asset record in DynamoDB.
+
+    Only the supplied attributes are written, so a field another writer changed while
+    the large file was being processed is not reverted. Conditional on the record still
+    existing so an asset removed during processing is not recreated.
+
     Args:
-        asset_data: The asset data to save
+        database_id: The database ID
+        asset_id: The asset ID
+        updates: Map of attribute name to value to write
     """
+    keys_map, values_map, expr = to_update_expr(updates)
     try:
-        asset_table.put_item(Item=asset_data)
-        logger.info(f"Saved asset details for {asset_data.get('assetId')}")
+        asset_table.update_item(
+            Key={
+                'databaseId': database_id,
+                'assetId': asset_id
+            },
+            UpdateExpression=expr,
+            ExpressionAttributeNames=keys_map,
+            ExpressionAttributeValues=values_map,
+            ConditionExpression='attribute_exists(databaseId) AND attribute_exists(assetId)'
+        )
+        logger.info(f"Saved asset details for {asset_id}")
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {asset_id} in database {database_id} no longer exists, asset record not updated")
+            raise VAMSGeneralErrorResponse(f"Error saving asset.")
+        logger.exception(f"Error saving asset details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error saving asset.")
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
@@ -391,15 +486,12 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         import os
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
-        
-        # List all objects with the specified prefix
-        response = s3.list_objects_v2(
-            Bucket=bucket,
-            Prefix=prefix,
-        )
-        
-        # Get the contents and filter out folder markers (objects ending with '/')
-        contents = response.get('Contents', [])
+
+        # Sample objects under the prefix to classify the asset (empty / single
+        # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
+        # best-effort visibility classification, so a sample is sufficient and
+        # avoids adding upload latency by scanning a very large asset in full.
+        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
         
         # Filter out archived files and count non-archived files
         non_archived_files = []
@@ -459,51 +551,12 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         return None
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    Determine if file is archived based on S3 delete markers.
-    Simplified version from uploadFile.py for async processing.
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
-    """
-    try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
-            return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
-            try:
-                s3.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3)
 
 def send_subscription_email(database_id: str, asset_id: str):
     """
@@ -601,13 +654,13 @@ def cleanup_failed_processing(file_info: Dict[str, Any], correlation_ids: Dict[s
         bucket_name = file_info.get('bucketName')
         temp_s3_key = file_info.get('tempS3Key')
         upload_id_s3 = file_info.get('uploadIdS3')
-        
+
         if not bucket_name or not temp_s3_key:
             logger.warning(f"Insufficient information for cleanup - {correlation_str}")
             return
-        
+
         logger.info(f"Starting cleanup after failed processing - {correlation_str}")
-        
+
         # Try to delete temporary file if it exists
         try:
             s3.head_object(Bucket=bucket_name, Key=temp_s3_key)
@@ -619,9 +672,10 @@ def cleanup_failed_processing(file_info: Dict[str, Any], correlation_ids: Dict[s
                 logger.debug(f"Temporary file does not exist, no cleanup needed - {correlation_str}")
             else:
                 logger.warning(f"Error checking temporary file existence during cleanup - {correlation_str}: {e}")
-        
-        # Try to abort multipart upload if it's still active
-        if upload_id_s3 and upload_id_s3 != "zero-byte":
+
+        # Try to abort multipart upload if it's still active. The sentinel upload ids
+        # identify files with no real multipart upload behind them.
+        if upload_id_s3 and upload_id_s3 not in (ZERO_BYTE_UPLOAD_ID, EXTERNAL_UPLOAD_ID):
             try:
                 s3.abort_multipart_upload(
                     Bucket=bucket_name,
@@ -678,73 +732,78 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
     """
     Validate file content and MIME type, then move file from temporary to final location.
     Ported from uploadFile.py complete_upload function.
-    
+
     Args:
         file_info: Dictionary containing file processing information
         correlation_ids: Dictionary containing correlation IDs for logging
-        
+
     Returns:
         True if validation and movement was successful, False otherwise
     """
     try:
         bucket_name = file_info['bucketName']
+        # Source bucket the temp file is read from; defaults to the destination bucket, but a
+        # workflow-execution output stages its temp file in the VAMS default run bucket.
+        source_bucket = file_info.get('sourceBucketName') or bucket_name
         temp_s3_key = file_info['tempS3Key']
         final_s3_key = file_info['finalS3Key']
         relative_key = file_info['relativeKey']
         upload_type = file_info['uploadType']
         database_id = file_info['databaseId']
         asset_id = file_info['assetId']
-        
+        change_metadata = resolve_change_metadata(file_info)
+
         logger.info(f"Validating and moving file {relative_key} from {temp_s3_key} to {final_s3_key}")
-        
-        # Validate file content type and check for malicious executables
-        if not validateS3AssetExtensionsAndContentType(bucket_name, temp_s3_key):
+
+        # Validate file content type and check for malicious executables (in the source bucket).
+        if not validateS3AssetExtensionsAndContentType(source_bucket, temp_s3_key):
             logger.error(f"File {relative_key} contains a potentially malicious executable type object")
             # Delete the uploaded file
-            delete_s3_object(bucket_name, temp_s3_key)
+            delete_s3_object(source_bucket, temp_s3_key)
             return False
-        
+
         # Additional validation for preview files
         if upload_type == "assetPreview":
             # Validate preview file extension
             if not validate_preview_file_extension(relative_key):
                 logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
                 # Delete the uploaded file
-                delete_s3_object(bucket_name, temp_s3_key)
+                delete_s3_object(source_bucket, temp_s3_key)
                 return False
-        
+
         # Check if this is a preview file in an assetFile upload
         if upload_type == "assetFile" and is_preview_file(relative_key):
             # Validate preview file extension
             if not validate_preview_file_extension(relative_key):
                 logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
                 # Delete the uploaded file
-                delete_s3_object(bucket_name, temp_s3_key)
+                delete_s3_object(source_bucket, temp_s3_key)
                 return False
-            
+
             # For preview files, we need to validate that the base file exists
             # This validation is simplified for async processing - we assume the base file exists
             # since the original upload validation would have caught missing base files
             logger.info(f"Preview file {relative_key} validation passed (base file existence assumed)")
-        
-        # Copy file from temporary to final location
+
+        # Copy file from temporary (source bucket) to final (destination asset bucket) location
         logger.info(f"Copying file from {temp_s3_key} to {final_s3_key}")
-        
+
         copy_success = copy_s3_object(
-            bucket_name, 
-            temp_s3_key, 
-            bucket_name, 
+            source_bucket,
+            temp_s3_key,
+            bucket_name,
             final_s3_key,
             database_id,
-            asset_id
+            asset_id,
+            change_metadata=change_metadata
         )
-        
+
         if not copy_success:
             logger.error(f"Failed to copy file from {temp_s3_key} to {final_s3_key}")
             return False
-        
-        # Delete temporary file after successful copy
-        delete_s3_object(bucket_name, temp_s3_key)
+
+        # Delete temporary source file after successful copy
+        delete_s3_object(source_bucket, temp_s3_key)
         
         # Update asset record if this is an assetFile upload
         if upload_type == "assetFile":
@@ -783,16 +842,24 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
         relative_key = file_info['relativeKey']
         
         logger.info(f"Completing multipart upload for {relative_key} at {temp_s3_key}")
-        
+
+        # Handle external uploads (identified by uploadIdS3 = "external"): the object is
+        # already fully written at the temporary key by the external producer, so there is
+        # no multipart upload to complete.
+        if upload_id_s3 == EXTERNAL_UPLOAD_ID:
+            logger.info(f"External upload {relative_key} already staged at {temp_s3_key}, nothing to complete")
+            return True
+
         # Handle zero-byte files (identified by uploadIdS3 = "zero-byte")
-        if upload_id_s3 == "zero-byte":
+        if upload_id_s3 == ZERO_BYTE_UPLOAD_ID:
             logger.info(f"Creating zero-byte file {relative_key} during async processing")
-            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id)
-        
+            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id,
+                                         change_metadata=resolve_change_metadata(file_info))
+
         # Handle abandoned uploads (no parts provided) - create empty file
         if not parts or len(parts) == 0:
             logger.info(f"No parts provided for file {relative_key}, creating empty file")
-            
+
             # Abort the existing multipart upload
             try:
                 s3.abort_multipart_upload(
@@ -802,10 +869,11 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
                 )
             except Exception as abort_error:
                 logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
-            
+
             # Create empty file in temporary location
-            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id)
-        
+            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id,
+                                         change_metadata=resolve_change_metadata(file_info))
+
         # Regular multipart upload completion
         actual_parts = sorted([p['PartNumber'] for p in parts])
         
@@ -850,7 +918,7 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
             
             # Extract metadata
             metadata = head_response.get('Metadata', {})
-            s3_upload_id = metadata.get('uploadid')
+            s3_upload_id = metadata.get(UPLOAD_ID_METADATA_KEY)
             
             # Verify the uploadId matches
             if s3_upload_id != upload_id:
@@ -1011,22 +1079,21 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
                 success_count += 1
                 
                 # AUDIT LOG: Large file upload completed asynchronously
-                # Create a mock event for audit logging since this is SQS-triggered
+                # SQS-triggered, so the actor is supplied as an internal cross-call identity:
+                # the initiating user the queuing handler recorded on the message, falling back
+                # to SYSTEM_USER. This is the same identity the change provenance is stamped
+                # with, so the audit entry correlates with the synchronous completion entry.
+                # The queued message carries no MFA state, so an end-user actor is recorded as
+                # not MFA-satisfied rather than taking the system cross-call default.
                 try:
-                    mock_event = {
-                        'requestContext': {
-                            'authorizer': {
-                                'jwt': {
-                                    'claims': {
-                                        'sub': 'SYSTEM_ASYNC_PROCESSOR'
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
+                    audit_user_id = file_info.get('changeUserId') or 'SYSTEM_USER'
+                    cross_call = {'userName': audit_user_id}
+                    if audit_user_id != 'SYSTEM_USER':
+                        cross_call['mfaEnabled'] = False
+                    audit_event = {'lambdaCrossCall': cross_call}
+
                     log_file_upload(
-                        mock_event,
+                        audit_event,
                         file_info.get('databaseId'),
                         file_info.get('assetId'),
                         file_info.get('relativeKey'),

@@ -31,19 +31,33 @@ A role is a named collection of constraints that can be assigned to users. Roles
 
 VAMS is deployed with two default roles:
 
-| Role         | Description                                                                                                                                         |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Admin**    | Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management. |
-| **ReadOnly** | Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data.               |
+| Role            | Description                                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `admin`         | Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management. |
+| `basicReadOnly` | Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data.               |
+
+The deployment assigns the administrator account named by `app.adminUserId` to `admin`. The reserved
+`SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
+
+`basicReadOnly` reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
+comments, subscriptions, and metadata schemas, and it may manage its own API keys. It cannot reach the
+administrative routes that `admin` holds: detailed execution logs
+(`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
+(`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
+broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
+which override a matching `allow`.
+
+In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
+and the tab reports that the logs are not viewable.
 
 ### Creating a custom role
 
 1. Navigate to **Roles** from the left navigation menu.
-2. Click **Create Role**.
+2. Choose **Create Role**.
 3. Enter a **Role Name** (3-64 characters, letters, numbers, hyphens, and underscores).
 4. Enter a **Description** (4-256 characters).
 5. Optionally enable **MFA Required** -- when checked, this role is only active for users who have authenticated with multi-factor authentication.
-6. Click **Create**.
+6. Choose **Create**.
 
 :::note
 A newly created role has no constraints and grants no permissions. You must add constraints to the role before it provides any access.
@@ -66,6 +80,14 @@ Constraints are the rules within a role that define what a user can or cannot do
 | **Criteria (AND)**    | Conditions that must ALL be true for the constraint to match.                                                                                                     |
 | **Criteria (OR)**     | Conditions where ANY one must be true for the constraint to match.                                                                                                |
 
+:::note[Combining AND and OR criteria]
+When a constraint includes both AND and OR criteria, they combine within the same rule: the constraint matches only when **all** AND conditions are true **and at least one** OR condition is true.
+:::
+
+:::tip[API route values]
+When creating a constraint with the `api` object type, the **Criteria Values** field for `Route Path` offers an autosuggest of the deployment's available API routes (with their HTTP methods), so you can pick valid `route__path` values instead of typing them by hand. You can still enter free text for prefix or regex patterns.
+:::
+
 ### The GLOBAL keyword
 
 Use `GLOBAL` as a criteria value for `databaseId` to match resources that are not scoped to any specific database. For example, GLOBAL pipelines and GLOBAL workflows use `databaseId equals GLOBAL`.
@@ -81,8 +103,8 @@ The authorization engine evaluates all constraints for a user. If any constraint
 
 ### Creating a constraint
 
-1. Navigate to **Constraints** from the left navigation menu.
-2. Click **Create Constraint**.
+1. Navigate to **Access Control Constraints** from the left navigation menu.
+2. Choose **Create Constraint**.
 3. Fill in the constraint details:
     - **Name** and **Description**.
     - **Object Type** -- Select the resource type this constraint targets.
@@ -91,23 +113,23 @@ The authorization engine evaluates all constraints for a user. If any constraint
     - **Criteria (OR)** -- Add conditions where any one must be true.
 4. Assign the constraint to one or more roles in the **Role Group Permissions** section.
 5. Optionally assign to specific users in the **User Permissions** section.
-6. Click **Create**.
+6. Choose **Create**.
 
 ![Access control constraints page showing constraint definitions](/img/access_constraints_page_20260323_v2.5.png)
 
 ![Constraint editor showing object type, criteria, and group permissions](/img/access_constraints_20260323_v2.5.png)
 
 :::warning[Limit who can manage constraints]
-The ability to create and edit constraints lets a role define the authorization policy itself, so it can grant access to any resource. Only assign constraint management (the Constraints page and its `api` route `/auth/constraints`) to fully trusted administrators. By default, only the **Admin** role can manage constraints. Avoid adding this access to roles meant for general users. See [Permissions Model](../concepts/permissions-model.md#constraints) for details.
+The ability to create and edit constraints lets a role define the authorization policy itself, so it can grant access to any resource. Only assign constraint management (the Access Control Constraints page and its `api` route `/auth/constraints`) to fully trusted administrators. By default, only the **Admin** role can manage constraints. Avoid adding this access to roles meant for general users. See [Permissions Model](../concepts/permissions-model.md#constraints) for details.
 :::
 
 ## Assigning roles to users
 
-1. Navigate to **User Roles** from the left navigation menu.
-2. Click **Create User Role**.
+1. Navigate to **Users in Roles** from the left navigation menu.
+2. Choose **Create User Role**.
 3. Select a **User** from the dropdown.
 4. Select a **Role** to assign.
-5. Click **Create**.
+5. Choose **Create**.
 
 A user can have multiple roles assigned. The effective permissions are the union of all constraints from all assigned roles, with deny effects taking precedence.
 
@@ -151,11 +173,11 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**
-    - Is the role assigned to the user on the **User Roles** page?
+    - Is the role assigned to the user on the **Users in Roles** page?
     - If the role requires MFA, has the user authenticated with MFA?
 
 :::tip
-Administrators can view a user's effective permissions by examining all roles assigned to the user and the constraints within each role. The **Constraints** page lists all constraints organized by role.
+Administrators can view a user's effective permissions by examining all roles assigned to the user and the constraints within each role. The **Access Control Constraints** page lists all constraints organized by role.
 :::
 
 :::tip[CLI alternative]

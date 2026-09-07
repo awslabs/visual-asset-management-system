@@ -11,6 +11,10 @@ VAMS enforces authorization at two levels:
 Both tiers must allow access for a request to succeed.
 :::
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `description` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## Constraints
@@ -25,35 +29,49 @@ Retrieves all permission constraints.
 GET /auth/constraints
 ```
 
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                         |
+| --------------- | ------ | -------- | ------- | ----------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `30000` | Ceiling on the constraints returned in one response (1-30000).                      |
+| `pageSize`      | number | No       | `3000`  | Constraints per page (1-10000). A value above 3000 is served in 3000-item pages.    |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                             |
+
+The page served is the smallest of `pageSize`, `maxItems`, and 3,000 — the bound that keeps a page of whole constraints, each carrying its criteria and permission lists, within the AWS Lambda response limit.
+
 #### Response
+
+`NextToken` is present only when more constraints remain; page until it is absent. It is an opaque string: pass it back on `startingToken` unmodified.
 
 ```json
 {
     "message": {
         "Items": [
             {
-                "constraintId": "constraint-abc123#group#admin-role",
+                "constraintId": "admin-full-access",
                 "name": "Admin Full Access",
                 "description": "Full access to all resources",
                 "objectType": "asset",
-                "criteriaAnd": "[{\"field\": \"databaseId\", \"value\": \"*\", \"operator\": \"equals\"}]",
-                "criteriaOr": "[]",
-                "groupPermissions": "[{\"groupId\": \"admin-role\", \"permission\": \"Read/Write\", \"permissionType\": \"allow\"}]",
-                "userPermissions": "[]",
-                "dateCreated": "2026-03-15T10:30:00",
-                "dateModified": "2026-03-15T10:30:00"
+                "criteriaAnd": [{ "field": "databaseId", "value": ".*", "operator": "contains" }],
+                "criteriaOr": [],
+                "groupPermissions": [
+                    { "groupId": "admin-role", "permission": "GET", "permissionType": "allow" }
+                ],
+                "userPermissions": []
             }
-        ]
+        ],
+        "NextToken": "eyJ..."
     }
 }
 ```
 
 #### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                                        |
+| ------ | -------------------------------------------------- |
+| `400`  | `startingToken` is not a token this listing emitted |
+| `403`  | Not authorized                                     |
+| `500`  | Internal server error                              |
 
 ---
 
@@ -89,23 +107,23 @@ POST /auth/constraints/{constraintId}
 
 #### Request body
 
-| Field              | Type   | Required | Description                                                                                                                                                                  |
-| ------------------ | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                                       |
-| `description`      | string | No       | Description of the constraint's purpose                                                                                                                                      |
-| `objectType`       | string | Yes      | Resource type this constraint applies to (e.g., `asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `apiKey`) |
-| `criteriaAnd`      | array  | No       | AND criteria for matching resources                                                                                                                                          |
-| `criteriaOr`       | array  | No       | OR criteria for matching resources                                                                                                                                           |
-| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                          |
-| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                                        |
+| Field              | Type   | Required | Description                                                                                                                                                        |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                             |
+| `description`      | string | Yes      | Description of the constraint's purpose                                                                                                                            |
+| `objectType`       | string | Yes      | Resource type this constraint applies to (e.g., `asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) |
+| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                               |
+| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                       |
+| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                |
+| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                              |
 
 Each entry in `groupPermissions`:
 
-| Field            | Type   | Required | Description                             |
-| ---------------- | ------ | -------- | --------------------------------------- |
-| `groupId`        | string | Yes      | Role/group name                         |
-| `permission`     | string | Yes      | Permission level (`Read`, `Read/Write`) |
-| `permissionType` | string | Yes      | `allow` or `deny`                       |
+| Field            | Type   | Required | Description                                  |
+| ---------------- | ------ | -------- | -------------------------------------------- |
+| `groupId`        | string | Yes      | Role/group name                              |
+| `permission`     | string | Yes      | HTTP action (`GET`, `PUT`, `POST`, `DELETE`) |
+| `permissionType` | string | Yes      | `allow` or `deny`                            |
 
 Each entry in `criteriaAnd` or `criteriaOr`:
 
@@ -114,6 +132,10 @@ Each entry in `criteriaAnd` or `criteriaOr`:
 | `field`    | string | Yes      | Field to match (e.g., `databaseId`, `assetType`) |
 | `value`    | string | Yes      | Value to match against (supports `*` wildcard)   |
 | `operator` | string | Yes      | Comparison operator (`equals`, `contains`, etc.) |
+
+:::note[Combining AND and OR criteria]
+A constraint may define both `criteriaAnd` and `criteriaOr`. When both are present, access is granted only if **all** `criteriaAnd` entries match **and at least one** `criteriaOr` entry matches.
+:::
 
 #### Request body example
 
@@ -133,7 +155,7 @@ Each entry in `criteriaAnd` or `criteriaOr`:
     "groupPermissions": [
         {
             "groupId": "viewer-role",
-            "permission": "Read",
+            "permission": "GET",
             "permissionType": "allow"
         }
     ],
@@ -145,7 +167,12 @@ Each entry in `criteriaAnd` or `criteriaOr`:
 
 ```json
 {
-    "message": "Constraint created successfully"
+    "success": true,
+    "message": "Constraint database-reader created/updated successfully",
+    "constraintId": "database-reader",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000",
+    "constraint": "{\"identifier\": \"database-reader\", \"name\": \"Database Reader\", \"description\": \"Read-only access to assets in the production database\", \"objectType\": \"asset\", \"criteriaAnd\": [{\"field\": \"databaseId\", \"value\": \"production-db\", \"operator\": \"equals\"}], \"groupPermissions\": [{\"groupId\": \"viewer-role\", \"permission\": \"GET\", \"permissionType\": \"allow\"}]}"
 }
 ```
 
@@ -189,7 +216,11 @@ DELETE /auth/constraints/{constraintId}
 
 ```json
 {
-    "message": "Constraint deleted successfully"
+    "success": true,
+    "message": "Constraint database-reader deleted successfully",
+    "constraintId": "database-reader",
+    "operation": "delete",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -217,6 +248,119 @@ The request body should contain the full constraint template JSON. See the permi
 
 ---
 
+### List constraint permission objects
+
+Retrieves the master mapping used when authoring constraints: the object types (with the fields valid on each), the criteria operators, the permissions (HTTP actions), and the permission types. The constraints editor and CLI use this as the authoritative source for `objectType`, criteria `field`, `operator`, `permission`, and `permissionType` values.
+
+```
+GET /auth/constraints/permissionObjects
+```
+
+#### Response
+
+```json
+{
+    "message": {
+        "objectTypes": [
+            {
+                "label": "Asset",
+                "value": "asset",
+                "fields": [
+                    { "label": "Database ID", "value": "databaseId" },
+                    { "label": "Asset Name", "value": "assetName" },
+                    { "label": "Asset Type", "value": "assetType" },
+                    { "label": "Tags", "value": "tags" }
+                ]
+            }
+        ],
+        "operators": [{ "label": "Equals", "value": "equals" }],
+        "permissions": [{ "label": "View/GET", "value": "GET" }],
+        "permissionTypes": [{ "label": "Allow", "value": "allow" }]
+    }
+}
+```
+
+:::note[Authoritative field matrix]
+A constraint criterion whose `field` is not valid for its `objectType` is rejected at create/update and template import, and out-of-matrix or deprecated fields are ignored during authorization evaluation.
+:::
+
+#### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
+---
+
+## API route listing
+
+These endpoints expose the deployment's API route surface from the master route definitions. They are useful when authoring API authorization constraints (`route__path` values) and for discovering which endpoints a user can call.
+
+### List all API routes
+
+Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories.
+
+```
+GET /auth/routes/api
+```
+
+#### Response
+
+```json
+{
+    "routes": [
+        {
+            "path": "/database/{databaseId}/assets",
+            "methods": ["GET"],
+            "category": "assets",
+            "unauthenticated": false
+        }
+    ]
+}
+```
+
+#### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
+---
+
+### List allowed API routes
+
+Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted.
+
+```
+GET /auth/routes/api/allowed
+```
+
+#### Response
+
+```json
+{
+    "routes": [
+        {
+            "path": "/database/{databaseId}/assets",
+            "methods": ["GET"],
+            "category": "assets"
+        }
+    ],
+    "userId": "user@example.com"
+}
+```
+
+#### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
+---
+
 ## Roles
 
 Roles are named groups that can be assigned to users. Constraints reference roles via `groupPermissions` to grant or deny access.
@@ -236,9 +380,13 @@ GET /roles
     "message": {
         "Items": [
             {
+                "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                 "roleName": "admin",
                 "description": "Full administrative access",
-                "dateCreated": "2026-03-15T10:30:00"
+                "createdOn": "2026-03-15T10:30:00",
+                "source": null,
+                "sourceIdentifier": null,
+                "mfaRequired": false
             }
         ]
     }
@@ -257,10 +405,13 @@ POST /roles
 
 #### Request body
 
-| Field         | Type   | Required | Description      |
-| ------------- | ------ | -------- | ---------------- |
-| `roleName`    | string | Yes      | Unique role name |
-| `description` | string | No       | Role description |
+| Field              | Type    | Required | Description                                                    |
+| ------------------ | ------- | -------- | -------------------------------------------------------------- |
+| `roleName`         | string  | Yes      | Unique role name                                               |
+| `description`      | string  | Yes      | Role description                                               |
+| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                           |
+| `sourceIdentifier` | string  | No       | Identifier associated with the source                          |
+| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions |
 
 #### Request body example
 
@@ -275,7 +426,11 @@ POST /roles
 
 ```json
 {
-    "message": "Role created successfully"
+    "success": true,
+    "message": "Role viewer created successfully",
+    "roleName": "viewer",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -291,7 +446,11 @@ PUT /roles
 
 #### Request body
 
-Same structure as [Create a role](#create-a-role).
+Same fields as [Create a role](#create-a-role), with `roleName` the only required one. It identifies the role and cannot be changed.
+
+Only the fields present in the body are written. A field the body omits keeps its stored value, so clearing one requires sending it explicitly — `"mfaRequired": false` to remove an MFA requirement, or `"source": null` to remove the source linkage. `description` is the exception: it is always present on a role, so `null` is rejected and omitting the field is how it is left alone.
+
+A body naming only `roleName` is rejected with `400`, since it asks for no change.
 
 ---
 
@@ -317,7 +476,7 @@ Deleting a role does not automatically remove user-role assignments referencing 
 
 ```json
 {
-    "message": "Role deleted successfully"
+    "message": "success"
 }
 ```
 
@@ -343,7 +502,8 @@ GET /user-roles
         "Items": [
             {
                 "userId": "user@example.com",
-                "roleName": "admin"
+                "roleName": ["admin", "viewer"],
+                "createdOn": "2026-03-15T10:30:00"
             }
         ]
     }
@@ -362,17 +522,17 @@ POST /user-roles
 
 #### Request body
 
-| Field      | Type   | Required | Description         |
-| ---------- | ------ | -------- | ------------------- |
-| `userId`   | string | Yes      | User identifier     |
-| `roleName` | string | Yes      | Role name to assign |
+| Field      | Type   | Required | Description                      |
+| ---------- | ------ | -------- | -------------------------------- |
+| `userId`   | string | Yes      | User identifier                  |
+| `roleName` | array  | Yes      | One or more role names to assign |
 
 #### Request body example
 
 ```json
 {
     "userId": "user@example.com",
-    "roleName": "viewer"
+    "roleName": ["viewer"]
 }
 ```
 
@@ -380,7 +540,11 @@ POST /user-roles
 
 ```json
 {
-    "message": "User role assignment created successfully"
+    "success": true,
+    "message": "User roles created successfully",
+    "userId": "user@example.com",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -400,9 +564,9 @@ Same structure as [Assign a role to a user](#assign-a-role-to-a-user).
 
 ---
 
-### Remove a role from a user
+### Remove all roles from a user
 
-Removes a user-role assignment.
+Removes every role assignment for a user.
 
 ```
 DELETE /user-roles
@@ -410,17 +574,19 @@ DELETE /user-roles
 
 #### Request body
 
-| Field      | Type   | Required | Description         |
-| ---------- | ------ | -------- | ------------------- |
-| `userId`   | string | Yes      | User identifier     |
-| `roleName` | string | Yes      | Role name to remove |
+| Field    | Type   | Required | Description     |
+| -------- | ------ | -------- | --------------- |
+| `userId` | string | Yes      | User identifier |
+
+:::warning[Removes all roles]
+This endpoint deletes **all** role assignments for the given `userId`. It does not accept a `roleName`, so there is no way to remove a single role through it. To leave the user with a subset of their roles, use `PUT /user-roles` with the desired role list instead.
+:::
 
 #### Request body example
 
 ```json
 {
-    "userId": "user@example.com",
-    "roleName": "viewer"
+    "userId": "user@example.com"
 }
 ```
 
@@ -428,7 +594,11 @@ DELETE /user-roles
 
 ```json
 {
-    "message": "User role assignment deleted successfully"
+    "success": true,
+    "message": "User roles deleted successfully",
+    "userId": "user@example.com",
+    "operation": "delete",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -448,21 +618,33 @@ These endpoints return an error if Cognito is not enabled in the deployment conf
 GET /user/cognito
 ```
 
+#### Query parameters
+
+| Parameter       | Type    | Required | Default | Description                                                        |
+| --------------- | ------- | -------- | ------- | ------------------------------------------------------------------ |
+| `maxItems`      | number  | No       | `60`    | Maximum number of users to return (1-60).                          |
+| `pageSize`      | number  | No       | `60`    | Number of users per page (1-60). Takes precedence over `maxItems`. |
+| `startingToken` | string  | No       | `null`  | Pagination token from a previous response's `NextToken`.           |
+
 #### Response
+
+`NextToken` is present only when more users remain; page until it is absent.
 
 ```json
 {
-    "message": {
-        "users": [
-            {
-                "userId": "user@example.com",
-                "email": "user@example.com",
-                "status": "CONFIRMED",
-                "enabled": true,
-                "dateCreated": "2026-03-15T10:30:00Z"
-            }
-        ]
-    }
+    "users": [
+        {
+            "userId": "user@example.com",
+            "email": "user@example.com",
+            "phone": "+12345678900",
+            "userStatus": "CONFIRMED",
+            "enabled": true,
+            "userCreateDate": "2026-03-15T10:30:00",
+            "userLastModifiedDate": "2026-03-15T10:30:00",
+            "mfaEnabled": false
+        }
+    ],
+    "NextToken": "eyJ..."
 }
 ```
 
@@ -476,17 +658,19 @@ POST /user/cognito
 
 #### Request body
 
-| Field    | Type   | Required | Description               |
-| -------- | ------ | -------- | ------------------------- |
-| `userId` | string | Yes      | Username for the new user |
-| `email`  | string | Yes      | Email address             |
+| Field    | Type   | Required | Description                                        |
+| -------- | ------ | -------- | -------------------------------------------------- |
+| `userId` | string | Yes      | Username for the new user                          |
+| `email`  | string | Yes      | Email address                                      |
+| `phone`  | string | No       | Phone number in E.164 format (e.g. `+12345678900`) |
 
 #### Request body example
 
 ```json
 {
     "userId": "newuser@example.com",
-    "email": "newuser@example.com"
+    "email": "newuser@example.com",
+    "phone": "+12345678900"
 }
 ```
 
@@ -506,10 +690,15 @@ PUT /user/cognito/{userId}
 
 #### Request body
 
-| Field     | Type    | Required | Description                |
-| --------- | ------- | -------- | -------------------------- |
-| `email`   | string  | No       | Updated email address      |
-| `enabled` | boolean | No       | Enable or disable the user |
+| Field        | Type    | Required | Description                                        |
+| ------------ | ------- | -------- | -------------------------------------------------- |
+| `email`      | string  | No       | Updated email address                              |
+| `phone`      | string  | No       | Phone number in E.164 format (e.g. `+12345678900`) |
+| `clearPhone` | boolean | No       | Set to `true` to remove the stored phone number    |
+
+At least one of `email`, `phone`, or `clearPhone` must be provided.
+
+The update is partial: an attribute the request does not mention keeps its stored value, so an email-only request leaves the phone number as it is. Removing the number takes `clearPhone` set to `true`, which is accepted on its own or alongside an email change. A request that sends both `phone` and `clearPhone` is rejected with `400`.
 
 ---
 
@@ -541,11 +730,23 @@ POST /user/cognito/{userId}/resetPassword
 | --------- | ------ | -------- | --------------- |
 | `userId`  | string | Yes      | User identifier |
 
+#### Request body
+
+The request body is required and must set `confirmReset` to `true`. A request that omits the body, sends an empty one, or sends the field as `false` or `null` is rejected with `400` and does not reach Amazon Cognito.
+
+| Field          | Type    | Required | Description    |
+| -------------- | ------- | -------- | -------------- |
+| `confirmReset` | boolean | Yes      | Must be `true` |
+
 #### Response
 
 ```json
 {
-    "message": "Password reset initiated successfully"
+    "success": true,
+    "message": "Password reset successfully for user user@example.com. A new temporary password has been sent to their email.",
+    "userId": "user@example.com",
+    "operation": "resetPassword",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -553,7 +754,13 @@ POST /user/cognito/{userId}/resetPassword
 
 ## API keys
 
-API keys provide programmatic access to VAMS without requiring interactive authentication.
+API keys provide programmatic access to VAMS without requiring interactive authentication. A request that presents an API key acts as the VAMS user the key is bound to and carries the roles assigned to that user.
+
+The `/auth/api-keys` routes are the administrative variant of these endpoints. They operate across every user's keys, and `POST /auth/api-keys` binds the new key to the `userId` supplied in the request body. Of the default roles, only `admin` reaches them; `basicReadOnly` is granted the self-service [`/auth/user/api-keys`](#user-self-service-api-keys) routes instead.
+
+:::warning[Administrative routes]
+Because `POST /auth/api-keys` accepts any `userId`, including an administrator's, a role that can call it can issue a credential that acts as any user in the deployment. Access to the `/auth/api-keys` routes is therefore equivalent to full administrative access. Grant them only to administrator roles, and give other users the self-service `/auth/user/api-keys` routes for managing their own keys.
+:::
 
 ### List API keys
 
@@ -561,27 +768,44 @@ API keys provide programmatic access to VAMS without requiring interactive authe
 GET /auth/api-keys
 ```
 
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                       |
+| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `3000`  | Maximum number of keys in one response (1-3000). Values above 3000 are clamped.    |
+| `pageSize`      | number | No       | `1000`  | Number of keys read per page. Clamped to `maxItems`.                              |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                           |
+
 #### Response
+
+`NextToken` and `truncated` are present only when more keys remain; page until they are absent. A malformed or foreign `startingToken` returns `400` with `Invalid pagination token`.
 
 ```json
 {
-    "message": {
-        "Items": [
-            {
-                "apiKeyId": "key-abc123",
-                "name": "CI/CD Pipeline Key",
-                "userId": "service-account@example.com",
-                "enabled": true,
-                "dateCreated": "2026-03-15T10:30:00Z",
-                "expiresAt": "2027-03-15T10:30:00Z"
-            }
-        ]
-    }
+    "Items": [
+        {
+            "apiKeyId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "apiKeyName": "CI/CD Pipeline Key",
+            "description": "Automation key for the deployment pipeline",
+            "userId": "service-account@example.com",
+            "createdBy": "admin@example.com",
+            "createdAt": "2026-03-15T10:30:00+00:00",
+            "updatedAt": "2026-03-15T10:30:00+00:00",
+            "expiresAt": "2027-03-15T10:30:00Z",
+            "isActive": "true"
+        }
+    ],
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
 
 :::note
 The API key secret value is only returned once during creation and cannot be retrieved afterwards.
+:::
+
+:::note[A bounded page can be empty]
+DynamoDB reports a continuation key whenever a read stops at its limit, so a listing whose size is an exact multiple of the page bound ends with a `NextToken` and an empty `Items` array. Treat an absent `NextToken`, not an empty page, as the end of the listing.
 :::
 
 ---
@@ -602,24 +826,28 @@ GET /auth/api-keys/{apiKeyId}
 
 ### Create an API key
 
+Creates an API key bound to the `userId` in the request body. The key acts as that user and carries that user's roles, which makes this an administrative route.
+
 ```
 POST /auth/api-keys
 ```
 
 #### Request body
 
-| Field       | Type   | Required | Description                    |
-| ----------- | ------ | -------- | ------------------------------ |
-| `name`      | string | Yes      | Display name for the API key   |
-| `userId`    | string | Yes      | User to associate the key with |
-| `expiresAt` | string | No       | Expiration date (ISO 8601)     |
+| Field         | Type   | Required | Description                                           |
+| ------------- | ------ | -------- | ----------------------------------------------------- |
+| `apiKeyName`  | string | Yes      | Display name for the API key                          |
+| `userId`      | string | Yes      | User the key acts as; any user with a role assignment |
+| `description` | string | Yes      | Description of the API key                            |
+| `expiresAt`   | string | No       | Expiration date (ISO 8601)                            |
 
 #### Request body example
 
 ```json
 {
-    "name": "CI/CD Pipeline Key",
+    "apiKeyName": "CI/CD Pipeline Key",
     "userId": "service-account@example.com",
+    "description": "Automation key for the deployment pipeline",
     "expiresAt": "2027-03-15T10:30:00Z"
 }
 ```
@@ -628,17 +856,21 @@ POST /auth/api-keys
 
 ```json
 {
-    "message": {
-        "apiKeyId": "key-abc123",
-        "apiKeySecret": "vams_ak_xxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "name": "CI/CD Pipeline Key",
-        "userId": "service-account@example.com"
-    }
+    "apiKeyId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "apiKeyName": "CI/CD Pipeline Key",
+    "description": "Automation key for the deployment pipeline",
+    "userId": "service-account@example.com",
+    "createdBy": "admin@example.com",
+    "createdAt": "2026-03-15T10:30:00+00:00",
+    "updatedAt": "2026-03-15T10:30:00+00:00",
+    "expiresAt": "2027-03-15T10:30:00Z",
+    "isActive": "true",
+    "apiKey": "vams_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 }
 ```
 
 :::warning[Store the secret securely]
-The `apiKeySecret` value is only returned during creation. Store it securely -- it cannot be retrieved again.
+The plaintext `apiKey` value is only returned during creation. Store it securely -- it cannot be retrieved again.
 :::
 
 ---
@@ -657,11 +889,13 @@ PUT /auth/api-keys/{apiKeyId}
 
 #### Request body
 
-| Field       | Type    | Required | Description               |
-| ----------- | ------- | -------- | ------------------------- |
-| `name`      | string  | No       | Updated display name      |
-| `enabled`   | boolean | No       | Enable or disable the key |
-| `expiresAt` | string  | No       | Updated expiration date   |
+| Field         | Type   | Required | Description                             |
+| ------------- | ------ | -------- | --------------------------------------- |
+| `description` | string | No       | Updated description                     |
+| `expiresAt`   | string | No       | Updated expiration date (ISO 8601)      |
+| `isActive`    | string | No       | `"true"` or `"false"` to enable/disable |
+
+At least one of `description`, `expiresAt`, or `isActive` must be provided. The API key name is immutable after creation.
 
 ---
 
@@ -684,6 +918,105 @@ DELETE /auth/api-keys/{apiKeyId}
     "message": "API key deleted successfully"
 }
 ```
+
+---
+
+## User (self-service) API keys
+
+The `/auth/user/api-keys` routes are the self-service variant of the API key endpoints. They allow users to manage their own keys without administrative access:
+
+-   All operations are scoped to keys owned by the requesting user. Other users' keys are never listed, and direct access to them returns not-found.
+-   Created keys are always tied to the authenticated caller -- there is no `userId` field.
+-   An **expiration date is required** on creation and may be at most **365 days** from creation.
+-   Updates cannot clear the expiration and cannot set it beyond 365 days from the key's **original creation date**. After the window elapses, the user must create a new key (rotation).
+
+The administrative routes ([`/auth/api-keys`](#api-keys)) cover every user's keys, accept a `userId` on creation, and treat the expiration date as optional. They are reserved for administrator roles.
+
+### List your API keys
+
+```
+GET /auth/user/api-keys
+```
+
+Returns the same response shape as the admin list, filtered to the requesting user's keys.
+
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                    |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
+| `maxItems`      | number | No       | `3000`  | Maximum number of keys in one response (1-3000). Values above 3000 are clamped. |
+| `pageSize`      | number | No       | `1000`  | Number of keys read per page. Clamped to `maxItems`.                            |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                        |
+
+`NextToken` and `truncated` behave exactly as they do on [`GET /auth/api-keys`](#list-api-keys), including the empty-final-page case.
+
+---
+
+### Get one of your API keys
+
+```
+GET /auth/user/api-keys/{apiKeyId}
+```
+
+#### Path parameters
+
+| Parameter  | Type   | Required | Description        |
+| ---------- | ------ | -------- | ------------------ |
+| `apiKeyId` | string | Yes      | API key identifier |
+
+---
+
+### Create a self-service API key
+
+```
+POST /auth/user/api-keys
+```
+
+#### Request body
+
+| Field         | Type   | Required | Description                                                |
+| ------------- | ------ | -------- | ---------------------------------------------------------- |
+| `apiKeyName`  | string | Yes      | Display name for the API key (immutable after creation)    |
+| `description` | string | Yes      | Description of the API key                                 |
+| `expiresAt`   | string | Yes      | Expiration date (ISO 8601), at most 365 days from creation |
+
+#### Request body example
+
+```json
+{
+    "apiKeyName": "My Automation Key",
+    "description": "Personal automation scripts",
+    "expiresAt": "2027-03-15T10:30:00Z"
+}
+```
+
+The response matches the admin create response; the plaintext key is returned exactly once.
+
+---
+
+### Update one of your API keys
+
+```
+PUT /auth/user/api-keys/{apiKeyId}
+```
+
+#### Request body
+
+| Field         | Type   | Required | Description                                                             |
+| ------------- | ------ | -------- | ----------------------------------------------------------------------- |
+| `description` | string | No       | Updated description                                                     |
+| `expiresAt`   | string | No       | Updated expiration (within 365 days of key creation; cannot be cleared) |
+| `isActive`    | string | No       | `true` or `false` to enable/disable the key                             |
+
+---
+
+### Delete one of your API keys
+
+```
+DELETE /auth/user/api-keys/{apiKeyId}
+```
+
+Deletes the key when it is owned by the requesting user; other users' keys return not-found.
 
 ---
 

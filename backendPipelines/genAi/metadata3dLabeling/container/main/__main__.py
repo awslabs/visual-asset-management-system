@@ -3,6 +3,7 @@
 
 import json
 import logging
+import os
 import sys
 from .pipelines import core
 from .utils.pipeline.objects import PipelineStatus
@@ -14,13 +15,20 @@ log.set_log_level(logging.INFO)
 def main():
     core.hello()
 
+    # The uid the work actually runs under. This image declares no USER, so it reports 0 — which is
+    # what makes it the live negative control for the sibling containers that do declare one: a uid
+    # line that never prints reads identically to one reporting a non-root account.
+    log.get_logger().info(
+        "container.runtime_uid uid=%s euid=%s", os.getuid(), os.geteuid()
+    )
+
     # run core application
     if sys.argv[1] == "localTest":
         #Local Test input
         testStageNameInput = sys.argv[2]
         testInput = "{\"jobName\": \"XXX\", \"stages\": [{\"type\": \""+testStageNameInput+"\", \"inputFile\": {\"bucketName\": \"XXX\", \"objectKey\": \"XXX\", \"fileExtension\": \"XXX\"}, \
             \"outputFiles\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}, \"outputMetadata\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}, \
-            \"temporaryFiles\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}}], \"inputMetadata\":\"\", \"inputParameters\":\"\", \
+            \"temporaryFiles\": {\"bucketName\": \"XXX\", \"objectDir\": \"XXX\"}}], \"inputMetadataS3Location\":\"\", \"inputConfigurationS3Location\":\"\", \
             \"externalSfnTaskToken\":\"\", \"localTest\":\"True\"}"
 
         response = core.run(json.loads(testInput))

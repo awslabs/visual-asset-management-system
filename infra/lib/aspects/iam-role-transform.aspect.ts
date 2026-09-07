@@ -84,6 +84,16 @@ export class IamRoleTransform implements cdk.IAspect {
         const returnNameRaw = this.prefix + uniqueResourceName + deploymentIdentifierId;
 
         if (returnNameRaw.length <= 63) return returnNameRaw;
-        else return returnNameRaw.substring(0, 63);
+        // When the name exceeds the 63-char IAM limit, truncate the MIDDLE
+        // (uniqueResourceName) rather than the tail, so the deployment-identifying
+        // suffix (the region, and account if re-enabled above) is always preserved.
+        // Truncating from the front would drop that suffix and let roles from
+        // different deployments collide on the same name.
+        const overflow = returnNameRaw.length - 63;
+        const truncatedUnique = uniqueResourceName.substring(
+            0,
+            Math.max(0, uniqueResourceName.length - overflow)
+        );
+        return this.prefix + truncatedUnique + deploymentIdentifierId;
     }
 }

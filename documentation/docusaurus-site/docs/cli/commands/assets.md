@@ -118,6 +118,39 @@ vamscli assets archive <ASSET_ID> [OPTIONS]
 
 ---
 
+## assets unarchive
+
+Unarchive an asset (restore from soft delete). Restores the asset record so it appears in normal listings again. The asset's files remain archived by default; pass `--unarchive-files` to also restore the files that the asset archive operation archived.
+
+```bash
+vamscli assets unarchive <ASSET_ID> [OPTIONS]
+```
+
+| Option              | Type | Required | Description                                                    |
+| ------------------- | ---- | -------- | -------------------------------------------------------------- |
+| `ASSET_ID`          | TEXT | Yes      | Asset ID to unarchive (positional)                             |
+| `-d`, `--database`  | TEXT | Yes      | Database ID containing the asset                               |
+| `--reason`          | TEXT | No       | Reason for unarchiving                                         |
+| `--unarchive-files` | Flag | No       | Also restore the files archived by the asset archive operation |
+| `--json-input`      | TEXT | No       | JSON input file path or JSON string                            |
+| `--json-output`     | Flag | No       | Output raw JSON response                                       |
+
+```bash
+vamscli assets unarchive my-asset -d my-database
+vamscli assets unarchive my-asset -d my-database --unarchive-files
+vamscli assets unarchive my-asset -d my-database --reason "Restoring for review"
+```
+
+:::note
+Only archived assets can be unarchived. Use `vamscli assets get <ASSET_ID> -d <DB> --show-archived` to confirm an asset's archived state.
+:::
+
+:::note
+`--unarchive-files` restores only the files that were archived by the asset archive itself (tracked by `assetArchive` provenance in the file version history). Files archived individually beforehand always stay archived — restore those with `vamscli file unarchive`. Assets archived before provenance tracking have no restorable file set, so no files are restored for them.
+:::
+
+---
+
 ## assets delete
 
 Permanently delete an asset and all associated data.
@@ -158,8 +191,9 @@ vamscli assets download [LOCAL_PATH] [OPTIONS]
 | `--flatten-download-tree`          | Flag    | No          | Ignore folder structure, download flat                                              |
 | `--asset-preview`                  | Flag    | No          | Download only the asset preview file                                                |
 | `--file-previews`                  | Flag    | No          | Additionally download file preview files                                            |
-| `--asset-version-id`               | TEXT    | No          | Download from a specific version by ID                                              |
-| `--asset-version-alias`            | TEXT    | No          | Download from a specific version by alias                                           |
+| `--asset-version-id`               | TEXT    | No          | Download files from a specific asset version snapshot (whole set)                   |
+| `--asset-version-alias`            | TEXT    | No          | Download files from a specific asset version by alias (whole set)                   |
+| `--version-id`                     | TEXT    | No          | S3 version ID for a single `--file-key` (per-file version)                          |
 | `--asset-link-children-tree-depth` | INTEGER | No          | Traverse child link tree to specified depth                                         |
 | `--shareable-links-only`           | Flag    | No          | Return presigned URLs without downloading                                           |
 | `--parallel-downloads`             | INTEGER | No          | Max parallel downloads (default: 5)                                                 |
@@ -168,8 +202,12 @@ vamscli assets download [LOCAL_PATH] [OPTIONS]
 | `--hide-progress`                  | Flag    | No          | Hide download progress display                                                      |
 | `--json-output`                    | Flag    | No          | Output raw JSON response                                                            |
 
-:::note
-`--asset-version-id` and `--asset-version-alias` are mutually exclusive. When provided, downloads retrieve files as they existed in the specified version rather than the current state.
+:::note[Version Selection]
+`--asset-version-id` and `--asset-version-alias` are mutually exclusive and pin the whole download (folder, tree, or entire asset) to that asset version snapshot — the file list itself reflects the files as they existed in that version. `--version-id` selects a specific S3 version of a single `--file-key` and cannot be combined with the asset-version flags. With no version option, the latest version of each file is downloaded.
+:::
+
+:::tip[Bulk URL Generation]
+Multi-file downloads and `--shareable-links-only` generate presigned URLs through the bulk download API (up to 1,500 files per request), so large assets prepare in a handful of API calls rather than one per file. Files that cannot be signed (missing or archived) are reported and skipped.
 :::
 
 ```bash
@@ -182,6 +220,8 @@ vamscli assets download /local/path -d my-db -a my-asset --asset-version-alias "
 vamscli assets download -d my-db -a my-asset --shareable-links-only
 vamscli assets download /local/path -d my-db -a my-asset --asset-link-children-tree-depth 2
 ```
+
+The command exits non-zero when any file did not arrive, so a partial transfer is distinguishable from a complete one. The report still goes to stdout: `overall_success` gives the outcome, and each entry in `failed_downloads` names a file in `relative_key` with the reason in `error`. A file the service declines to issue a download URL for is counted as a failure like any other — an asset that is not distributable, for example, lists its files but permits none of them to be fetched, and that reads as `failed_downloads` entries rather than an empty success. When nothing at all could be prepared, the error message names the reason.
 
 ---
 
@@ -199,6 +239,7 @@ vamscli assets export [OPTIONS]
 | `-a`, `--asset-id`                       | TEXT    | Yes      | Root asset ID to export                                |
 | `--auto-paginate` / `--no-auto-paginate` | Flag    | No       | Enable/disable automatic pagination (default: enabled) |
 | `--max-assets`                           | INTEGER | No       | Maximum assets per page (1-1000, default: 100)         |
+| `--max-files`                            | INTEGER | No       | Maximum files per page (1-10000, default: 2000)        |
 | `--starting-token`                       | TEXT    | No       | Pagination token from previous response                |
 | `--no-fetch-relationships`               | Flag    | No       | Skip fetching relationships (single asset only)        |
 | `--fetch-entire-subtrees`                | Flag    | No       | Fetch complete descendant tree (all levels)            |
@@ -211,6 +252,14 @@ vamscli assets export [OPTIONS]
 | `--no-file-metadata`                     | Flag    | No       | Exclude file metadata                                  |
 | `--no-asset-link-metadata`               | Flag    | No       | Exclude asset link metadata                            |
 | `--no-asset-metadata`                    | Flag    | No       | Exclude asset metadata                                 |
+| `--download-files`                       | Flag    | No       | Download files to a local directory                    |
+| `--local-path`                           | PATH    | No       | Local directory (required with `--download-files`)     |
+| `--organize-by-asset`                    | Flag    | No       | Save files flat within a per-asset subdirectory        |
+| `--flatten-downloads`                    | Flag    | No       | Save all files flat in `--local-path`                  |
+| `--parallel-downloads`                   | INTEGER | No       | Max parallel downloads (default: 5)                    |
+| `--download-timeout`                     | INTEGER | No       | Download timeout per file in seconds (default: 300)    |
+| `--hide-download-progress`               | Flag    | No       | Hide download progress display                         |
+| `--json-input`                           | TEXT    | No       | JSON input file path or JSON string with all options   |
 | `--json-output`                          | Flag    | No       | Output raw JSON response                               |
 
 ```bash
@@ -218,7 +267,55 @@ vamscli assets export -d my-database -a my-asset
 vamscli assets export -d my-database -a my-asset --fetch-entire-subtrees --json-output > export.json
 vamscli assets export -d my-database -a my-asset --file-extensions .gltf --file-extensions .bin --generate-presigned-urls
 vamscli assets export -d my-database -a my-asset --no-fetch-relationships
+vamscli assets export -d my-database -a my-asset --download-files --local-path ./export --organize-by-asset
 ```
+
+:::note[Downloading files as part of an export]
+`--download-files` exports the asset data and retrieves the files in a single command, using the same parallel download manager as `assets download`. It requires `--local-path`, and it enables `--generate-presigned-urls` automatically.
+
+The two organization flags require `--download-files`, are mutually exclusive, and control the local layout:
+
+-   Default — files are written to `LOCAL_PATH/ASSET_ID/` with their asset folder structure preserved.
+-   `--organize-by-asset` — files are written flat into `LOCAL_PATH/ASSET_ID/`.
+-   `--flatten-downloads` — files from every exported asset are written flat into `LOCAL_PATH/`.
+    :::
+
+:::note[Exporting an asset with more files than one page carries]
+`--max-files` bounds the files one page returns across all of its assets, so a page can end before `--max-assets` assets. An asset holding more files than the budget is returned over successive pages, each resuming its file list where the last one stopped.
+
+`--auto-paginate` (the default) follows those pages and merges each asset's files into a single entry, so the combined output holds one record per asset with its complete file list. With `--no-auto-paginate`, an entry whose file list is partial reports `files_truncated`; pass the returned token to `--starting-token` to retrieve the rest of that asset before the export moves on to its siblings.
+:::
+
+---
+
+## assets history
+
+List the lifecycle history records for an asset. Records are returned newest first and cover create, edit, archive, unarchive, and permanent delete operations, each with the acting user and a snapshot of the asset fields after the operation. Records backfilled by the deployment data migration are marked as migrated.
+
+```bash
+vamscli assets history [OPTIONS]
+```
+
+| Option             | Type    | Required | Description                                       |
+| ------------------ | ------- | -------- | ------------------------------------------------- |
+| `-d`, `--database` | TEXT    | Yes      | Database ID containing the asset                  |
+| `-a`, `--asset`    | TEXT    | Yes      | Asset ID to get history for                       |
+| `--page-size`      | INTEGER | No       | Number of items per page                          |
+| `--max-items`      | INTEGER | No       | Maximum total items (only with `--auto-paginate`) |
+| `--starting-token` | TEXT    | No       | Token for manual pagination                       |
+| `--auto-paginate`  | Flag    | No       | Automatically fetch all items                     |
+| `--json-input`     | TEXT    | No       | JSON input file path or JSON string               |
+| `--json-output`    | Flag    | No       | Output raw JSON response                          |
+
+```bash
+vamscli assets history -d my-database -a my-asset
+vamscli assets history -d my-database -a my-asset --auto-paginate --json-output
+vamscli assets history -d my-database -a my-asset --page-size 50
+```
+
+:::note
+History records persist across permanent deletion. If an asset is permanently deleted and later recreated with the same asset ID, the prior history (including the `permanentDelete` record) remains visible for that ID. History for a permanently deleted asset ID that has not been recreated returns a 404.
+:::
 
 ---
 
@@ -254,13 +351,13 @@ List all versions for an asset. Archived versions are hidden by default.
 vamscli asset-version list [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                                         |
-| ------------------ | ---- | -------- | ------------------------------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                                         |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                            |
-| `--show-archived`  | Flag | No       | Include archived versions                                           |
-| Pagination options |      | No       | `--page-size`, `--max-items`, `--starting-token`, `--auto-paginate` |
-| `--json-output`    | Flag | No       | Output raw JSON response                                            |
+| Option             | Type | Required | Description                                                                        |
+| ------------------ | ---- | -------- | ---------------------------------------------------------------------------------- |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                                                        |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                                           |
+| `--show-archived`  | Flag | No       | Include archived versions                                                          |
+| Pagination options |      | No       | `--page-size` (maximum 1000), `--max-items`, `--starting-token`, `--auto-paginate` |
+| `--json-output`    | Flag | No       | Output raw JSON response                                                           |
 
 ---
 
@@ -355,6 +452,10 @@ vamscli asset-links get --asset-link-id <UUID>
 vamscli asset-links update --asset-link-id <UUID> --tags new-tag
 vamscli asset-links delete --asset-link-id <UUID>
 ```
+
+:::note[Reading a large tree]
+A `--tree-view` listing walks at most 100 levels and 10,000 assets. When it reaches either ceiling, the output says the tree is incomplete (`treeTruncated` in `--json-output`) — list the links of an asset further down the tree for the rest of it. Links whose asset could not be read are reported separately from unauthorized ones, under `Unresolved Assets` (`unresolvedCounts` in `--json-output`), and usually clear on a retry.
+:::
 
 ---
 

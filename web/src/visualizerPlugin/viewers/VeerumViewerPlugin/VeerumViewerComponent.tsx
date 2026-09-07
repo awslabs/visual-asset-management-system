@@ -23,6 +23,8 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerControllerRef = useRef<any>(null);
+    // Aborted on unmount so a reachability check in flight does not outlive the viewer.
+    const abortControllerRef = useRef<AbortController | null>(null);
     const initializationRef = useRef(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
@@ -217,7 +219,16 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             // All other file types - use PointCloudModel with Potree metadata path
                             // This allows the plugin viewer system to control supported file types
                             // and makes it easier to add new point cloud formats later
-                            const potreeFileKey = fileKey + "/preview/PotreeViewer/metadata.json";
+                            // Pass only the asset-relative path (not the databaseId or the leading
+                            // assetId). The stream endpoint prepends {databaseId}/{assetLocationKey}
+                            // to resolve the database-scoped per-file aux preview location. If
+                            // fileKey is the full, assetId-prefixed key, strip that leading segment.
+                            let relativeFileKey = fileKey;
+                            if (relativeFileKey.startsWith(assetId + "/")) {
+                                relativeFileKey = relativeFileKey.slice(assetId.length + 1);
+                            }
+                            const potreeFileKey =
+                                relativeFileKey + "/preview/PotreeViewer/metadata.json";
                             const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
 
                             console.log(`VEERUM Viewer: Validating point cloud URL ${assetUrl}`);
@@ -228,6 +239,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                 const response = await fetch(assetUrl, {
                                     method: "HEAD", // Use HEAD to avoid downloading the full file
                                     headers: headers,
+                                    signal: abortControllerRef.current?.signal,
                                 });
 
                                 // Check for successful response (2xx) or redirect (3xx)
@@ -352,11 +364,15 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             }
         };
 
+        abortControllerRef.current = new AbortController();
         initViewer();
 
         // Cleanup function
         return () => {
             console.log("VEERUM Viewer: Cleaning up");
+            // Stop any reachability check still in flight before disposing the controller.
+            abortControllerRef.current?.abort();
+            abortControllerRef.current = null;
             if (viewerControllerRef.current) {
                 try {
                     viewerControllerRef.current.dispose?.();

@@ -5,7 +5,18 @@
 
 html,
 body {
-    touch-action: none;
+    /* No `touch-action` restriction here on purpose.
+     *
+     * This carried `touch-action: none` from the initial commit, and because the effective touch-action
+     * for a gesture is the intersection of the values along the ancestor chain, a `none` at the root
+     * suppresses the browser's touch behaviour for the ENTIRE page no matter what descendants declare.
+     * That disabled pinch-to-zoom everywhere — and `html` is also the app's real scroll container, so it
+     * disabled swipe-to-scroll with it. A Firefox-only `@-moz-document` override was added below to get
+     * scrolling back in that one browser, which left the application behaving differently there and hid
+     * how broad the restriction was.
+     *
+     * Surfaces that genuinely own their gestures opt out individually instead — see the viewer canvas
+     * rule further down. */
     overflow-x: hidden;
     background-color: var(--vams-bg-primary);
     color: var(--vams-text-primary);
@@ -13,12 +24,23 @@ body {
     padding: 0;
 }
 
-/* Firefox-specific rule to enable scrolling */
-@-moz-document url-prefix() {
-    html,
-    body {
-        touch-action: auto; /* Enable scrolling in Firefox */
-    }
+/* Reserve the vertical scrollbar's space at all times so opening a modal/drawer (which locks body
+   scroll) does not remove the scrollbar and shift the fixed header, leaving a gap on the right. */
+html {
+    scrollbar-gutter: stable;
+}
+
+/* The 3D, point-cloud and splat viewers interpret drag and pinch inside their own canvas, so the
+   browser must not also pan or zoom the page while a gesture is happening there. Declared on the canvas
+   rather than on the document, which is the difference that matters: the restriction now covers exactly
+   the element that needs it and the rest of the application keeps native pinch-zoom and touch scrolling.
+
+   Declared here rather than relying on the viewer libraries, several of which set `touch-action: none`
+   on their own canvas — that is convenient but not guaranteed, and it varies by library and version. */
+.visualizer-container canvas,
+.visualizer-container-canvas,
+.visualizer-container-canvases canvas {
+    touch-action: none;
 }
 
 body {
@@ -146,6 +168,13 @@ code {
     margin-top: -20px;
     margin-bottom: -20px;
     box-sizing: border-box;
+}
+
+// The negative margins above offset page-level padding on the asset view page;
+// inside the file viewer modal they pull the viewer under the modal header
+.file-viewer-modal-content .visualizer-container {
+    margin-top: 0;
+    margin-bottom: 0;
 }
 
 .visualizer-footer {

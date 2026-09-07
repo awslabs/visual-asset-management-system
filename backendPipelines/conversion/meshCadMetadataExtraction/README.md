@@ -15,10 +15,6 @@ This pipeline extracts comprehensive metadata from CAD and Mesh files using CADQ
 -   OBJ (.obj) - Wavefront OBJ mesh format
 -   PLY (.ply) - Polygon File Format
 -   GLTF/GLB (.gltf, .glb) - GL Transmission Format
--   3MF (.3mf) - 3D Manufacturing Format
--   XAML (.xaml) - XAML 3D format
--   3DXML (.3dxml) - Dassault Systèmes 3DXML format
--   DAE (.dae) - COLLADA format
 -   XYZ (.xyz) - Point cloud format
 
 ## Extracted Metadata
@@ -55,7 +51,7 @@ The pipeline accepts an input S3 URI to a CAD or mesh file and outputs a JSON me
 
 ### Output
 
-The pipeline generates a JSON file containing the extracted metadata with the naming pattern `{original_filename}_metadata.json`.
+The pipeline generates a JSON file containing the extracted metadata, named after the input file's path within its asset with `.attribute.json` appended (`parts/housing/pump.stl.attribute.json`). The write-back step reads that name and applies the contents to that file as file-level attributes.
 
 ## Implementation
 

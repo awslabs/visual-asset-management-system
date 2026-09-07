@@ -19,6 +19,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
@@ -35,7 +36,12 @@ export function buildSubscriptionService(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "subscriptionService";
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.subscription.${name}.lambda_handler`,
@@ -51,19 +57,13 @@ export function buildSubscriptionService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
-        },
+        environment: {},
     });
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: [
                 "sns:CreateTopic",
-                "sns:ListTopics",
                 "sns:Subscribe",
                 "sns:DeleteTopic",
                 "sns:ListSubscriptionsByTopic",
@@ -82,6 +82,7 @@ export function buildSubscriptionService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -110,11 +111,7 @@ export function buildCheckSubscriptionFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
@@ -122,6 +119,7 @@ export function buildCheckSubscriptionFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -135,7 +133,9 @@ export function buildUnSubscribeFunction(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "unsubscribeService";
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.subscription.${name}.lambda_handler`,
@@ -151,17 +151,12 @@ export function buildUnSubscribeFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: [
-                "sns:ListTopics",
                 "sns:Subscribe",
                 "sns:DeleteTopic",
                 "sns:ListSubscriptionsByTopic",
@@ -179,5 +174,6 @@ export function buildUnSubscribeFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }

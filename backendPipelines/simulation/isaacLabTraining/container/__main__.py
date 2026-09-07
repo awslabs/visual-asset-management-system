@@ -18,33 +18,46 @@ import traceback
 import boto3
 from utils.aws.s3 import S3Client
 from utils.training.config import PipelineConfig
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 # EFS mount path for checkpoints
 EFS_CHECKPOINT_PATH = "/mnt/efs/checkpoints"
 LOCAL_LOG_PATH = "/workspace/isaaclab/logs"
+
+# Package formats pip can install from a downloaded archive
+ENVIRONMENT_PACKAGE_SUFFIXES = (".tar.gz", ".tgz", ".zip", ".whl")
 
 # Get region from environment (set by Batch job definition)
 AWS_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-west-2"))
 
 
 def get_job_uuid_from_output_path(output_s3_path: str) -> str:
-    """Extract job UUID from output S3 path.
-    
-    Output path format: .../output/{uuid}/files/
-    Returns the UUID for organizing files under {uuid}/ prefix.
-    """
+    """The execution id encoded in the output S3 path (``.../output/{executionId}/files/``), or ``""``."""
     if not output_s3_path:
         return ""
-    # Path ends with /files/, UUID is second-to-last segment
+    # Path ends with /files/, execution id is the second-to-last segment
     parts = output_s3_path.rstrip("/").split("/")
     if len(parts) >= 2 and parts[-1] == "files":
         return parts[-2]
     return ""
 
 
+def resolve_output_base_path(output_s3_path: str) -> str:
+    """Output prefix for all written files, with a trailing slash."""
+    if not output_s3_path:
+        return ""
+    return output_s3_path if output_s3_path.endswith("/") else output_s3_path + "/"
+
+
 def get_sfn_client():
     """Create Step Functions client with proper error handling."""
-    return boto3.client("stepfunctions", region_name=AWS_REGION)
+    return boto3.client("stepfunctions", region_name=AWS_REGION, config=retry_config)
 
 
 def send_task_failure(task_token: str, error: str, cause: str):
@@ -180,8 +193,7 @@ def main():
 
 def run_pipeline():
     if len(sys.argv) < 2:
-        print("Usage: python __main__.py '<job_config_json>'")
-        sys.exit(1)
+        raise ValueError("Usage: python __main__.py '<job_config_json>'")
 
     job_config = json.loads(sys.argv[1])
     config = PipelineConfig.from_dict(job_config)
@@ -198,16 +210,12 @@ def run_pipeline():
     
     if config.mode == "train":
         print(f"Max Iterations: {config.max_iterations}")
-        print(f"Num Nodes: {config.num_nodes}")
     else:
         print(f"Policy: {config.policy_s3_uri}")
         print(f"Num Episodes: {config.num_episodes}")
         print(f"Record Video: {config.record_video}")
     
     print("=" * 60)
-
-    # Setup multi-node if needed (training only)
-    node_info = setup_multi_node(config) if config.mode == "train" else None
 
     s3 = S3Client()
 
@@ -220,7 +228,7 @@ def run_pipeline():
 
     # Execute based on mode
     if config.mode == "train":
-        run_training(config, s3, node_info, job_config)
+        run_training(config, s3, job_config)
     elif config.mode == "evaluate":
         run_evaluation(config, s3, job_config)
     else:
@@ -234,11 +242,11 @@ def run_pipeline():
     }
 
 
-def run_training(config: PipelineConfig, s3: S3Client, node_info: dict, job_config: dict):
+def run_training(config: PipelineConfig, s3: S3Client, job_config: dict):
     """Execute training workflow."""
     checkpoint_dir = setup_checkpoint_dir(config)
-    
-    cmd = build_training_command(config, checkpoint_dir, node_info)
+
+    cmd = build_training_command(config, checkpoint_dir)
     print(f"Executing: {' '.join(cmd)}")
 
     result = subprocess.run(cmd, cwd="/workspace/isaaclab", capture_output=False) # nosemgrep: dangerous-subprocess-use-audit
@@ -246,10 +254,11 @@ def run_training(config: PipelineConfig, s3: S3Client, node_info: dict, job_conf
     if result.returncode != 0:
         print(f"ERROR: Training failed with exit code {result.returncode}")
         upload_logs(s3, config)
-        sys.exit(result.returncode)
+        # Raise rather than exit: main() owns the Step Functions failure callbacks, and
+        # SystemExit would bypass them and leave the workflow task waiting for its timeout.
+        raise RuntimeError(f"Training failed with exit code {result.returncode}")
 
-    if node_info["is_main"]:
-        upload_training_results(s3, config, checkpoint_dir, job_config)
+    upload_training_results(s3, config, checkpoint_dir, job_config)
 
     print("Training complete")
 
@@ -267,7 +276,7 @@ def run_evaluation(config: PipelineConfig, s3: S3Client, job_config: dict):
     if result.returncode != 0:
         print(f"ERROR: Evaluation failed with exit code {result.returncode}")
         upload_logs(s3, config)
-        sys.exit(result.returncode)
+        raise RuntimeError(f"Evaluation failed with exit code {result.returncode}")
 
     upload_evaluation_results(s3, config, job_config)
     print("Evaluation complete")
@@ -275,47 +284,30 @@ def run_evaluation(config: PipelineConfig, s3: S3Client, job_config: dict):
 
 def download_policy(s3: S3Client, config: PipelineConfig) -> str:
     """Download policy file from VAMS.
-    
-    Policy S3 URI is provided by the Lambda (openPipeline) which discovers
-    the .pt file location in the VAMS asset bucket.
+
+    The policy S3 URI reaches here from the Lambda (openPipeline), which resolves it from a relative
+    checkpointPath, an operator-supplied policyS3Uri, or by discovering the newest .pt in the asset.
+    The Lambda constrains it to the executing asset's own bucket in every case, because the file is
+    deserialized by torch.load in this container.
     """
     policy_path = "/tmp/policy.pt"
-    
+
     if not config.policy_s3_uri:
         raise ValueError(
             "No policy S3 URI provided. The Lambda should have discovered and passed "
             "the policy file location. Check openPipeline Lambda logs."
         )
-    
+
     print(f"Downloading policy from: {config.policy_s3_uri}")
     from urllib.parse import urlparse
     parsed = urlparse(config.policy_s3_uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"Policy must be an s3:// URI: {config.policy_s3_uri}")
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
     s3.client.download_file(bucket, key, policy_path)
     print(f"Policy downloaded to {policy_path}")
     return policy_path
-
-
-def setup_multi_node(config: PipelineConfig) -> dict:
-    """Setup multi-node parallel communication."""
-    node_index = int(os.environ.get("AWS_BATCH_JOB_NODE_INDEX", "0"))
-    num_nodes = int(os.environ.get("AWS_BATCH_JOB_NUM_NODES", "1"))
-    main_host = os.environ.get("AWS_BATCH_JOB_MAIN_NODE_PRIVATE_IPV4_ADDRESS", "")
-
-    is_main = node_index == 0
-
-    print(f"Node Index: {node_index}/{num_nodes - 1}")
-    print(f"Is Main Node: {is_main}")
-    if main_host:
-        print(f"Main Node IP: {main_host}")
-
-    return {
-        "node_index": node_index,
-        "num_nodes": num_nodes,
-        "main_host": main_host,
-        "is_main": is_main,
-    }
 
 
 def setup_checkpoint_dir(config: PipelineConfig) -> str:
@@ -332,45 +324,70 @@ def setup_checkpoint_dir(config: PipelineConfig) -> str:
 
 def download_and_install_custom_environment(s3: S3Client, s3_uri: str):
     """Download a custom environment package from S3 and install it.
-    
+
     Args:
         s3: S3Client instance
-        s3_uri: Full S3 URI to the environment package (.tar.gz, .zip, or .whl)
+        s3_uri: Full S3 URI to the environment package (.tar.gz, .tgz, .zip, or .whl)
+
+    The install runs with build isolation disabled so it builds against the backend already
+    present in the image rather than fetching one. A package whose dependencies are not already
+    installed fails here rather than mid-run.
     """
     from urllib.parse import urlparse
-    
+
     parsed = urlparse(s3_uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"Custom environment must be an s3:// URI: {s3_uri}")
+
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
     filename = os.path.basename(key)
+    if not filename.endswith(ENVIRONMENT_PACKAGE_SUFFIXES):
+        raise ValueError(
+            f"Unsupported custom environment package '{filename}'. Supported formats: "
+            f"{', '.join(ENVIRONMENT_PACKAGE_SUFFIXES)}"
+        )
     local_path = f"/tmp/{filename}"
-    
+
     print(f"Downloading {filename} from s3://{bucket}/{key}")
     s3.client.download_file(bucket, key, local_path)
-    
+
     print(f"Installing custom environment: {local_path}")
     result = subprocess.run(
-        ["/isaac-sim/python.sh", "-m", "pip", "install", "-e", local_path],
+        ["/isaac-sim/python.sh", "-m", "pip", "install", "--no-build-isolation", local_path],
         capture_output=True,
         text=True
     )
-    
+
     if result.returncode == 0:
         print(f"Successfully installed {filename}")
     else:
         raise RuntimeError(f"Failed to install custom environment {filename}: {result.stderr}")
 
 
-def build_training_command(
-    config: PipelineConfig, checkpoint_dir: str, node_info: dict
-) -> list:
+def resolve_script(rl_library: str, script_map: dict) -> str:
+    """The IsaacLab script for an RL library.
+
+    An unrecognized library is rejected rather than substituted: falling back would run the whole
+    job with a different library than asked for and report success, leaving checkpoints the
+    requested library cannot load.
+    """
+    if rl_library not in script_map:
+        raise ValueError(
+            f"Unsupported rlLibrary '{rl_library}'. Supported libraries: "
+            f"{', '.join(sorted(script_map))}"
+        )
+    return script_map[rl_library]
+
+
+def build_training_command(config: PipelineConfig, checkpoint_dir: str) -> list:
     """Build the IsaacLab training command."""
     script_map = {
         "rsl_rl": "scripts/reinforcement_learning/rsl_rl/train.py",
         "rl_games": "scripts/reinforcement_learning/rl_games/train.py",
         "skrl": "scripts/reinforcement_learning/skrl/train.py",
     }
-    script = script_map.get(config.rl_library, script_map["rsl_rl"])
+    script = resolve_script(config.rl_library, script_map)
 
     cmd = [
         "./isaaclab.sh",
@@ -388,9 +405,6 @@ def build_training_command(
     if config.seed is not None:
         cmd.extend(["--seed", str(config.seed)])
 
-    if node_info["num_nodes"] > 1:
-        cmd = build_multi_node_command(cmd, node_info)
-
     return cmd
 
 
@@ -406,7 +420,7 @@ def build_evaluation_command(config: PipelineConfig, policy_path: str) -> list:
         "rl_games": "scripts/reinforcement_learning/rl_games/play.py",
         "skrl": "scripts/reinforcement_learning/skrl/play.py",
     }
-    script = script_map.get(config.rl_library, script_map["rsl_rl"])
+    script = resolve_script(config.rl_library, script_map)
 
     # Calculate total steps from user-configurable parameters
     total_steps = config.num_episodes * config.steps_per_episode
@@ -431,45 +445,23 @@ def build_evaluation_command(config: PipelineConfig, policy_path: str) -> list:
     return cmd
 
 
-def build_multi_node_command(base_cmd: list, node_info: dict) -> list:
-    """Wrap command with torchrun for multi-node training."""
-    torchrun_cmd = [
-        "torchrun",
-        f"--nnodes={node_info['num_nodes']}",
-        f"--node_rank={node_info['node_index']}",
-        "--nproc_per_node=1",
-    ]
-
-    if node_info["main_host"]:
-        torchrun_cmd.extend([
-            f"--master_addr={node_info['main_host']}",
-            "--master_port=29500",
-        ])
-
-    script_idx = base_cmd.index("-p") + 1
-    script_and_args = base_cmd[script_idx:]
-
-    return torchrun_cmd + script_and_args
-
-
 def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir: str, job_config: dict):
     """Upload trained policy and checkpoints to VAMS asset bucket.
-    
-    Output structure (files organized under job UUID for easy identification):
-    - {output_s3_path}/{uuid}/checkpoints/*.pt (model checkpoints)
-    - {output_s3_path}/{uuid}/metrics.csv (training metrics from TensorBoard)
-    - {output_s3_path}/{uuid}/*.txt (converted .diff files)
-    - {output_s3_path}/{uuid}/training-config.json (input configuration)
+
+    Output structure:
+    - {output_s3_path}checkpoints/*.pt (model checkpoints)
+    - {output_s3_path}metrics.csv (training metrics from TensorBoard)
+    - {output_s3_path}*.txt (converted .diff files)
+    - {output_s3_path}train-config.json (input configuration)
     """
     if not config.output_s3_path:
         print("No output S3 path configured, skipping upload")
         return
 
-    # Get job UUID for organizing output files
+    base_output_path = resolve_output_base_path(config.output_s3_path)
     job_uuid = get_job_uuid_from_output_path(config.output_s3_path)
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
-    print(f"Uploading training results to {base_output_path}")
+
+    print(f"Uploading training results for execution {job_uuid} to {base_output_path}")
 
     # Upload model checkpoints
     checkpoint_output_path = f"{base_output_path}checkpoints/"
@@ -487,33 +479,33 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
             s3.upload_file(policy_path, s3_path)
 
     # Upload logs
-    upload_logs(s3, config, job_uuid)
-    
+    upload_logs(s3, config)
+
     # Upload input config
-    upload_config(s3, config, job_config, job_uuid)
+    upload_config(s3, config, job_config)
 
 
 def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: dict):
     """Upload evaluation results to VAMS asset bucket.
-    
-    Output structure (files organized under job UUID for easy identification):
-    - {output_s3_path}/{uuid}/metrics.csv (evaluation metrics from TensorBoard)
-    - {output_s3_path}/{uuid}/*.txt (converted .diff files)
-    - {output_s3_path}/{uuid}/videos/*.mp4 (evaluation videos)
-    - {output_s3_path}/{uuid}/evaluation-config.json (input configuration)
-    
-    Note: Videos are always generated because --video flag is required for
-    play.py to terminate. See ISAACLAB_CLI_REFERENCE.md for details.
+
+    Output structure:
+    - {output_s3_path}metrics.csv (evaluation metrics from TensorBoard)
+    - {output_s3_path}*.txt (converted .diff files)
+    - {output_s3_path}videos/*.mp4 (evaluation videos, when recordVideo is set)
+    - {output_s3_path}evaluate-config.json (input configuration)
+
+    Note: Videos are always generated because the --video flag is required for play.py to
+    terminate, so recordVideo decides whether the recording is uploaded rather than whether it
+    is produced. See ISAACLAB_CLI_REFERENCE.md for details.
     """
     if not config.output_s3_path:
         print("No output S3 path configured, skipping upload")
         return
 
-    # Get job UUID for organizing output files
+    base_output_path = resolve_output_base_path(config.output_s3_path)
     job_uuid = get_job_uuid_from_output_path(config.output_s3_path)
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
-    print(f"Uploading evaluation results to {base_output_path}")
+
+    print(f"Uploading evaluation results for execution {job_uuid} to {base_output_path}")
 
     # Convert TensorBoard events to CSV for VAMS compatibility
     export_tensorboard_to_csv(LOCAL_LOG_PATH)
@@ -539,27 +531,30 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
             except Exception as e:
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
-    # Upload videos - always generated since --video is required for termination
-    videos_output_path = f"{base_output_path}videos/"
-    video_search_paths = [
-        "/tmp/videos/**/*.mp4",
-        "/tmp/videos/**/*.avi",
-        f"{LOCAL_LOG_PATH}/**/videos/**/*.mp4",
-        f"{LOCAL_LOG_PATH}/**/videos/**/*.avi",
-    ]
-    
-    for pattern in video_search_paths:
-        for video_path in glob.glob(pattern, recursive=True):
-            filename = os.path.basename(video_path)
-            s3_path = f"{videos_output_path}{filename}"
-            print(f"Uploading video {video_path} -> {s3_path}")
-            try:
-                s3.upload_file(video_path, s3_path)
-            except Exception as e:
-                print(f"Warning: Failed to upload video {video_path}: {e}")
+    # Upload videos - recorded on every run since --video is required for termination
+    if config.record_video:
+        videos_output_path = f"{base_output_path}videos/"
+        video_search_paths = [
+            "/tmp/videos/**/*.mp4",
+            "/tmp/videos/**/*.avi",
+            f"{LOCAL_LOG_PATH}/**/videos/**/*.mp4",
+            f"{LOCAL_LOG_PATH}/**/videos/**/*.avi",
+        ]
+
+        for pattern in video_search_paths:
+            for video_path in glob.glob(pattern, recursive=True):
+                filename = os.path.basename(video_path)
+                s3_path = f"{videos_output_path}{filename}"
+                print(f"Uploading video {video_path} -> {s3_path}")
+                try:
+                    s3.upload_file(video_path, s3_path)
+                except Exception as e:
+                    print(f"Warning: Failed to upload video {video_path}: {e}")
+    else:
+        print("Record Video disabled, skipping video upload")
 
     # Upload input config
-    upload_config(s3, config, job_config, job_uuid)
+    upload_config(s3, config, job_config)
 
 
 def export_tensorboard_to_csv(log_dir: str) -> str | None:
@@ -661,14 +656,13 @@ def convert_diff_to_txt(log_dir: str) -> list[str]:
     return txt_files
 
 
-def upload_logs(s3: S3Client, config: PipelineConfig, job_uuid: str = ""):
+def upload_logs(s3: S3Client, config: PipelineConfig):
     """Upload logs and metrics to VAMS asset bucket."""
     if not config.output_s3_path:
         return
-    
-    # Determine base output path with job UUID prefix
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
+
+    base_output_path = resolve_output_base_path(config.output_s3_path)
+
     # Convert TensorBoard events to CSV for VAMS compatibility
     export_tensorboard_to_csv(LOCAL_LOG_PATH)
     
@@ -694,11 +688,10 @@ def upload_logs(s3: S3Client, config: PipelineConfig, job_uuid: str = ""):
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
 
-def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict, job_uuid: str = ""):
+def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict):
     """Upload the input configuration to the output directory for reference."""
-    # Determine base output path with job UUID prefix
-    base_output_path = f"{config.output_s3_path}{job_uuid}/" if job_uuid else config.output_s3_path
-    
+    base_output_path = resolve_output_base_path(config.output_s3_path)
+
     # Determine config filename based on mode
     config_filename = f"{config.mode}-config.json"
     config_s3_path = f"{base_output_path}{config_filename}"

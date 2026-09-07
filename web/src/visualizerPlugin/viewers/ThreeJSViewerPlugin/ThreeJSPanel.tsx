@@ -39,6 +39,9 @@ interface ThreeJSPanelProps {
     // Control props
     enable3DSelection: boolean;
     onToggle3DSelection: (enabled: boolean) => void;
+    canSpreadModels?: boolean;
+    spreadModels?: boolean;
+    onToggleSpreadModels?: (spread: boolean) => void;
     // Animation props
     animations?: any[];
     animationPaused?: boolean;
@@ -74,6 +77,9 @@ const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
     onClearSelection,
     enable3DSelection,
     onToggle3DSelection,
+    canSpreadModels,
+    spreadModels,
+    onToggleSpreadModels,
     animations,
     animationPaused,
     onToggleAnimation,
@@ -310,6 +316,9 @@ const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
                         onResetAllMaterials={onResetAllMaterials}
                         enable3DSelection={enable3DSelection}
                         onToggle3DSelection={onToggle3DSelection}
+                        canSpreadModels={canSpreadModels}
+                        spreadModels={spreadModels}
+                        onToggleSpreadModels={onToggleSpreadModels}
                         animations={animations}
                         animationPaused={animationPaused}
                         onToggleAnimation={onToggleAnimation}

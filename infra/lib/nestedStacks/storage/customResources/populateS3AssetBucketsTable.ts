@@ -13,7 +13,7 @@ import { Duration } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 import * as s3AssetBuckets from "../../../helper/s3AssetBuckets";
-import * as ServiceHelper from "../../../../lib/helper/service-helper";
+import { suppressCdkNagLambda } from "../../../helper/security";
 
 /**
  * Creates a custom resource that populates the S3AssetBucketsStorageTable with bucket information
@@ -39,6 +39,7 @@ import json
 import boto3
 import uuid
 import logging
+from botocore.exceptions import ClientError
 
 # Configure logging
 logger = logging.getLogger()
@@ -67,17 +68,41 @@ def get_existing_entries(table_name):
     return existing_entries
 
 def check_bucket_versioning(bucket_name):
-    """Check if bucket has versioning enabled"""
+    """Check whether a bucket has versioning enabled.
+
+    A failure to READ the setting is raised rather than recorded as "not enabled". The two answers are
+    not interchangeable: VAMS stores this flag and uses it to decide whether an asset's file version
+    history can be kept, so a bucket that IS versioned but whose status could not be read is registered
+    as unversioned and stays that way - every later deployment re-reads it and gets the same wrong
+    answer for as long as the grant is missing. The external-bucket documentation also states that a
+    bucket VAMS cannot inspect fails the deployment, so raising is the behaviour the operator was told
+    to expect.
+
+    A genuinely unversioned bucket answers with no Status field and is still reported as False.
+    """
     try:
         response = s3_client.get_bucket_versioning(Bucket=bucket_name)
-        # Status will be 'Enabled' if versioning is enabled
+        # Status is 'Enabled' when versioning is on, 'Suspended' when it was turned off, and absent
+        # when it was never enabled.
         is_versioning_enabled = response.get('Status') == 'Enabled'
         logger.info(f"Bucket {bucket_name} versioning status: {is_versioning_enabled}")
         return is_versioning_enabled
-    except Exception as e:
-        logger.error(f"Error checking versioning for bucket {bucket_name}: {str(e)}")
-        # Default to False if there's an error
-        return False
+    except ClientError as e:
+        code = e.response.get('Error', {}).get('Code', '')
+        http_status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
+        if code in ('AccessDenied', 'AccessDeniedException', 'AllAccessDisabled') or http_status == 403:
+            logger.error(
+                "Access denied reading the versioning configuration of bucket " + str(bucket_name) +
+                ". VAMS cannot determine whether this bucket is versioned, and registering it as "
+                "unversioned would silently disable file version history for its assets. Grant "
+                "s3:GetBucketVersioning on the bucket to this deployment, or remove the bucket from "
+                "app.assetBuckets.externalAssetBuckets."
+            )
+            raise
+        # Anything else - a missing bucket, a region redirect, a throttle - is also a fault the
+        # operator needs to see rather than a versioning answer.
+        logger.error("Error checking versioning for bucket " + str(bucket_name) + ": " + str(e))
+        raise
 
 def lambda_handler(event, context):
     """Main handler function for the Lambda"""
@@ -119,7 +144,11 @@ def lambda_handler(event, context):
             
             # Check if bucket has versioning enabled
             is_versioning_enabled = check_bucket_versioning(bucket_name)
-            
+
+            # Whether this bucket record is the VAMS default (houses all pipeline template + run
+            # I/O data). Resolved at synth time per bucket record; exactly one record is default.
+            is_default = bool(bucket.get('isDefault'))
+
             # Create or update the record in DynamoDB
             table.put_item(
                 Item={
@@ -127,10 +156,11 @@ def lambda_handler(event, context):
                     'bucketName:baseAssetsPrefix': sort_key,
                     'bucketName': bucket_name,
                     'baseAssetsPrefix': prefix,
-                    'isVersioningEnabled': is_versioning_enabled
+                    'isVersioningEnabled': is_versioning_enabled,
+                    'isDefault': is_default
                 }
             )
-            logger.info(f"Successfully added/updated record for bucket: {bucket_name} with versioning status: {is_versioning_enabled}")
+            logger.info(f"Successfully added/updated record for bucket: {bucket_name} (versioning: {is_versioning_enabled}, default: {is_default})")
         
         return {
             'PhysicalResourceId': 'S3AssetBucketsTablePopulator',
@@ -147,20 +177,32 @@ def lambda_handler(event, context):
     // Grant the Lambda function permissions to read/write to the DynamoDB table
     table.grantReadWriteData(populateS3AssetBucketsTableLambda);
 
-    // Grant the Lambda function permissions to check S3 bucket versioning status
-    populateS3AssetBucketsTableLambda.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["s3:GetBucketVersioning"],
-            resources: [`arn:${ServiceHelper.Partition()}:s3:::*`],
-            effect: iam.Effect.ALLOW,
-        })
-    );
-
-    // Prepare bucket data for the custom resource
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+
+    // Grant the Lambda function permissions to check S3 bucket versioning status. Scoped to the
+    // registered asset buckets; a bucket registered under several prefixes yields one ARN.
+    const registeredBucketArns = Array.from(
+        new Set(bucketRecords.map((record) => record.bucket.bucketArn))
+    );
+    if (registeredBucketArns.length > 0) {
+        populateS3AssetBucketsTableLambda.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["s3:GetBucketVersioning"],
+                resources: registeredBucketArns,
+                effect: iam.Effect.ALLOW,
+            })
+        );
+    }
+
+    suppressCdkNagLambda(populateS3AssetBucketsTableLambda);
+
+    // Prepare bucket data for the custom resource. isDefault is resolved per bucket record at synth
+    // time (exactly one record is the VAMS default), so the Lambda writes the flag directly with no
+    // name/ARN matching.
     const bucketData = bucketRecords.map((record) => ({
         bucketName: record.bucket.bucketName,
         prefix: record.prefix || "/",
+        isDefault: !!record.isDefault,
     }));
 
     // Create the custom resource provider

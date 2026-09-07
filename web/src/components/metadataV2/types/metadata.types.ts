@@ -45,8 +45,14 @@ export type EditMode = "normal" | "bulk";
  */
 export interface MetadataRecord {
     metadataKey: string;
-    metadataValue: string;
-    metadataValueType: MetadataValueType;
+    // Both are nullable because the API returns them so. A record stored before either attribute
+    // was recorded carries the key and not the value or the type, and the backend reports the
+    // absent attribute as null rather than inventing one — so the operator can see the row and
+    // repair it. Declaring these non-nullable did not prevent the null arriving; it only stopped
+    // the compiler pointing at the code that would meet it, which is how four call sites came to
+    // dereference a null value directly.
+    metadataValue: string | null;
+    metadataValueType: MetadataValueType | null;
     // Schema enrichment fields (from backend)
     metadataSchemaName?: string;
     metadataSchemaField?: boolean;
@@ -67,13 +73,23 @@ export interface MetadataRowState extends MetadataRecord {
     hasChanges: boolean;
     isNew: boolean;
     isDeleted: boolean;
-    // Edit values (separate from display values)
+    // Edit values (separate from display values).
+    //
+    // `editValue` is NOT nullable: an absent stored value is normalized to "" when the record
+    // becomes a row, because a text input's empty state already means "no value" and the save path
+    // treats empty as acceptable. Threading null through every input component would express
+    // nothing the empty string does not.
+    //
+    // `editType` IS nullable, and deliberately so. There is no type that means "none chosen", and
+    // defaulting it here would re-invent the type the backend stopped inventing — the operator
+    // would save `string` for a row they never classified. Null is what makes the type selector show
+    // no selection, so the operator sees that the choice is theirs.
     editKey: string;
     editValue: string;
-    editType: MetadataValueType;
+    editType: MetadataValueType | null;
     // Original values (for change tracking and history)
     originalValue?: string;
-    originalType?: MetadataValueType;
+    originalType?: MetadataValueType | null;
     // Validation state
     validationError?: string;
 }

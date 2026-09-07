@@ -2,12 +2,13 @@
 
 import click
 import datetime
+import sys
 
 from ..auth.cognito import CognitoAuthenticator
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_api_access, requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
-from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError
+from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError, AuthRoutesError
 
 
 def get_authenticator(config: dict) -> CognitoAuthenticator:
@@ -26,6 +27,61 @@ def get_authenticator(config: dict) -> CognitoAuthenticator:
     return CognitoAuthenticator(region, user_pool_id, client_id)
 
 
+def read_secret_from_stdin() -> str:
+    """Read a credential from stdin, without the trailing newline a pipe or heredoc adds.
+
+    Only CR and LF are stripped, so a credential ending in a space survives intact. The bytes are
+    read directly and decoded as UTF-8 where possible: the writer is often another process (the
+    Isaac Sim and ArcGIS Pro connectors both pipe the credential in) and the console code page a
+    text-mode read would use is not the same on both ends.
+    """
+    buffer = getattr(sys.stdin, 'buffer', None)
+    if buffer is None:
+        return sys.stdin.read().rstrip('\r\n')
+
+    raw = buffer.read()
+    try:
+        secret = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        secret = raw.decode(sys.stdin.encoding or 'utf-8', errors='replace')
+    return secret.rstrip('\r\n')
+
+
+def read_secrets_from_stdin(count: int, names) -> list:
+    """Read `count` newline-separated credentials from stdin, in the order `names` lists them.
+
+    A process has one stdin, so a command that needs two secrets off argv reads them as consecutive
+    lines rather than growing a second stream it cannot have. Decoding matches
+    `read_secret_from_stdin` (UTF-8 from the raw buffer, because the writer is usually another
+    process); only the line terminators are removed, so a credential ending in a space survives.
+    """
+    buffer = getattr(sys.stdin, 'buffer', None)
+    if buffer is None:
+        text = sys.stdin.read()
+    else:
+        raw = buffer.read()
+        try:
+            text = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            text = raw.decode(sys.stdin.encoding or 'utf-8', errors='replace')
+
+    lines = [line.rstrip('\r') for line in text.split('\n')]
+    # A heredoc or `printf '%s\n'` leaves one empty trailing element; an empty secret is rejected
+    # below either way, so dropping it cannot swallow a real value.
+    while lines and lines[-1] == '':
+        lines.pop()
+
+    if len(lines) < count:
+        raise click.BadParameter(
+            f"Expected {count} newline-separated value(s) on stdin, in the order "
+            f"{', '.join(names)}; received {len(lines)}."
+        )
+    for name, value in zip(names, lines):
+        if not value:
+            raise click.BadParameter(f"No {name} was received on stdin")
+    return lines[:count]
+
+
 @click.group()
 def auth():
     """Authentication commands."""
@@ -34,39 +90,92 @@ def auth():
 
 @auth.command()
 @click.option('-u', '--username', help='Username for Cognito authentication')
-@click.option('-p', '--password', help='Password (will prompt if not provided)')
+@click.option('-p', '--password',
+              help='Password, passed on the command line. Not recommended: every argument of a '
+                   'running process is readable from the OS process table. Prefer '
+                   '--password-stdin, or omit both to be prompted.')
+@click.option('--password-stdin', is_flag=True,
+              help='Read the password from stdin instead of the command line')
+@click.option('--new-password',
+              help='New password to set when a forced password change is required (Cognito only), '
+                   'passed on the command line. Not recommended: every argument of a running process '
+                   'is readable from the OS process table. Prefer --new-password-stdin.')
+@click.option('--new-password-stdin', is_flag=True,
+              help='Read the new password from stdin instead of the command line. Combined with '
+                   '--password-stdin, stdin carries two lines: current password, then new.')
 @click.option('--save-credentials', is_flag=True, help='Save credentials for automatic re-authentication')
 @click.option('--user-id', help='User ID for token override authentication')
-@click.option('--token-override', help='Override token for external authentication (requires --user-id)')
+@click.option('--token-override',
+              help='Pre-generated token to use directly, for external IDP or SAML/OIDC-federated '
+                   'logins (requires --user-id). Not recommended: the token is readable from the OS '
+                   'process table. Prefer --token-override-stdin.')
+@click.option('--token-override-stdin', is_flag=True,
+              help='Read the pre-generated token from stdin instead of the command line '
+                   '(requires --user-id)')
 @click.option('--expires-at', help='Token expiration time (Unix timestamp, ISO 8601, or +seconds)')
 @click.option('--skip-version-check', is_flag=True, help='Skip version mismatch confirmation prompts')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_api_access
-def login(ctx: click.Context, username: str, password: str, save_credentials: bool, user_id: str, 
-          token_override: str, expires_at: str, skip_version_check: bool, json_output: bool):
+def login(ctx: click.Context, username: str, password: str, password_stdin: bool, new_password: str,
+          new_password_stdin: bool, save_credentials: bool, user_id: str, token_override: str,
+          token_override_stdin: bool, expires_at: str, skip_version_check: bool, json_output: bool):
     """
-    Authenticate with VAMS using Cognito or token override.
-    
-    This command authenticates you with the VAMS system using AWS Cognito or
-    an external token override. It will handle MFA challenges and password 
-    reset requirements automatically for Cognito authentication.
-    
-    For token override authentication, provide --user-id and --token-override.
-    The token will be saved and validated against the VAMS API.
-    
+    Authenticate with VAMS using Cognito or a token override.
+
+    This command authenticates you with the VAMS system using AWS Cognito or a
+    token override. It will handle MFA challenges and password reset
+    requirements automatically for Cognito authentication.
+
+    Token override is for supplying a pre-generated token directly instead of
+    having the CLI sign you in. Use it for any identity that has no password in
+    the Cognito user pool: an external OAuth identity provider, or a user pool
+    federated to SAML or to OIDC. Any other valid pre-generated token works too
+    (including a Cognito token obtained outside VAMS). To use it, provide
+    --user-id and --token-override-stdin (or --token-override); the token is saved
+    and validated against the VAMS API, not against a particular issuer. A federated
+    user pool still accepts username/password for its native users, such as the
+    initial administrator.
+
+    A credential passed as an option value (-p, --new-password, --token-override) is
+    readable from the OS process table for the lifetime of the command by any other
+    local account. Every option keeps working, but --password-stdin,
+    --new-password-stdin and --token-override-stdin are the recommended
+    non-interactive forms: the credential is read from stdin and never becomes a
+    process argument. One stdin carries the password pair as two lines when both of
+    those flags are set; the token-override form cannot share stdin with a password.
+
+    If Cognito requires a password change on login (for example, on a new
+    account's first sign-in), provide the new password with --new-password-stdin
+    (or --new-password). In interactive mode you will be prompted for it if
+    omitted; with --json-output, it is required when a change is forced.
+
     Examples:
         # Cognito authentication
         vamscli auth login -u john.doe@example.com
-        vamscli auth login -u john.doe@example.com -p mypassword
         vamscli auth login -u john.doe@example.com --save-credentials
-        
+        cat password.txt | vamscli auth login -u john.doe@example.com --password-stdin
+
+        # Discouraged: the password is visible in the OS process table
+        vamscli auth login -u john.doe@example.com -p mypassword
+
+        # First login when a password change is forced by Cognito: two lines on stdin,
+        # temporary password first, then the new one
+        printf '%s\\n%s\\n' "$TEMP" "$NEW" | vamscli auth login -u john.doe@example.com \\
+            --password-stdin --new-password-stdin --json-output
+
+        # Discouraged: both passwords are visible in the OS process table
+        vamscli auth login -u john.doe@example.com -p temp-password --new-password new-password
+
         # Token override authentication
+        echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin
+        echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin --expires-at "+3600"
+
+        # Discouraged: the token is visible in the OS process table
         vamscli auth login --user-id john.doe@example.com --token-override "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-        vamscli auth login --user-id john.doe@example.com --token-override "token123" --expires-at "+3600"
-        
+
         # JSON output
-        vamscli auth login -u john.doe@example.com --json-output
+        vamscli auth login -u john.doe@example.com --password-stdin --json-output
     """
     # Get profile manager from context
     profile_manager = get_profile_manager_from_context(ctx)
@@ -114,6 +223,38 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
         # Version check failure shouldn't block authentication
         output_warning(f"Could not check API version: {e}", json_output)
     
+    # Read the credentials supplied on stdin. There is one stdin, so the token-override form cannot
+    # share it with a password, and no flag combines with its own option form. The password pair CAN
+    # share it: with both flags set, stdin carries two lines in the documented order.
+    if token_override_stdin and (password_stdin or new_password_stdin):
+        error_msg = "--token-override-stdin cannot be combined with a password stdin flag"
+        output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+        raise click.ClickException(error_msg)
+
+    try:
+        if password_stdin and password:
+            raise click.BadParameter("--password cannot be used with --password-stdin")
+        if new_password_stdin and new_password:
+            raise click.BadParameter("--new-password cannot be used with --new-password-stdin")
+        if token_override_stdin and token_override:
+            raise click.BadParameter("--token-override cannot be used with --token-override-stdin")
+
+        if password_stdin and new_password_stdin:
+            password, new_password = read_secrets_from_stdin(2, ("password", "new password"))
+        elif password_stdin:
+            password = read_secret_from_stdin()
+            if not password:
+                raise click.BadParameter("No password was received on stdin")
+        elif new_password_stdin:
+            (new_password,) = read_secrets_from_stdin(1, ("new password",))
+        elif token_override_stdin:
+            token_override = read_secret_from_stdin()
+            if not token_override:
+                raise click.BadParameter("No token was received on stdin")
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Parameters")
+        raise click.ClickException(e.format_message())
+
     # Validate input combinations
     if token_override and not user_id:
         error_msg = "--user-id is required when using --token-override"
@@ -134,29 +275,28 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
             profile_manager.save_override_token(token_override, user_id, expires_at)
             
             # Call login profile API to validate the token and refresh user profile
+            api_client = APIClient(config['api_gateway_url'], profile_manager)
             try:
-                api_client = APIClient(config['api_gateway_url'], profile_manager)
                 login_profile_result = api_client.call_login_profile(user_id)
-                
                 output_status("User profile refreshed successfully.", json_output)
-                
-                # Fetch feature switches after successful validation
-                try:
-                    secure_config_result = api_client.get_secure_config()
-                    profile_manager.save_feature_switches(secure_config_result)
-                    output_status("Feature switches updated successfully.", json_output)
-                except Exception as fs_e:
-                    # Feature switches fetch failure is non-blocking
-                    output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
-                
             except AuthenticationError as e:
                 # If login profile fails with 401/403, credentials are already cleared
                 output_error(e, json_output, error_type="Authentication Error")
                 raise click.ClickException(str(e))
             except Exception as e:
                 # If login profile API fails for other reasons, warn but keep the token
+                # and continue with the rest of the auth process below.
                 output_warning(f"Could not validate token with user profile: {e}", json_output)
-            
+
+            # Fetch feature switches independently of the login-profile result
+            try:
+                secure_config_result = api_client.get_secure_config()
+                profile_manager.save_feature_switches(secure_config_result)
+                output_status("Feature switches updated successfully.", json_output)
+            except Exception as fs_e:
+                # Feature switches fetch failure is non-blocking
+                output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
+
             # Prepare result
             result = {
                 'success': True,
@@ -221,7 +361,7 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
         # Prompt for password if not provided (only in CLI mode)
         if not password:
             if json_output:
-                error_msg = "--password is required when using --json-output"
+                error_msg = "--password-stdin or --password is required when using --json-output"
                 output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
                 raise click.ClickException(error_msg)
             password = click.prompt("Password", hide_input=True)
@@ -231,9 +371,13 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
             authenticator = get_authenticator(config)
             
             output_status("Authenticating with Cognito...", json_output)
-            
-            # Authenticate user
-            auth_result = authenticator.authenticate(username, password)
+
+            # Authenticate user. In JSON mode we must not block on interactive
+            # prompts, so unmet challenges (e.g. a forced password change with no
+            # --new-password) surface as a clean error instead.
+            auth_result = authenticator.authenticate(
+                username, password, new_password=new_password, interactive=not json_output
+            )
             
             # Add user_id to the auth result
             auth_result['user_id'] = username
@@ -242,28 +386,28 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
             profile_manager.save_auth_profile(auth_result)
             
             # Call login profile API to refresh user profile and validate authentication
+            api_client = APIClient(config['api_gateway_url'], profile_manager)
             try:
-                api_client = APIClient(config['api_gateway_url'], profile_manager)
                 login_profile_result = api_client.call_login_profile(username)
                 output_status("User profile refreshed successfully.", json_output)
-                
-                # Fetch feature switches after successful authentication
-                try:
-                    secure_config_result = api_client.get_secure_config()
-                    profile_manager.save_feature_switches(secure_config_result)
-                    output_status("Feature switches updated successfully.", json_output)
-                except Exception as fs_e:
-                    # Feature switches fetch failure is non-blocking
-                    output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
-                    
             except AuthenticationError as e:
                 # If login profile fails with 401/403, credentials are already cleared
                 output_error(e, json_output, error_type="Authentication Error")
                 raise click.ClickException(str(e))
             except Exception as e:
-                # If login profile API fails for other reasons, warn but don't fail authentication
+                # If login profile API fails for other reasons, warn but don't fail
+                # authentication or block the rest of the auth process below.
                 output_warning(f"Could not refresh user profile: {e}", json_output)
-            
+
+            # Fetch feature switches independently of the login-profile result
+            try:
+                secure_config_result = api_client.get_secure_config()
+                profile_manager.save_feature_switches(secure_config_result)
+                output_status("Feature switches updated successfully.", json_output)
+            except Exception as fs_e:
+                # Feature switches fetch failure is non-blocking
+                output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
+
             # Save credentials if requested
             if save_credentials:
                 profile_manager.save_credentials({
@@ -306,6 +450,337 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
         except Exception as e:
             output_error(e, json_output, error_type="Unexpected Error")
             raise click.ClickException(str(e))
+
+
+@auth.command('change-password')
+@click.option('-u', '--username', required=True, help='Username for Cognito authentication')
+@click.option('--old-password',
+              help='Current password, passed on the command line. Not recommended: every argument '
+                   'of a running process is readable from the OS process table. Prefer '
+                   '--old-password-stdin, or omit both to be prompted.')
+@click.option('--old-password-stdin', is_flag=True,
+              help='Read the current password from stdin instead of the command line')
+@click.option('--new-password',
+              help='New password, passed on the command line. Not recommended: every argument of a '
+                   'running process is readable from the OS process table. Prefer '
+                   '--new-password-stdin, or omit both to be prompted.')
+@click.option('--new-password-stdin', is_flag=True,
+              help='Read the new password from stdin instead of the command line. Combined with '
+                   '--old-password-stdin, stdin carries two lines: current password, then new.')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_api_access
+def change_password(ctx: click.Context, username: str, old_password: str, old_password_stdin: bool,
+                    new_password: str, new_password_stdin: bool, json_output: bool):
+    """
+    Change your Cognito password when you know your current password.
+
+    Use this command when you know your current password and want to set a new
+    one. It signs in with the current password and sets the new one. It also
+    satisfies a forced password change when Cognito requires one (for example,
+    on a new account's first sign-in).
+
+    If you have forgotten your current password, use 'vamscli auth
+    forgot-password' instead, which resets it using a code emailed by Cognito.
+
+    This command is only available for deployments that use AWS Cognito
+    authentication. In interactive mode you are prompted for any password not
+    provided on the command line; with --json-output, both passwords must be
+    supplied up front, by option or on stdin.
+
+    A password passed as an option value is readable from the OS process table by any other local
+    account, and is recorded in shell history and CI logs. --old-password / --new-password keep
+    working, but the stdin forms are the recommended non-interactive path. With both stdin flags set,
+    stdin carries two newline-separated values in this order: the current password, then the new one.
+
+    Examples:
+        vamscli auth change-password -u john.doe@example.com
+
+        # Recommended: neither password reaches the process table
+        printf '%s\\n%s\\n' "$OLD" "$NEW" | vamscli auth change-password -u john.doe@example.com \\
+            --old-password-stdin --new-password-stdin --json-output
+        echo "$NEW" | vamscli auth change-password -u john.doe@example.com --new-password-stdin
+
+        # Discouraged: the passwords are visible in the OS process table
+        vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
+        vamscli auth change-password -u john.doe@example.com --old-password old --new-password new --json-output
+    """
+    # Get profile manager from context
+    profile_manager = get_profile_manager_from_context(ctx)
+
+    # Check if setup has been completed
+    if not profile_manager.has_config():
+        profile_name = profile_manager.profile_name
+        error_msg = (
+            f"Configuration not found for profile '{profile_name}'. "
+            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    # Load configuration
+    try:
+        config = profile_manager.load_config()
+    except Exception as e:
+        output_error(e, json_output, error_type="Configuration Error")
+        raise click.ClickException(f"Failed to load configuration: {e}")
+
+    # Verify Cognito is configured for this environment
+    amplify_config = config.get('amplify_config', {})
+    cognito_user_pool_id = amplify_config.get('cognitoUserPoolId')
+
+    if not cognito_user_pool_id or cognito_user_pool_id in ['undefined', 'null', '']:
+        error_msg = (
+            "Password changes are only supported for Cognito authentication. "
+            "This deployment uses external authentication."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    # Read whichever passwords were piped in. One stdin carries both when both flags are set, as
+    # two lines in the documented order.
+    try:
+        if old_password_stdin and old_password:
+            raise click.BadParameter("--old-password cannot be used with --old-password-stdin")
+        if new_password_stdin and new_password:
+            raise click.BadParameter("--new-password cannot be used with --new-password-stdin")
+        if old_password_stdin and new_password_stdin:
+            old_password, new_password = read_secrets_from_stdin(
+                2, ("current password", "new password"))
+        elif old_password_stdin:
+            (old_password,) = read_secrets_from_stdin(1, ("current password",))
+        elif new_password_stdin:
+            (new_password,) = read_secrets_from_stdin(1, ("new password",))
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Parameters")
+        raise click.ClickException(e.format_message())
+
+    # Collect passwords. In JSON mode we must not block on prompts, so both
+    # passwords are required up front.
+    if json_output:
+        if not old_password or not new_password:
+            error_msg = ("Both passwords are required when using --json-output: supply "
+                         "--old-password-stdin / --new-password-stdin (recommended) or "
+                         "--old-password / --new-password")
+            output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+            raise click.ClickException(error_msg)
+    else:
+        if not old_password:
+            old_password = click.prompt("Current password", hide_input=True)
+        if not new_password:
+            new_password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
+
+    try:
+        authenticator = get_authenticator(config)
+
+        output_status("Authenticating with Cognito...", json_output)
+
+        # Sign in with the current password. If the account is in a forced
+        # password-change state, the new password is applied while answering the
+        # challenge, so a separate change call is unnecessary.
+        auth_result = authenticator.authenticate(
+            username, old_password, new_password=new_password, interactive=False
+        )
+
+        if not auth_result.get('password_changed_via_challenge'):
+            output_status("Changing password...", json_output)
+            authenticator.change_password(
+                auth_result['access_token'], old_password, new_password
+            )
+
+        result = {
+            'success': True,
+            'user_id': username,
+            'message': 'Password changed successfully'
+        }
+
+        def format_change_password_result(data):
+            """Format change-password result for CLI display."""
+            return f"  User ID: {data['user_id']}"
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Password changed successfully!",
+            cli_formatter=format_change_password_result
+        )
+
+    except AuthenticationError as e:
+        output_error(e, json_output, error_type="Password Change Error")
+        raise click.ClickException(str(e))
+    except Exception as e:
+        output_error(e, json_output, error_type="Unexpected Error")
+        raise click.ClickException(str(e))
+
+
+@auth.command('forgot-password')
+@click.option('-u', '--username', required=True, help='Username for Cognito authentication')
+@click.option('--code', help='Verification code emailed by Cognito (confirm step)')
+@click.option('--new-password',
+              help='New password to set (confirm step), passed on the command line. Not '
+                   'recommended: every argument of a running process is readable from the OS '
+                   'process table. Prefer --new-password-stdin.')
+@click.option('--new-password-stdin', is_flag=True,
+              help='Read the new password from stdin instead of the command line (confirm step)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_api_access
+def forgot_password(ctx: click.Context, username: str, code: str, new_password: str,
+                    new_password_stdin: bool, json_output: bool):
+    """
+    Reset a forgotten Cognito password using an emailed verification code.
+
+    Use this command when you do not know your current password. If you do know
+    your current password and simply want to change it, use 'vamscli auth
+    change-password' instead.
+
+    This is a two-step, self-service flow that does not require knowing the
+    current password:
+
+    1. Request a code: run with --username only. Cognito emails a verification
+       code to the user's verified email or phone.
+    2. Confirm the reset: run again with --code and --new-password to set the
+       new password.
+
+    In interactive mode, after the code is requested you are prompted for the
+    code and new password to complete both steps in one invocation. With
+    --json-output, prompts are not possible: provide --code and --new-password
+    together to confirm, or neither to only request a code.
+
+    This command is only available for deployments that use AWS Cognito
+    authentication. After a successful reset, sign in with 'vamscli auth login'.
+
+    A password passed as an option value is readable from the OS process table by any other local
+    account, and is recorded in shell history and CI logs. --new-password keeps working, but
+    --new-password-stdin is the recommended non-interactive form.
+
+    Examples:
+        # Step 1: request a verification code
+        vamscli auth forgot-password -u john.doe@example.com
+
+        # Step 2 (recommended): the password never reaches the process table
+        echo "$NEW" | vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password-stdin
+
+        # Step 2, discouraged: the password is visible in the OS process table
+        vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
+
+        # JSON output (request only)
+        vamscli auth forgot-password -u john.doe@example.com --json-output
+    """
+    # Get profile manager from context
+    profile_manager = get_profile_manager_from_context(ctx)
+
+    # Read a piped new password before the phase decision below, which branches on its presence.
+    try:
+        if new_password_stdin:
+            if new_password:
+                raise click.BadParameter("--new-password cannot be used with --new-password-stdin")
+            (new_password,) = read_secrets_from_stdin(1, ("new password",))
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid Parameters")
+        raise click.ClickException(e.format_message())
+
+    # Check if setup has been completed
+    if not profile_manager.has_config():
+        profile_name = profile_manager.profile_name
+        error_msg = (
+            f"Configuration not found for profile '{profile_name}'. "
+            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    # Load configuration
+    try:
+        config = profile_manager.load_config()
+    except Exception as e:
+        output_error(e, json_output, error_type="Configuration Error")
+        raise click.ClickException(f"Failed to load configuration: {e}")
+
+    # Verify Cognito is configured for this environment
+    amplify_config = config.get('amplify_config', {})
+    cognito_user_pool_id = amplify_config.get('cognitoUserPoolId')
+
+    if not cognito_user_pool_id or cognito_user_pool_id in ['undefined', 'null', '']:
+        error_msg = (
+            "Password resets are only supported for Cognito authentication. "
+            "This deployment uses external authentication."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    try:
+        authenticator = get_authenticator(config)
+
+        # Confirm phase: a code and new password complete the reset directly.
+        if code or new_password:
+            if not code or not new_password:
+                error_msg = "--code and --new-password must be provided together to confirm a reset"
+                output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+                raise click.ClickException(error_msg)
+            _confirm_forgot_password(authenticator, username, code, new_password, json_output)
+            return
+
+        # Request phase: send a verification code.
+        output_status(f"Requesting password reset code for '{username}'...", json_output)
+        request_result = authenticator.forgot_password(username)
+        destination = request_result.get('code_delivery', {}).get('Destination')
+
+        # In JSON mode we cannot prompt, so stop after requesting the code.
+        if json_output:
+            result = {
+                'code_sent': True,
+                'user_id': username,
+                'code_delivery': request_result.get('code_delivery', {}),
+                'message': 'Verification code sent. Re-run with --code and --new-password to confirm.'
+            }
+            output_result(result, json_output)
+            return
+
+        # Interactive mode: prompt for the code and new password to finish.
+        if destination:
+            output_status(f"Verification code sent to {destination}.", json_output)
+        else:
+            output_status("Verification code sent.", json_output)
+
+        code = click.prompt("Enter verification code")
+        new_password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
+        _confirm_forgot_password(authenticator, username, code, new_password, json_output)
+
+    except AuthenticationError as e:
+        output_error(e, json_output, error_type="Password Reset Error")
+        raise click.ClickException(str(e))
+    except click.ClickException:
+        raise
+    except Exception as e:
+        output_error(e, json_output, error_type="Unexpected Error")
+        raise click.ClickException(str(e))
+
+
+def _confirm_forgot_password(authenticator, username: str, code: str, new_password: str,
+                             json_output: bool):
+    """Confirm a forgot-password reset and report the result."""
+    output_status("Resetting password...", json_output)
+    authenticator.confirm_forgot_password(username, code, new_password)
+
+    result = {
+        'success': True,
+        'user_id': username,
+        'message': 'Password reset successfully'
+    }
+
+    def format_forgot_password_result(data):
+        """Format forgot-password result for CLI display."""
+        lines = [f"  User ID: {data['user_id']}"]
+        lines.append("  Sign in with 'vamscli auth login' using your new password.")
+        return '\n'.join(lines)
+
+    output_result(
+        result,
+        json_output,
+        success_message="✓ Password reset successfully!",
+        cli_formatter=format_forgot_password_result
+    )
 
 
 @auth.command()
@@ -624,31 +1099,61 @@ def refresh(ctx: click.Context, json_output: bool):
 
 @auth.command('set-override')
 @click.option('-u', '--user-id', required=True, help='User ID associated with the override token')
-@click.option('--token', required=True, help='Override token to use for authentication')
+@click.option('--token',
+              help='Override token, passed on the command line. Not recommended: every argument of '
+                   'a running process is readable from the OS process table. Prefer --token-stdin.')
+@click.option('--token-stdin', is_flag=True,
+              help='Read the override token from stdin instead of the command line')
 @click.option('--expires-at', help='Token expiration time (Unix timestamp, ISO 8601, or +seconds)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-def set_override(ctx: click.Context, user_id: str, token: str, expires_at: str, json_output: bool):
+def set_override(ctx: click.Context, user_id: str, token: str, token_stdin: bool, expires_at: str,
+                 json_output: bool):
     """
     Set an override token for external authentication.
-    
+
     This command allows you to use tokens from external authentication systems
     that are not natively supported by the CLI. The token will be used directly
     in API requests without any refresh capability.
-    
+
+    A token passed as an option value is readable from the OS process table by any other local
+    account, and is recorded in shell history and CI logs. --token keeps working, but
+    --token-stdin is the recommended form: the token is read from stdin and never reaches argv.
+
     Expiration formats supported:
     - Unix timestamp: 1735689599
     - ISO 8601: 2024-12-31T23:59:59Z
     - Relative: +3600 (3600 seconds from now)
-    
+
     Examples:
+        # Recommended: the token never reaches the process table
+        echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin
+        echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin --expires-at "+3600"
+
+        # Discouraged: the token is visible in the OS process table
         vamscli auth set-override -u john.doe@example.com --token "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
         vamscli auth set-override -u john.doe@example.com --token "token123" --expires-at "2024-12-31T23:59:59Z"
         vamscli auth set-override -u john.doe@example.com --token "token123" --expires-at "+3600" --json-output
     """
     # Get profile manager from context
     profile_manager = get_profile_manager_from_context(ctx)
-    
+
+    # --token is no longer Click-`required`, so exactly one of the two forms is enforced here.
+    if token_stdin:
+        if token:
+            error_msg = "--token cannot be used with --token-stdin"
+            output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+            raise click.ClickException(error_msg)
+        token = read_secret_from_stdin()
+        if not token:
+            error_msg = "No token was received on stdin"
+            output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+            raise click.ClickException(error_msg)
+    elif not token:
+        error_msg = "Provide the override token with --token-stdin (recommended) or --token"
+        output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+        raise click.ClickException(error_msg)
+
     # Check if setup has been completed
     if not profile_manager.has_config():
         error_msg = "Configuration not found. Please run 'vamscli setup <api-gateway-url>' first."
@@ -664,30 +1169,29 @@ def set_override(ctx: click.Context, user_id: str, token: str, expires_at: str, 
         
         # Call login profile API to validate the token and refresh user profile
         validation_successful = False
+        api_client = APIClient(config['api_gateway_url'], profile_manager)
         try:
-            api_client = APIClient(config['api_gateway_url'], profile_manager)
             login_profile_result = api_client.call_login_profile(user_id)
-            
             output_status("User profile refreshed successfully.", json_output)
             validation_successful = True
-            
-            # Fetch feature switches after successful validation
-            try:
-                secure_config_result = api_client.get_secure_config()
-                profile_manager.save_feature_switches(secure_config_result)
-                output_status("Feature switches updated successfully.", json_output)
-            except Exception as fs_e:
-                # Feature switches fetch failure is non-blocking
-                output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
-            
         except AuthenticationError as e:
             # If login profile fails with 401/403, credentials are already cleared
             output_error(e, json_output, error_type="Authentication Error")
             raise click.ClickException(str(e))
         except Exception as e:
             # If login profile API fails for other reasons, warn but keep the token
+            # and continue with the rest of the auth process below.
             output_warning(f"Could not validate token with user profile: {e}", json_output)
-        
+
+        # Fetch feature switches independently of the login-profile result
+        try:
+            secure_config_result = api_client.get_secure_config()
+            profile_manager.save_feature_switches(secure_config_result)
+            output_status("Feature switches updated successfully.", json_output)
+        except Exception as fs_e:
+            # Feature switches fetch failure is non-blocking
+            output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
+
         # Prepare result
         result = {
             'success': True,
@@ -782,3 +1286,101 @@ def clear_override(ctx: click.Context, json_output: bool):
         success_message="✓ Override token cleared successfully!",
         cli_formatter=format_clear_override_result
     )
+
+
+@auth.group()
+def routes():
+    """API route listing commands."""
+    pass
+
+
+@routes.command(name='list')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def list_routes(ctx: click.Context, json_output: bool):
+    """
+    List all available VAMS API routes.
+
+    Returns the full list of API endpoint routes with their HTTP methods and
+    categories from the deployment's master route definitions. Useful when
+    authoring API authorization constraints (route__path values).
+
+    Examples:
+        vamscli auth routes list
+        vamscli auth routes list --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    output_status("Retrieving API routes...", json_output)
+
+    try:
+        result = api_client.list_api_routes()
+        route_list = result.get('routes', [])
+        output_result(
+            result,
+            json_output,
+            success_message=f"Found {len(route_list)} API route(s)",
+            cli_formatter=format_api_routes_output
+        )
+    except AuthRoutesError as e:
+        output_error(e, json_output, error_type="Auth Routes Error")
+        raise click.ClickException(str(e))
+
+
+@routes.command(name='allowed')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def allowed_routes(ctx: click.Context, json_output: bool):
+    """
+    List the VAMS API routes the current user is authorized to call.
+
+    Returns the API routes (and the HTTP methods on each) permitted by the
+    current user's authorization constraints.
+
+    Examples:
+        vamscli auth routes allowed
+        vamscli auth routes allowed --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    output_status("Retrieving allowed API routes...", json_output)
+
+    try:
+        result = api_client.list_allowed_api_routes()
+        route_list = result.get('routes', [])
+        output_result(
+            result,
+            json_output,
+            success_message=f"Found {len(route_list)} allowed API route(s)",
+            cli_formatter=format_api_routes_output
+        )
+    except AuthRoutesError as e:
+        output_error(e, json_output, error_type="Auth Routes Error")
+        raise click.ClickException(str(e))
+
+
+def format_api_routes_output(result):
+    """Format API routes list for CLI output, grouped by category."""
+    route_list = result.get('routes', [])
+    if not route_list:
+        return "No API routes found."
+
+    by_category = {}
+    for route in route_list:
+        by_category.setdefault(route.get('category', 'other'), []).append(route)
+
+    lines = []
+    for category in sorted(by_category):
+        lines.append(f"  {category}:")
+        for route in sorted(by_category[category], key=lambda r: r.get('path', '')):
+            methods = ','.join(route.get('methods', []))
+            lines.append(f"    {methods:25s} {route.get('path', '')}")
+    return '\n'.join(lines)

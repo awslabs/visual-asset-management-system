@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { loadExternalScript } from "../../core/loadExternalScript";
+
 /**
  * Dependency manager for BabylonJS Gaussian Splat Viewer
  * Handles loading and cleanup of BabylonJS dependencies via dynamic script loading
@@ -59,22 +61,10 @@ export class BabylonJSGaussianSplatDependencyManager {
      * Load a script dynamically
      * @param src - Script source URL
      */
+    // Resolving on the mere presence of a tag returned before an in-flight download had executed,
+    // leaving waitForBABYLON to poll for a global that was not there yet.
     private static loadScript(src: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            // Check if script is already loaded
-            const existingScript = document.querySelector(`script[src="${src}"]`);
-            if (existingScript) {
-                resolve();
-                return;
-            }
-
-            const script = document.createElement("script");
-            script.src = src;
-            script.async = true;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+        return loadExternalScript(src, { isReady: () => !!(window as any).BABYLON });
     }
 
     /**

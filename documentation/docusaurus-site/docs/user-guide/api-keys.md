@@ -14,7 +14,7 @@ API keys grant the same level of access as the associated user. Treat API keys w
 
 ### How API keys work
 
-1. An administrator creates an API key and associates it with an existing VAMS user ID.
+1. An administrator creates an API key and associates it with an existing VAMS user ID, or a user creates a self-service key tied to their own user.
 2. The system generates a unique key value prefixed with `vams_`. This value is displayed **only once** at creation time.
 3. The API key is stored as a SHA-256 hash in Amazon DynamoDB. The plaintext key cannot be retrieved after creation.
 4. When the key is used in an API request, the system hashes the provided key, looks up the matching record, and resolves the associated user ID to determine permissions.
@@ -23,11 +23,20 @@ API keys grant the same level of access as the associated user. Treat API keys w
 The user ID specified during API key creation must already have at least one VAMS role assigned. You cannot create an API key for a user with no roles.
 :::
 
+### Admin and self-service modes
+
+The API Key Management page operates in two modes, depending on which API routes your roles grant access to:
+
+-   **All Keys (Admin)** -- View and manage API keys across all users. Keys may be created for any user, and an expiration date is optional.
+-   **My Keys (self-service)** -- View and manage only your own API keys. Created keys are always tied to your user, an **expiration date is required**, and the expiration may be at most **365 days** from the key's creation. Later edits cannot extend the expiration beyond that window -- create a new key to rotate after it elapses.
+
+Users with access to both modes see a toggle at the top of the page.
+
 ---
 
 ## Creating an API key
 
-1. Navigate to **Admin - Auth** > **API Key Management** in the left sidebar.
+1. Navigate to **User** > **API Key Management** in the left sidebar. The page offers an **All Keys (Admin)** mode for administrators and a **My Keys** self-service mode for managing your own keys; users with access to both see a mode toggle.
 2. Choose **Create API Key**.
 3. Complete the form fields:
 
@@ -64,19 +73,23 @@ curl -X GET "https://your-vams-endpoint/api/databases" \
 
 ### With the VAMS CLI
 
-Use the `--token-override` flag with the `auth login` command to authenticate the CLI with an API key:
+Use the `--token-override` option with the `auth login` command to authenticate the CLI with an API key. Pass the key on standard input rather than on the command line -- every argument of a running process is readable from the operating system's process table, so a key given as `--token-override "vams_..."` is exposed to any other user on that machine:
 
 ```bash
-# Authenticate the CLI using an API key
-vamscli auth login --user-id "ci-bot@example.com" --token-override "vams_your-key-here"
+# Authenticate the CLI using an API key (key read from stdin)
+echo "$VAMS_API_KEY" | vamscli auth login --user-id "ci-bot@example.com" --token-override-stdin
 
 # With expiration (recommended for CI/CD)
-vamscli auth login --user-id "ci-bot@example.com" --token-override "vams_your-key-here" --expires-at "+3600"
+echo "$VAMS_API_KEY" | vamscli auth login --user-id "ci-bot@example.com" --token-override-stdin --expires-at "+3600"
 
 # Then use the CLI normally -- all commands authenticate with the API key
 vamscli database list
-vamscli asset list --database-id my-database
+vamscli assets list --database-id my-database
 ```
+
+:::warning[Avoid passing the key as an argument]
+`--token-override "vams_your-key-here"` accepts the key directly, but leaks it to the process table. Prefer `--token-override-stdin` as shown above, and keep the key in a secret variable rather than in the command itself.
+:::
 
 :::tip[CI/CD best practices]
 For CI/CD pipelines, create a dedicated VAMS user with a role that has only the minimum permissions required by the pipeline. Set an expiration date on the API key and rotate it regularly.
@@ -102,6 +115,8 @@ The **API Key Management** page displays all API keys in a table with the follow
 | Active      | Whether the key is currently active or inactive.                    |
 
 Use the text filter at the top of the table to search by name, user ID, or description.
+
+The table requests up to 1000 keys at a time. A deployment holding more than that pages through them with the pagination control below the table, and the header then notes that the text filter and column sorting apply to the page shown rather than to every key. To search or export across all keys, use `vamscli api-key list --auto-paginate --json-output`.
 
 <!-- The API Key Management screenshot is shown above in the Creating an API key section -->
 
@@ -152,3 +167,9 @@ All API key operations (creation, update, deletion) are recorded in the VAMS aud
 :::tip[CLI alternative]
 API key operations can also be performed via the command line. See [CLI Users and Keys Commands](../cli/commands/users-and-keys.md).
 :::
+
+## Related topics
+
+-   [Automating VAMS](automating-vams.md) -- Choosing between the web interface, CLI, AI agents, and the REST API
+-   [Permissions](permissions.md) -- How roles and constraints determine what a key can reach
+-   [User Management](user-management.md) -- Creating the dedicated user an automation key is issued against

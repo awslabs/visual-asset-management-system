@@ -42,8 +42,15 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         showCharsCounter: false,
         showWordsCounter: false,
         showXPathInStatusbar: false,
+        // Jodit's own default width is 'auto', which sizes the editor to its content rather than to
+        // its parent — so the box stops short of the container's right edge however wide the tab is.
+        // The surrounding div is already width:100%, so only Jodit's setting has to change.
+        width: "100%",
         maxWidth: "auto",
         placeholder: "",
+        // Disable the 'source' plugin, which lazy-loads ACE + js-beautify from cdnjs (blocked by
+        // the VAMS CSP). Keeps all script loading same-origin.
+        disablePlugins: ["source"],
         buttons: [
             "bold",
             "italic",
@@ -123,6 +130,19 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                             showMessage({
                                 type: "error",
                                 message: `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`,
+                                dismissible: true,
+                            });
+                        } else {
+                            // Any other failure return (e.g. a 403 "Forbidden" string or false)
+                            // must surface an error instead of falling through silently.
+                            const failureMessage =
+                                typeof items === "string" && items.trim() !== ""
+                                    ? `Failed to load ${Synonyms.comments}: ${items}`
+                                    : `Failed to load ${Synonyms.comments}. You may not have permission to access it.`;
+                            setError(failureMessage);
+                            showMessage({
+                                type: "error",
+                                message: failureMessage,
                                 dismissible: true,
                             });
                         }
@@ -239,6 +259,19 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                 },
             });
             console.log(response);
+            // createComment resolves with [false, message] for a rejected request — a body over
+            // the API's length limit, a comment id that already exists, a permission denial — so
+            // the failure never reaches the catch below and has to be read off the result.
+            if (response[0] === false) {
+                setShowLoadingIcon(false);
+                const reason = response[1] || "Unknown error";
+                showMessage({
+                    type: "error",
+                    message: `Unable to add ${Synonyms.comment}: ${reason}`,
+                    dismissible: true,
+                });
+                return;
+            }
             showMessage({
                 type: "success",
                 message: `${Synonyms.Comment} added successfully`,
@@ -320,7 +353,15 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                                 <td className="commentSectionTableBorder">
                                     <div>
                                         <form onSubmit={addComment}>
-                                            <div className="container">
+                                            {/* No `container` class here: VAMS defines no such rule, so
+                                                the only match is Tailwind's `.container` utility, which
+                                                carries responsive max-widths (640/768/1024/1280/1536px).
+                                                Tailwind is scoped to the orchestration module, but its
+                                                utility CSS is global, so that class capped this
+                                                Cloudscape tab's comment box at 1280px on a wider
+                                                viewport — the editor filled its parent correctly, the
+                                                parent was simply clamped. */}
+                                            <div>
                                                 <div className="commentSectionTextBoxContainer">
                                                     <JoditEditor
                                                         ref={editor}

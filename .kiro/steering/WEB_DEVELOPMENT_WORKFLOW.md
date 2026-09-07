@@ -2,15 +2,17 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **Technology Stack**
 
 | Technology       | Version/Details                                                |
 | ---------------- | -------------------------------------------------------------- |
-| React            | 17.0.2 (NOT React 18)                                          |
-| TypeScript       | 4.4.4                                                          |
-| Vite             | ^6.0.0                                                         |
+| React            | 18.3 (upgraded from 17.0.2)                                    |
+| TypeScript       | ^5.0.0 (upgraded from 4.4.4)                                   |
+| Vite             | ^8.0.0 (upgraded from ^6.0.0)                                  |
 | UI Library       | AWS Cloudscape Design System (`@cloudscape-design/components`) |
 | Auth             | AWS Amplify v6 + `@badgateway/oauth2-client` (dual-mode)       |
 | Routing          | React Router v6 with HashRouter                                |
@@ -22,22 +24,41 @@ This document provides comprehensive guidelines for developing and extending the
 
 ```
 web/
-  package.json              # npm, React 17, Vite scripts
+  package.json              # npm, React 18, Vite scripts
+  e2e/                      # Playwright specs against a deployed stack
   customInstalls/           # Viewer plugin custom install scripts
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
     routes.tsx              # Centralized route table, React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
-    index.tsx               # Entry point, ReactDOM.render
+    index.tsx               # Entry point, createRoot
+
+    features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
+      api/                  # Services + TanStack Query hooks + qk key factory
+                            #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
+                            #   Stepper, Breadcrumb, ConfigEditor, ToastProvider, ...)
+      pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
+                            #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
+      workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor,
+                            #   WorkflowSystemConfigFields, DagPreview, workflowValidation
+      executions/           # ExecutionsBoard, ExecutionDetailPage, ExecutionLogViewer,
+                            #   ExecutionQuickView, ExecuteWorkflowModal, logSearch
+      wizard/               # ExecuteWizard + pipeline/input/review stages, InputFileSelector,
+                            #   MetadataSourceSelector, resolveRestrictions, resolveTemplate
+      types.ts reservedTagKeys.ts
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
 
-    services/               # API and data services (ONLY place apiClient is imported)
+    services/               # API and data services (with features/orchestration/api/, the ONLY
+                            #   places apiClient is imported)
       APIService.ts         # Main API service (~900+ lines, 40+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts
       FileOperationsService.ts
@@ -47,16 +68,15 @@ web/
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
-      WorkflowContext.ts     # NOTE: typo is intentional, do NOT rename
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-      common/               # Shared components
-      containers/
-      createupdate/         # Workflow create/update
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        versions/           # Asset version management
+      common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
       form/
-      interactive/          # Map/geospatial components
       list/
       loading/
       metadata/
@@ -64,22 +84,27 @@ web/
       metadataV2/
       modals/
       search/               # ModernSearchContainer.tsx - main search UI
+      searchSmall/
       selectors/
-      single/               # Single-entity views
+      single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx
       AssetUpload/
-      Assets.tsx
       auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys
       Databases.tsx
       LandingPage.tsx
-      Pipelines.tsx
+      ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/
-      Workflows.tsx
+      Subscription/ Tag/
+      # Orchestration route shells rendering the matching features/orchestration component
+      PipelinesPage2.tsx PipelineBuilderPage.tsx
+      TemplateListPage.tsx TemplateBuilderPage.tsx
+      WorkflowsPage2.tsx WorkflowBuilderPage.tsx WorkflowTriggersPage.tsx
+      ExecutionsPage.tsx ExecutionDetail.tsx
 
-    visualizerPlugin/       # 3D/media viewer plugin system (17 plugins)
+    visualizerPlugin/       # 3D/media viewer plugin system
       core/
         PluginRegistry.ts   # Singleton registry
         types.ts
@@ -88,13 +113,18 @@ web/
       viewers/              # Individual viewer plugins
         manifest.ts
 
-    common/                 # Shared utilities and helpers
+    common/                 # Shared utilities, helpers, and feature-switch constants
+    constants/uploadLimits.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts
     layout/
       Navigation.tsx        # Left sidebar navigation
     utils/
+      apiEndpoint.ts        # Resolves the API base URL
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      sessionManager.ts     # Idle/expiry session handling
     styles/
       theme.css             # CSS custom properties for dark/light theming
+      tailwind.css          # Tailwind entry (scoped content glob; preflight disabled)
 ```
 
 ---
@@ -149,7 +179,7 @@ web/
 -   [ ] **Synonyms compliance**: No hardcoded "Asset"/"Database"/"Comment" in user-visible text
 -   [ ] **HashRouter compliance**: No `BrowserRouter` usage
 -   [ ] **Lazy loading compliance**: All pages lazy-loaded in `routes.tsx`
--   [ ] **React 17 compliance**: No React 18 APIs (`createRoot`, `useId`, etc.)
+-   [ ] **React 18 migration**: Entry point uses `createRoot`; React 18 APIs (`useId`, `useTransition`) allowed in orchestration module
 
 #### **Step 5: Documentation Updates**
 
@@ -179,9 +209,18 @@ const response = await fetch("/api/databases");
 
 When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
 
-### **Rule 2: Use Cloudscape Components with Subpath Imports**
+### **Rule 2: Use Cloudscape Components (with orchestration exception)**
 
-All UI components MUST use AWS Cloudscape Design System. Import from individual subpaths, NEVER from the barrel export.
+The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module (`src/features/orchestration/**`) is built with **Tailwind CSS + Radix UI** (the seed of the future design system) and is Cloudscape-free. This boundary is intentional:
+
+-   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
+-   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. A Cloudscape page that happens to use a class named like a Tailwind utility therefore picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module use a VAMS-defined class or no class at all.
+
+    Real instance: `<div className="container">` wrapped the asset-view comment editor. VAMS defines no `.container` rule, so the only match was Tailwind's `.container` utility and its responsive max-widths (640/768/1024/1280/1536px), which capped the comment box on any wide viewport. The component's own styles gave no hint — the editor filled its parent correctly and the parent was the clamped element — so it was only findable by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
+
+Import Cloudscape from individual subpaths, NEVER from the barrel export.
 
 ```typescript
 // CORRECT -- tree-shakeable individual imports
@@ -221,9 +260,9 @@ const MyPage = React.lazy(() => import("./pages/MyPage"));
 import MyPage from "./pages/MyPage";
 ```
 
-### **Rule 5: No Global State Libraries**
+### **Rule 5: No Global State Libraries (TanStack Query for orchestration server state)**
 
-This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state.
+This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The orchestration module (`features/orchestration/`) uses **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible).
 
 ```typescript
 // CORRECT
@@ -283,13 +322,40 @@ npm run build
 yarn install
 ```
 
-### **Rule 10: React 17 Compatibility**
+#### Keep the platform-specific native bindings in `optionalDependencies`
 
-This project uses React 17.0.2. Do NOT use React 18 APIs:
+`vite build` needs three compiled binaries for the machine running it: **rolldown's** binding (the bundler), **esbuild** (imported directly by the `jsxInJs` plugin in `vite.config.ts`), and **lightningcss** (the CSS minifier used by `vite:css-post`). npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on Linux does **not** add the missing one — so a lockfile written on Windows breaks the Linux CI build with one of:
 
--   No `createRoot` (use `ReactDOM.render`)
--   No `useId`, `useSyncExternalStore`, `useTransition`, `useDeferredValue`
--   No automatic batching assumptions
+```
+Error: Cannot find native binding.
+  cause: Cannot find module '@rolldown/binding-linux-x64-gnu'
+
+[plugin vite:css-post] [lightningcss minify] Cannot find module '../lightningcss.linux-x64-gnu.node'
+```
+
+`web/package.json` declares the other platforms explicitly — `@rolldown/binding-{linux-x64-gnu,darwin-arm64,darwin-x64}`, `@esbuild/{linux-x64,darwin-arm64,darwin-x64}`, and `lightningcss-{linux-x64-gnu,darwin-arm64,darwin-x64}`. Each carries its own `os`/`cpu` constraints, so a developer only installs their own platform's binary.
+
+**The versions are coupled to `vite`/`esbuild`/`lightningcss` and no test catches drift.** When bumping any of them: read the resolved versions with `npm ls rolldown esbuild lightningcss`, re-pin every entry, run `npm install`, then confirm all platforms are still recorded —
+
+```bash
+node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
+```
+
+Expect `darwin`, `linux`, **and** `win32` for all three families. If one is missing, `npm install --package-lock-only --save-optional <pkg>@<version>` adds it; `npm install --force` and the `--os`/`--cpu` flags do **not** repair an already-pruned lockfile.
+
+**Verify a Linux build locally instead of iterating through CI** — copy `package.json`, `package-lock.json`, `index.html`, the Vite/TS/Tailwind/PostCSS/Babel configs, `logo_*.png`, `src/`, and `public/` into a scratch directory, delete the `postinstall` script (viewer clones are not build inputs), then:
+
+```bash
+docker run --rm -v "$B:/app" -w /app node:22 bash -c "npm install --no-audit --no-fund && npm run build.lowmem"
+```
+
+`node:22` matches the GitHub runner. `customInstalls/` is excluded by `vite.config.ts` and is not needed.
+
+`@napi-rs/canvas`, `@parcel/watcher`, and `@unrs/resolver-binding` are also Windows-only in the lockfile and are deliberately **not** pinned — the Linux build succeeds without them (optional canvas rendering, Sass watching, and the ESLint resolver are not loaded by the production build). `infra/` needs the same treatment for `@esbuild/*` (see `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`).
+
+### **Rule 10: React 18 (Upgraded)**
+
+This project uses React 18.3 (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot`. React 18 APIs (`useId`, `useTransition`, `useDeferredValue`) are allowed in the orchestration module but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.
 
 ### **Rule 11: Use appCache, Not Amplify Cache**
 
@@ -303,7 +369,37 @@ import { Cache } from "aws-amplify";
 Cache.setItem("config", data);
 ```
 
-### **Rule 12: Use Dual-Mode Auth Token Utilities**
+### **Rule 12: Permission Graying (Orchestration Module)**
+
+The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+
+```typescript
+const { can } = useAllowedRoutes();
+const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
+<Button disabled={!canDelete}>Permanent Delete</Button>;
+```
+
+### **Rule 13: Toast Notifications (Orchestration Module)**
+
+Every mutation in `features/orchestration/**` reports through `useToast()` (`components/ToastProvider.tsx`) so a failure is always visible and a success is always confirmed. It renders through the **same Cloudscape `Flashbar`** the rest of the app notifies with (`components/search/SearchNotifications/ToastManager.tsx`) — same fixed top-right position, same durations (8s error / 5s otherwise), same shared `ToastNotification` shape from `components/search/types` — so an orchestration notification is indistinguishable from a search one. This is a deliberate exception to the Cloudscape-free rule: that rule governs page content, while the toast layer is a global overlay mounted from `App.tsx`, which already renders Cloudscape. Import from the subpath (`@cloudscape-design/components/flashbar`), never the barrel.
+
+```typescript
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
+
+const toast = useToast();
+try {
+    await archiveMutation.mutateAsync({ databaseId, pipelineId });
+    toast.success("Pipeline archived", { description: pipeline.pipelineName });
+} catch (err) {
+    toast.error("Archive failed", {
+        description: `${pipeline.pipelineName}: ${toastErrorMessage(err)}`,
+    });
+}
+```
+
+Match the app's message convention: a short header naming the outcome (`"Archive failed"` / `"Pipeline archived"`, mirroring `"Search failed"` / `"Search completed"`), with the entity name and backend message in the `description` — never the entity in the header. Never leave a mutation's `catch` as `console.error` only and never use `alert()`. Always confirm success when the surface disappears (a form that closes, a page that navigates away). Keep an inline message as well where it has context; the toast is additive. `toastErrorMessage(err)` normalizes an `Error`, a raw string, or a `{message|error|detail}` object instead of rendering `[object Object]`. The provider adds lifecycle safety over the search hook: timers cleared on unmount, identical repeats collapsed, stack capped at four, and z-index 4000 so a failure raised inside a dialog (z 3001) is not painted underneath it.
+
+### **Rule 14: Use Dual-Mode Auth Token Utilities**
 
 ```typescript
 // CORRECT
@@ -314,11 +410,11 @@ const token = await getDualValidAccessToken();
 const session = await AmplifyAuth.currentSession();
 ```
 
-### **Rule 13: Do NOT Rename Intentional Typos**
+### **Rule 15: Do NOT Rename Intentional Typos**
 
-`AssetContext.ts` and `WorkflowContext.ts` -- the file names are intentional. NEVER rename them.
+`AssetContext.ts` -- the file name is intentional. NEVER rename it.
 
-### **Rule 14: Update Documentation When Making Frontend Changes**
+### **Rule 16: Update Documentation When Making Frontend Changes**
 
 When frontend changes affect user-facing functionality, update the relevant Docusaurus documentation:
 
@@ -331,13 +427,46 @@ When frontend changes affect user-facing functionality, update the relevant Docu
 | Search UI change     | `user-guide/search.md`                                         |
 | Upload flow change   | `user-guide/upload-tutorial.md`                                |
 
-### **Rule 15: Update Steering Files When Standards Change**
+### **Rule 17: Update Steering Files When Standards Change**
 
 When system-wide frontend standards change (new rules, new patterns, new conventions), update all three locations:
 
 1. `web/CLAUDE.md` -- frontend steering document
-2. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
-3. `.clinerules/workflows/WEB_DEVELOPMENT_WORKFLOW.md` -- identical copy
+2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
+3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
+
+### **Rule 18: Regenerate the CSP Hashes After Editing an Inline Script in `index.html`**
+
+`web/index.html` carries inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer` probe, the pre-render theme application). The CDK Content-Security-Policy allows them by **SHA-256 hash** rather than by `'unsafe-inline'`, so an injected inline script is still blocked.
+
+A CSP hash covers the **exact text content** of the element -- every byte between the tags, indentation included. Adding a line, renaming a variable, or letting Prettier reindent the block invalidates its hash. The browser then refuses to run that script, the app breaks at runtime, and **nothing fails at build time**.
+
+**Any edit to an inline `<script>` block in `web/index.html` -- including a pure reformat -- requires regenerating the hashes and updating the CDK constant in the same change:**
+
+```bash
+cd web && npm run build                        # hash the HTML that is actually served
+node scripts/cspInlineScriptHashes.js --ts     # emit the TypeScript constant
+# paste over INDEX_HTML_INLINE_SCRIPT_HASHES in infra/lib/helper/cspInlineScriptHashes.ts
+cd ../infra && npx jest test/web/cspInlineScriptHashes.test.ts   # drift guard must pass
+```
+
+Omit `--ts` for a readable per-block listing.
+
+| File                                           | Role                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                               | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`         | Generator -- hashes every inline block, skips any with a `src` attribute |
+| `infra/lib/helper/cspInlineScriptHashes.ts`    | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`                 | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/web/cspInlineScriptHashes.test.ts` | Recomputes from `index.html` and fails on drift                          |
+
+**A hash and `'unsafe-inline'` are mutually exclusive.** A CSP may allow inline script by hash **or** by the `'unsafe-inline'` keyword, never both -- when a hash source is present, browsers ignore `'unsafe-inline'` entirely. The two are not additive, so `'unsafe-inline'` cannot be kept as a fallback.
+
+For that reason `generateContentSecurityPolicy()` emits `'unsafe-inline'` in **no** configuration, the Physna add-on included. The add-on's viewer frames Physna's own HTTPS origin rather than a `blob:` document, so that page loads under Physna's own CSP and its inline scripts are outside this policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are present. The add-on contributes `frame-src` and `connect-src` origins and no `script-src` source.
+
+If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than returning `'unsafe-inline'` to `script-src` -- a hash source makes the keyword inert, so adding it would relax nothing and remove the protection the hashes give every other page.
+
+An external `<script src="...">` needs no hash; it is matched by host-source. It may still need its origin added to `script-src`/`connect-src`.
 
 ---
 
@@ -671,8 +800,27 @@ cd web
 npm install           # Install dependencies + runs postinstall (viewer installs)
 npm run start         # Dev server (port 3001)
 npm run build         # Production build (output: web/dist/)
-npm test              # Run tests (Vitest + @testing-library/react)
+npm test              # Run tests with coverage (Jest 30 + @testing-library/react)
+npx jest              # Run tests without coverage (faster)
 ```
+
+**Label a temporary test with a `TEMPORARY-TEST` comment.** Jest has no marker system, so a test written to
+prove one specific change landed — a removed prop, a deleted branch, a reworded string — carries a
+`TEMPORARY-TEST` token in a comment directly above its `it(...)`, naming what it pins:
+
+```ts
+// TEMPORARY-TEST: pins the removal of the duplicate upload summary branch; drop once released.
+it("no longer renders the second summary", () => {
+```
+
+Release cleanup finds them with `grep -rn "TEMPORARY-TEST" web/src web/e2e`. The token is needed because a
+temporary test and a durable guardrail read identically afterwards — both may assert an absence and both
+explain themselves.
+
+Do **not** label a test whose forbidden construct is still writable: a CSP that must not gain
+`'unsafe-inline'`, a component that must not import `apiClient` directly, a div that must not be named after
+a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
+counterpart: `web/CLAUDE.md` section 11.4.1.
 
 **Lint and format (from project root):**
 
@@ -695,7 +843,7 @@ npm run prettier-fix
 -   [ ] `Synonyms` used for all user-visible entity names
 -   [ ] All pages lazy-loaded in `routes.tsx`
 -   [ ] HashRouter used (no BrowserRouter)
--   [ ] React 17 compatible (no React 18 APIs)
+-   [ ] React 18 APIs kept to the orchestration module unless there is a reason otherwise
 -   [ ] TypeScript used for all new files
 -   [ ] `appCache` used instead of Amplify Cache
 -   [ ] `getDualValidAccessToken` used for auth tokens
@@ -763,7 +911,8 @@ npm run prettier-fix
 6. **Using Amplify Cache** -- use appCache
 7. **Manually getting auth tokens** -- use getDualValidAccessToken
 8. **Hardcoding entity display names** -- use Synonyms
-9. **Using React 18 APIs** -- project is React 17
+9. **Spreading React 18 APIs across the codebase** -- allowed in `features/orchestration/`, used sparingly elsewhere
 10. **Using yarn** -- project uses npm
 11. **Creating .js files** -- all new files must be TypeScript
 12. **Hardcoding colors/spacing** -- use Cloudscape design tokens or theme.css
+13. **Over-documenting or narrating changes in comments** -- match surrounding comment density; describe what code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history)

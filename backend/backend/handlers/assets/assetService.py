@@ -7,6 +7,7 @@ import json
 import base64
 import uuid
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -15,14 +16,29 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_ARCHIVE_ASSET, API_UNARCHIVE_ASSET, API_DELETE_ASSET
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
-from handlers.assets.assetFiles import delete_s3_prefix_all_versions
+from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from common.dynamodb import validate_pagination_info, to_update_expr
+from common.s3 import is_object_version_archived, list_all_object_versions
+from common.s3MetadataKeys import (
+    VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
+    VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
+    normalize_history_file_path,
+)
+from common.assetHistory import (
+    CHANGE_SOURCE_EDIT,
+    CHANGE_SOURCE_ARCHIVE,
+    CHANGE_SOURCE_UNARCHIVE,
+    CHANGE_SOURCE_PERMANENT_DELETE,
+    build_asset_snapshot,
+    write_asset_history_record,
+)
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
     ArchiveAssetRequestModel, UnarchiveAssetRequestModel, DeleteAssetRequestModel, 
@@ -48,29 +64,65 @@ sns_client = boto3.client('sns', config=retry_config)
 s3 = boto3.client('s3', config=retry_config)
 logger = safeLogger(service_name="AssetService")
 
+# Worker pool size for per-object S3 operations (archive/unarchive loops);
+# bounds Lambda concurrency and matches the S3 client connection pool
+MAX_PARALLEL_S3_WORKERS = 10
+
 # Global variables for claims and roles
 claims_and_roles = {}
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    s3_assetAuxiliary_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
-    asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
-    asset_links_table_name = os.environ.get("ASSET_LINKS_STORAGE_TABLE_NAME")
-    asset_links_metadata_table_name = os.environ.get("ASSET_LINKS_METADATA_STORAGE_TABLE_NAME")
-    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
-    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
-    asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
-    asset_file_metadata_versions_table_name = os.environ.get("ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME")
-    comment_table_name = os.environ.get("COMMENT_STORAGE_TABLE_NAME")
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    s3_assetAuxiliary_bucket = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    try:
+        asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
+    except Exception:
+        asset_upload_table_name = None
+    try:
+        asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    except Exception:
+        asset_links_table_name = None
+    try:
+        asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    except Exception:
+        asset_links_metadata_table_name = None
+    try:
+        asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_table_name = None
+    try:
+        file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    except Exception:
+        file_attribute_table_name = None
+    try:
+        asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_versions_table_name = None
+    try:
+        asset_versions_files_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_versions_files_table_name = None
+    try:
+        asset_file_metadata_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_versions_table_name = None
+    try:
+        comment_table_name = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
+    except Exception:
+        comment_table_name = None
+    try:
+        asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
+    except Exception:
+        asset_file_version_history_table_name = None
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -87,6 +139,17 @@ comment_table = dynamodb.Table(comment_table_name) if comment_table_name else No
 asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if asset_versions_files_table_name else None
 asset_file_metadata_versions_table = dynamodb.Table(asset_file_metadata_versions_table_name) if asset_file_metadata_versions_table_name else None
 subscription_table = dynamodb.Table(subscription_table_name) if subscription_table_name else None
+asset_file_version_history_table = dynamodb.Table(asset_file_version_history_table_name) if asset_file_version_history_table_name else None
+
+
+class AuthorizationDenied(Exception):
+    """Object-level authorization refused the caller.
+
+    Raised rather than returned so a business-logic function has one return type -- its
+    response model -- and a denial cannot be mistaken for data by its caller. Translated to
+    authorization_error() by the request handler.
+    """
+
 
 #######################
 # Version Functions
@@ -126,6 +189,14 @@ def get_default_bucket_details(bucketId):
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting bucket details.")
+
+def get_asset_bucket_details(asset):
+    """Get bucket details for an asset record, validating the record carries a bucketId"""
+    bucket_id = asset.get('bucketId')
+    if not bucket_id:
+        logger.error(f"Asset record {asset.get('databaseId')}:{asset.get('assetId')} is missing bucketId")
+        raise VAMSGeneralErrorResponse("Asset record is invalid (missing bucket details).")
+    return get_default_bucket_details(bucket_id)
 
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
@@ -203,47 +274,12 @@ def enhance_asset_with_version_info(asset):
 #######################
 
 def is_file_archived(bucket, key, version_id=None):
-    """Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    try:
-        if version_id:
-            # For specific version, try head_object with version_id
-            # If it's a delete marker, head_object will return 405 Method Not Allowed
-            try:
-                s3.head_object(Bucket=bucket, Key=key, VersionId=version_id)
-                return False  # Version exists and is not a delete marker
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'MethodNotAllowed':
-                    # This version is a delete marker
-                    return True
-                elif e.response['Error']['Code'] == 'NoSuchKey':
-                    # Version doesn't exist
-                    return False
-                else:
-                    raise
-        else:
-            # Check if current version is a delete marker
-            try:
-                response = s3.head_object(Bucket=bucket, Key=key)
-                # If head_object succeeds, check if it's a delete marker
-                return response.get('DeleteMarker', False)
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist at all (no versions)
-                    return False
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3)
 
 def mark_file_as_archived(key, bucket):
     """Mark an S3 object as archived by creating a delete marker
@@ -263,10 +299,11 @@ def mark_file_as_archived(key, bucket):
         Key=key
     )
 
-def delete_assetAuxiliary_files(assetLocation):
+def delete_assetAuxiliary_files(databaseId, assetLocation):
     """Delete auxiliary files for an asset
-    
+
     Args:
+        databaseId: The database ID owning the asset
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
     """
     # Convert to AssetLocationModel if it's a dictionary
@@ -282,37 +319,106 @@ def delete_assetAuxiliary_files(assetLocation):
         logger.warning("Invalid asset location type")
         return
 
-    key = location_model.Key
-    if not key:
+    if not location_model.Key:
         return
 
-    # Add the folder delimiter to the end of the key
-    key = key + '/'
+    # Auxiliary objects live under the database-scoped per-file layout
+    key = aux_bucket_asset_file_base(databaseId, location_model.Key)
 
     logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder: {s3_assetAuxiliary_bucket}:{key}")
 
     try:
         # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
         # Use assetLocation key as root folder key for assetAuxiliaryFiles
-        assetAuxiliaryBucketFilesDeleted = []
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=s3_assetAuxiliary_bucket, Prefix=key):
             if 'Contents' in page:
-                for item in page['Contents']:
-                    assetAuxiliaryBucketFilesDeleted.append(item['Key'])
-                    logger.info(f"Deleting auxiliary asset file: {item['Key']}")
-                    s3.delete_object(Bucket=s3_assetAuxiliary_bucket, Key=item['Key'])
+                # Batch-delete the page's objects (up to 1000 per request)
+                objects_to_delete = [{'Key': item['Key']} for item in page['Contents']]
+                logger.info(f"Deleting {len(objects_to_delete)} auxiliary asset files under {key}")
+                s3.delete_objects(
+                    Bucket=s3_assetAuxiliary_bucket,
+                    Delete={'Objects': objects_to_delete}
+                )
 
     except Exception as e:
         logger.exception(f"Error deleting auxiliary files: {e}")
 
     return
 
-def archive_multi_assetFiles(location, bucket):
+def build_asset_archive_history_record(database_id, asset_id, relative_file_path,
+                                       marker_version_id, user_id):
+    """Build an assetArchive change-history record.
+
+    Asset archive soft-deletes each file via an S3 delete marker, which carries
+    no metadata, so sqsBucketSync cannot derive this provenance. The record's
+    versionId is the created delete marker's VersionId, letting a selective
+    unarchive distinguish markers created by the asset archive from markers a
+    user created earlier by archiving individual files.
+    """
+    relative_file_path = normalize_history_file_path(relative_file_path)
+    return {
+        "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{relative_file_path}",
+        "versionId": marker_version_id or "null",
+        "databaseId:assetId": f"{database_id}:{asset_id}",
+        "databaseId": database_id,
+        "assetId": asset_id,
+        "filePath": relative_file_path,
+        "changeSource": VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
+        "changeUserId": user_id or "SYSTEM_USER",
+        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "s3LastModified": "",
+    }
+
+
+def get_asset_archive_marker_versions(database_id, asset_id):
+    """Return the delete-marker version IDs recorded by this asset's archive.
+
+    Queries the file version history for assetArchive-provenance records and
+    maps relative filePath -> set of marker VersionIds. Empty when the asset
+    was archived before provenance tracking existed (or the table is not
+    configured) — callers must treat that as "restore nothing".
+    """
+    markers = {}
+    if not asset_file_version_history_table:
+        return markers
+    try:
+        query_kwargs = {
+            'IndexName': 'DatabaseIdAssetIdIndex',
+            'KeyConditionExpression': Key('databaseId:assetId').eq(f"{database_id}:{asset_id}"),
+        }
+        while True:
+            response = asset_file_version_history_table.query(**query_kwargs)
+            for item in response.get('Items', []):
+                if item.get('changeSource') != VAMS_CHANGE_SOURCE_ASSET_ARCHIVE:
+                    continue
+                file_path = item.get('filePath', '')
+                version_id = item.get('versionId', '')
+                if file_path and version_id and version_id != 'null':
+                    markers.setdefault(file_path, set()).add(version_id)
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.exception(f"Error reading assetArchive history for {asset_id}: {e}")
+        return {}
+    return markers
+
+
+def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
     """Archive all files in a multi-file asset
-    
+
+    Each created delete marker is recorded in the file version history with
+    assetArchive provenance so a later unarchive can selectively restore only
+    the files this operation archived (files a user archived individually
+    beforehand keep their own markers and stay archived).
+
     Args:
         location: The asset location object with Key and optional Bucket (dict or AssetLocationModel)
+        bucket: The S3 bucket name
+        database_id: The database ID (for provenance records)
+        asset_id: The asset ID (for provenance records)
+        user_id: The acting user (for provenance records)
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(location, dict):
@@ -330,7 +436,7 @@ def archive_multi_assetFiles(location, bucket):
     prefix = location_model.Key
     if not prefix:
         return
-    
+
     # Get bucket from location or use default
     logger.info(f'Archiving folder with multiple files from bucket: {bucket}')
 
@@ -341,10 +447,26 @@ def archive_multi_assetFiles(location, bucket):
             for obj in page.get('Contents', []):
                 files.append(obj['Key'])
 
-    for key in files:
+    def _archive_one(key):
         try:
             response = mark_file_as_archived(key, bucket)
             logger.info(f"S3 archive response for {key}: {response}")
+
+            # Record provenance for the created delete marker (best-effort).
+            # Folder markers get no history record.
+            if (asset_file_version_history_table and database_id and asset_id
+                    and not key.endswith('/')):
+                marker_version_id = response.get('VersionId')
+                relative_path = key[len(prefix):] if key.startswith(prefix) else key
+                try:
+                    asset_file_version_history_table.put_item(
+                        Item=build_asset_archive_history_record(
+                            database_id, asset_id, relative_path,
+                            marker_version_id, user_id
+                        )
+                    )
+                except Exception as he:
+                    logger.exception(f"Failed writing assetArchive history for {key}: {he}")
 
         except s3.exceptions.InvalidObjectState as ios:
             logger.exception(f"S3 object already archived: {key}")
@@ -352,6 +474,11 @@ def archive_multi_assetFiles(location, bucket):
 
         except Exception as e:
             logger.exception(f"Error archiving file {key}: {e}")
+
+    if files:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(_archive_one, files))
 
     return
 
@@ -393,11 +520,27 @@ def archive_file_preview(location, bucket):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
-def unarchive_multi_assetFiles(location, bucket):
-    """Unarchive all files in a multi-file asset by removing delete markers
-    
+def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
+    """Selectively unarchive an asset's files by removing the delete markers
+    that the asset archive created.
+
+    Only markers whose VersionId appears in the asset's assetArchive-provenance
+    history records are removed — files a user archived individually before the
+    asset archive keep their markers and stay archived. When no assetArchive
+    provenance exists (asset archived before provenance tracking, or history
+    table not configured), no files are restored; users unarchive individual
+    files via the file unarchive API. Each restored file gets an assetUnarchive
+    history record.
+
     Args:
         location: The asset location object with Key and optional Bucket (dict or AssetLocationModel)
+        bucket: The S3 bucket name
+        database_id: The database ID (for provenance lookup/records)
+        asset_id: The asset ID (for provenance lookup/records)
+        user_id: The acting user (for provenance records)
+
+    Returns:
+        Number of files restored.
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(location, dict):
@@ -405,36 +548,72 @@ def unarchive_multi_assetFiles(location, bucket):
             location_model = AssetLocationModel(**location)
         except ValidationError as e:
             logger.warning(f"Invalid asset location format: {e}")
-            return
+            return 0
     elif isinstance(location, AssetLocationModel):
         location_model = location
     else:
         logger.warning("Invalid asset location type")
-        return
+        return 0
 
     prefix = location_model.Key
     if not prefix:
-        return
-    
-    logger.info(f'Unarchiving folder with multiple files from bucket: {bucket}')
+        return 0
 
+    archive_markers = get_asset_archive_marker_versions(database_id, asset_id) if (database_id and asset_id) else {}
+    if not archive_markers:
+        logger.info(
+            f"No assetArchive provenance records for {asset_id}; not restoring any files. "
+            "Files can be unarchived individually via the file unarchive API."
+        )
+        return 0
+
+    logger.info(f'Selectively unarchiving {len(archive_markers)} file(s) archived by asset archive from bucket: {bucket}')
+
+    restored_count = 0
     try:
-        # List all versions to find delete markers
+        # List current delete markers and remove only those the asset archive created
         paginator = s3.get_paginator('list_object_versions')
+        markers_to_remove = []
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            # Remove delete markers
             for delete_marker in page.get('DeleteMarkers', []):
-                if delete_marker.get('IsLatest'):
-                    logger.info(f"Removing delete marker for {delete_marker['Key']}")
-                    s3.delete_object(
-                        Bucket=bucket,
-                        Key=delete_marker['Key'],
-                        VersionId=delete_marker['VersionId']
-                    )
+                if not delete_marker.get('IsLatest'):
+                    continue
+                key = delete_marker['Key']
+                relative_path = normalize_history_file_path(
+                    key[len(prefix):] if key.startswith(prefix) else key
+                )
+                if delete_marker['VersionId'] in archive_markers.get(relative_path, set()):
+                    markers_to_remove.append((key, delete_marker['VersionId'], relative_path))
+
+        def _remove_marker(marker):
+            key, version_id, relative_path = marker
+            try:
+                logger.info(f"Removing assetArchive delete marker for {key}")
+                s3.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+                if asset_file_version_history_table:
+                    try:
+                        record = build_asset_archive_history_record(
+                            database_id, asset_id, relative_path, version_id, user_id
+                        )
+                        record['changeSource'] = VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE
+                        # New SK so the assetArchive record is preserved as history
+                        record['versionId'] = f"unarchive:{version_id}"
+                        asset_file_version_history_table.put_item(Item=record)
+                    except Exception as he:
+                        logger.exception(f"Failed writing assetUnarchive history for {key}: {he}")
+                return True
+            except Exception as e:
+                logger.exception(f"Error removing delete marker for {key}: {e}")
+                return False
+
+        if markers_to_remove:
+            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(markers_to_remove))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                restored_count = sum(1 for ok in executor.map(_remove_marker, markers_to_remove) if ok)
     except Exception as e:
         logger.exception(f"Error unarchiving files: {e}")
 
-    return
+    return restored_count
 
 def unarchive_file_preview(location, bucket):
     """Unarchive a single file by removing delete marker
@@ -462,11 +641,16 @@ def unarchive_file_preview(location, bucket):
     logger.info(f"Unarchiving item: {bucket}:{key}")
 
     try:
-        # List versions to find the delete marker
-        response = s3.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
-        
+        # Page through all versions/markers for this prefix and remove the delete
+        # marker that is the current (IsLatest) version of exactly this key. The
+        # prior MaxKeys=1 lookup could miss the marker: list_object_versions caps
+        # total returned entries across Versions+DeleteMarkers, and the prefix can
+        # match sibling keys, so a single entry is not guaranteed to be this key's
+        # delete marker.
+        versions_response = list_all_object_versions(bucket, key, client=s3)
+
         # Remove delete marker if it exists
-        for delete_marker in response.get('DeleteMarkers', []):
+        for delete_marker in versions_response.get('DeleteMarkers', []):
             if delete_marker.get('IsLatest') and delete_marker['Key'] == key:
                 logger.info(f"Removing delete marker for {key}")
                 s3.delete_object(
@@ -476,7 +660,7 @@ def unarchive_file_preview(location, bucket):
                 )
     except Exception as e:
         logger.exception(f"Error unarchiving file {key}: {e}")
-    
+
     return
 
 def delete_s3_objects(prefix, bucket):
@@ -724,6 +908,41 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
+def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles):
+    """Tier-2 authorization for a single-asset operation, decided before existence and state.
+
+    The verdict is reached before the caller learns anything about the asset, so a refusal
+    cannot be told apart from a not-found or a wrong-state rejection. When the asset exists it
+    is annotated with its object type and evaluated as stored; when it does not, the
+    identifiers the request supplied stand in, so an unauthorized caller is refused rather than
+    told the identifiers are unused. An empty token list is no identity to evaluate, so it
+    denies without constructing an enforcer.
+
+    Args:
+        asset: The stored asset record, or None when no asset was found
+        databaseId: The database ID from the request
+        assetId: The asset ID from the request
+        action: The Casbin action for the operation (GET / PUT / DELETE)
+        claims_and_roles: User claims and roles for authorization
+
+    Returns:
+        True if the caller is authorized for the operation
+    """
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+
+    if asset:
+        asset.update({"object__type": "asset"})
+        authorization_object = asset
+    else:
+        authorization_object = {
+            'databaseId': databaseId,
+            'assetId': assetId,
+            'object__type': 'asset'
+        }
+
+    return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action)
+
 def get_assets(databaseId, query_params, showArchived=False):
     """Get assets for a database
     
@@ -801,8 +1020,12 @@ def get_assets(databaseId, query_params, showArchived=False):
     # Return the combined results
     result = {"Items": all_items}
     if next_token:
+        # More assets remain; expose a truncation indicator so callers that do
+        # not follow NextToken can detect the result is incomplete.
         result["NextToken"] = next_token
-        
+        result["truncated"] = True
+        logger.warning("Asset listing truncated; more results available via NextToken")
+
     return result
 
 def get_all_assets(query_params, showArchived=False):
@@ -873,12 +1096,16 @@ def get_all_assets(query_params, showArchived=False):
         
         # Build response with nextToken
         result = {'Items': items}
-        
+
         # Return LastEvaluatedKey as nextToken if present (base64 encoded)
         if 'LastEvaluatedKey' in response:
+            # More assets remain; expose a truncation indicator so callers that do
+            # not follow NextToken can detect the result is incomplete.
             json_str = json.dumps(response['LastEvaluatedKey'])
             result['NextToken'] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-            
+            result['truncated'] = True
+            logger.warning("Asset listing truncated; more results available via NextToken")
+
         return result
         
     except Exception as e:
@@ -893,45 +1120,122 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         assetId: The asset ID
         update_data: Dictionary with fields to update
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         Updated asset data
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to update the asset
     """
     # Get the existing asset
     asset = get_asset_details(databaseId, assetId)
+
+    # Check authorization before existence, so a refused caller cannot use the not-found
+    # response to learn which assets exist
+    if not authorize_single_asset(asset, databaseId, assetId, "PUT", claims_and_roles):
+        raise AuthorizationDenied()
+
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "PUT"):
-            return authorization_error()
 
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
-    # Update only the editable fields
+    # Update only the editable fields. `edited_attributes` accumulates exactly what this
+    # request changes, so the write below touches nothing else on the record.
+    edited_attributes = {}
+
     if 'assetName' in update_data:
         asset['assetName'] = update_data['assetName']
-    
+        edited_attributes['assetName'] = update_data['assetName']
+
     if 'description' in update_data:
         asset['description'] = update_data['description']
-    
+        edited_attributes['description'] = update_data['description']
+
     if 'isDistributable' in update_data:
         asset['isDistributable'] = update_data['isDistributable']
-    
+        edited_attributes['isDistributable'] = update_data['isDistributable']
+
     if 'tags' in update_data:
-        asset['tags'] = update_data['tags']
-    
-    # Save the updated asset
+        new_tags = update_data['tags']
+        # Tags must resolve within this asset's own database partition plus the shared GLOBAL
+        # partition, so an edit cannot adopt another database's tags. Imported lazily to avoid a
+        # module-load dependency.
+        from handlers.assets.createAsset import (
+            validate_tags_exist,
+            verify_all_required_tags_satisfied,
+        )
+
+        # Only tags the edit ADDS are validated. A tag that was deleted after being applied stays on
+        # the asset, and re-submitting it — which every edit does, even one that only changes the
+        # description — must not fail. The asset keeps such a tag and the user can remove it; they
+        # simply cannot add it again, because it no longer resolves in scope.
+        existing_tags = asset.get('tags') or []
+        added_tags = [tag for tag in new_tags if tag not in existing_tags]
+
+        # A tag can carry object-level authority, so the check above — made against the stored
+        # tag list — is satisfied by the very tags a tag edit replaces. A constraint matches its
+        # action exactly (`r.act == p.act`), and a tag that gates visibility is written as a GET
+        # rule while the edit itself is a PUT, so a PUT-only check never consults it. A tag change
+        # is therefore authorized for GET as well: the caller must already reach the asset they are
+        # retagging, and must still reach the record they are about to write. A tag that keeps the
+        # asset out of their reach can neither be dropped nor attached. The two objects differ only
+        # in the tag list, so the decision isolates the tag change; PUT on the stored tag list is
+        # established above, and an unchanged tag list is still gated exactly once.
+        if sorted(new_tags) != sorted(existing_tags):
+            post_mutation_asset = {**asset, 'tags': new_tags}
+            tag_change_enforcer = CasbinEnforcer(claims_and_roles)
+            for enforced_asset, enforced_action in (
+                (asset, "GET"),
+                (post_mutation_asset, "GET"),
+                (post_mutation_asset, "PUT"),
+            ):
+                if not tag_change_enforcer.enforce(enforced_asset, enforced_action):
+                    raise AuthorizationDenied()
+
+        # The shared validators raise ValueError, which this handler does not translate — it
+        # would surface as a 500. Re-raised as VAMSGeneralErrorResponse so a rejected tag is a
+        # 400 with its reason, matching the create path.
+        try:
+            validate_tags_exist(added_tags, databaseId)
+
+            # Required tag types are enforced only when the tag set actually changes, so an asset whose
+            # tags predate a newly-required type is still editable in every other respect.
+            if sorted(new_tags) != sorted(existing_tags):
+                verify_all_required_tags_satisfied(new_tags, databaseId)
+
+        except ValueError as tag_error:
+            logger.warning(f"Asset tag update rejected: {tag_error}")
+            raise VAMSGeneralErrorResponse(str(tag_error))
+        asset['tags'] = new_tags
+        edited_attributes['tags'] = new_tags
+
+    # Save the updated asset. Only the edited attributes are written, so a field another
+    # writer changed between the read above and this write — an upload completion setting
+    # assetType or previewLocation, a version bump — is not reverted. Conditional on the
+    # record still existing so an asset archived mid-edit is not recreated.
     try:
-        asset_table.put_item(Item=asset)
-        
+        if edited_attributes:
+            keys_map, values_map, expr = to_update_expr(edited_attributes)
+            asset_table.update_item(
+                Key={'databaseId': databaseId, 'assetId': assetId},
+                UpdateExpression=expr,
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+                ConditionExpression='attribute_exists(databaseId) AND attribute_exists(assetId)'
+            )
+
+        # Record edit in asset history (best-effort)
+        write_asset_history_record(
+            databaseId, assetId, CHANGE_SOURCE_EDIT,
+            claims_and_roles.get("tokens", ["SYSTEM_USER"])[0],
+            build_asset_snapshot(asset)
+        )
+
         # Create response
         timestamp = datetime.utcnow().isoformat()
-        
+
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
 
@@ -942,6 +1246,12 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
             operation="update",
             timestamp=timestamp
         )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {assetId} in database {databaseId} no longer exists, asset record not updated")
+            raise VAMSGeneralErrorResponse("Asset not found in database")
+        logger.exception(f"Error updating asset: {e}")
+        raise VAMSGeneralErrorResponse(f"Error updating asset.")
     except Exception as e:
         logger.exception(f"Error updating asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error updating asset.")
@@ -954,45 +1264,50 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         assetId: The asset ID
         request_model: ArchiveAssetRequestModel with archive options
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         AssetOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to archive the asset
     """
     # Get the existing asset
     asset = get_asset_details(databaseId, assetId)
+
+    # Check authorization before existence and archive state, so a refused caller cannot use
+    # the not-found or already-archived response to learn either
+    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles):
+        raise AuthorizationDenied()
+
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
-    
+
     # Check if asset is already archived
     if databaseId.endswith('#deleted') or asset.get('status') == 'archived':
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} is already archived")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "DELETE"):
-            return authorization_error()
+        logger.info(f"Asset {assetId} in database {databaseId} is already archived")
+        raise VAMSGeneralErrorResponse("Asset is already archived")
 
     #Get bucket details for asset
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
-    
+
     # Archive S3 files
     logger.info(f"Archiving asset {assetId} in database {databaseId}")
     
     try:
-        # Archive asset files in S3
+        # Update asset record with archived status
+        now = datetime.utcnow().isoformat()
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+
+        # Archive asset files in S3, recording assetArchive provenance per file
+        # so unarchive can selectively restore exactly these files
         if "assetLocation" in asset:
-            archive_multi_assetFiles(asset['assetLocation'], bucket_name)
+            archive_multi_assetFiles(asset['assetLocation'], bucket_name,
+                                     databaseId, assetId, username)
 
         # Archive preview if exists
         if "previewLocation" in asset:
             archive_file_preview(asset['previewLocation'], bucket_name)
-        
-        # Update asset record with archived status
-        now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["system"])[0]
         
         # Add archive metadata
         asset['status'] = 'archived'
@@ -1007,10 +1322,16 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Save to archived location
         asset_table.put_item(Item=asset)
-        
+
         # Delete from original location
         asset_table.delete_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        
+
+        # Record archive in asset history (best-effort)
+        write_asset_history_record(
+            databaseId, assetId, CHANGE_SOURCE_ARCHIVE, username,
+            build_asset_snapshot(asset, archived_reason=request_model.reason)
+        )
+
         # Update asset count
         update_asset_count(db_database, asset_database, {}, databaseId)
 
@@ -1037,9 +1358,12 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         assetId: The asset ID
         request_model: UnarchiveAssetRequestModel with unarchive options
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         AssetOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to unarchive the asset
     """
     # Normalize databaseId - remove #deleted if present
     original_db_id = databaseId.replace("#deleted", "")
@@ -1050,42 +1374,45 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     if not asset:
         # Try without #deleted suffix in case user provided clean ID
         asset = get_asset_details(original_db_id, assetId, showArchived=True)
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found")
-        # If found in original location, check if it's actually archived
-        if asset.get('status') != 'archived':
-            raise VAMSGeneralErrorResponse("Asset is not archived. Only archived assets can be unarchived.")
-    else:
-        # Found via #deleted key — verify it is indeed in archived state
-        if asset.get('status') != 'archived':
-            raise VAMSGeneralErrorResponse("Asset is not in a valid archived state. Cannot unarchive.")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "PUT"):
-            return authorization_error()
+
+    # Check authorization before existence and archive state, so a refused caller cannot use
+    # the not-found or not-archived response to learn either
+    if not authorize_single_asset(asset, original_db_id, assetId, "PUT", claims_and_roles):
+        raise AuthorizationDenied()
+
+    if not asset:
+        raise VAMSGeneralErrorResponse("Asset not found")
+
+    # Only an archived asset can be unarchived
+    if asset.get('status') != 'archived':
+        logger.info(f"Asset {assetId} in database {original_db_id} is not in an archived state")
+        raise VAMSGeneralErrorResponse("Asset is not archived. Only archived assets can be unarchived.")
 
     # Get bucket details for asset
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
-    
-    # Unarchive S3 files
-    logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
-    
-    try:
-        # Unarchive asset files in S3
-        if "assetLocation" in asset:
-            unarchive_multi_assetFiles(asset['assetLocation'], bucket_name)
 
-        # Unarchive preview if exists
-        if "previewLocation" in asset:
-            unarchive_file_preview(asset['previewLocation'], bucket_name)
-        
-        # Update asset record
+    # Unarchive the asset record; file restoration is opt-in
+    logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
+
+    try:
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+        files_restored = 0
+
+        # Optionally restore the files this asset's archive operation archived
+        # (assetArchive provenance only — individually archived files stay
+        # archived). Default restores the asset record only.
+        if request_model.unarchiveFiles:
+            if "assetLocation" in asset:
+                files_restored = unarchive_multi_assetFiles(
+                    asset['assetLocation'], bucket_name,
+                    original_db_id, assetId, username
+                )
+
+            # Unarchive preview if exists
+            if "previewLocation" in asset:
+                unarchive_file_preview(asset['previewLocation'], bucket_name)
         
         # Remove archive metadata - INCLUDING status field
         asset.pop('status', None)  # Remove status entirely
@@ -1104,20 +1431,33 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Save to original location
         asset_table.put_item(Item=asset)
-        
+
         # Delete from archived location
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
-        
+
+        # Record unarchive in asset history (best-effort)
+        write_asset_history_record(
+            original_db_id, assetId, CHANGE_SOURCE_UNARCHIVE, username,
+            build_asset_snapshot(asset, unarchived_reason=request_model.reason)
+        )
+
         # Update asset count
         update_asset_count(db_database, asset_database, {}, original_db_id)
 
         # Send email notification
         send_subscription_email(original_db_id, assetId)
-        
+
         # Return success response
+        if request_model.unarchiveFiles:
+            message = (f"Asset {assetId} unarchived successfully; "
+                       f"{files_restored} file(s) archived by the asset archive were restored")
+        else:
+            message = (f"Asset {assetId} unarchived successfully. "
+                       "Files previously archived remain archived; unarchive files "
+                       "individually or use the restore-files option.")
         return AssetOperationResponseModel(
             success=True,
-            message=f"Asset {assetId} unarchived successfully",
+            message=message,
             assetId=assetId,
             operation="unarchive",
             timestamp=now
@@ -1134,30 +1474,36 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         assetId: The asset ID
         request_model: DeleteAssetRequestModel with delete options
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         AssetOperationResponseModel with operation result
+
+    Raises:
+        AuthorizationDenied: If the caller is not authorized to delete the asset
     """
     # Verify confirmPermanentDelete is True
     if not request_model.confirmPermanentDelete:
         raise VAMSGeneralErrorResponse("Permanent deletion requires explicit confirmation")
-    
+
     # Get the existing asset (including archived)
     asset = get_asset_details(databaseId, assetId, showArchived=True)
+
+    # Check authorization before existence, so a refused caller cannot use the not-found
+    # response to learn which assets exist
+    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles):
+        raise AuthorizationDenied()
+
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
-    
-    # Check authorization
-    asset.update({"object__type": "asset"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(asset, "DELETE"):
-            return authorization_error()
 
     #Get bucket details for asset
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
-    
+
+    # Capture the last-known asset state for the history record before deletion
+    pre_delete_snapshot = build_asset_snapshot(asset)
+    delete_user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+
     # Begin deletion process
     logger.info(f"Permanently deleting asset {assetId} from database {databaseId}")
     
@@ -1197,6 +1543,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
         
+        original_db_id = databaseId.replace("#deleted", "")
+
         # 1. Delete all S3 objects (assets files and preview)
         if "assetLocation" in asset and "Key" in asset["assetLocation"]:
             prefix = asset["assetLocation"]["Key"]
@@ -1209,7 +1557,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 deleted_items["s3_objects"].extend(deleted_keys)
                 
                 # Also delete any auxiliary files
-                delete_assetAuxiliary_files(asset["assetLocation"])
+                delete_assetAuxiliary_files(original_db_id, asset["assetLocation"])
 
         if "previewLocation" in asset and "Key" in asset["previewLocation"]:
             prefix = asset["previewLocation"]["Key"]
@@ -1223,7 +1571,6 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         
         # 2. Delete from asset table (both active and archived locations)
         # First try the original database ID
-        original_db_id = databaseId.replace("#deleted", "")
         asset_table.delete_item(Key={'databaseId': original_db_id, 'assetId': assetId})
         deleted_items["dynamodb_tables"].append(f"{asset_database} (databaseId={original_db_id})")
         
@@ -1425,7 +1772,14 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
 
         # 9. Update asset count
         update_asset_count(db_database, asset_database, {}, original_db_id)
-        
+
+        # Record permanent delete in asset history (best-effort). History
+        # records for the asset are intentionally NOT deleted.
+        write_asset_history_record(
+            original_db_id, assetId, CHANGE_SOURCE_PERMANENT_DELETE,
+            delete_user_id, pre_delete_snapshot
+        )
+
         # Return success response
         now = datetime.utcnow().isoformat()
         return AssetOperationResponseModel(
@@ -1493,37 +1847,36 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Get the asset
             asset = get_asset_details(path_parameters['databaseId'], path_parameters['assetId'], show_archived)
-            
-            # Check if asset exists and user has permission
-            if asset:
-                asset.update({"object__type": "asset"})
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce(asset, "GET"):
-                        return authorization_error()
-                
-                # Enhance asset with version information
-                enhanced_asset = enhance_asset_with_version_info(asset)
 
-                #Get bucket details for asset
-                bucketDetails = get_default_bucket_details(asset['bucketId'])
-                enhanced_asset["bucketName"] = bucketDetails['bucketName']
-                
-                # Convert to AssetResponseModel for consistent response format
-                try:
-                    response_model = AssetResponseModel(**enhanced_asset)
-                    return success(body=response_model.dict())
-                except ValidationError as v:
-                    logger.exception(f"Error converting asset to response model: {v}")
-                    # Fall back to raw response if conversion fails
-                    return success(body={"message": enhanced_asset})
-            else:
+            # Check authorization before existence, so a refused caller cannot use the
+            # not-found response to learn which assets exist
+            if not authorize_single_asset(asset, path_parameters['databaseId'],
+                                          path_parameters['assetId'], "GET", claims_and_roles):
+                return authorization_error()
+
+            if not asset:
                 return general_error(body={"message": "Asset not found"}, status_code=404, event=event)
-        
+
+            # Enhance asset with version information
+            enhanced_asset = enhance_asset_with_version_info(asset)
+
+            #Get bucket details for asset
+            bucketDetails = get_asset_bucket_details(asset)
+            enhanced_asset["bucketName"] = bucketDetails['bucketName']
+
+            # Convert to AssetResponseModel for consistent response format
+            try:
+                response_model = AssetResponseModel(**enhanced_asset)
+                return success(body=response_model.dict())
+            except ValidationError as v:
+                logger.exception(f"Error converting asset to response model: {v}")
+                # Fall back to raw response if conversion fails
+                return success(body={"message": enhanced_asset})
+
         # Case 2: Get assets for a specific database
         elif 'databaseId' in path_parameters:
             logger.info(f"Listing assets for database {path_parameters['databaseId']}")
@@ -1563,19 +1916,20 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
-                # # Fall back to default pagination with validation
-                # validate_pagination_info(query_parameters)
-                # query_params = query_parameters
-                # show_archived = query_parameters.get('showArchived', '').lower() == 'true'
-            
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
+
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
-            
+
             # Enhance each asset with version information
             enhanced_items = []
             for item in assets_result.get('Items', []):
+                # Skip malformed records so one bad item cannot fail the whole listing
+                if not item.get('bucketId'):
+                    logger.error(f"Skipping asset record with missing bucketId: "
+                                 f"{item.get('databaseId')}:{item.get('assetId')}")
+                    continue
+
                 enhanced_item = enhance_asset_with_version_info(item)
 
                 #Get bucket details for asset
@@ -1631,19 +1985,20 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
-                # # Fall back to default pagination with validation
-                # validate_pagination_info(query_parameters)
-                # query_params = query_parameters
-                # show_archived = query_parameters.get('showArchived', '').lower() == 'true'
-            
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
+
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
-            
+
             # Enhance each asset with version information
             enhanced_items = []
             for item in assets_result.get('Items', []):
+                # Skip malformed records so one bad item cannot fail the whole listing
+                if not item.get('bucketId'):
+                    logger.error(f"Skipping asset record with missing bucketId: "
+                                 f"{item.get('databaseId')}:{item.get('assetId')}")
+                    continue
+
                 enhanced_item = enhance_asset_with_version_info(item)
 
                 #Get bucket details for asset
@@ -1734,7 +2089,7 @@ def handle_put_request(event):
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Check if this is an unarchive request
-        if path.endswith('/unarchiveAsset'):
+        if API_UNARCHIVE_ASSET.matches(path):
             request_model = parse(body, model=UnarchiveAssetRequestModel)
             result = unarchive_asset(
                 path_parameters['databaseId'],
@@ -1754,12 +2109,17 @@ def handle_put_request(event):
             update_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
         # Return success response
         return success(body=result.dict())
-        
+
+    except AuthorizationDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except ValueError as v:
+        logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
@@ -1822,7 +2182,7 @@ def handle_delete_request(event):
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
         # Determine which operation to perform based on the path
-        if path.endswith('/archiveAsset'):
+        if API_ARCHIVE_ASSET.matches(path):
             # Archive asset operation
             request_model = parse(body, model=ArchiveAssetRequestModel)
             result = archive_asset(
@@ -1833,7 +2193,7 @@ def handle_delete_request(event):
             )
             return success(body=result.dict())
             
-        elif path.endswith('/deleteAsset'):
+        elif API_DELETE_ASSET.matches(path):
             # Permanent delete operation
             request_model = parse(body, model=DeleteAssetRequestModel)
             result = delete_asset_permanent(
@@ -1854,10 +2214,12 @@ def handle_delete_request(event):
                 claims_and_roles
             )
             return success(body=result.dict())
-            
+
+    except AuthorizationDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -1897,7 +2259,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

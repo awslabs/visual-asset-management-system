@@ -9,6 +9,25 @@
     ],
     "constraints": [
         {
+            "name": "{{ROLE_NAME}}-user-api-keys",
+            "description": "Allow self-service API key management (own keys only, expiration required)",
+            "objectType": "api",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/user/api-keys"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
             "name": "{{ROLE_NAME}}-web-routes",
             "description": "Allow navigation to standard viewing pages",
             "objectType": "web",
@@ -18,7 +37,9 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/databases" },
                 { "field": "route__path", "operator": "starts_with", "value": "/pipelines" },
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
-                { "field": "route__path", "operator": "starts_with", "value": "/workflows" }
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
+                { "field": "route__path", "operator": "starts_with", "value": "/executions" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
@@ -31,6 +52,11 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
                 { "field": "route__path", "operator": "starts_with", "value": "/asset-links" },
                 { "field": "route__path", "operator": "starts_with", "value": "/assets" },
                 { "field": "route__path", "operator": "starts_with", "value": "/comments" },
@@ -47,10 +73,23 @@
                 },
                 { "field": "route__path", "operator": "starts_with", "value": "/tags" },
                 { "field": "route__path", "operator": "starts_with", "value": "/tag-types" },
-                { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
-                { "field": "route__path", "operator": "starts_with", "value": "/buckets" }
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-execution-logs-deny",
+            "description": "Withhold the admin-only detailed execution logs route. A deny overrides the broad /workflows GET allow above.",
+            "objectType": "api",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/workflows/executions/"
+                }
+            ],
+            "criteriaOr": [{ "field": "route__path", "operator": "ends_with", "value": "/logs" }],
+            "groupPermissions": [{ "action": "GET", "type": "deny" }]
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-post",
@@ -59,6 +98,11 @@
             "criteriaAnd": [],
             "criteriaOr": [
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
                 {
                     "field": "route__path",

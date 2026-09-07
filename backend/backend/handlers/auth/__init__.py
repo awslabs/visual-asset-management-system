@@ -2,16 +2,28 @@
 #  SPDX-License-Identifier: Apache-2.0
 import json
 from customConfigCommon.customAuthClaimsCheck import customAuthClaimsCheckOverride
+from common.auth.apiEvent import normalize_event
+from common.validators import normalize_userid, normalize_userid_array
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service="RequestToClaims")
 
 def request_to_claims(request):
+    normalize_event(request)
 
-    #Lambda cross-calling input short-circuit. 
+    #Lambda cross-calling input short-circuit.
+    #mfaEnabled defaults to True (system/admin cross-calls run as MFA-satisfied), but a caller
+    #delegating on behalf of an end user (e.g. execution re-run) MUST propagate that user's real
+    #MFA state so MFA-gated roles are not silently activated for a non-MFA session. An explicit
+    #boolean 'mfaEnabled' in the lambdaCrossCall payload is honored when present.
     if 'lambdaCrossCall' in request:
+        cross_call = request["lambdaCrossCall"]
+        mfa_value = cross_call.get("mfaEnabled", True)
         return {
-            "tokens": [request["lambdaCrossCall"].get("userName", "SYSTEM_USER")],
+            "tokens": [normalize_userid(cross_call.get("userName", "SYSTEM_USER"))],
             "roles": [],
             "externalAttributes": [],
-            "mfaEnabled": True
+            "mfaEnabled": bool(mfa_value)
         }
     elif 'requestContext' not in request or 'authorizer' not in request['requestContext']:
         return {
@@ -27,11 +39,16 @@ def request_to_claims(request):
     externalAttributes = []
     mfaEnabled = False
 
-    #Handle both claims from APIGateway standard authorizer format or lambda authorizers
-    if 'jwt' in request['requestContext']['authorizer'] and 'claims' in request['requestContext']['authorizer']['jwt']:
-        claims = request['requestContext']['authorizer']['jwt']['claims']
-    elif 'lambda' in request['requestContext']['authorizer']:
-        claims = request['requestContext']['authorizer']['lambda']
+    #Handle claims from: HTTP API JWT authorizer, HTTP API lambda authorizer (v2),
+    #or REST API REQUEST lambda authorizer (flat string map under 'authorizer').
+    authorizer_ctx = request['requestContext']['authorizer']
+    if 'jwt' in authorizer_ctx and 'claims' in authorizer_ctx['jwt']:
+        claims = authorizer_ctx['jwt']['claims']
+    elif 'lambda' in authorizer_ctx:
+        claims = authorizer_ctx['lambda']
+    elif isinstance(authorizer_ctx, dict):
+        # REST REQUEST authorizer: context is a flat map of string values.
+        claims = {k: v for k, v in authorizer_ctx.items() if k != 'principalId'}
     else:
         claims = {}
 
@@ -55,6 +72,18 @@ def request_to_claims(request):
     if 'vams:externalAttributes' in claims:
         externalAttributes = json.loads(claims['vams:externalAttributes'])
 
+    #MFA sign-in status is resolved at authorization time by the API Gateway authorizer
+    #(common/auth/authorizerCore.py via the customMFATokenScopeCheckOverride hook) and
+    #passed through the authorizer context as vams:mfaEnabled
+    if 'vams:mfaEnabled' in claims:
+        mfaValue = claims['vams:mfaEnabled']
+        mfaEnabled = mfaValue == 'true' if isinstance(mfaValue, str) else bool(mfaValue)
+
+    #The token list is the caller's identity: it keys per-user lookups, is written as createdBy /
+    #modifiedBy, and is what Casbin compares a constraint's userId against. Normalized here, the one
+    #point every handler receives it from, so it carries the same spelling as a stored user id.
+    tokens = normalize_userid_array(tokens)
+
     claims_and_roles = {
             "tokens": tokens,
             "roles": roles,
@@ -62,10 +91,13 @@ def request_to_claims(request):
             "mfaEnabled": mfaEnabled
         }
 
-    #Conduct custom claims check, including MFA sign-in
+    #Conduct custom claims check. If a customer-supplied hook raises, fail closed by
+    #dropping roles (rather than silently passing the un-filtered claims through) so a
+    #broken claims-restriction hook cannot grant more access than intended.
     try:
         claims_and_roles = customAuthClaimsCheckOverride(claims_and_roles, request)
-    except:
-        pass
+    except Exception as e:
+        logger.exception(f"customAuthClaimsCheckOverride failed; denying roles: {e}")
+        claims_and_roles["roles"] = []
 
     return claims_and_roles

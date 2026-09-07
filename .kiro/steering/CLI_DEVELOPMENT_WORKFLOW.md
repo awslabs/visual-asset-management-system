@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending VamsCLI. Follow these rules to ensure consistency, quality, and maintainability across all implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `tools/VamsCLI/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `tools/VamsCLI/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **File Structure Standards**
@@ -30,6 +32,32 @@ tools/VamsCLI/
 ├── pyproject.toml          # Modern Python packaging
 └── README.md               # User documentation
 ```
+
+### **Command Groups (22 top-level)**
+
+All registered in `main.py` via `cli.add_command()`:
+
+```
+setup, auth, assets, asset-version, asset-links, file, profile, database,
+tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
+pipeline, execution, industry, user, role, api-key
+```
+
+Sync has a nested sub-command group:
+
+-   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
+
+Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution APIs:
+
+-   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
+-   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
+-   `execution list` (global, permission-filtered), `execution details|details-metadata|logs|abort|rerun|permanent-delete`
+
+Industry has nested sub-command groups:
+
+-   `industry engineering bom <command>`
+-   `industry engineering plm <command>`
+-   `industry spatial glb <command>`
 
 ## 📋 **Development Workflow Checklist**
 
@@ -86,7 +114,34 @@ tools/VamsCLI/
 -   [ ] **Write Unit Tests**: Create tests in `tests/` directory
 -   [ ] **Test Success Cases**: Test normal operation flows
 -   [ ] **Test Error Cases**: Test all error scenarios
--   [ ] **Test CLI Interface**: Use `CliRunner` for command testing
+-   [ ] **Mark a temporary test** — a test proving one specific change landed (a deleted branch, a removed
+        helper, a reworded message) carries `@pytest.mark.temporary` (registered in `pyproject.toml`) plus a
+        line naming what it pins, so release cleanup finds it with `pytest -m temporary --collect-only`.
+        This suite runs `--strict-markers`, so the marker must stay registered or every test using it fails.
+
+        The marker is required because a temporary test and a durable guardrail cannot be told apart by
+        reading them later — both scan source, both assert an absence. Do **not** mark a test whose
+        forbidden construct is still writable (`test_api_error_body.py`'s "every error path uses the
+        helper", the `test_log_redaction.py` guards), nor a control whose subject is deliberately a string
+        that does not exist. Full criterion: root `CLAUDE.md` Rule 13; Claude Code counterpart:
+        `tools/VamsCLI/CLAUDE.md`.
+
+-   [ ] **Test CLI Interface**: Use `CliRunner` for command testing. `CliRunner` bypasses `main()`, so
+        behavior implemented there (the `standalone_mode=False` call and its `UsageError` /
+        `ClickException` → JSON handling) can only be covered by spawning `python -m vamscli.main`
+        as a subprocess — and such a test MUST supply its own config home. The subprocess has no
+        pytest loaded, so `check_setup_required`'s `if 'pytest' in sys.modules` escape hatch does not
+        apply and the setup gate is live: with a real profile on the developer's machine the test
+        reaches the behavior under test, while on a clean checkout or in CI the gate fires first and
+        every case sees a `SetupRequired` payload instead (no `error_type` key, no `Usage:` text).
+        Point `HOME`, `USERPROFILE` and `APPDATA` at a `tmp_path` containing one
+        `profiles/default/config.json` (see the `cli_env` fixture in
+        `tests/test_json_output_purity.py`) and assert `"Setup Required" not in output` as a control,
+        so a fixture that stops satisfying the gate fails loudly rather than testing the wrong error.
+        When reproducing such a CI failure locally, do not simply blank `HOME`: that also hides
+        `~/.aws` (botocore then raises `ProfileNotFound` for the shell's `AWS_PROFILE`) and, on
+        Windows, leaves the temp `APPDATA` without `vamscli/logs` (the rotating file handler raises
+        `FileNotFoundError`). Both are artifacts of the simulation, not defects.
 -   [ ] **Run All Tests**: Ensure `pytest` passes
 
 #### **Step 7: Documentation**
@@ -102,6 +157,41 @@ tools/VamsCLI/
 -   [ ] **Run MyPy**: Type check with `mypy vamscli/`
 -   [ ] **Check Imports**: Ensure all imports are properly organized
 -   [ ] **Review Error Messages**: Ensure user-friendly error messages
+
+#### **Step 9: MCP and Connector Propagation**
+
+Three consumers sit **downstream of the CLI** and must be carried through in the same change. The VAMS MCP server (`tools/VamsMCP/`) imports `vamscli`'s `APIClient` and `ProfileManager` directly. The external connectors (`tools/ExternalIntegrations/`) instead shell out to the `vamscli` **executable** and parse its `--json-output`, so they are coupled to the command surface itself — command names, subcommands, flags, and response JSON keys.
+
+**MCP server:**
+
+-   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
+-   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`). The tier is about STORED DATA, so `abort_execution` is write-tier even though it is irreversible; the compute risk is carried by the README's `autoApprove` caution and `tools/VamsMCP/CLAUDE.md` Rule 4, which name `execute_workflow`, `rerun_execution` and `abort_execution` together. A required-true request field is not a confirmation to re-expose: `delete_asset` sends `confirmPermanentDelete=True` because `DeleteAssetRequestModel` declares an `always=True` validator rejecting any other value, so surfacing it as a tool parameter would give the agent a boolean whose only non-erroring value is `True`.
+-   [ ] **Check Pagination Shape**: `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. Confirm the `items_key` still matches the endpoint's response. **Three envelope variants exist and they are not interchangeable** — an unenveloped body (the asset/database and metadata-schema/api-key methods); `{"message": {"Items": [...], "NextToken": ...}}`, where the page is nested UNDER `message` so the envelope must be unwrapped before the items key applies (the subscriptions list); and `{"message": [row, ...]}`, a **bare array** with no items key and no token at all (both asset-scoped comment listings). Do **not** route the bare-array shape through `paginate()`: it finds no items key and returns zero rows on a perfectly successful 200. Lift the list and report the bound with `_bounded_message_list()` instead. The failure is silent in the worst direction — an empty result reads as "no comments exist".
+-   [ ] **Give the List Tool a `starting_token`, and State Its Bound**: `paginate()` stops at `max_items` or at `max_pages` (a per-call work bound on the server process, which a larger `max_items` deliberately does not raise), sets `truncated` with a `note` naming which fired — including the case where one page returned more rows than `max_items` and carried no token, which a token-only check misses — and returns the outstanding `NextToken`. Every paginated read tool takes a `starting_token` that forwards it as the first page's `startingToken`, and says so in its docstring. Without that pair the ceiling is a wall and the rows past it are unreachable through the server at all.
+-   [ ] **Never expose a parameter the endpoint cannot honour — the converse of the rule above.** Two shapes, both found in the comment routes: a parameter the handler **accepts and ignores** (`showDeleted` is forwarded by `get_handler` and read by none of the three asset-scoped service functions), and a parameter whose value **can never be obtained** (`starting_token` on a route that drops its `NextToken`, so a caller can pass a token it has no way to get). Expose neither. A flag that silently does nothing is worse than its absence, because a green result now carries a false claim: the operator believes they asked for deleted comments and were shown none. Where the capability genuinely exists on a sibling route, reach that route rather than exposing a parameter on the one that ignores it — and where it exists nowhere, say so in the docstring instead of offering the parameter.
+-   [ ] **Repeat Filter-Pinned Query Parameters on Every Page**: Some continuation tokens are only valid alongside the filters that produced them — the paged execution-detail metadata read pins its token to the request's `collection` and `pipelineId`, and the handler answers a mismatch with a 400. `paginate()` sends only `pageSize` and `startingToken`, so merge those filters into the params inside the `fetch_page` callable rather than on the first request alone.
+-   [ ] **Carry Out-of-Band Bound Signals Through**: A handler can answer successfully while withholding rows, and it says so in a field alongside the items — a top-level `warnings` array, a `truncatedCollections` list, or an echoed filter window such as the executions list's `filterStartDate`. `paginate()` rebuilds its result from the accumulated items alone and drops all of them, so an agent reports an understated count or concludes an object does not exist. A `warnings` array can carry more than one entry, because more than one bound can shorten the same page (the global executions list reports both its distinct-asset permission-check cap and its per-request work budget), so collect every entry rather than the first, and do the same in the CLI's own `--auto-paginate` aggregate — it rebuilds its result from the items too. Use `server.py`'s `_paginate_with_page_metadata(fetch_page, passthrough_keys=...)` for a list endpoint that can report those, and `_unwrap_message_with_warnings()` for a single call whose `warnings` array is a sibling of `message` (the pipeline saves). Then say in the docstring what the flag means for the agent's conclusion, not merely that the field exists.
+-   [ ] **Forward Every Narrowing Parameter**: An omitted optional parameter silently pins the agent to the server default. `get_execution_logs` without `limit`/`next_token` caps a container's output at 100 events with no way past the first page; `list_workflows` without `include_archived` makes the archived id that `unarchive_workflow` requires undiscoverable. Read the matching `vamscli` command for the endpoint's full parameter set, and send a parameter only in the mode that acts on it (the log paging parameters go in `full` mode only — truncated mode returns one joined blob and no continuation token).
+-   [ ] **Verify Placement and Uniqueness**: The tools are plain module-level `def`s, so both ways placement goes wrong leave a valid, importable module. A repeated tool name silently shadows the earlier definition, and a `def` past the `if __name__` entrypoint or outside its gate block is simply never executed — in both cases the tool is missing at run time with no error. `tests/test_server_tools.py` asserts against the source layout for exactly this; keep those checks passing.
+-   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list, and to the `autoApprove` array of that README's sample MCP host config if it is a safe read. Document a new environment variable in `tools/VamsMCP/.env.example` **and** in the README's `env` sample. That file is a reference list, not a dotenv template: nothing in the package loads a `.env` (and a cwd-upward search would not reliably find it, since a host spawns the console script from an arbitrary directory), so never write documentation telling a reader to copy it — a `.env` beside the server is silently ignored and the usual next step is to delete the gate guard in source. A tool whose parameters or response fields change also needs its README paragraph updated — that list is the only place the parameter set is documented outside the docstring.
+-   [ ] **Roll the MCP Version**: When the server's contract with the CLI changes, bump both `tools/VamsMCP/pyproject.toml` and `tools/VamsMCP/vams_mcp/__init__.py` alongside `tools/VamsCLI/vamscli/version.py`.
+-   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed). The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection. Assert the params that reach the `APIClient`, not just that the call happened — a dropped optional parameter is a silent server-default that no assertion on the return value catches.
+
+**External connectors** — required whenever a command name, subcommand, option/flag, or `--json-output` response shape changes. Nothing catches connector drift at build or import time: a renamed flag fails at connector runtime with a non-zero CLI exit, and a renamed or removed JSON key silently yields a blank field, which is worse.
+
+-   [ ] **Isaac Sim** (`isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py`): verify the argument lists passed to `subprocess.run` still match the CLI, and that each `@dataclass` field's `item.get("jsonKey", ...)` maps a key the command actually returns.
+-   [ ] **ArcGIS Pro** (`arcgispro-connector-for-vams/Services/VamsCliService.cs`): verify the interpolated argument strings, plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
+-   [ ] **Map keys to the right command**: `file list` items and the `file info` response are **different shapes**. A listing item carries `dateCreatedCurrentVersion` and no `contentType`/`lastModified`; `file info` carries `contentType`/`lastModified` and no `dateCreatedCurrentVersion`. Mapping a key onto the wrong command yields a permanently empty value with no error.
+-   [ ] **Guard ArcGIS computed properties**: a computed convenience property whose name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`) **must** carry `[JsonIgnore]`. Deserialization runs with `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata and fails the entire response, not just that field.
+-   [ ] **Keep `--profile` on every invocation, PREPENDED**: an omitted `--profile` resolves to whatever `profile switch` last recorded (see Profile Resolution), so a connector that skips the flag runs against another deployment. It is a group-level option, so a flag appended after the subcommand is rejected with Click's "no such option" — an argv-membership assertion passes while the command still fails at runtime. Both connectors prepend it centrally, in `_execute_command` and `ExecuteCommandAsync`; add it there rather than at each call site. `profile info <name>` takes the profile as a **positional** as well, which must track the configured name too.
+-   [ ] **Keep credentials on stdin, never on argv**: the connectors pipe the password and the override token to `--password-stdin` / `--token-override-stdin` (see Credential Input). A connector-side flag rename is caught only by the paired suites — `tools/VamsCLI/tests/test_auth_secret_not_in_argv.py` and `isaacsim_vams_integration/tests/test_vams_cli_service_secrets.py` — because the connectors do not import the package.
+-   [ ] **Validate the command surface**: confirm every group/subcommand/flag the connectors pass still resolves (walk `cli.commands[group].commands[cmd].params`), then spot-check a live `--json-output` response for the keys each connector parses.
+
+**Agent skill:**
+
+-   [ ] **Review the Agent Skill**: `tools/VamsAgentSkill/SKILL.md` self-discovers commands via `vamscli --help`, so ordinary command additions need no edit. Update it only when a **structural** rule changes: entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating command category.
+
+Reverse direction applies too: if working on the MCP server or a connector reveals a missing or incorrect `APIClient` method, fix it in the CLI rather than hand-rolling raw requests in the consumer.
 
 ## 🔧 **Implementation Standards**
 
@@ -176,6 +266,28 @@ def requires_setup_and_auth(func):  # VIOLATION - use existing decorator
 def get_profile_manager_from_context(ctx):  # VIOLATION - use existing helper
     pass
 
+# ❌ INCORRECT - Don't fall back to the default profile when resolving which profile to use
+profile_manager = ProfileManager(DEFAULT_PROFILE_NAME)  # VIOLATION - ignores `profile switch`
+```
+
+### Profile Resolution
+
+An explicit `--profile` wins; otherwise the profile recorded in `active_profile.json` by
+`vamscli profile switch` is used; the default profile applies only when no marker exists.
+`read_active_profile_name()` (module level in `utils/profile.py`) performs that lookup.
+
+Never resolve a profile by falling back to `DEFAULT_PROFILE_NAME`, and never give the global
+`--profile` option a Click `default=`. A Click default makes Click pass that name even when the flag
+is absent, so the callback cannot tell "omitted" from "explicitly asked for the default profile" —
+`profile switch` then silently becomes a no-op and every command runs against whatever deployment the
+default profile points at, while still reporting success. A bare `ProfileManager()` or
+`APIClient(url)` has the same effect. Guarded by `tests/test_active_profile_resolution.py`.
+
+```python
+# ✅ CORRECT
+from ..utils.profile import read_active_profile_name
+profile_manager = ProfileManager(read_active_profile_name())
+
 # ✅ CORRECT - Include comprehensive help
 @click.command()
 def my_command():
@@ -190,6 +302,29 @@ def my_command():
     """
     pass
 ```
+
+### Credential Input
+
+The OS process table publishes every argument of a running process — `/proc/<pid>/cmdline` and
+`ps -ef` on Linux, Task Manager's command-line column on Windows — to any other local account,
+including one with no VAMS entitlement. A command that accepts a password, token, or API key as an
+**option value only** therefore has no safe non-interactive form, and the CLI's two external
+connectors are non-interactive by construction.
+
+`auth login` pairs each credential option with a stdin flag: `-p/--password` with `--password-stdin`,
+`--token-override` with `--token-override-stdin`. Follow that shape for any new credential input:
+
+-   Read the secret with `read_secret_from_stdin()` (`commands/auth.py`). It reads `sys.stdin.buffer`
+    and decodes UTF-8, because the writer is usually another process and a text-mode read would use
+    the console code page, which differs on the two ends. Only CR and LF are stripped, so a
+    credential ending in a space survives.
+-   Reject the stdin flag combined with its option form, and reject an empty payload — an empty pipe
+    otherwise authenticates with an empty secret, or saves an override token that 401s on every call.
+-   **Keep the option form working**; existing scripts and integrations depend on it. Say in its
+    `help` text that it is discouraged and why, and document the stdin form as the recommended one in
+    `documentation/docusaurus-site/docs/cli/commands/setup-and-auth.md`.
+
+Guarded by `tests/test_auth_secret_not_in_argv.py`.
 
 ### **Error Handling Standards**
 
@@ -258,6 +393,27 @@ class TestAssetCommands:
         assert result.exit_code == 1
         assert 'Authentication required' in result.output
 ```
+
+#### **Output Encoding Is Set by the CLI, and a Fixture Must Not Paper Over It**
+
+The CLI prints Unicode status indicators (`✓`, `✗`, `●`) throughout its human-readable output, and
+`main._use_utf8_output()` reconfigures `sys.stdout`/`sys.stderr` to UTF-8 with `errors="replace"` at the
+entry point. Without that, Python takes the encoding from the locale whenever stdout is not a console —
+`cp1252` on a default Windows install — and every redirect or pipe raised `UnicodeEncodeError`.
+
+Two testing consequences:
+
+-   **`CliRunner` cannot observe this class of defect.** It replaces `sys.stdout` with an in-memory
+    buffer that has no code page, so encoding behaviour must be exercised by spawning
+    `python -m vamscli.main` as a subprocess (which brings its own config-home requirement, because the
+    setup gate is live outside pytest).
+-   **Never set `PYTHONIOENCODING=utf-8` in a fixture to make glyphs encode.** Doing so fixes the symptom
+    for the suite and leaves the defect in production — which is exactly how it survived a full release.
+    A test covering output encoding forces a legacy code page instead, and carries a positive control
+    asserting a non-`cp1252` character really reaches stdout so it cannot pass vacuously. See
+    `tools/VamsCLI/tests/test_output_encoding.py`.
+
+Mirrors `tools/VamsCLI/CLAUDE.md` Rule 9.
 
 ## 📝 **Development Templates**
 
@@ -492,6 +648,12 @@ def get_assets(self):
     return self.get("/api/user/assets")  # VIOLATION
 ```
 
+**Every `API_*` path constant must also name a route the backend actually registers.** `constants.py` is the authority a new consumer trusts, so a path the backend never declared is a trap that fails only at runtime against a live deployment: API Gateway rejects an unmatched path before any handler runs, so neither import nor build catches it, and the caller sees a `403 Missing Authentication Token` that is indistinguishable from a permissions failure. `tests/test_constants_contract.py` cross-checks every constant against the `ApiRoute` declarations in `backend/backend/common/apiRoutes.py`.
+
+Two such constants shipped in this release — one formatted by a live `APIClient` method (so the request really was rejected), and one imported but never formatted (dead, but reading like working code). A third case is a dead _name_ rather than a dead _path_: two constants holding the same registered path, one unused, differing by a single character. That one passes the cross-check by construction, so it stays a review concern rather than a mechanical one.
+
+A constant used as a path **prefix** — concatenated at the call site rather than formatted, as `API_LOGIN_PROFILE` is above — needs an entry in `_PREFIX_ONLY_CONSTANTS` naming why. Prefer a format-string constant matching a registered route: the exemption list is the one place this check can be widened, so each entry has to earn its place.
+
 ### **Rule 2: Commands MUST Use @requires_setup_and_auth**
 
 ```python
@@ -624,16 +786,19 @@ When making changes, update the appropriate documentation files:
 
 All CLI documentation lives in the Docusaurus documentation site at `documentation/docusaurus-site/docs/cli/`.
 
-**Docusaurus documentation site** (`documentation/docusaurus-site/docs/cli/`):
+**Docusaurus documentation site** (`documentation/docusaurus-site/docs/cli/`) is the single source of truth for all CLI documentation:
 
 -   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
 -   **New command group** → Create new page in `cli/commands/`, update `cli/command-reference.md`, and add to `sidebars.ts`
 -   **Installation/auth changes** → Update `cli/getting-started.md` and `cli/installation.md`
 -   **Automation patterns** → Update `cli/automation.md`
+-   **Troubleshooting changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/troubleshooting/` (CLI troubleshooting lives under the CLI section, not the top-level `troubleshooting/`)
 -   **API changes** → Update relevant `documentation/docusaurus-site/docs/api/` page and `documentation/VAMS_API.yaml`
 -   **Permission changes** → Update `documentation/docusaurus-site/docs/concepts/permissions-model.md`
 
 **Docusaurus documentation style**: Use `:::note`/`:::warning` admonitions, escape `\{curly braces\}` outside code blocks, `bash` language tags on code blocks. See `documentation/CLAUDE.md` for the full documentation style guide.
+
+> **Note:** The legacy in-repo docs under `tools/VamsCLI/docs/` are deprecated and retained only temporarily for migration validation. Do not add new content there. `tools/VamsCLI/README.md` keeps basic installation and quick start, then points to the official documentation site.
 
 #### **Documentation Update Checklist:**
 
@@ -644,49 +809,44 @@ All CLI documentation lives in the Docusaurus documentation site at `documentati
 -   [ ] **Build verification**: Run `cd documentation/docusaurus-site && npm run build` to verify
 -   [ ] **Cross-Reference Check**: Verify all internal documentation links work
 -   [ ] **Accuracy Check**: Ensure all documented features actually exist in code
--   [ ] **External Tool Integrations**: If CLI commands, parameters, output formats, or authentication flows changed, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI (Isaac Sim Python wrapper in `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py`, ArcGIS Pro C# wrapper in `arcgispro-connector-for-vams/Services/VamsCliService.cs`)
+-   [ ] **External Tool Integrations**: Connector **code** validation is a propagation step, not a documentation step — see [Step 9](#step-9-mcp-and-connector-propagation). Here, only confirm that any connector-facing documentation (each connector's own `README.md` / `CHANGELOG.md`) reflects a changed command surface.
 
-#### **New Documentation Structure:**
+#### **Documentation Structure (Docusaurus — single source of truth):**
 
 ```
-tools/VamsCLI/
-├── docs/
-│   ├── commands/
-│   │   ├── setup-auth.md          # Setup, auth, profile commands
-│   │   ├── asset-management.md    # Assets, asset-version, asset-links commands
-│   │   ├── file-operations.md     # File management commands
-│   │   ├── database-admin.md      # Database commands
-│   │   ├── tag-management.md      # Tag, tag-type commands
-│   │   └── global-options.md      # Global options and JSON usage
-│   │   └── ........md             # Any others that were generated afterwards
-│   ├── troubleshooting/
-│   │   ├── setup-auth-issues.md   # Setup and authentication problems
-│   │   ├── asset-file-issues.md   # Asset and file operation problems
-│   │   ├── database-tag-issues.md # Database and tag management problems
-│   │   ├── network-config-issues.md # Network, proxy, SSL issues
-│   │   └── general-troubleshooting.md # Debug mode, performance, etc.
-│   │   └── .......md              # Any others that were generated afterwards
-│   ├── INSTALLATION.md            # Installation methods and setup details
-│   ├── AUTHENTICATION.md          # Authentication system details
-│   └── DEVELOPMENT.md             # Development guidelines
-└── README.md                      # Main entry point with overview and quick start
+documentation/docusaurus-site/docs/cli/
+├── getting-started.md             # Install, first-time setup, authentication overview
+├── installation.md                # Install methods, profiles, configuration storage
+├── command-reference.md           # Index of all command groups
+├── automation.md                  # JSON output, pagination, scripting, CI/CD
+├── development.md                  # CLI contributor guide (code quality, testing, release)
+├── commands/                      # Per-command-group reference pages
+│   ├── setup-and-auth.md          # setup, auth, features, profile
+│   ├── database.md                # database commands
+│   ├── assets.md                  # assets, asset-version, asset-links, export
+│   ├── files.md                   # file management commands
+│   ├── tags.md                    # tag, tag-type commands
+│   ├── metadata.md                # metadata + metadata-schema commands
+│   ├── search.md                  # search commands
+│   ├── workflows.md               # workflow commands
+│   ├── permissions.md             # role, constraint, user-role commands
+│   ├── users-and-keys.md          # user cognito + api-key commands
+│   └── industry.md                # industry (BOM, PLM, spatial GLB) commands
+└── troubleshooting/               # CLI-specific troubleshooting (under the CLI section)
+    ├── setup-auth.md, assets-files.md, database-tags.md, search.md,
+    ├── permissions.md, users.md, industry.md, network-config.md, general.md
 ```
+
+Register any new page in `documentation/docusaurus-site/sidebars.ts` under the **CLI Reference** category (command pages under **Command Details**, troubleshooting under the **Troubleshooting** sub-category).
 
 #### **Documentation Update Process:**
 
 1. **Identify Command Group**: Determine which command group your changes affect
-2. **Update Command Documentation**: Add/modify examples in appropriate `docs/commands/` file
-3. **Update Troubleshooting**: Add error scenarios to appropriate `docs/troubleshooting/` file
-4. **Update Cross-References**: Ensure internal links work across the new structure
-5. **Test Documentation**: Verify all examples and links are accurate
-
-#### **Documentation Structure Benefits:**
-
--   **Focused Content**: Each file covers a specific functional area
--   **Easier Maintenance**: Smaller files are easier to update and review
--   **Better Navigation**: Users can find relevant information faster
--   **Scalable**: Easy to add new command groups without restructuring
--   **Reduced Conflicts**: Multiple developers can work on different areas simultaneously
+2. **Update Command Documentation**: Add/modify the appropriate `cli/commands/` page
+3. **Update Troubleshooting**: Add error scenarios to the appropriate `cli/troubleshooting/` page
+4. **Update sidebars.ts**: If a new page was added
+5. **Build verification**: Run `cd documentation/docusaurus-site && npm run build` to verify links and MDX
+6. **Accuracy Check**: Ensure all documented features actually exist in code
 
 #### **When to Update CLI_DEVELOPMENT_WORKFLOW.md:**
 
@@ -698,25 +858,27 @@ tools/VamsCLI/
 -   Changing testing standards or patterns
 -   Adding new security or compliance requirements
 
-### **Rule 8: Documentation Structure MUST Follow New Organization**
+### **Rule 8: All CLI Documentation Lives in the Docusaurus Site**
 
-When updating VamsCLI documentation, use the new organized structure:
+The official Docusaurus documentation site (`documentation/docusaurus-site/docs/cli/`) is the single source of truth for CLI documentation. The legacy in-repo docs under `tools/VamsCLI/docs/` are deprecated — do not add or update content there.
 
 #### **Documentation Update Guidelines:**
 
--   **Command changes** → Update or create relevant command guides in `docs/commands/` directory
--   **Troubleshooting changes** → Update or create relevant troubleshooting guides in `docs/troubleshooting/` directory
--   **Installation/setup process** → Update `docs/INSTALLATION.md`
--   **Authentication system** → Update `docs/AUTHENTICATION.md`
--   **Development process** → Update `docs/DEVELOPMENT.md`
--   **Major feature additions** → Update main `README.md`
--   **System-wide rule changes** → Update `CLI_DEVELOPMENT_WORKFLOW.md` (this file)
+-   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
+-   **Troubleshooting changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/troubleshooting/`
+-   **Installation/setup process** → Update `cli/getting-started.md` and `cli/installation.md`
+-   **Authentication system** → Update `cli/commands/setup-and-auth.md` (and `cli/getting-started.md` for the overview)
+-   **Automation/scripting** → Update `cli/automation.md`
+-   **CLI development process** → Update `documentation/docusaurus-site/docs/cli/development.md` (CLI-specific contributor guide); update `documentation/docusaurus-site/docs/developer/setup.md` only for changes to the full-stack/local-development setup
+-   **Basic install / quick start** → Update `tools/VamsCLI/README.md` (which then points to the official site)
+-   **System-wide rule changes** → Update `CLI_DEVELOPMENT_WORKFLOW.md` (this file) and the mirrored `tools/VamsCLI/CLAUDE.md`
+-   **MCP propagation rule changes** → This file is the Kiro counterpart for **both** `tools/VamsCLI/CLAUDE.md` and `tools/VamsMCP/CLAUDE.md`. A change to the Backend → CLI → MCP chain must land in root `CLAUDE.md` Pattern 7, both of those `CLAUDE.md` files, and the Step 9 checklist in this document — synchronization is bidirectional, so a rule authored here must be carried back into the `CLAUDE.md` files (root `CLAUDE.md` Rule 11)
 
 #### **Documentation Organization:**
 
--   **Command Documentation** (`docs/commands/`): Organize by CLI command groups (setup/auth, assets, files, database, tags, global options)
--   **Troubleshooting Documentation** (`docs/troubleshooting/`): Organize by problem categories (setup/auth issues, asset/file issues, database/tag issues, network/config issues, general troubleshooting)
--   **Supporting Documentation** (`docs/`): Installation, authentication, and development guides
+-   **Command Documentation** (`cli/commands/`): One page per command group
+-   **Troubleshooting Documentation** (`cli/troubleshooting/`): One page per problem domain, registered under the CLI Reference → Troubleshooting sidebar sub-category
+-   **Top-level CLI pages** (`cli/`): Getting started, installation, command reference, and automation
 
 ### **Rule 9: Decorators MUST be Imported from utils.decorators**
 
@@ -763,6 +925,16 @@ All tests MUST properly mock ProfileManager instances to avoid setup check failu
 -   [ ] **Use Patches When Needed**: Use `@patch` decorators for specific scenarios not covered by fixtures
 -   [ ] **Mock Main ProfileManager**: Always mock `vamscli.main.ProfileManager` for ALL CLI tests
 -   [ ] **Mock Decorator ProfileManager**: Mock `vamscli.utils.decorators.ProfileManager` for API command tests
+-   [ ] **Patch a client's construction boundary, not the attribute afterwards**: a test building a `CognitoAuthenticator` patches `vamscli.auth.cognito.boto3.client` **around** the constructor rather than assigning over `.client` after it returns. The client is built in `__init__`, so a later assignment leaves a real one already constructed and makes the test depend on ambient AWS configuration. `tests/test_auth_password.py::_make_authenticator` is the reference shape, and `tests/conftest.py::isolate_aws_credentials` sets dummy credentials suite-wide as a second line of defence.
+
+#### **The `cognito-idp` client is UNSIGNED, and must stay that way**
+
+`CognitoAuthenticator` builds its `cognito-idp` client with `signature_version=UNSIGNED`. Every operation the login and password flows reach — `initiate_auth`, `respond_to_auth_challenge`, `forgot_password`, `confirm_forgot_password`, `change_password` — is an unauthenticated Cognito user-pool API that takes no SigV4 signature, and botocore skips credential resolution entirely for an unsigned client.
+
+A **signed** client walks the AWS credential chain inside `create_client`, so a configured-but-failing provider (an expired SSO session, a `credential_process` helper that now exits non-zero) aborts `vamscli auth login` with a raw `CredentialRetrievalError` before any Cognito call — the CLI's front door blocked by an AWS configuration it does not use. A machine with **no** AWS configuration at all resolves to `None` and proceeds, which is why CI never sees it and why the failure only reaches developers and operators. Pinned by `tests/test_auth_cognito_unsigned.py`.
+
+Note the interaction with the mocking rule above, because it decides what a test can prove: once the client is unsigned, asserting that credentials are never _resolved_ is vacuous — an unsigned client never resolves them either way. Assert over `botocore.session.Session.create_client`, which boto3 calls for signed and unsigned clients alike, so the assertion measures whether a real client was built at all.
+
 -   [ ] **Mock Command ProfileManager**: Mock command-specific ProfileManager imports when needed
 -   [ ] **Comprehensive Mocking**: Ensure all ProfileManager instances are mocked in tests
 
@@ -930,9 +1102,10 @@ This workflow document itself MUST be updated whenever system-wide standards, im
 
 When updating this workflow document, also update the corresponding files:
 
-1. Update **both** `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` (they must stay in sync)
+1. Update `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`
 2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, DOCUMENTATION_WORKFLOW.md)
+3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, DOCUMENTATION_WORKFLOW.md)
+4. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping)
 
 #### **Workflow Maintenance Responsibility:**
 
@@ -1035,7 +1208,7 @@ Available constants are in `infra/common/vamsAppFeatures.ts`
 
 #### **Feature Switch Development Workflow Location:**
 
-This workflow document is located at `.clinerules/workflows/CLI_DEVELOPMENT_WORKFLOW.md` and should be referenced for all VamsCLI development tasks.
+This workflow document is located at `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` and should be referenced for all VamsCLI development tasks.
 
 ### **Rule 13: CLI Integration Testing MUST Use Main CLI Entry Point**
 
@@ -1222,12 +1395,36 @@ A caveat is for core logic unit tests or unit tests where the existing fixtures 
 
 The following fixtures are available in `tools/VamsCLI/tests/conftest.py`:
 
+-   `isolate_logging_globals` (autouse): Restores `vamscli.utils.logging._verbose_mode` and `._logger` after every test
+-   `mock_logging` (autouse): Prevents log-directory and log-file creation during tests
 -   `cli_runner`: Pre-configured CliRunner instance
 -   `mock_profile_manager`: Standard ProfileManager mock with valid configuration
 -   `mock_api_client`: Standard APIClient mock with API availability
 -   `no_setup_profile_manager`: ProfileManager mock for no-setup scenarios
 -   `generic_command_mocks`: Factory for creating comprehensive command mocks
 -   `no_setup_command_mocks`: Factory for creating no-setup command mocks
+
+#### **Patching a Command's asyncio.run**
+
+Commands call `asyncio.run(some_coro())`. Python evaluates the argument before the call, so the coroutine object is always constructed — and a plain `MagicMock` then discards it un-awaited. Python emits "coroutine ... was never awaited" when that object is garbage collected, which happens inside whatever unrelated test is running at the time.
+
+Patch with the `CoroutineClosingMock` class from `tests/conftest.py`, which closes any coroutine argument and otherwise behaves as a normal `MagicMock`:
+
+```python
+@patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
+def test_download(self, mock_asyncio_run, cli_runner, assets_command_mocks):
+    mock_asyncio_run.return_value = {...}
+```
+
+`new_callable=` rather than `side_effect=` is deliberate: a `side_effect` that returns a value makes a later `mock.return_value = ...` silently ineffective. Do **not** use `AsyncMock` — it returns a coroutine instead of the canned value and leaks two coroutines rather than one.
+
+#### **Logging State Must Not Leak Between Tests**
+
+`vamscli.utils.logging` keeps `_verbose_mode` and `_logger` as module globals, and `main.py` binds `initialize_logging` at import time — so `mock_logging`'s patch of the module attribute does not intercept the call the CLI group makes. Every `cli_runner.invoke` runs the real initializer and writes those globals for the remainder of the session.
+
+A leaked `_verbose_mode = True` is not cosmetic: in verbose mode every `log_*` call also writes to stderr, `CliRunner` merges stderr into `result.output`, and any later test doing `json.loads(result.output)` fails on text wrapped around its JSON document — in a test that never touched logging. The autouse `isolate_logging_globals` fixture restores both globals, and `tests/test_logging_isolation.py` guards it in ordered `test_a_` / `test_b_` pairs (the setter half doubles as the positive control).
+
+`_is_verbose_mode()` reads only the `_verbose_mode` module global, which `initialize_logging()` sets from click's parsed `--verbose` (registered in `main.py`). It must stay that way. While it also matched the literal `--verbose` anywhere in `sys.argv`, the suite's outcome depended on how pytest was invoked: pytest's own flag enabled stderr logging session-wide and broke ~113 tests that parse `result.output` as JSON, and no fixture could prevent it because the helper is consulted per call rather than per test. `tests/conftest.py` compensated by stripping the argument out of `sys.argv` at import — a process global no test owns. The same sniff also fired on an option VALUE, so `vamscli search assets -q "--verbose"` turned on full request/response logging. Both are pinned by `tests/test_logging_isolation.py::test_verbosity_does_not_depend_on_process_argv` and `tests/test_logging.py::TestVerboseMode`.
 
 #### **Fixture Usage Patterns:**
 
@@ -1661,6 +1858,41 @@ The `vamscli.utils.json_output` module provides:
 
 These utilities ensure consistent JSON output handling across all commands.
 
+### **Rule 18: Never Log a Whole Request or Response Payload Unredacted**
+
+The CLI writes to a rotating log file (`get_config_dir()/logs/vamscli.log`, up to 6 files) at DEBUG level regardless of whether `--verbose` is set. Anything written there **outlives the command** and, on a shared host or build agent, is readable by other local users. Several API payloads carry live credentials:
+
+| Payload                                       | Credential                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------ |
+| `auth login` response                         | Amazon Cognito access, refresh, and id tokens                      |
+| `auth login` / `auth change-password` request | The plaintext password                                             |
+| `api-key create` response                     | The one-time plaintext `vams_…` API key                            |
+| Any download response                         | Presigned Amazon S3 URLs (a bearer credential in the query string) |
+
+**Every log call that receives a whole request or response payload MUST route it through the redactor in `utils/logging.py`:**
+
+```python
+from .logging import redact_to_text    # returns a redacted string
+from .logging import redact_sensitive  # returns a redacted copy of the object
+
+logger.debug(f"Response body: {redact_to_text(response_data)}")
+```
+
+The three existing sinks are wired: `output_result` (`utils/json_output.py`), `log_api_request`, and `log_api_response` (`utils/logging.py`). **Adding a fourth sink means adding the redactor call** — there is no automatic interception, because the payload reaches the logger as an already-formatted string.
+
+**How the redactor decides:**
+
+-   **By key name** — a key whose normalized form (separators stripped, lowercased) contains `password`, `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`, or `cookie` is replaced. Applied recursively through dicts and sequences.
+-   **By descriptive suffix (an exception)** — a key that also _ends_ in `id`, `name`, `arn`, `type`, `count`, `expiry`, `expiration`, `enabled`, or `status` names a credential rather than carrying one, so `apiKeyId`, `tokenType`, and `credentialsSecretArn` survive. `apiKeyHash` and `passwordHash` deliberately do **not** survive.
+-   **By value shape** — `vams_…` keys, JWTs, `Bearer …`, and presigned-URL `X-Amz-Signature` / `X-Amz-Security-Token` parameters are scrubbed even when the key name gives no hint, covering a payload already rendered to a string.
+
+**Two properties that must not be broken** (both pinned by `tests/test_log_redaction.py`):
+
+1. **Redaction applies to the log file only — never to console or `--json-output`.** A newly created API key is displayed exactly once and cannot be retrieved again, so leaking redaction into the output path would make `api-key create` useless. `redact_sensitive` returns a **copy** and never mutates its input.
+2. **Non-secret keys must survive.** This CLI logs S3 object keys constantly (`s3Key`, `objectKey`, `keyName`, `bucketExistingKey`). Over-redaction destroys the diagnostic value the log exists for, which is why the key-fragment list spells out credential names rather than matching a bare `key`.
+
+> **One predicate, every per-key filter:** `redact_mapping_for_log()` wraps `_is_sensitive_key`, and `log_command_start`, `log_api_request`'s header filter, `log_config_info`, `log_config_diagnostic` and `log_auth_diagnostic` all use it. A new per-key log filter must call it rather than keep its own list. Each of those sites previously matched with `key.lower() in ['password', 'token', 'secret', 'key']`, which missed every parameter name the CLI actually declares -- `new_password`, `old_password`, `token_override`, `access_token` -- while the redaction visibly fired for `password` on the same line. Pinned by `tests/test_log_redaction.py::TestPerKeyLogFiltersShareOnePredicate`, which asserts both directions (the secrets are masked, and `starting_token` / `tokenType` / `apiKeyId` survive).
+
 ## 📚 **Detailed Implementation Guide**
 
 ### **Adding New API Endpoints**
@@ -2028,6 +2260,38 @@ if not required_param:
 10. **Always** provide clear error messages
 11. **Always** follow the new exception handling architecture
 12. **Always** let global exceptions bubble up to main.py
+13. **Always** match the surrounding comment density and style — describe **what** code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in code)
+14. **Never** call `list()`, `get()` or `set()` in a module that defines a command of that name — use `builtin_list` (see below)
+
+### **Builtins Shadowed by Command Names**
+
+A Click command is bound to a module-scope name, so a command named `list` makes the module attribute
+`list` a `click.Command` and shadows the builtin for that whole module. A `Command` is callable and its
+`__call__` runs `main()`, so `list(x)` executes that CLI command as a nested program with `x` parsed as
+its argv — it does not build a list, and it raises no `TypeError` to point at the call site.
+
+```python
+# In commands/assets.py, which defines `def list(...)` as `assets list`:
+list([])            # runs `assets list` -> prints the asset listing, SystemExit(0)
+list({'dup.txt'})   # runs `assets list dup.txt` -> "unexpected extra argument", SystemExit(2)
+```
+
+The empty-iterable case is the dangerous one: the command emits an unrelated asset listing instead of
+its own result **and exits 0**, so it looks like a successful run of a different command.
+
+Modules that define such a command must alias the builtin and use the alias:
+
+```python
+from builtins import list as builtin_list  # Avoid namespace collision with the 'list' command
+
+unique = builtin_list(set(conflicts))
+```
+
+`commands/metadata.py` established the idiom and `commands/assets.py` follows it. Of the command names
+this CLI uses, `list`, `get` and `set` are builtins. Prefer a comprehension or `[*a, *b]` where one
+will do, since neither names the builtin. No linter catches this — the rebinding is valid Python and
+the call type-checks — so treat a command whose output contains another command's output as this bug
+until shown otherwise.
 
 ## 🛠️ **Development Commands**
 

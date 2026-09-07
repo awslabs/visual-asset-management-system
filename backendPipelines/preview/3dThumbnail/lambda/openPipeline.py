@@ -5,17 +5,37 @@ import os
 import boto3
 import json
 import datetime
+import uuid
 from customLogging.logger import safeLogger
+import manifestHelper
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="OpenPipeline")
 
 sfn = boto3.client(
     'stepfunctions',
-    region_name=os.environ["AWS_REGION"]
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
+events_client = boto3.client(
+    'events',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
 )
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
+# Orchestration bus + state-machine log group for optional sub-process registration
+ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
+STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
@@ -25,6 +45,42 @@ def abort_external_workflow(error, task_token):
             error='Pipeline Failure: ' + error,
             cause='See AWS cloudwatch logs for error cause.'
         )
+
+
+def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
+                           sub_execution_arn, state_machine_arn):
+    """Best-effort: report this pipeline's sub-SFN execution + log group to the orchestration bus."""
+    if not orchestration_bus_name or not orchestration_event_prefix:
+        logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
+        return
+    pipeline_execution_id = manifestHelper.pipeline_execution_id_from_event_prefix(
+        orchestration_event_prefix)
+    if not pipeline_execution_id:
+        logger.warning("Could not derive pipelineExecutionId from event prefix; skipping registration")
+        return
+    detail = {
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {
+            "stateMachineArn": state_machine_arn or "",
+            "executionArn": sub_execution_arn or "",
+        },
+    }
+    if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
+        detail["logs"] = [{
+            "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
+            "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
+            "logStreamName": "",
+        }]
+    try:
+        events_client.put_events(Entries=[{
+            "EventBusName": orchestration_bus_name,
+            "Source": orchestration_event_prefix,
+            "DetailType": REGISTER_DETAIL_TYPE,
+            "Detail": json.dumps(detail),
+        }])
+        logger.info(f"Registered sub-execution for pipeline execution {pipeline_execution_id}")
+    except Exception as e:  # nosec B110 - registration is best-effort; never fail the pipeline
+        logger.warning(f"Sub-process registration failed (non-critical): {e}")
 
 def lambda_handler(event, context):
     """
@@ -37,17 +93,12 @@ def lambda_handler(event, context):
 
     responses = []
 
-    # Get any given additional inputMetadata
-    if ('inputMetadata' in event):
-        input_Metadata = event['inputMetadata']
-    else:
-        input_Metadata = ''
+    # Get the input metadata + input-configuration S3 locations
+    input_metadata_s3_location = event.get('inputMetadataS3Location', '')
+    input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
 
-    # Get any given additional inputParameters
-    if ('inputParameters' in event):
-        input_Parameters = event['inputParameters']
-    else:
-        input_Parameters = ''
+    # Get the orchestration event prefix for optional sub-process registration
+    orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
 
     # Get any given additional outer/external task token to report back to (when using this pipeline as part of another state machine)
     if ('sfnExternalTaskToken' in event):
@@ -77,8 +128,13 @@ def lambda_handler(event, context):
     file_root, extension = os.path.splitext(input_s3_asset_files_uri)
 
     logger.info(f"Checking for valid file")
-    # Check to make sure we are working with the right file types (if not, exit)
-    if (not extension or extension == '' or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+    # Validate the extension against exact members of the comma-separated allow list. A containment
+    # test against the joined string accepts any prefix of a listed extension ('.st' against
+    # '.stl,.step'), which admits a file the container cannot read.
+    allowed_extensions = [ext.strip().lower() for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(',')
+                          if ext.strip()]
+
+    if (not extension or extension.lower() not in allowed_extensions):
         abort_external_workflow("Pipeline cannot process file type provided", external_sfn_task_token)
         return {
             'statusCode': 400,
@@ -88,7 +144,7 @@ def lambda_handler(event, context):
         }
 
     # Generate new job name
-    job_name = f"PipelineJob_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    job_name = f"PipelineJob_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}_{uuid.uuid4().hex[:8]}"
 
     # StateMachine Execution Input
     sfn_input = {
@@ -98,8 +154,8 @@ def lambda_handler(event, context):
         "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_uri,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
-        "inputMetadata": input_Metadata,
-        "inputParameters": input_Parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
         "assetId": asset_id,
         "databaseId": database_id,
@@ -117,6 +173,11 @@ def lambda_handler(event, context):
         )
 
         logger.info(f"SFN Response: {sfn_response}")
+
+        # Best-effort: register this sub-SFN execution + its log group
+        register_sub_execution(
+            ORCHESTRATION_BUS_NAME, orchestration_event_prefix,
+            sfn_response.get("executionArn", ""), STATE_MACHINE_ARN)
 
         # response datetime not JSON serializable
         sfn_response["startDate"] = sfn_response["startDate"].strftime('%m-%d-%Y %H:%M:%S')

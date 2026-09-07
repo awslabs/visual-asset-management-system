@@ -1,0 +1,36 @@
+version: 0.2
+
+env:
+    variables:
+        # Mutable alias pushed beside the immutable IMAGE_TAG and used for the Docker layer cache.
+        # IMAGE_TAG itself is supplied by the CodeBuild project and is deliberately not defaulted here.
+        CACHE_TAG: "latest"
+
+phases:
+    pre_build:
+        commands:
+            - test -n "${IMAGE_TAG}" || (echo "IMAGE_TAG was not supplied by the CodeBuild project" && exit 1)
+            - echo "Logging in to ECR..."
+            - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_URI%%/*}
+            - IMAGE_URI="${ECR_REPO_URI}:${IMAGE_TAG}"
+            - CACHE_URI="${ECR_REPO_URI}:${CACHE_TAG}"
+            # Pull previous image from ECR to use as Docker layer cache (speeds up rebuilds significantly)
+            - echo "Pulling previous image for layer cache..."
+            - docker pull ${CACHE_URI} || true
+    build:
+        commands:
+            - echo "Building container image..."
+            # ACCEPT_EULA is forwarded as a build arg — the Isaac Lab Dockerfile fails the build
+            # unless ACCEPT_EULA=Y, accepting the NVIDIA Software License Agreement.
+            - docker build --build-arg ACCEPT_EULA=${ACCEPT_EULA} --cache-from ${CACHE_URI} -t ${IMAGE_URI} -t ${CACHE_URI} .
+    post_build:
+        commands:
+            - echo "Pushing image to ECR..."
+            - docker push ${IMAGE_URI}
+            - docker push ${CACHE_URI}
+            - echo "${IMAGE_URI}" > image_uri.txt
+            - echo "Build completed successfully"
+
+artifacts:
+    files:
+        - image_uri.txt
