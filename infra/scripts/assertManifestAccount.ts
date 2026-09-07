@@ -130,8 +130,4 @@ if (wrong.length) {
     process.exit(1);
 }
 
-console.log(
-    `assertManifestAccount: OK — all ${
-        accounts.length === 1 ? "" : ""
-    }artifacts target ${expected}.`
-);
+console.log(`assertManifestAccount: OK — all artifacts target ${expected}.`);

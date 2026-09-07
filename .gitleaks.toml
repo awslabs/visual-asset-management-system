@@ -96,4 +96,18 @@ regexes = [
     # plain words that they are placeholders.
     '''n0t-in-argv-please''',
     '''vams_n0t_in_argv_either''',
+
+    # AWS Step Functions task-token stubs in the pipeline lambda test suites (rapidPipeline, modelOps,
+    # 3dThumbnail, pcPotreeViewer, gr00t). Each suite asserts that a failing pipeline still returns its
+    # token through SendTaskFailure, so a token-shaped literal has to be present for the assertion to
+    # prove anything. A real task token is several hundred characters of mixed-case base64 including
+    # `+`, `/` and `=`, so a short dash-separated lowercase word cannot be one.
+    #
+    # All three are listed although the scan reported only `tok-rapid-123`: the other two are the same
+    # fixture under a different name and a build with a lower entropy threshold flags them too — the
+    # session-token entries above were added for exactly that reason after one build reported them and
+    # another did not.
+    '''tok-rapid-123''',
+    '''tok-fix053''',
+    '''tok-123''',
 ]

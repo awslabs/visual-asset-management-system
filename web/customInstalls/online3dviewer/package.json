@@ -9,5 +9,8 @@
         "online-3d-viewer": "^0.16.0",
         "rhino3dm": "8.17.0",
         "web-ifc": "0.0.68"
+    },
+    "overrides": {
+        "fflate": "^0.8.3"
     }
 }

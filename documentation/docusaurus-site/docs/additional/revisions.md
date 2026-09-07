@@ -127,6 +127,10 @@ The full list is in the repository `CHANGELOG.md`; these are the ones that chang
 Run the v2.5 to v2.6 migration at `infra/deploymentDataMigration/v2.5_to_v2.6/upgrade` after deploying the v2.6 stack. It runs seven steps by default (`--steps all`): `reindex`, `assetHistory`, `workflowExecutions`, `auxPreviewRelocation`, `pipelineWorkflowDefinitions`, `globalListBackfill`, and `tagsNamespacing`. Repopulating `vams-assets-v3` and `vams-files-v3` from source data is the `reindex` step alone — the other six reshape execution history, backfill asset history, relocate auxiliary previews, migrate pipeline, workflow, and tag definitions, and stamp the global-list partition attribute, so running only `reindex` leaves the rest of the upgrade incomplete. `pipelineWorkflowDefinitions` is the one step that is not safe to repeat. For provisioned deployments, if the OpenSearch 2.7 → 3.5 in-place engine upgrade fails during `cdk deploy`, deploy first with OpenSearch disabled in `config.json` to delete the existing domain, then re-enable and redeploy to create a fresh 3.5 domain before running the migration. See the [v2.5 to v2.6 update guide](../deployment/update-the-solution.md#v25-to-v26) for what each step does and the ordered procedure.
 :::
 
+**Known issues:**
+
+-   Two dependency findings remain in the documentation site, both reported against `image-size`, and neither has a patched version published upstream — every released version of the package is affected, so the findings cannot be resolved by raising the version. The package is a build-time transitive dependency of the Docusaurus MDX loader, which reads image dimensions while the static site is generated, and it is not part of the published site. Both advisories describe a denial of service reached by parsing a malformed JXL, HEIF, or ICNS image, so reaching either one requires committing such a file to the documentation source tree. These will be revisited when a fixed version is published.
+
 ### 2.5.3
 
 **Release date:** 2026-08-03

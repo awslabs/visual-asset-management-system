@@ -24,6 +24,7 @@ retry policy changes. What this file owns is that no client is left bare.
 
 import ast
 import os
+import re
 
 import pytest
 
@@ -33,11 +34,15 @@ _PIPELINES_DIR = os.path.join(_REPO_ROOT, "backendPipelines")
 # Directories that are not shipped pipeline code: test suites, vendored upstream trees, caches.
 _SKIP_PARTS = {"__pycache__", "tests", "src", "node_modules", ".venv", ".pytest_cache"}
 
-# A directory carrying this marker is synced from an upstream repository on EVERY cdk synth or list:
-# `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file
-# over the local tree. An edit to such a file survives until the next CDK invocation and no further --
-# measured, not assumed: `build_models_tar.py` was fixed here, and `npx cdk list` reverted it within
-# the hour, leaving this ratchet red with nothing a VAMS change could do about it.
+# The splat container directory is synced from an upstream repository on EVERY cdk synth or list:
+# `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and `copyFileSync`s every file
+# present upstream over the local tree. An edit to such a file survives until the next CDK invocation
+# and no further -- measured, not assumed: `build_models_tar.py` was fixed here, and `npx cdk list`
+# reverted it within the hour, leaving this ratchet red with nothing a VAMS change could do about it.
+#
+# Being tracked in git does not make a file VAMS-owned, and that is the trap. HEAD's copy of
+# `build_models_tar.py` already holds upstream's bytes, so a sync rewrites it to what it already was
+# and `git diff` stays empty -- which reads as evidence the sync does not touch it. It does.
 #
 # VAMS-owned files in those directories are the ones that do NOT exist upstream, which is precisely why
 # they survive the copy: `__main__.py` (the container entry point), `vams_utils/` (its support package),
@@ -54,17 +59,32 @@ _SKIP_PARTS = {"__pycache__", "tests", "src", "node_modules", ".venv", ".pytest_
 # the client after each copy. Rejected deliberately: the one bare client is in a workstation utility that
 # builds a model archive for local debug runs, not in anything the deployed pipeline executes, so a
 # brittle source-rewriting anchor would buy no production behaviour.
-_UPSTREAM_SYNC_MARKER = ".synced-commit"
 _UPSTREAM_OWNED_FILES = {"build_models_tar.py"}
+
+# The synced directories are NAMED here rather than discovered by their marker file.
+#
+# `.synced-commit` is listed in the splat container's own `.gitignore`, so it exists only on a machine
+# that has already synthesized. Discovering the directory through it made this ratchet environment
+# dependent in the worst direction: locally the marker was present, the exemption applied, and both
+# rules passed; on a CI runner the marker cannot exist, so the exemption was inert, and
+# `build_models_tar.py` entered the walk carrying upstream's bare `boto3.client("s3")` — turning two
+# rules red on a checkout where nothing was wrong. The marker is a build artefact and cannot be the
+# authority for a check that has to mean the same thing everywhere.
+#
+# This path is committed, so it reads identically in both places. It is kept honest from the other end
+# by `test_the_synced_directory_is_the_one_the_construct_writes`, which recovers the directory from the
+# TypeScript that performs the sync: move or rename it there and this list turns RED rather than
+# quietly exempting nothing.
+_UPSTREAM_SYNCED_RELDIRS = ("3dRecon/splatToolbox/container",)
 
 
 def _upstream_synced_dirs():
     """Directories under backendPipelines that a CDK invocation overwrites from upstream."""
     found = set()
-    for dirpath, dirnames, filenames in os.walk(_PIPELINES_DIR):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_PARTS]
-        if _UPSTREAM_SYNC_MARKER in filenames:
-            found.add(os.path.abspath(dirpath))
+    for rel in _UPSTREAM_SYNCED_RELDIRS:
+        candidate = os.path.join(_PIPELINES_DIR, *rel.split("/"))
+        if os.path.isdir(candidate):
+            found.add(os.path.abspath(candidate))
     return found
 
 
@@ -328,20 +348,21 @@ class TestPipelineBotoClientsAreConfigured:
     def test_the_upstream_exemption_is_narrow_and_still_examines_vams_code(self):
         """The upstream-sync skip is the one place this ratchet can lose coverage silently.
 
-        Four arms, because a skip keyed on a marker file is easy to widen by accident:
-          * the marker directory is actually found (otherwise the skip is inert and the rule would be
-            red, which is at least loud);
+        Four arms, because a narrow skip is easy to widen by accident:
+          * every declared synced directory actually resolves (a renamed or moved directory makes the
+            skip inert, and this says so rather than absorbing it);
           * every OTHER Python file in that directory is still examined -- `__main__.py` (the container
             entry point), `vams_bake_models.py` and `__init__.py` are VAMS-owned and survive the sync;
           * the exemption names one file, so a future upstream bump that adds Python files turns the
             rule red rather than absorbing them;
-          * a file with an exempt basename OUTSIDE a marked directory is NOT exempted.
+          * a file with an exempt basename OUTSIDE a synced directory is NOT exempted.
         """
         synced = _upstream_synced_dirs()
-        assert synced, (
-            "no .synced-commit marker found under backendPipelines. Either the splat container has "
-            "never been synced in this checkout, or the marker was renamed -- in which case this "
-            "ratchet is now asserting against files a cdk synth will overwrite.")
+        assert len(synced) == len(_UPSTREAM_SYNCED_RELDIRS), (
+            f"{len(synced)} of {len(_UPSTREAM_SYNCED_RELDIRS)} declared upstream-synced directories "
+            f"resolve under backendPipelines: {_UPSTREAM_SYNCED_RELDIRS}. A directory that no longer "
+            f"exists exempts nothing, so the ratchet would be asserting against files a cdk synth "
+            f"overwrites -- reconcile the list with the construct that performs the sync.")
 
         examined = {rel for rel, _ in _pipeline_modules()}
 
@@ -374,6 +395,61 @@ class TestPipelineBotoClientsAreConfigured:
         # rule: keying on the filename alone would exempt any same-named file anywhere in the tree.
         elsewhere = os.path.join(_PIPELINES_DIR, "conversion", "build_models_tar.py")
         assert _is_upstream_owned(elsewhere, synced) is False
+
+    def test_the_synced_directory_is_the_one_the_construct_writes(self):
+        """`_UPSTREAM_SYNCED_RELDIRS` must name the directory the sync actually overwrites.
+
+        This is the arm that replaces the old marker lookup, and it is the reason naming the directory
+        is not simply a hardcoded guess. The construct builds its target with
+        `path.resolve(__dirname, ..., "backendPipelines", "3dRecon", "splatToolbox", "container")`;
+        this recovers those trailing segments from that TypeScript and requires the declared list to
+        match. A directory renamed on the construct side therefore turns this RED, where the previous
+        shape would have gone on exempting nothing and quietly stopped protecting anything.
+
+        Reading the TypeScript rather than re-deriving the path is deliberate: the two are only
+        coupled if one is read out of the other.
+        """
+        construct = os.path.join(
+            _REPO_ROOT, "infra", "lib", "nestedStacks", "pipelines", "3dRecon", "splatToolbox",
+            "constructs", "splatToolbox-construct.ts")
+        assert os.path.isfile(construct), (
+            f"the splat construct is not at {construct}; this arm can no longer verify the synced "
+            f"directory, so the exemption is unanchored")
+
+        with open(construct, encoding="utf-8") as handle:
+            source = handle.read()
+
+        # Narrow to the sync function's OWN target expression before reading a path out of it. The
+        # construct builds three paths under `backendPipelines` — the CodeBuild image asset, the
+        # vamsSchema bundle, and this one — and they move independently. Scanning the whole file unions
+        # all three, which lets the image asset's copy of the directory answer for a sync target that
+        # has already moved: renaming only the `targetDir` segment left this arm GREEN, which is exactly
+        # the silent widening it exists to catch.
+        target = re.search(r"targetDir\s*=\s*path\.resolve\((.*?)\);", source, re.DOTALL)
+        assert target, (
+            "the splat construct no longer assigns `targetDir = path.resolve(...)`; the sync target "
+            "cannot be recovered from it and this arm would pass vacuously")
+
+        # Consecutive quoted segments from "backendPipelines" onwards are the whole relative path.
+        quoted = re.findall(r'"([^"\n]+)"', target.group(1))
+        recovered = set()
+        if "backendPipelines" in quoted:
+            segments = []
+            for following in quoted[quoted.index("backendPipelines") + 1:]:
+                # Path segments are bare names; anything else ends the path expression.
+                if not re.fullmatch(r"[A-Za-z0-9_.\-]+", following):
+                    break
+                segments.append(following)
+                recovered.add("/".join(segments))
+        assert recovered, (
+            "the splat construct's targetDir builds no path under \"backendPipelines\"; the sync "
+            "target can no longer be recovered from it and this arm would pass vacuously")
+
+        for declared in _UPSTREAM_SYNCED_RELDIRS:
+            assert declared in recovered, (
+                f"{declared!r} is declared upstream-synced but the splat construct builds no such "
+                f"path under backendPipelines. Paths it does build: "
+                f"{sorted(r for r in recovered if r.count('/') >= 2)}")
 
     def test_no_pipeline_client_is_left_bare(self):
         offenders = []

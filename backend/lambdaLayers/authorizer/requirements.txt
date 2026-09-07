@@ -2,7 +2,7 @@ aws-lambda-powertools==3.19.0 ; python_version >= "3.12" and python_version < "4
 certifi==2025.8.3 ; python_version >= "3.12" and python_version < "4.0"
 cffi==2.0.0 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy"
 charset-normalizer==3.4.3 ; python_version >= "3.12" and python_version < "4.0"
-cryptography==46.0.7 ; python_version >= "3.12" and python_version < "4.0"
+cryptography==50.0.1 ; python_version >= "3.12" and python_version < "4.0"
 idna==3.18 ; python_version >= "3.12" and python_version < "4.0"
 jmespath==1.0.1 ; python_version >= "3.12" and python_version < "4.0"
 joserfc==1.7.2 ; python_version >= "3.12" and python_version < "4.0"

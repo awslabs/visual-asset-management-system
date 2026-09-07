@@ -12,6 +12,13 @@
     "dependencies": {
         "@veerum/viewer": "^2.0.12"
     },
+    "overrides": {
+        "fast-uri": "^3.1.7",
+        "fflate": "^0.8.3",
+        "three-stdlib": {
+            "fflate": "^0.6.11"
+        }
+    },
     "devDependencies": {
         "@babel/core": "^7.23.0",
         "@babel/preset-env": "^7.23.0",

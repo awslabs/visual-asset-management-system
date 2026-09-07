@@ -478,6 +478,10 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
             reason = "Deadline Cloud is not available in this deployment"
         else:
             reason = ""
+        # The empty string is this function's "nothing to report" sentinel, matching the empty string it
+        # returns on success — so `if reason` asks whether a reason was set, and an empty reason is never
+        # a message a caller should surface. Not a boolean coerced from text.
+        # nosemgrep: no-strings-as-booleans
         if reason:
             return (f"Sub-process stop failed for Deadline Cloud job {job_id}: {reason}, so it could "
                     "not be cancelled; it may still be running on the farm.")

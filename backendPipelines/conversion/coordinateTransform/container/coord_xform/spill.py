@@ -48,6 +48,11 @@ class ChunkSpill:
         )
         os.close(fd)
         self._path = Path(path)
+        # The handle is owned for the object's lifetime, not for this call: append() writes to it
+        # repeatedly and close() (line ~142) closes it and clears the attribute. The class is also a
+        # context manager (__enter__/__exit__), which is how every caller acquires it, so the handle is
+        # released on the exception path too. chunks() reopens the file for reading afterwards.
+        # nosemgrep: open-never-closed
         self._handle = open(self._path, "wb")
         # (point_count, present-field names) per appended chunk. A few tens of bytes per chunk, so a
         # cloud spilled at the default chunk size costs well under a megabyte of index.
