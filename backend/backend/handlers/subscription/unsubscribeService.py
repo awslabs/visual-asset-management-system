@@ -79,8 +79,8 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
     asset_table = dynamodb.Table(asset_table_name)
     asset_obj = get_asset(asset_id)
 
-    # The subscription row has already been updated; the topic cleanup is best effort and
-    # is skipped when the asset can no longer be resolved to one live record
+    # An asset that no longer resolves to one live record has no topic to act on, so the
+    # cleanup is skipped and the caller's row rewrite proceeds without it
     if asset_obj is None:
         logger.error(f"No live asset found for asset {asset_id}")
         return
@@ -129,27 +129,33 @@ def delete_subscription(body):
     subscription_table = dynamodb.Table(subscription_table_name)
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
-    if not items or body["subscribers"][0] not in [item["S"] for item in items["subscribers"]['L']]:
+    if not items:
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": "Subscription does not exists for eventName."})
         return response
 
+    subscriber = body["subscribers"][0]
     existing_subscribers = [item["S"] for item in items["subscribers"]['L']]
-    existing_subscribers.remove(body["subscribers"][0])
 
-    subscription_table.update_item(
-        Key={
-            'eventName': body["eventName"],
-            'entityName_entityId': f'{body["entityName"]}#{body["entityId"]}'
-        },
-        UpdateExpression='SET subscribers = :subscribers',
-        ExpressionAttributeValues={
-            ':subscribers': existing_subscribers
-        }
-    )
-
+    # The SNS side is released before the row is rewritten: a failed unsubscribe leaves the row
+    # still listing the subscriber, so the same request can be retried. The cleanup also runs
+    # for a subscriber the row no longer lists -- a retry after a failure between the two writes
+    # still owes the SNS half, and it is a no-op for an endpoint the topic never carried.
     if body["entityName"] == "Asset":
         delete_sns_subscriptions(body["entityId"], list(body["subscribers"]), delete_sns=False)
+
+    if subscriber in existing_subscribers:
+        existing_subscribers.remove(subscriber)
+        subscription_table.update_item(
+            Key={
+                'eventName': body["eventName"],
+                'entityName_entityId': f'{body["entityName"]}#{body["entityId"]}'
+            },
+            UpdateExpression='SET subscribers = :subscribers',
+            ExpressionAttributeValues={
+                ':subscribers': existing_subscribers
+            }
+        )
 
     response['statusCode'] = 200
     response['body'] = json.dumps({"message": "success"})

@@ -64,7 +64,16 @@ def run(params: dict) -> PipelineExecutionParams:
         definition.currentStage = current_stage
         logger.info(f"Pipeline Current Stage: {current_stage}")
     else:
-        current_stage = definition.currentStage
+        # A resumed definition already carries its stage. It arrives deserialized from JSON, where
+        # the stage is a plain dict, so it is coerced back; an in-process definition already holds
+        # the object. Without this branch current_stage is unbound and the reference below raises
+        # UnboundLocalError -- and nothing above run() catches it, so the container ends without
+        # reporting against the workflow's task token and the step waits out its full taskTimeout.
+        current_stage = (
+            PipelineStage(**definition.currentStage)
+            if isinstance(definition.currentStage, dict)
+            else definition.currentStage
+        )
 
     # Verify pipeline type
     if current_stage.type != PipelineType.PREVIEW_3D_THUMBNAIL:

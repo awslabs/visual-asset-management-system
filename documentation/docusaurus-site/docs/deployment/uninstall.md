@@ -177,15 +177,15 @@ done
 
 VAMS creates the following S3 buckets. The asset, auxiliary, artefacts, access logs, and GPU model cache buckets use a `RETAIN` removal policy and require manual deletion. The web app bucket and its access logs bucket are emptied and deleted automatically during stack teardown, so they normally require manual deletion only if the stack deletion fails partway.
 
-| Bucket                     | Removal on teardown     | Blocks redeploy if left behind?     | Description                                                                                                                                                                    |
-| -------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external).                                                                                        |
-| Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data.                                                                                                       |
-| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                                                                                                               |
-| Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                                  |
+| Bucket                     | Removal on teardown     | Blocks redeploy if left behind?     | Description                                                                                                                                                                 |
+| -------------------------- | ----------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external).                                                                                     |
+| Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data.                                                                                                    |
+| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                                                                                                            |
+| Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                               |
 | Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, or `useNvidiaGr00t` was enabled. |
-| Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                              |
-| Web app access logs bucket | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores access logs for the web app bucket and ALB.                                                                                                                             |
+| Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                           |
+| Web app access logs bucket | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores access logs for the web app bucket and ALB.                                                                                                                          |
 
 :::note[Retained does not mean it blocks a redeploy]
 The retained asset, auxiliary, artefacts, access logs, and model cache buckets are **auto-named** by AWS CloudFormation, so they can be left in place when redeploying with the same configuration name — they will not cause a name collision. Delete them only when you intend to permanently remove the stored data. By contrast, under ALB deployments the web app bucket and its access logs bucket carry fixed names derived from the configured domain host; if a teardown fails and leaves either behind, delete it before redeploying with the same domain host to avoid a bucket-name collision.
@@ -634,21 +634,21 @@ All of the above commands should return empty results when the uninstall is comp
 
 The following table describes what stops incurring charges immediately after stack deletion versus resources that continue to incur charges until manually cleaned up.
 
-| Resource                               | Charges stop after `cdk destroy` |          Charges continue until manual cleanup           |
-| -------------------------------------- | :------------------------------: | :------------------------------------------------------: |
-| AWS Lambda functions                   |               Yes                |                            --                            |
-| Amazon API Gateway                     |               Yes                |                            --                            |
-| Amazon CloudFront distribution         |               Yes                |                            --                            |
-| Application Load Balancer              |               Yes                |                            --                            |
-| Amazon DynamoDB tables (data storage)  |                --                |              Yes, until tables are deleted.              |
-| Amazon S3 buckets (data storage)       |                --                |       Yes, until buckets are emptied and deleted.        |
+| Resource                               | Charges stop after `cdk destroy` |                                             Charges continue until manual cleanup                                             |
+| -------------------------------------- | :------------------------------: | :---------------------------------------------------------------------------------------------------------------------------: |
+| AWS Lambda functions                   |               Yes                |                                                              --                                                               |
+| Amazon API Gateway                     |               Yes                |                                                              --                                                               |
+| Amazon CloudFront distribution         |               Yes                |                                                              --                                                               |
+| Application Load Balancer              |               Yes                |                                                              --                                                               |
+| Amazon DynamoDB tables (data storage)  |                --                |                                                Yes, until tables are deleted.                                                 |
+| Amazon S3 buckets (data storage)       |                --                |                                          Yes, until buckets are emptied and deleted.                                          |
 | Amazon S3 GPU model cache buckets      |                --                | Yes, until emptied and deleted. Often the largest retained storage cost — a single cached model checkpoint can exceed 100 GB. |
-| Amazon CloudWatch log groups (storage) |                --                |            Yes, until log groups are deleted.            |
-| AWS KMS keys                           |                --                | Yes, until keys are scheduled for and complete deletion. |
-| Amazon OpenSearch Service              |                --                |      Yes, until collections or domains are deleted.      |
-| Amazon Cognito user pool               |                --                |           Minimal, but remains until deleted.            |
-| VPC endpoints                          |                --                |     Yes, hourly charges until endpoints are deleted.     |
-| Elastic IP addresses (if ALB)          |                --                |           Yes, if allocated and not released.            |
+| Amazon CloudWatch log groups (storage) |                --                |                                              Yes, until log groups are deleted.                                               |
+| AWS KMS keys                           |                --                |                                   Yes, until keys are scheduled for and complete deletion.                                    |
+| Amazon OpenSearch Service              |                --                |                                        Yes, until collections or domains are deleted.                                         |
+| Amazon Cognito user pool               |                --                |                                              Minimal, but remains until deleted.                                              |
+| VPC endpoints                          |                --                |                                       Yes, hourly charges until endpoints are deleted.                                        |
+| Elastic IP addresses (if ALB)          |                --                |                                              Yes, if allocated and not released.                                              |
 
 :::tip[Cost verification]
 After completing the uninstall, monitor your AWS billing dashboard for 24-48 hours to confirm that charges from VAMS resources have stopped. Use AWS Cost Explorer to filter costs by the VAMS CloudFormation stack tag if tags were applied during deployment.

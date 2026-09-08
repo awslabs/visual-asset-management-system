@@ -171,8 +171,8 @@ List all API keys in the VAMS system. Returns metadata only -- key values are ne
 vamscli api-key list [OPTIONS]
 ```
 
-| Option             | Type    | Required | Description                                                                             |
-| ------------------ | ------- | -------- | --------------------------------------------------------------------------------------- |
+| Option             | Type    | Required | Description                                                                              |
+| ------------------ | ------- | -------- | ---------------------------------------------------------------------------------------- |
 | `--page-size`      | INTEGER | No       | API keys read per page (deployment default: 1000)                                        |
 | `--max-items`      | INTEGER | No       | Maximum keys in one response, or in total with `--auto-paginate` (default and cap: 3000) |
 | `--starting-token` | TEXT    | No       | Pagination token from a previous response's `NextToken`                                  |
@@ -209,6 +209,7 @@ vamscli api-key get --api-key-id 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed --json-out
 ```
 
 ---
+
 ## api-key create
 
 Create a new API key. The key value is displayed only once -- save it immediately.
@@ -299,8 +300,8 @@ List your own API keys. Returns metadata only.
 vamscli api-key user list [OPTIONS]
 ```
 
-| Option             | Type    | Required | Description                                                                             |
-| ------------------ | ------- | -------- | --------------------------------------------------------------------------------------- |
+| Option             | Type    | Required | Description                                                                              |
+| ------------------ | ------- | -------- | ---------------------------------------------------------------------------------------- |
 | `--page-size`      | INTEGER | No       | API keys read per page (deployment default: 1000)                                        |
 | `--max-items`      | INTEGER | No       | Maximum keys in one response, or in total with `--auto-paginate` (default and cap: 3000) |
 | `--starting-token` | TEXT    | No       | Pagination token from a previous response's `NextToken`                                  |
@@ -339,6 +340,7 @@ A key ID that belongs to a different user is reported as `API key not found`, th
 :::
 
 ---
+
 ## api-key user create
 
 Create a new API key tied to your own user. The key value is displayed only once -- save it immediately.

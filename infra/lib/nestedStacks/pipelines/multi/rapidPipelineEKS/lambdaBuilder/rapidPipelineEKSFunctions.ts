@@ -82,13 +82,6 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
             // Reference to open pipeline function
             OPEN_PIPELINE_FUNCTION_NAME_EKS: openPipelineFunction.functionName,
 
-            // The Kubernetes Job's activeDeadlineSeconds. Sourced from the same configuration value the
-            // state machine derives its poll ceiling from, so the two cannot drift: a pod allowed to run
-            // longer than the poll watches for it produces a FAILED execution that then writes output.
-            EKS_JOB_TIMEOUT_SECONDS: String(
-                config.app.pipelines.useRapidPipeline.useEks.jobTimeout
-            ),
-
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",
         },
@@ -285,6 +278,25 @@ export function buildConsolidatedHandlerFunction(
             CONTAINER_IMAGE_URI:
                 config.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI ||
                 "CONTAINER_IMAGE_PLACEHOLDER",
+
+            // The Kubernetes Job spec. This is the only function that builds one, so these belong here
+            // and nowhere else — delivered to a sibling they are read by nothing and the handler falls
+            // back to its own defaults with no error anywhere.
+            //
+            // activeDeadlineSeconds comes from the same configuration value the state machine derives
+            // its poll ceiling from, so the two cannot drift: a pod allowed to run longer than the poll
+            // watches for it produces a FAILED execution that then writes output.
+            EKS_JOB_TIMEOUT_SECONDS: String(
+                config.app.pipelines.useRapidPipeline.useEks.jobTimeout
+            ),
+            EKS_JOB_MEMORY: config.app.pipelines.useRapidPipeline.useEks.jobMemory,
+            EKS_JOB_CPU: config.app.pipelines.useRapidPipeline.useEks.jobCpu,
+            EKS_JOB_BACKOFF_LIMIT: String(
+                config.app.pipelines.useRapidPipeline.useEks.jobBackoffLimit
+            ),
+            EKS_JOB_TTL_SECONDS_AFTER_FINISHED: String(
+                config.app.pipelines.useRapidPipeline.useEks.jobTTLSecondsAfterFinished
+            ),
 
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",

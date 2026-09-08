@@ -90,20 +90,20 @@ vamscli auth login [OPTIONS]
 
 ### Options
 
-| Option                   | Type | Required    | Description                                                                          |
-| ------------------------ | ---- | ----------- | ------------------------------------------------------------------------------------ |
-| `-u`, `--username`       | TEXT | Conditional | Username for Amazon Cognito authentication                                           |
-| `-p`, `--password`       | TEXT | No          | Password, passed on the command line. Discouraged — see the note below               |
-| `--password-stdin`       | Flag | No          | Read the password from stdin. The recommended non-interactive form                   |
-| `--new-password`         | TEXT | No          | New password to set when Amazon Cognito requires a password change. Discouraged      |
-| `--new-password-stdin`   | Flag | No          | Read the new password from stdin. The recommended non-interactive form               |
-| `--save-credentials`     | Flag | No          | Save credentials for automatic re-authentication                                     |
-| `--user-id`              | TEXT | Conditional | User ID for token override authentication                                            |
+| Option                   | Type | Required    | Description                                                                           |
+| ------------------------ | ---- | ----------- | ------------------------------------------------------------------------------------- |
+| `-u`, `--username`       | TEXT | Conditional | Username for Amazon Cognito authentication                                            |
+| `-p`, `--password`       | TEXT | No          | Password, passed on the command line. Discouraged — see the note below                |
+| `--password-stdin`       | Flag | No          | Read the password from stdin. The recommended non-interactive form                    |
+| `--new-password`         | TEXT | No          | New password to set when Amazon Cognito requires a password change. Discouraged       |
+| `--new-password-stdin`   | Flag | No          | Read the new password from stdin. The recommended non-interactive form                |
+| `--save-credentials`     | Flag | No          | Save credentials for automatic re-authentication                                      |
+| `--user-id`              | TEXT | Conditional | User ID for token override authentication                                             |
 | `--token-override`       | TEXT | Conditional | Pre-generated token, mostly for external IDP auth (requires `--user-id`). Discouraged |
 | `--token-override-stdin` | Flag | Conditional | Read the pre-generated token from stdin (requires `--user-id`). The recommended form  |
-| `--expires-at`           | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)                      |
-| `--skip-version-check`   | Flag | No          | Skip version mismatch confirmation prompts                                           |
-| `--json-output`          | Flag | No          | Output raw JSON response                                                             |
+| `--expires-at`           | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)                       |
+| `--skip-version-check`   | Flag | No          | Skip version mismatch confirmation prompts                                            |
+| `--json-output`          | Flag | No          | Output raw JSON response                                                              |
 
 :::warning[Credentials on the command line are readable by other local accounts]
 Every argument of a running process appears in the OS process table — `/proc/<pid>/cmdline` and `ps -ef` on Linux, the command-line column of Task Manager on Windows. A credential supplied with `-p` or `--token-override` is therefore readable for the lifetime of the command by any other account on the machine, including one with no VAMS access.
@@ -194,14 +194,14 @@ vamscli auth change-password [OPTIONS]
 
 ### Options
 
-| Option                  | Type | Required    | Description                                                            |
-| ----------------------- | ---- | ----------- | ---------------------------------------------------------------------- |
-| `-u`, `--username`      | TEXT | Yes         | Username for Amazon Cognito authentication                             |
-| `--old-password`        | TEXT | Conditional | Current password (prompts if not provided). Discouraged — see below    |
-| `--old-password-stdin`  | Flag | No          | Read the current password from stdin instead of the command line       |
-| `--new-password`        | TEXT | Conditional | New password to set (prompts if not provided). Discouraged — see below |
-| `--new-password-stdin`  | Flag | No          | Read the new password from stdin instead of the command line           |
-| `--json-output`         | Flag | No          | Output raw JSON response                                               |
+| Option                 | Type | Required    | Description                                                            |
+| ---------------------- | ---- | ----------- | ---------------------------------------------------------------------- |
+| `-u`, `--username`     | TEXT | Yes         | Username for Amazon Cognito authentication                             |
+| `--old-password`       | TEXT | Conditional | Current password (prompts if not provided). Discouraged — see below    |
+| `--old-password-stdin` | Flag | No          | Read the current password from stdin instead of the command line       |
+| `--new-password`       | TEXT | Conditional | New password to set (prompts if not provided). Discouraged — see below |
+| `--new-password-stdin` | Flag | No          | Read the new password from stdin instead of the command line           |
+| `--json-output`        | Flag | No          | Output raw JSON response                                               |
 
 ### Examples
 
@@ -325,13 +325,13 @@ Set an override token for external authentication systems.
 vamscli auth set-override [OPTIONS]
 ```
 
-| Option            | Type | Required    | Description                                                                 |
-| ----------------- | ---- | ----------- | --------------------------------------------------------------------------- |
-| `-u`, `--user-id` | TEXT | Yes         | User ID associated with the override token                                   |
+| Option            | Type | Required    | Description                                                                   |
+| ----------------- | ---- | ----------- | ----------------------------------------------------------------------------- |
+| `-u`, `--user-id` | TEXT | Yes         | User ID associated with the override token                                    |
 | `--token`         | TEXT | Conditional | Override token to use for authentication. Discouraged — see the warning below |
-| `--token-stdin`   | Flag | Conditional | Read the override token from stdin instead of the command line               |
-| `--expires-at`    | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)             |
-| `--json-output`   | Flag | No          | Output raw JSON response                                                    |
+| `--token-stdin`   | Flag | Conditional | Read the override token from stdin instead of the command line                |
+| `--expires-at`    | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)               |
+| `--json-output`   | Flag | No          | Output raw JSON response                                                      |
 
 Exactly one of `--token` or `--token-stdin` is required.
 

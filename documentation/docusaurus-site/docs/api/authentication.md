@@ -37,9 +37,9 @@ Authorization: Bearer eyJraWQiOiJ...
 :::note[Cognito federation vs External OAuth]
 VAMS supports three approaches to external identity providers:
 
-- **Cognito OIDC federation** (`app.authProvider.useCognito.useOidc`, configured in `infra/config/oidc-config.ts`): External OIDC provider authenticates users, Amazon Cognito issues session tokens. Users appear in the Cognito user pool. Both native and federated users can coexist.
-- **Cognito SAML federation** (`app.authProvider.useCognito.useSaml`, configured in `infra/config/saml-config.ts`): External SAML 2.0 provider authenticates users, Amazon Cognito issues session tokens. Same coexistence model as OIDC federation.
-- **External OAuth** (`app.authProvider.useExternalOAuthIdp`): Bypasses Amazon Cognito entirely. All users authenticate via the external provider. Cannot be combined with Cognito.
+-   **Cognito OIDC federation** (`app.authProvider.useCognito.useOidc`, configured in `infra/config/oidc-config.ts`): External OIDC provider authenticates users, Amazon Cognito issues session tokens. Users appear in the Cognito user pool. Both native and federated users can coexist.
+-   **Cognito SAML federation** (`app.authProvider.useCognito.useSaml`, configured in `infra/config/saml-config.ts`): External SAML 2.0 provider authenticates users, Amazon Cognito issues session tokens. Same coexistence model as OIDC federation.
+-   **External OAuth** (`app.authProvider.useExternalOAuthIdp`): Bypasses Amazon Cognito entirely. All users authenticate via the external provider. Cannot be combined with Cognito.
 
 Choose Cognito federation (OIDC or SAML) when you need to support both corporate SSO and native username/password accounts. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
 :::
@@ -102,16 +102,16 @@ None.
 
 **Response Fields:**
 
-| Field                     | Type   | Description                                                                                                                                                                   |
-| ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `region`                  | string | Deployment Region.                                                                                                                                                            |
-| `api`                     | string | API base URL, including the stage path.                                                                                                                                       |
-| `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                            |
-| `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                                                           |
-| `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                        |
-| `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below.                                |
-| `contentSecurityPolicy`   | string | Content Security Policy header value applied by the web application.                                                                                                           |
-| `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                                               |
+| Field                     | Type   | Description                                                                                                                                     |
+| ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `region`                  | string | Deployment Region.                                                                                                                              |
+| `api`                     | string | API base URL, including the stage path.                                                                                                         |
+| `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                             |
+| `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                            |
+| `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                         |
+| `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below. |
+| `contentSecurityPolicy`   | string | Content Security Policy header value applied by the web application.                                                                            |
+| `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                |
 
 When an external OAuth identity provider is the authentication provider, the response instead carries `externalOAuthIdpURL`, `externalOAuthIdpClientId`, `externalOAuthIdpScope`, `externalOAuthIdpScopeMfa`, `externalOAuthIdpTokenEndpoint`, `externalOAuthIdpAuthorizationEndpoint`, and `externalOAuthIdpDiscoveryEndpoint`.
 

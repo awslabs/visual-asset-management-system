@@ -90,15 +90,21 @@ describe("useRapidPipeline.useEks.eksClusterVersion validation", () => {
         (fs.readFileSync as unknown as jest.Mock).mockReset();
     });
 
-    test("the shipped 1.31 is accepted and survives getConfig() unchanged", () => {
+    test("the shipped version is accepted and survives getConfig() unchanged", () => {
         // Two claims in one: the rule does not reject the value every template ships, and getConfig()
         // does not default or normalize the field away before the construct reads it. Without the
         // second half, a rule could pass here while the resolved config still carried something else.
         // The second half is also what proves getConfig() completes — the negative is scoped to this
         // rule's message so an unrelated validation added elsewhere is not reported against it.
-        const run = withEks("1.31");
+        //
+        // Read from the template rather than written out, so bumping the shipped version does not
+        // leave this arm quietly asserting a version nothing deploys any more.
+        const shipped = (govcloudTemplate as any).app.pipelines.useRapidPipeline.useEks
+            .eksClusterVersion;
+        expect(shipped).toMatch(/^1\.\d{2,}$/);
+        const run = withEks(shipped);
         expect(run).not.toThrow(VERSION_MESSAGE);
-        expect(run().app.pipelines.useRapidPipeline.useEks.eksClusterVersion).toBe("1.31");
+        expect(run().app.pipelines.useRapidPipeline.useEks.eksClusterVersion).toBe(shipped);
     });
 
     test("an operator-set 1.32 survives getConfig() unchanged", () => {

@@ -114,6 +114,13 @@ asymmetry other callers rely on):
    fans out across a group), so keep all three out of `autoApprove`. The tier is
    about stored data; that list is about compute. Three places state this and must
    agree: this rule, the README's caution paragraph, and the tool's own docstring.
+   The same three-place rule holds for the tools that RETURN a credential:
+   `create_api_key` and `create_user_api_key` (write tier) hand back the one-time
+   API key value, a bearer token with the acting user's permissions, so both stay out
+   of `autoApprove` and their docstrings say where the value ends up. `update_*_api_key`
+   with `is_active=False` is the reversible revoke and is what the delete tools point at
+   first. An API-key tool takes `is_active` as a bool and sends the model's `"true"` /
+   `"false"` string — the request model rejects a raw boolean.
 
     **A required-true request field is not a confirmation to re-expose.**
     `delete_asset` sends `confirmPermanentDelete=True` because

@@ -783,6 +783,27 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
             logger.error(f"{error_msg}: resolved {s3_key} not under base prefix {normalized_base_prefix}")
             raise VAMSGeneralErrorResponse(error_msg)
 
+        # An asset may occupy a location UNDER the bucket record's prefix root, never the root itself.
+        #
+        # A root-owning asset becomes a silent ancestor of every asset later derived from an assetId,
+        # and neither ownership layer below sees that relationship: the record layer compares assetIds,
+        # which differ, and the S3 layer lists under the DERIVED child prefix, where the ancestor's own
+        # objects do not appear. The ancestor's owner then reads the newer asset's files through its own
+        # listFiles. The check above admits this case because `startswith` is satisfied by equality.
+        #
+        # Rejecting it here removes the only route that creates such an asset, since a key derived from
+        # an assetId always adds a segment and can never BE the root.
+        resolved_as_prefix = normalize_location_key(s3_key)
+        if resolved_as_prefix and not resolved_as_prefix.endswith('/'):
+            resolved_as_prefix += '/'
+        if resolved_as_prefix == normalize_base_assets_prefix(s3_bucket_prefix):
+            error_msg = ("The specified bucketExistingKey is the S3 bucket location root for this "
+                         "database. An asset must be located in a folder beneath it.")
+            logger.error(
+                f"{error_msg}: resolved {s3_key} equals base prefix root "
+                f"{normalize_base_assets_prefix(s3_bucket_prefix)!r}")
+            raise VAMSGeneralErrorResponse(error_msg)
+
         # Check if the key exists in S3 (full path: bucketPrefix/bucketExistingKey)
         if not check_s3_key_exists(s3_bucket, s3_key):
             error_msg = "The specified bucketExistingKey does not exist in the asset's database default S3 bucket"

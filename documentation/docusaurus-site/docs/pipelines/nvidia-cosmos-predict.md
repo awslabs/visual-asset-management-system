@@ -14,7 +14,7 @@ VAMS supports the **Cosmos-Predict2.5** (v2, flow-matching) model family with 2B
 | **Pipeline ID (v2.5)**      | `cosmos-predict2-text2world-2b`, `cosmos-predict2-text2world-14b`, `cosmos-predict2-video2world-2b`, `cosmos-predict2-video2world-14b` |
 | **Configuration flag**      | `app.pipelines.useNvidiaCosmos.enabled`, per-model flags under `app.pipelines.useNvidiaCosmos.modelsPredict.*`                         |
 | **Execution type**          | Lambda (asynchronous with callback)                                                                                                    |
-| **Supported input formats** | Text2World: None (uses text prompt only), Video2World: `.mp4`, `.mov`, `.jpg`, `.jpeg`, `.png`, `.webp`                 |
+| **Supported input formats** | Text2World: None (uses text prompt only), Video2World: `.mp4`, `.mov`, `.jpg`, `.jpeg`, `.png`, `.webp`                                |
 | **Output (v2.5)**           | MP4 video (1280x720, 16fps, ~4 seconds / 61 frames)                                                                                    |
 | **Timeout**                 | 8 hours (Batch job), 8 hours (VAMS workflow task token)                                                                                |
 
@@ -259,10 +259,10 @@ The v2.5 Video2World models generate videos from input images or videos with opt
 
 **Input Frame Handling:** The v2.5 model accepts either **1 frame** (image) or **2 frames** (video) as conditioning input.
 
-| Input Type | File Extensions                        | Conditioning Frames | Behavior                                                                                  |
-| ---------- | -------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
-| Image      | `.jpg`, `.jpeg`, `.png`, `.webp`       | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
-| Video      | `.mp4`, `.mov`                         | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
+| Input Type | File Extensions                  | Conditioning Frames | Behavior                                                                                  |
+| ---------- | -------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| Image      | `.jpg`, `.jpeg`, `.png`, `.webp` | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
+| Video      | `.mp4`, `.mov`                   | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
 
 :::note[v2.5 Conditioning Frame Count]
 The v2.5 model uses **2 frames** for video conditioning, providing a short temporal context window. This design choice supports faster inference while still capturing temporal motion information from the input video.
@@ -353,10 +353,10 @@ The v2.5 Video2World models generate videos from input images or videos with opt
 
 **Input Frame Handling:** The v2.5 model accepts either **1 frame** (image) or **2 frames** (video) as conditioning input.
 
-| Input Type | File Extensions                        | Conditioning Frames | Behavior                                                                                  |
-| ---------- | -------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
-| Image      | `.jpg`, `.jpeg`, `.png`, `.webp`       | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
-| Video      | `.mp4`, `.mov`                         | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
+| Input Type | File Extensions                  | Conditioning Frames | Behavior                                                                                  |
+| ---------- | -------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| Image      | `.jpg`, `.jpeg`, `.png`, `.webp` | 1 frame             | Model takes the image as the first frame and generates 60 additional frames               |
+| Video      | `.mp4`, `.mov`                   | 2 frames            | Model extracts the first 2 frames for temporal context and generates 59 additional frames |
 
 :::note[v2.5 Conditioning Frame Count]
 The v2.5 model uses **2 frames** for video conditioning, providing a short temporal context window. This design choice supports faster inference while still capturing temporal motion information from the input video.

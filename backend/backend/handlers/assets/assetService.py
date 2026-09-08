@@ -23,7 +23,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items
 from common.s3 import is_object_version_archived, list_all_object_versions
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -1466,6 +1466,42 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         logger.exception(f"Error unarchiving asset: {e}")
         raise VAMSGeneralErrorResponse("Error unarchiving asset")
 
+
+def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, deleted_items: dict):
+    """Remove every asset-link row (and its metadata) that has this asset at either end.
+
+    The links table is keyed by `assetLinkId`, with the two ends indexed on `fromAssetGSI`
+    (`fromAssetDatabaseId:fromAssetId`) and `toAssetGSI` (`toAssetDatabaseId:toAssetId`), so
+    the asset is looked up on both indexes by its `databaseId:assetId` key and each link is
+    then deleted by its own id. Both reads page to exhaustion: an asset with many links must
+    not keep the ones past the first page.
+
+    A link that cannot be removed is logged and skipped rather than aborting the deletion
+    -- the asset row is already gone by this point -- but the lookup itself is not swallowed,
+    since a failed lookup here would leave every link behind while the deletion reported
+    success.
+    """
+    asset_key = f"{databaseId}:{assetId}"
+    link_ids = {}
+    for index_name, key_attr in (("fromAssetGSI", "fromAssetDatabaseId:fromAssetId"),
+                                 ("toAssetGSI", "toAssetDatabaseId:toAssetId")):
+        for item in query_all_items(
+            asset_links_table,
+            IndexName=index_name,
+            KeyConditionExpression=Key(key_attr).eq(asset_key),
+        ):
+            if item.get("assetLinkId"):
+                link_ids[item["assetLinkId"]] = item
+
+    for asset_link_id, item in link_ids.items():
+        try:
+            delete_asset_link_metadata_for_permanent_deletion(asset_link_id)
+            asset_links_table.delete_item(Key={"assetLinkId": asset_link_id})
+            deleted_items["dynamodb_tables"].append(
+                f"{asset_links_table_name} (assetLinkId={asset_link_id})")
+        except Exception as e:
+            logger.warning(f"Error deleting asset link {asset_link_id} for asset {assetId}: {e}")
+
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
     
@@ -1588,50 +1624,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         
         # 4. Delete from asset links table if available
         if asset_links_table:
-            # Query and delete links where this asset is the source
-            try:
-                response = asset_links_table.query(
-                    KeyConditionExpression=Key('assetIdFrom').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
-                    if 'assetIdTo' in item:
-                        # Delete associated metadata first
-                        if 'assetLinkId' in item:
-                            delete_asset_link_metadata_for_permanent_deletion(item['assetLinkId'])
-                        
-                        # Then delete the link
-                        asset_links_table.delete_item(Key={
-                            'assetIdFrom': assetId,
-                            'assetIdTo': item['assetIdTo']
-                        })
-                        deleted_items["dynamodb_tables"].append(f"{asset_links_table_name} (assetIdFrom={assetId}, assetIdTo={item['assetIdTo']})")
-            except Exception as e:
-                logger.warning(f"Error deleting asset links where asset is source: {e}")
-            
-            # Query and delete links where this asset is the target
-            # This requires using a GSI, so we need to query first
-            try:
-                response = asset_links_table.query(
-                    IndexName='AssetIdToGSI',
-                    KeyConditionExpression=Key('assetIdTo').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
-                    if 'assetIdFrom' in item:
-                        # Delete associated metadata first
-                        if 'assetLinkId' in item:
-                            delete_asset_link_metadata_for_permanent_deletion(item['assetLinkId'])
-                        
-                        # Then delete the link
-                        asset_links_table.delete_item(Key={
-                            'assetIdFrom': item['assetIdFrom'],
-                            'assetIdTo': assetId
-                        })
-                        deleted_items["dynamodb_tables"].append(f"{asset_links_table_name} (assetIdFrom={item['assetIdFrom']}, assetIdTo={assetId})")
-            except Exception as e:
-                logger.warning(f"Error deleting asset links where asset is target: {e}")
-        
+            _delete_asset_links_for_permanent_deletion(databaseId, assetId, deleted_items)
+
         # 5. Delete from asset uploads table if available
         if asset_upload_table:
             try:

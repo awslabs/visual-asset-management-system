@@ -211,12 +211,12 @@ vamscli workflow trigger delete -d my-db -w my-workflow -t fileUpload
 | `--default-template-ids[-file]` | Map of `pipelineDatabaseId:pipelineId → templateId`    |
 | `--enable / --disable`          | Whether the trigger auto-fires (default enabled)       |
 
-| Option (list)      | Description                                                                    |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `--page-size`      | Triggers per page (default 100, clamped to 500)                                 |
-| `--max-items`      | Maximum total triggers to fetch; applies only with `--auto-paginate`             |
-| `--starting-token` | Continuation token from a previous response's `NextToken` (manual pagination)    |
-| `--auto-paginate`  | Follow `NextToken` until every trigger has been fetched                          |
+| Option (list)      | Description                                                                   |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `--page-size`      | Triggers per page (default 100, clamped to 500)                               |
+| `--max-items`      | Maximum total triggers to fetch; applies only with `--auto-paginate`          |
+| `--starting-token` | Continuation token from a previous response's `NextToken` (manual pagination) |
+| `--auto-paginate`  | Follow `NextToken` until every trigger has been fetched                       |
 
 A workflow may carry several triggers of one base type, so the listing serves one bounded page and
 reports a `NextToken` while more remain. Without `--auto-paginate` the human output prints that token

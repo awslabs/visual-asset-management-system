@@ -969,6 +969,8 @@ _PAGINATED_READ_TOOLS = (
     "list_executions",
     "page_execution_detail_metadata",
     "list_subscriptions",
+    "list_api_keys",
+    "list_user_api_keys",
 )
 
 

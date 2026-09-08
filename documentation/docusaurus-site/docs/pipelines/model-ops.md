@@ -69,6 +69,26 @@ Add the following to your `config.json` under `app.pipelines`:
 -   **VPC with private subnets** -- When using an external VPC, provide private subnet IDs in the VPC configuration for the ECS cluster.
 -   **Container image** -- The `ecrContainerImageURI` must point to a valid container image.
 
+:::warning[Verify where your container writes its output before running a same-format conversion]
+VAMS supplies the container two configuration blocks: `state`, which describes the **input** file and
+carries that file's own directory, and `output`, which carries the destination — the workflow's output
+prefix plus an `optimized` folder for a conversion whose output format matches its input.
+
+Which block a given VNTANA container build reads is part of that container's contract, and VAMS cannot
+determine it. The distinction only matters in one case, and it matters a great deal there: for a
+conversion whose **output format equals its input format**, a container that derives its destination from
+`state` resolves onto the source object itself, adding a new version of the operator's own file rather
+than writing a separate artifact. A container that reads `output` writes to the `optimized` folder and
+leaves the source untouched.
+
+Before running a same-format conversion (for example `vntana-model-ops-to-glb` on a `.glb` input) on
+assets you care about, determine your container's behaviour on data you do not. The check in
+`tools/smoketest/v260/suite_deploy_residuals.py`, section `modelops-container-output-contract`, does this
+on a purpose-created disposable asset and reports which block your build honours. Conversions between
+**different** formats are unaffected, because the output object has a different key from its source
+whichever block is used.
+:::
+
 ## Registered workflows
 
 When `autoRegisterWithVAMS` is `true`, the following pipelines and workflows are automatically registered at deploy time:

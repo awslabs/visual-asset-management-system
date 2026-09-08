@@ -124,18 +124,18 @@ Editing either value therefore does not rename the account — AWS CloudFormatio
 deletes the old one. Which of two outcomes you get depends only on whether the new username already
 exists in the pool:
 
-- **The new username does not exist.** The deployment **succeeds** and the new administrator is created.
-  The previous identity is **retained** rather than deleted — the user carries a `Retain` replacement
-  policy — so you can still sign in as it, but it is no longer managed by AWS CloudFormation and will
-  not be removed when the stack is deleted. Review it and delete it by hand once the new administrator
-  is working. Any `userRoles` rows keyed to the old username continue to apply to it and not to the new
-  one.
-- **The new username already exists** (created by hand, or equal to another operator's account). The
-  replacement's create step fails with `AlreadyExists`, the nested authorization stack fails, and the
-  **whole core stack rolls back** — roughly 15 minutes, across every nested stack.
+-   **The new username does not exist.** The deployment **succeeds** and the new administrator is created.
+    The previous identity is **retained** rather than deleted — the user carries a `Retain` replacement
+    policy — so you can still sign in as it, but it is no longer managed by AWS CloudFormation and will
+    not be removed when the stack is deleted. Review it and delete it by hand once the new administrator
+    is working. Any `userRoles` rows keyed to the old username continue to apply to it and not to the new
+    one.
+-   **The new username already exists** (created by hand, or equal to another operator's account). The
+    replacement's create step fails with `AlreadyExists`, the nested authorization stack fails, and the
+    **whole core stack rolls back** — roughly 15 minutes, across every nested stack.
 
 Synthesis warns whenever `app.adminUserId` and `app.adminEmailAddress` differ, restating that both are
-immutable — it cannot detect that a value has *changed*, because it has no view of what is deployed. It
+immutable — it cannot detect that a value has _changed_, because it has no view of what is deployed. It
 also rejects a username Amazon Cognito itself would refuse (whitespace, or over 128 characters), so that
 failure arrives as a configuration message rather than as a rolled-back deployment.
 
@@ -476,15 +476,15 @@ steps here.
 
 7.  The migration runs seven independent steps in the order below. `--steps` selects a single step; the default (`all`) runs every one.
 
-    | Step                            | `--steps` value               | What it does                                                                                                                                                                                                        |
-    | ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Step                            | `--steps` value               | What it does                                                                                                                                                                                                                                                                                          |
+    | ------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
     | OpenSearch reindex              | `reindex`                     | Invokes the deployed reindexer Lambda, which re-publishes every asset record so the asset indexer writes into `vams-assets-v3` (including the new `geo_MD_location` field), lists every asset bucket and re-publishes file events into `vams-files-v3`, and returns aggregate success/failure counts. |
-    | Asset history backfill          | `assetHistory`                | Backfills the new asset history table from existing asset and version records — a `create` record from each asset's v0 version, plus `archive`/`unarchive` records inferred from the asset's archive fields.        |
-    | Workflow executions overhaul    | `workflowExecutions`          | Reshapes legacy workflow execution rows into the V2 workflow-keyed tables (main record, workflow inputs, per-pipeline execution records, and input files). The V1 table is never modified.                          |
-    | Auxiliary preview relocation    | `auxPreviewRelocation`        | Moves auxiliary-bucket preview and viewer objects to the database-scoped per-file layout by copying each object to its new key and then deleting the old one. Previews are unavailable between the deploy and this step. |
-    | Pipeline + workflow definitions | `pipelineWorkflowDefinitions` | Migrates user-database pipeline and workflow definitions from the V1 tables to the V2 tables, preserving each pipeline's parameters as a `migrated-default` template. Shipped `GLOBAL` built-ins are skipped.        |
-    | Global-list partition backfill  | `globalListBackfill`          | Stamps the `allListPartition` attribute on V2 pipeline, workflow, and execution rows that predate it, so the cross-database "all pipelines / workflows / executions" lists return them.                             |
-    | Tags namespacing                | `tagsNamespacing`             | Copies every legacy tag and tag type into the V2 composite-key tables under the `GLOBAL` partition. Asset tag lists are unchanged.                                                                                  |
+    | Asset history backfill          | `assetHistory`                | Backfills the new asset history table from existing asset and version records — a `create` record from each asset's v0 version, plus `archive`/`unarchive` records inferred from the asset's archive fields.                                                                                          |
+    | Workflow executions overhaul    | `workflowExecutions`          | Reshapes legacy workflow execution rows into the V2 workflow-keyed tables (main record, workflow inputs, per-pipeline execution records, and input files). The V1 table is never modified.                                                                                                            |
+    | Auxiliary preview relocation    | `auxPreviewRelocation`        | Moves auxiliary-bucket preview and viewer objects to the database-scoped per-file layout by copying each object to its new key and then deleting the old one. Previews are unavailable between the deploy and this step.                                                                              |
+    | Pipeline + workflow definitions | `pipelineWorkflowDefinitions` | Migrates user-database pipeline and workflow definitions from the V1 tables to the V2 tables, preserving each pipeline's parameters as a `migrated-default` template. Shipped `GLOBAL` built-ins are skipped.                                                                                         |
+    | Global-list partition backfill  | `globalListBackfill`          | Stamps the `allListPartition` attribute on V2 pipeline, workflow, and execution rows that predate it, so the cross-database "all pipelines / workflows / executions" lists return them.                                                                                                               |
+    | Tags namespacing                | `tagsNamespacing`             | Copies every legacy tag and tag type into the V2 composite-key tables under the `GLOBAL` partition. Asset tag lists are unchanged.                                                                                                                                                                    |
 
 :::danger[Run the pipeline and workflow definition step once per upgrade]
 `pipelineWorkflowDefinitions` is the one step that is not safe to repeat. Its V2 rows are keyed by the same `(databaseId, pipelineId/workflowId)` as the V1 source, and the overwrite is **unconditional**: a second run replaces each migrated pipeline, workflow, and `migrated-default` template with the V1-derived record, discarding every edit made since the first run — renames, archive flags, and template bodies included. Nothing reports the loss.
@@ -513,14 +513,14 @@ python v2.5_to_v2.6_migration.py --config my_migration_config.json --steps reind
 
 Two things to expect afterwards:
 
-- **The first search immediately after a large reindex can return a 500.** OpenSearch Serverless is
-  still settling; retry after about 30 seconds. It is not a failed migration.
-- **Documents whose source no longer exists are not rewritten.** A reindex repopulates from live
-  DynamoDB and S3 records, so a stale document left by an asset or file deleted earlier keeps its
-  pre-upgrade shape indefinitely. Those documents are unreachable through any live-entity read. To
-  clear them out as well, re-run the step with `--clear-indexes`, which empties v3 before
-  repopulating.
-:::
+-   **The first search immediately after a large reindex can return a 500.** OpenSearch Serverless is
+    still settling; retry after about 30 seconds. It is not a failed migration.
+-   **Documents whose source no longer exists are not rewritten.** A reindex repopulates from live
+    DynamoDB and S3 records, so a stale document left by an asset or file deleted earlier keeps its
+    pre-upgrade shape indefinitely. Those documents are unreachable through any live-entity read. To
+    clear them out as well, re-run the step with `--clear-indexes`, which empties v3 before
+    repopulating.
+    :::
 
 :::note[Tag namespacing migration]
 v2.6 adds per-database tag namespacing, backed by the new composite-key `TagStorageTableV2` and `TagTypeStorageTableV2` DynamoDB tables (the former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources). The default migration run above includes the `tagsNamespacing` step, which copies every existing tag and tag type into the new tables under the `GLOBAL` partition, so all previously existing tags become GLOBAL tags. Asset tag lists are unchanged. The step is idempotent (already-copied rows are skipped on re-run) and can be run on its own:
@@ -528,6 +528,7 @@ v2.6 adds per-database tag namespacing, backed by the new composite-key `TagStor
 ```bash
 python v2.5_to_v2.6_migration.py --config my_migration_config.json --steps tagsNamespacing
 ```
+
 :::
 
 :::warning[Provisioned OpenSearch 3.5 upgrade]
@@ -721,20 +722,19 @@ what ties the group to the stack resource.
 Changing `app.useCloudFront.enabled` on an existing deployment renames the regional AWS WAF stack, because
 the two distributions need differently-scoped web ACLs and a CloudFront-scoped ACL must live in us-east-1:
 
-| `useCloudFront.enabled` | Regional WAF stack             | CloudFront WAF stack (us-east-1) |
-| ----------------------- | ------------------------------ | -------------------------------- |
-| `false`                 | `<name>-waf-<base>`            | not created                      |
-| `true`                  | `<name>-waf-regional-<base>`   | `<name>-waf-<base>`              |
+| `useCloudFront.enabled` | Regional WAF stack           | CloudFront WAF stack (us-east-1) |
+| ----------------------- | ---------------------------- | -------------------------------- |
+| `false`                 | `<name>-waf-<base>`          | not created                      |
+| `true`                  | `<name>-waf-regional-<base>` | `<name>-waf-<base>`              |
 
 The naming keeps an in-place update for a deployment that never changes distribution. Switching does not
 migrate, and the two directions fail differently:
 
-- **ALB → CloudFront.** `<name>-waf-<base>` is redefined as the CloudFront stack in us-east-1 while the
-  existing stack of that name holds the regional ACL in the deployment Region. A stack cannot change
-  Region, so the deployment attempts a new us-east-1 stack under a name already in use elsewhere and the
-  old regional stack is left unmanaged.
-- **CloudFront → ALB.** `<name>-waf-regional-<base>` is no longer referenced and is left in place.
-
+-   **ALB → CloudFront.** `<name>-waf-<base>` is redefined as the CloudFront stack in us-east-1 while the
+    existing stack of that name holds the regional ACL in the deployment Region. A stack cannot change
+    Region, so the deployment attempts a new us-east-1 stack under a name already in use elsewhere and the
+    old regional stack is left unmanaged.
+-   **CloudFront → ALB.** `<name>-waf-regional-<base>` is no longer referenced and is left in place.
 
 ##### Release the DNS record first
 
@@ -766,28 +766,28 @@ Then deploy. The web ACL carries no data, so nothing is lost.
 
 Use this checklist to determine if additional actions are needed after updating.
 
-| Change type                            | Versions affected                          | Action required                                                                                                                         |
-| -------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| DynamoDB table schema change           | v2.3 to v2.4, v2.4 to v2.5                 | Run version-specific migration scripts.                                                                                                 |
-| Amazon OpenSearch Service reindex      | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6   | Run reindex script or set `reindexOnCdkDeploy: true`.                                                                                   |
-| OpenSearch engine version upgrade      | v2.5 to v2.6 (provisioned only, 2.7 → 3.5) | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.                                                        |
-| OpenSearch Serverless next-gen reshape | v2.5 to v2.6 (serverless only)             | Disable Serverless, deploy, re-enable with new settings, deploy, then reindex. Keep `nextGen: false` on GovCloud/EU.                    |
-| VPC no longer auto-enabled             | v2.5 to v2.6                               | Set `app.useGlobalVpc.enabled: true` (or disable VPC-requiring features) if validation fails.                                           |
-| OpenSearch AZ count VPC downgrade      | v2.5 to v2.6 (provisioned only)            | Set `availabilityZoneCount: 3` to keep the existing VPC, or follow the drain-and-redeploy teardown to move to 2 AZs.                    |
-| Externally registered pipelines        | v2.5 to v2.6                               | Port each pipeline's input reads, task-token return, and sub-process registration, and declare its definition in a `vamsSchema` bundle. |
-| Three API routes removed               | v2.5 to v2.6                               | Repoint direct API clients: `PUT /pipelines` → `POST /database/{databaseId}/pipelines`, `PUT /workflows` → `POST /database/{databaseId}/workflows`, `POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}` → `POST /workflows/{workflowDatabaseId}/{workflowId}/execute`. A removed route answers `403`, not `404`. |
-| AWS WAF count mode → block mode        | v2.5 to v2.6 (`app.useWaf` enabled)        | Review AWS WAF blocked-request metrics after upgrading. Set `"block": false` on a rule group in `infra/config/policy/wafPolicyConfig.json` to return it to monitor mode. Blocked requests produce no VAMS log entry. |
-| OpenSearch Serverless `allowPublic`    | v2.5 to v2.6 (serverless only)             | Set `app.openSearch.useServerless.allowPublic: false` when `app.useGlobalVpc.useForAllLambdas` is `true`; the new default of `true` fails `cdk synth` on that topology. |
-| API Gateway REST API endpoint change   | v2.5 to v2.6                               | Re-run `vamscli setup`; update any client or script that stored the API Gateway invoke URL.                                             |
-| External asset bucket default          | v2.5 to v2.6 (`createNewBucket: false`)    | Set `isDefault: true` on exactly one `app.assetBuckets.externalAssetBuckets` entry; configuration validation otherwise fails `cdk synth`. |
-| Pipeline constraint field audit        | v2.5 to v2.6                               | Re-author any role constraint criterion that uses `pipelineType` against `category`; no script rewrites constraints.                    |
-| Bucket listing route scoped to admins  | v2.5 to v2.6                               | Remove the `/buckets` `api` criterion from non-administrator roles built from an earlier template; stored constraints are not reconciled. |
-| Permission constraint migration        | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                                                                            |
-| API Gateway authorizer change          | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                                                                                |
-| Pipeline CDK construct rename          | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                                                                         |
-| Website framework change               | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`.                                                     |
+| Change type                                                   | Versions affected                                 | Action required                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DynamoDB table schema change                                  | v2.3 to v2.4, v2.4 to v2.5                        | Run version-specific migration scripts.                                                                                                                                                                                                                                                                                                  |
+| Amazon OpenSearch Service reindex                             | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6          | Run reindex script or set `reindexOnCdkDeploy: true`.                                                                                                                                                                                                                                                                                    |
+| OpenSearch engine version upgrade                             | v2.5 to v2.6 (provisioned only, 2.7 → 3.5)        | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.                                                                                                                                                                                                                                                         |
+| OpenSearch Serverless next-gen reshape                        | v2.5 to v2.6 (serverless only)                    | Disable Serverless, deploy, re-enable with new settings, deploy, then reindex. Keep `nextGen: false` on GovCloud/EU.                                                                                                                                                                                                                     |
+| VPC no longer auto-enabled                                    | v2.5 to v2.6                                      | Set `app.useGlobalVpc.enabled: true` (or disable VPC-requiring features) if validation fails.                                                                                                                                                                                                                                            |
+| OpenSearch AZ count VPC downgrade                             | v2.5 to v2.6 (provisioned only)                   | Set `availabilityZoneCount: 3` to keep the existing VPC, or follow the drain-and-redeploy teardown to move to 2 AZs.                                                                                                                                                                                                                     |
+| Externally registered pipelines                               | v2.5 to v2.6                                      | Port each pipeline's input reads, task-token return, and sub-process registration, and declare its definition in a `vamsSchema` bundle.                                                                                                                                                                                                  |
+| Three API routes removed                                      | v2.5 to v2.6                                      | Repoint direct API clients: `PUT /pipelines` → `POST /database/{databaseId}/pipelines`, `PUT /workflows` → `POST /database/{databaseId}/workflows`, `POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}` → `POST /workflows/{workflowDatabaseId}/{workflowId}/execute`. A removed route answers `403`, not `404`.       |
+| AWS WAF count mode → block mode                               | v2.5 to v2.6 (`app.useWaf` enabled)               | Review AWS WAF blocked-request metrics after upgrading. Set `"block": false` on a rule group in `infra/config/policy/wafPolicyConfig.json` to return it to monitor mode. Blocked requests produce no VAMS log entry.                                                                                                                     |
+| OpenSearch Serverless `allowPublic`                           | v2.5 to v2.6 (serverless only)                    | Set `app.openSearch.useServerless.allowPublic: false` when `app.useGlobalVpc.useForAllLambdas` is `true`; the new default of `true` fails `cdk synth` on that topology.                                                                                                                                                                  |
+| API Gateway REST API endpoint change                          | v2.5 to v2.6                                      | Re-run `vamscli setup`; update any client or script that stored the API Gateway invoke URL.                                                                                                                                                                                                                                              |
+| External asset bucket default                                 | v2.5 to v2.6 (`createNewBucket: false`)           | Set `isDefault: true` on exactly one `app.assetBuckets.externalAssetBuckets` entry; configuration validation otherwise fails `cdk synth`.                                                                                                                                                                                                |
+| Pipeline constraint field audit                               | v2.5 to v2.6                                      | Re-author any role constraint criterion that uses `pipelineType` against `category`; no script rewrites constraints.                                                                                                                                                                                                                     |
+| Bucket listing route scoped to admins                         | v2.5 to v2.6                                      | Remove the `/buckets` `api` criterion from non-administrator roles built from an earlier template; stored constraints are not reconciled.                                                                                                                                                                                                |
+| Permission constraint migration                               | v2.3 to v2.4, v2.4 to v2.5                        | Run constraint migration script if custom constraints exist.                                                                                                                                                                                                                                                                             |
+| API Gateway authorizer change                                 | v2.2 to v2.3                                      | Reset authorizer cache after deployment.                                                                                                                                                                                                                                                                                                 |
+| Pipeline CDK construct rename                                 | v2.2 to v2.3                                      | Deploy without pipelines, then redeploy with pipelines enabled.                                                                                                                                                                                                                                                                          |
+| Website framework change                                      | v2.4 to v2.5                                      | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`.                                                                                                                                                                                                                                                      |
 | Distribution switch renames the WAF stack and collides on DNS | any version (`app.useCloudFront.enabled` changed) | Delete the existing Route 53 alias record for the shared `domainHost` before deploying — both fronts create one for the same name and Route 53 rejects the create, failing the update. Also delete the WAF stack the new configuration does not use, disassociating its web ACL first since AWS WAF refuses to delete an associated ACL. |
-| Encryption at rest for log groups and EFS | v2.5 to v2.6 (`app.useKmsCmkEncryption` enabled) | Log groups update in place. The Isaac Lab training EFS is replaced and its checkpoints are lost — copy them off first. If a resource fails to update, disable the owning pipeline, deploy, and re-enable it; rename any log group whose data you need to keep before the disabling deploy, because the cycle deletes it. |
+| Encryption at rest for log groups and EFS                     | v2.5 to v2.6 (`app.useKmsCmkEncryption` enabled)  | Log groups update in place. The Isaac Lab training EFS is replaced and its checkpoints are lost — copy them off first. If a resource fails to update, disable the owning pipeline, deploy, and re-enable it; rename any log group whose data you need to keep before the disabling deploy, because the cycle deletes it.                 |
 
 ## Rollback guidance
 

@@ -434,11 +434,11 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                                                                     |
-| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `maxItems`      | number | No       | `100`   | Maximum number of triggers to return. Clamped to 500 — a larger request is served a 500-row page and the remainder as a token.   |
-| `pageSize`      | number | No       | `100`   | Number of triggers per page, clamped to `maxItems`.                                                                             |
-| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                                       |
+| Parameter       | Type   | Required | Default | Description                                                                                                                    |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `maxItems`      | number | No       | `100`   | Maximum number of triggers to return. Clamped to 500 — a larger request is served a 500-row page and the remainder as a token. |
+| `pageSize`      | number | No       | `100`   | Number of triggers per page, clamped to `maxItems`.                                                                            |
+| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                                     |
 
 `NextToken` is present only while more triggers remain; page until it is absent. A page bounded by `pageSize` can hold no triggers and still carry a token, so an empty page is not the end of the listing.
 
@@ -1087,7 +1087,7 @@ The applied lower bound is echoed back as `filterStartDate`.
 }
 ```
 
-One request lists the asset's 200 most recent executions across both directions; the page size is fixed rather than caller-controlled, because each listed execution costs a record read and a permission check. `NextToken` is present when that cap was reached with older executions still available — page with `startingToken` until the token is absent. A run that only wrote into the asset carries no input file, so its `inputAssetFileKey` is empty.
+One request lists the asset's most recent executions across both directions. `pageSize` is honoured and is capped at 200, because each listed execution costs a record read and a permission check — ask for fewer and you get fewer; ask for more and you get 200. `NextToken` is present when that cap was reached with older executions still available — page with `startingToken` until the token is absent. A run that only wrote into the asset carries no input file, so its `inputAssetFileKey` is empty.
 
 :::note
 All executions are returned, both completed and running. Completed executions use the stored `startDate`, `stopDate`, and `executionStatus`; executions without a stored stop date are refreshed from AWS Step Functions, and once found to have stopped their status and dates are persisted.
@@ -1268,7 +1268,7 @@ Aborting an execution requires `GET` permission on the execution's workflow, `PO
 
 Reconstructs the execute request from an execution's stored records and launches a new execution (new `executionId`). The caller must be able to view the original execution; the re-launch re-validates permissions against every referenced asset, workflow, and pipeline.
 
-A re-run reproduces the original request exactly. When a configuration value was too large to record in full on the original run — a pipeline step's template tag values, or the custom configuration body of a template-less step — the reconstruction returns `400` rather than launching a run that differs from the original. Start a new execution supplying those values.
+A re-run reproduces the original request exactly. When a configuration value was too large to record in full on the original run — a pipeline step's template tag values, the custom configuration body of a template-less step, or the execution's metadata source asset list — the reconstruction returns `400` rather than launching a run that differs from the original. Start a new execution supplying those values.
 
 ```
 POST /workflows/executions/{executionId}/rerun
@@ -1296,13 +1296,13 @@ A re-run requires that the caller can view the original execution (`GET` on its 
 
 ### Error responses
 
-| Status | Description                                                                                   |
-| ------ | --------------------------------------------------------------------------------------------- |
+| Status | Description                                                                                                                                                |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid `executionId` or `executionGroupId`, a stored configuration value too large to reproduce exactly, or the reconstructed execution failed validation |
-| `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)         |
-| `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone        |
-| `429`  | Throttling -- too many requests                                                               |
-| `500`  | Internal server error, or re-run is unavailable in this deployment                            |
+| `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)                                                                      |
+| `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone                                                                     |
+| `429`  | Throttling -- too many requests                                                                                                                            |
+| `500`  | Internal server error, or re-run is unavailable in this deployment                                                                                         |
 
 ---
 
@@ -1605,12 +1605,12 @@ The `pipelines` array and `inputConfigurations` are charged against the response
 
 ### Error responses
 
-| Status | Description                                                                                                          |
-| ------ | -------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`                                                                                     |
+| Status | Description                                                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`                                                                                                       |
 | `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
-| `404`  | Execution not found                                                                                                  |
-| `500`  | Internal server error                                                                                                |
+| `404`  | Execution not found                                                                                                                    |
+| `500`  | Internal server error                                                                                                                  |
 
 ---
 
@@ -1686,12 +1686,12 @@ This route enforces the rule [Get execution details](#get-execution-details) enf
 
 ### Error responses
 
-| Status | Description                                                                                                            |
-| ------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`, an unknown `collection`, an invalid `pipelineId` or `pageSize`, or an unusable token |
-| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database)   |
-| `404`  | Execution not found                                                                                                    |
-| `500`  | Internal server error                                                                                                  |
+| Status | Description                                                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, an unknown `collection`, an invalid `pipelineId` or `pageSize`, or an unusable token                 |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
+| `404`  | Execution not found                                                                                                                    |
+| `500`  | Internal server error                                                                                                                  |
 
 ---
 
@@ -1801,12 +1801,12 @@ A full-mode CloudWatch search is always restricted to the requested execution wi
 
 ### Error responses
 
-| Status | Description                                                                                                          |
-| ------ | -------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`, an invalid `mode`, or a non-integer `limit`, `startTime`, or `endTime`             |
+| Status | Description                                                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, an invalid `mode`, or a non-integer `limit`, `startTime`, or `endTime`                               |
 | `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
-| `404`  | Execution (or specified pipeline execution) not found                                                                |
-| `500`  | Internal server error                                                                                                |
+| `404`  | Execution (or specified pipeline execution) not found                                                                                  |
+| `500`  | Internal server error                                                                                                                  |
 
 ---
 

@@ -14,7 +14,7 @@ VAMS supports the **Cosmos-Transfer2.5-2B** model for video transformation using
 | **Pipeline ID**             | `cosmos-transfer2-edge-2b`                                                                                    |
 | **Configuration flag**      | `app.pipelines.useNvidiaCosmos.modelsTransfer.transfer2B.enabled`                                             |
 | **Execution type**          | Lambda (asynchronous with callback)                                                                           |
-| **Supported input formats** | `.mp4`, `.mov`, `.avi` (source video); control signal (optional, auto-computed or provided)                           |
+| **Supported input formats** | `.mp4`, `.mov`, `.avi` (source video); control signal (optional, auto-computed or provided)                   |
 | **Output**                  | MP4 video file stored at `outputS3AssetFilesPath`                                                             |
 | **Timeout**                 | 8 hours (AWS Batch job), 8 hours (VAMS workflow task token)                                                   |
 | **GPU Requirements**        | 65.4GB VRAM minimum across 8 GPUs. Default: g6e.48xlarge (8x L40S 48GB), fallback: p5.48xlarge (8x H100 80GB) |

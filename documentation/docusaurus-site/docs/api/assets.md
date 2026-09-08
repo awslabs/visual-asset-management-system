@@ -142,15 +142,15 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 }
 ```
 
-| Field               | Type          | Required | Description                                                                                              |
-| ------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------- |
-| `databaseId`        | string        | Yes      | Target database identifier.                                                                              |
-| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                           |
-| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                    |
-| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                     |
-| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted. |
+| Field               | Type          | Required | Description                                                                                                                                                                          |
+| ------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                          |
+| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                       |
+| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                |
+| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                 |
+| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted.                                                      |
 | `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
-| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                   |
+| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                                                                                               |
 
 **Response:**
 
@@ -187,15 +187,15 @@ Both stages require `PUT` permission on the asset (`objectType: "asset"`) in add
 
 #### Initialize request body
 
-| Field             | Type          | Required | Description                                                                                                              |
-| ----------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `databaseId`      | string        | Yes      | Target database identifier (4-256 characters).                                                                           |
-| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`.                             |
-| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                           |
-| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                    |
-| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                                    |
-| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                                 |
-| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                              |
+| Field             | Type          | Required | Description                                                                                                          |
+| ----------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`      | string        | Yes      | Target database identifier (4-256 characters).                                                                       |
+| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`. |
+| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                       |
+| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                |
+| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                               |
+| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                             |
+| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                         |
 
 Each entry in `files` is an object:
 
@@ -248,9 +248,9 @@ Each entry in `files` is an object:
 
 Repeat the asset fields from the initialize request, and add:
 
-| Field      | Type   | Required | Description                                                                    |
-| ---------- | ------ | -------- | ------------------------------------------------------------------------------ |
-| `uploadId` | string | Yes      | Identifier returned by the initialize stage. Its presence selects this stage.   |
+| Field      | Type   | Required | Description                                                                                                                                    |
+| ---------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `uploadId` | string | Yes      | Identifier returned by the initialize stage. Its presence selects this stage.                                                                  |
 | `files`    | array  | Yes      | Completed files, each with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. At least one part per file. |
 
 ```json
@@ -296,11 +296,11 @@ Repeat the asset fields from the initialize request, and add:
 
 **Error Responses:**
 
-| Status | Description                                                                                                          |
-| ------ | -------------------------------------------------------------------------------------------------------------------- |
+| Status | Description                                                                                                                                                               |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset.                                                                                  |
-| `500`  | Internal server error.                                                                                               |
+| `403`  | Not authorized to write this asset.                                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                                                    |
 
 ---
 
@@ -385,11 +385,11 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 }
 ```
 
-| Field             | Type          | Required | Description                            |
-| ----------------- | ------------- | -------- | -------------------------------------- |
-| `assetName`       | string        | No       | Updated asset name.                    |
-| `description`     | string        | No       | Updated description.                   |
-| `isDistributable` | boolean       | No       | Updated distributable flag.            |
+| Field             | Type          | Required | Description                                                                                                                                                                                     |
+| ----------------- | ------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assetName`       | string        | No       | Updated asset name.                                                                                                                                                                             |
+| `description`     | string        | No       | Updated description.                                                                                                                                                                            |
+| `isDistributable` | boolean       | No       | Updated distributable flag.                                                                                                                                                                     |
 | `tags`            | array[string] | No       | Updated tags (replaces existing tags). Only newly added names are checked for existence, so an asset keeps a tag that was deleted; required tag types that have tags must still be represented. |
 
 **Response:**

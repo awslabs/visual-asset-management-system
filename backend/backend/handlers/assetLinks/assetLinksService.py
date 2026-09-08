@@ -688,16 +688,18 @@ def delete_asset_link(asset_link_id: str, claims_and_roles: dict) -> DeleteAsset
             
         link_item = response['Item']
         
-        # Check permissions for both assets
+        # A link whose asset has been permanently deleted is authorized against whichever end
+        # still exists. When neither end exists there is nothing left to authorize against; the
+        # API-level check has already admitted the caller, so the dangling row is removed.
         from_asset = get_asset_details(link_item['fromAssetId'], link_item['fromAssetDatabaseId'])
         to_asset = get_asset_details(link_item['toAssetId'], link_item['toAssetDatabaseId'])
-        
-        if not from_asset or not to_asset:
-            raise ValueError("One or both linked assets no longer exist")
-            
-        # Check permissions - user must have DELETE permission on both assets
-        if not (check_asset_permission(from_asset, claims_and_roles, "DELETE") and 
-                check_asset_permission(to_asset, claims_and_roles, "DELETE")):
+
+        existing_assets = [asset for asset in (from_asset, to_asset) if asset]
+        if not existing_assets:
+            logger.warning(f"Deleting asset link {asset_link_id}: neither linked asset exists any longer")
+
+        # User must have DELETE permission on every linked asset that still exists
+        if not all(check_asset_permission(asset, claims_and_roles, "DELETE") for asset in existing_assets):
             raise PermissionError("Not authorized to delete this asset link")
         
         # Delete associated metadata first

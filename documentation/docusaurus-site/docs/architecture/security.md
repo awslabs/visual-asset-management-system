@@ -36,12 +36,12 @@ SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS
 1. Set `authProvider.useCognito.useSaml` to `true` in `infra/config/config.json`.
 2. Edit `infra/config/saml-config.ts` with the following required fields:
 
-| Field                 | Description                                                                                                                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name`                | Identifies the SAML identity provider in the Amazon Cognito User Pool and in the web UI                                                                                              |
+| Field                 | Description                                                                                                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | Identifies the SAML identity provider in the Amazon Cognito User Pool and in the web UI                                                                                          |
 | `cognitoDomainPrefix` | DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL (for example, `https://{prefix}.auth.{region}.amazoncognito.com/saml2/idpresponse`) |
-| `metadataContent`     | URL of your SAML metadata. Can also point to a local file if `metadataType` is changed to `cognito.UserPoolIdentityProviderSamlMetadataType.FILE`                                    |
-| `attributeMapping`    | Maps SAML attributes back to VAMS (email, fullname)                                                                                                                                  |
+| `metadataContent`     | URL of your SAML metadata. Can also point to a local file if `metadataType` is changed to `cognito.UserPoolIdentityProviderSamlMetadataType.FILE`                                |
+| `attributeMapping`    | Maps SAML attributes back to VAMS (email, fullname)                                                                                                                              |
 
 3. Deploy or redeploy the CDK stack with `cdk deploy --all`.
 
@@ -66,17 +66,17 @@ SAML and OIDC federation are mutually exclusive: configuration validation reject
 2. Set `authProvider.useCognito.useOidc` to `true` in `infra/config/config.json`.
 3. Edit `infra/config/oidc-config.ts` with the following required fields:
 
-| Field                 | Description                                                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                | Identifies the OIDC identity provider in the Amazon Cognito User Pool and in the web application                                                   |
-| `displayName`         | Label rendered on the federated login button ("Login with \{displayName\}")                                                                       |
-| `cognitoDomainPrefix` | DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL                                                       |
-| `clientId`            | Client identifier issued by the identity provider for this application                                                                            |
-| `clientSecretArn`     | ARN (or name) of the AWS Secrets Manager secret holding the client secret. The plaintext secret is never placed in configuration                   |
-| `issuerUrl`           | HTTPS issuer base URL. Amazon Cognito discovers the authorization, token, and JWKS endpoints from it                                               |
-| `scopes`              | Scopes requested at authorization time. Must include `openid`                                                                                      |
-| `attributeMapping`    | Maps incoming OIDC claims to Amazon Cognito user attributes (for example, `email`)                                                                 |
-| `manageDomain`        | Whether the CDK creates the hosted UI domain. Leave `true` unless the domain already exists on the user pool, which CloudFormation cannot adopt    |
+| Field                 | Description                                                                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | Identifies the OIDC identity provider in the Amazon Cognito User Pool and in the web application                                                |
+| `displayName`         | Label rendered on the federated login button ("Login with \{displayName\}")                                                                     |
+| `cognitoDomainPrefix` | DNS-compatible, globally unique string used as a subdomain of the Amazon Cognito sign-on URL                                                    |
+| `clientId`            | Client identifier issued by the identity provider for this application                                                                          |
+| `clientSecretArn`     | ARN (or name) of the AWS Secrets Manager secret holding the client secret. The plaintext secret is never placed in configuration                |
+| `issuerUrl`           | HTTPS issuer base URL. Amazon Cognito discovers the authorization, token, and JWKS endpoints from it                                            |
+| `scopes`              | Scopes requested at authorization time. Must include `openid`                                                                                   |
+| `attributeMapping`    | Maps incoming OIDC claims to Amazon Cognito user attributes (for example, `email`)                                                              |
+| `manageDomain`        | Whether the CDK creates the hosted UI domain. Leave `true` unless the domain already exists on the user pool, which CloudFormation cannot adopt |
 
     Configuration validation rejects the placeholder values the file ships with, so a deployment cannot silently register an identity provider that cannot complete a login.
 
@@ -427,21 +427,21 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 
 ### Base CSP Directives
 
-| Directive         | Sources                                                         |
-| ----------------- | --------------------------------------------------------------- |
-| `base-uri`        | `'none'`                                                        |
-| `default-src`     | `'none'`                                                        |
+| Directive         | Sources                                                                      |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `base-uri`        | `'none'`                                                                     |
+| `default-src`     | `'none'`                                                                     |
 | `script-src`      | `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, per-script SHA-256 hashes |
-| `style-src`       | `'self'`, `'unsafe-inline'`                                     |
-| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint |
-| `worker-src`      | `'self'`, `blob:`, `data:`                                      |
-| `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
-| `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
-| `object-src`      | `'none'`                                                        |
-| `frame-src`       | `'self'`, `blob:`                                               |
-| `frame-ancestors` | `'self'`                                                        |
-| `font-src`        | `'self'`                                                        |
-| `manifest-src`    | `'self'`                                                        |
+| `style-src`       | `'self'`, `'unsafe-inline'`                                                  |
+| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint              |
+| `worker-src`      | `'self'`, `blob:`, `data:`                                                   |
+| `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
+| `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
+| `object-src`      | `'none'`                                                                     |
+| `frame-src`       | `'self'`, `blob:`                                                            |
+| `frame-ancestors` | `'self'`                                                                     |
+| `font-src`        | `'self'`                                                                     |
+| `manifest-src`    | `'self'`                                                                     |
 
 :::note[Framing directives]
 `frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes. A viewer that frames a third-party document needs that document's origin added as well, which is what the Physna Sync add-on contributes in the conditional table below. `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
@@ -476,13 +476,13 @@ when `app.webUi.allowUnsafeEvalFeatures` is enabled.
 
 ### Conditional CSP Sources
 
-| Condition                        | Added Sources                                                            |
-| -------------------------------- | ------------------------------------------------------------------------ |
-| Amazon Cognito enabled           | Cognito IDP and Identity endpoints in `connect-src`                      |
-| SAML enabled                     | Cognito auth domain in `connect-src`                                     |
-| External OAuth IDP               | IDP auth provider URL in `connect-src`                                   |
-| `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins) |
-| Amazon Location Service enabled  | Maps endpoint in `connect-src`                                           |
+| Condition                        | Added Sources                                                                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Amazon Cognito enabled           | Cognito IDP and Identity endpoints in `connect-src`                                                                                   |
+| SAML enabled                     | Cognito auth domain in `connect-src`                                                                                                  |
+| External OAuth IDP               | IDP auth provider URL in `connect-src`                                                                                                |
+| `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins)                                                              |
+| Amazon Location Service enabled  | Maps endpoint in `connect-src`                                                                                                        |
 | Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`. The add-on adds no `script-src` source, and in particular no `'unsafe-inline'` |
 
 :::note[The Physna add-on does not relax inline-script protection]
@@ -513,12 +513,12 @@ A policy that exceeds the limit is rejected at synthesis time with a message nam
 
 Both web distributions set the same security response headers, so neither delivery path is the weaker one.
 
-| Header                    | Value                                    | Purpose                                                                                 |
-| ------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------- |
-| `Content-Security-Policy` | Generated per deployment (see above)      | Restricts the origins each resource type may load from                                  |
-| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains`   | Requires HTTPS for two years, including subdomains                                      |
-| `X-Content-Type-Options`  | `nosniff`                                | Prevents MIME-type sniffing of served objects                                           |
-| `X-Frame-Options`         | `SAMEORIGIN`                             | Legacy equivalent of `frame-ancestors 'self'`; permits VAMS's own iframe viewers         |
+| Header                      | Value                                 | Purpose                                                                          |
+| --------------------------- | ------------------------------------- | -------------------------------------------------------------------------------- |
+| `Content-Security-Policy`   | Generated per deployment (see above)  | Restricts the origins each resource type may load from                           |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` | Requires HTTPS for two years, including subdomains                               |
+| `X-Content-Type-Options`    | `nosniff`                             | Prevents MIME-type sniffing of served objects                                    |
+| `X-Frame-Options`           | `SAMEORIGIN`                          | Legacy equivalent of `frame-ancestors 'self'`; permits VAMS's own iframe viewers |
 
 CloudFront delivers these through a response-headers policy; the ALB delivers them as listener attributes. The ALB path additionally suppresses the load balancer's own `Server` response header, which names the infrastructure without serving the application.
 
@@ -614,13 +614,13 @@ When `useGlobalVpc.enabled = true`, all Lambda functions can be deployed into VP
 
 When `useFips = true` (typically in AWS GovCloud), the partition-aware service helper automatically selects FIPS-compliant endpoints for all AWS service calls. The service helper supports the `aws`, `aws-us-gov`, `aws-eusc` (AWS European Sovereign Cloud), `aws-cn`, and `aws-iso*` partitions:
 
-| Partition                    | Identifier   | DNS suffix           |
-| ---------------------------- | ------------ | -------------------- |
-| Commercial                   | `aws`        | `amazonaws.com`      |
-| GovCloud                     | `aws-us-gov` | `amazonaws.com`      |
-| AWS European Sovereign Cloud | `aws-eusc`   | `amazonaws.eu`       |
-| China                        | `aws-cn`     | `amazonaws.com.cn`   |
-| Isolated                     | `aws-iso*`   | Per isolated Region  |
+| Partition                    | Identifier   | DNS suffix          |
+| ---------------------------- | ------------ | ------------------- |
+| Commercial                   | `aws`        | `amazonaws.com`     |
+| GovCloud                     | `aws-us-gov` | `amazonaws.com`     |
+| AWS European Sovereign Cloud | `aws-eusc`   | `amazonaws.eu`      |
+| China                        | `aws-cn`     | `amazonaws.com.cn`  |
+| Isolated                     | `aws-iso*`   | Per isolated Region |
 
 Each partition entry carries both a standard and a FIPS hostname, so `useFips` resolves within whichever partition the deployment targets. The shipped configuration templates set `useFips` to `true` for GovCloud and `false` for the commercial and AWS European Sovereign Cloud partitions.
 
@@ -687,15 +687,15 @@ Custom bucket policies can be applied to all VAMS Amazon S3 buckets via `infra/c
 
 `govCloud.enabled = true` is the restricted-partition switch: the AWS GovCloud (US), AWS European Sovereign Cloud, and ISO partitions all set it. When it is `true`:
 
-| Constraint                                | Enforcement                                                                            |
-| ----------------------------------------- | --------------------------------------------------------------------------------------- |
-| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                   |
-| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                                 |
-| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                            |
-| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                            |
-| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable)    |
-| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                       |
-| FIPS endpoints                            | Automatically selected by service helper                                                |
+| Constraint                                | Enforcement                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------- |
+| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                 |
+| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                               |
+| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                          |
+| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                         |
+| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable) |
+| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                    |
+| FIPS endpoints                            | Automatically selected by service helper                                              |
 
 The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain.
 

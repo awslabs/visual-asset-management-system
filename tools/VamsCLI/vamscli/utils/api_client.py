@@ -34,6 +34,18 @@ _STAGE_HINT = (
 )
 
 
+def _is_cognito_unavailable(error_message: str) -> bool:
+    """True when a 400 from the Cognito user routes says the feature is off, not that the input is bad.
+
+    The handler refuses every Cognito user-management call with "Cognito user management is not
+    available" (Cognito disabled in the deployment) or "Cognito configuration error" (no user pool id),
+    both as an ordinary 400 -- the same status a malformed request gets. The two are told apart by the
+    message alone.
+    """
+    text = (error_message or "").lower()
+    return "cognito user management is not available" in text or "cognito configuration error" in text
+
+
 def _api_error_message(response, fallback: str) -> str:
     """The server's error text from an HTTP error response, or `fallback` when it carries none.
 
@@ -4688,24 +4700,24 @@ class APIClient:
         
         Raises:
             AuthenticationError: When authentication fails
-            APIError: When API call fails or Cognito is not enabled
+            CognitoUserOperationError: When the parameters are invalid or Cognito is not enabled
+            APIError: When the API call fails
         """
         from ..constants import API_COGNITO_USERS
         from .exceptions import CognitoUserOperationError
         
         try:
             query_params = params or {}
-            response = self.get(API_COGNITO_USERS, include_auth=True, params=query_params)
+            response = self.get(API_COGNITO_USERS, include_auth=True, params=query_params,
+                                raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 raise CognitoUserOperationError(f"Invalid list parameters: {error_message}")
-                
-            elif e.response.status_code == 503:
-                error_message = _api_error_message(e.response, str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4741,22 +4753,21 @@ class APIClient:
         )
         
         try:
-            response = self.post(API_COGNITO_USERS, data=user_data, include_auth=True)
+            response = self.post(API_COGNITO_USERS, data=user_data, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
                 if 'already exists' in error_message.lower() or 'user exists' in error_message.lower():
                     raise CognitoUserAlreadyExistsError(f"User already exists: {error_message}")
                 else:
                     raise InvalidCognitoUserDataError(f"Invalid user data: {error_message}")
                     
-            elif e.response.status_code == 503:
-                error_message = _api_error_message(e.response, str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
-                
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
@@ -4792,20 +4803,20 @@ class APIClient:
         
         try:
             endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
-            response = self.put(endpoint, data=update_data, include_auth=True)
+            response = self.put(endpoint, data=update_data, include_auth=True, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                if 'user not found' in error_message.lower():
+                    raise CognitoUserNotFoundError(f"User '{user_id}' not found")
                 raise InvalidCognitoUserDataError(f"Invalid update data: {error_message}")
                 
             elif e.response.status_code == 404:
                 raise CognitoUserNotFoundError(f"User '{user_id}' not found")
-                
-            elif e.response.status_code == 503:
-                error_message = _api_error_message(e.response, str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4836,16 +4847,20 @@ class APIClient:
         
         try:
             endpoint = API_COGNITO_USER_BY_ID.format(userId=user_id)
-            response = self.delete(endpoint, include_auth=True)
+            response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                raise CognitoUserNotFoundError(f"User '{user_id}' not found")
-                
-            elif e.response.status_code == 503:
+            if e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                if 'user not found' in error_message.lower():
+                    raise CognitoUserNotFoundError(f"User '{user_id}' not found")
+                raise CognitoUserOperationError(f"Invalid delete request: {error_message}")
+
+            elif e.response.status_code == 404:
+                raise CognitoUserNotFoundError(f"User '{user_id}' not found")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4881,20 +4896,20 @@ class APIClient:
         try:
             endpoint = API_COGNITO_USER_RESET_PASSWORD.format(userId=user_id)
             data = {'confirmReset': confirm_reset}
-            response = self.post(endpoint, data=data, include_auth=True)
+            response = self.post(endpoint, data=data, include_auth=True, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
+                if _is_cognito_unavailable(error_message):
+                    raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
+                if 'user not found' in error_message.lower():
+                    raise CognitoUserNotFoundError(f"User '{user_id}' not found")
                 raise InvalidCognitoUserDataError(f"Invalid reset request: {error_message}")
                 
             elif e.response.status_code == 404:
                 raise CognitoUserNotFoundError(f"User '{user_id}' not found")
-                
-            elif e.response.status_code == 503:
-                error_message = _api_error_message(e.response, str(e))
-                raise CognitoUserOperationError(f"Cognito not enabled: {error_message}")
                 
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -6382,7 +6397,7 @@ class APIClient:
             API response data: {"message": "success"}
 
         Raises:
-            SubscriptionNotFoundError: When no subscription exists, or the user is not subscribed
+            SubscriptionNotFoundError: When no subscription record exists for the event and entity
             InvalidSubscriptionDataError: When the request is rejected
             AssetNotFoundError: When the entity's asset cannot be resolved
             AuthenticationError: When authentication fails

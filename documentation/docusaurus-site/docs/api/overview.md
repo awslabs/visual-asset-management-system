@@ -95,7 +95,7 @@ VAMS uses standard HTTP status codes to indicate the result of an API request.
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `200`       | The request succeeded.                                                                                                                                                            |
 | `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled). |
-| `401`       | Unauthorized. The asset is not distributable (download-specific).                                                                                                                 |
+| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                     |
 | `403`       | Forbidden. The authenticated user does not have permission for the requested action.                                                                                              |
 | `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                    |
 | `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                |
@@ -114,15 +114,22 @@ Many list endpoints support pagination using a token-based pattern. The followin
 
 Default and maximum values for `maxItems` and `pageSize` vary by listing:
 
-| Listing                                      | `maxItems` default | `pageSize` default            | Maximum                              |
-| -------------------------------------------- | ------------------ | ----------------------------- | ------------------------------------ |
-| Assets                                       | 30,000             | 3,000                         | None                                 |
-| Asset files                                  | 10,000             | 100 (1,500 with `basic=true`) | None                                 |
-| Metadata (asset, file, database, asset link) | 1,000              | 100                           | 1,000 for each                       |
-| Constraints                                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000 |
-| Roles, tags, and user roles                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000 |
+| Listing                                      | `maxItems` default | `pageSize` default            | Maximum                                                                                                        |
+| -------------------------------------------- | ------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Assets (all, or within a database)           | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Asset files                                  | 10,000             | 100 (1,500 with `basic=true`) | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Asset versions                               | 1,000              | 1,000                         | 1,000 for each                                                                                                 |
+| Databases                                    | 10,000             | 10,000                        | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Bucket configurations                        | 3,000              | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Metadata (asset, file, database, asset link) | 1,000              | 100                           | 1,000 for each                                                                                                 |
+| Metadata schemas                             | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Constraints                                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Roles, tags, tag types, and user roles       | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000; roles, tags and tag types reduce a larger value rather than rejecting it |
+| Pipelines and workflows                      | 100                | 100                           | 500 for each; a larger value is reduced to 500 rather than rejected                                            |
+| Comments                                     | 10,000             | 10,000                        | `maxItems` 30,000; `pageSize` 10,000; a larger value is reduced, not rejected                                  |
+| Subscriptions                                | 10,000             | 10,000                        | None                                                                                                           |
 
-A listing with a maximum rejects a larger value with `400` rather than reducing it to the maximum, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. A listing with no maximum accepts the value as given. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size — the whole set is reachable by following it whatever the page size.
+Unless the table says otherwise, a listing with a maximum rejects a larger value with `400` rather than reducing it to the maximum, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. A listing with no maximum accepts the value as given. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size — the whole set is reachable by following it whatever the page size.
 
 ### Paginated Response
 
@@ -203,20 +210,20 @@ Version information can be retrieved from the `GET /api/version` endpoint:
 
 The VAMS API is organized into the following functional groups:
 
-| Category           | Description                                                                                  | Documentation                       |
-| ------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------- |
-| **Authentication** | Authentication providers, runtime configuration, web route authorization, login profiles      | [Authentication](authentication.md) |
-| **Databases**      | Database CRUD and the bucket configurations a database is created against                    | [Databases](databases.md)           |
-| **Assets**         | Asset CRUD, archive/unarchive, download, export, history, single-call ingest                  | [Assets](assets.md)                 |
-| **Asset Versions** | Asset version creation, retrieval, revert, archive/unarchive                                 | [Asset Versions](asset-versions.md) |
-| **Files**          | File listing, operations, upload, streaming, preview management                               | [Files](files.md)                   |
-| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links, plus metadata schemas            | [Metadata](metadata.md)             |
-| **Search**         | Full-text and structured search across assets and files                                      | [Search](search.md)                 |
-| **Pipelines**      | Pipeline CRUD, configuration templates, and template tag schemas                              | [Pipelines](pipelines.md)           |
-| **Workflows**      | Workflow CRUD, triggers, and execution launch, listing, detail, logs, re-run, and abort        | [Workflows](workflows.md)           |
-| **Asset Links**    | Relationships between assets, with optional tags and tree views                               | [Asset Links](asset-links.md)       |
-| **Comments**       | Review comments attached to an asset version                                                 | [Comments](comments.md)             |
-| **Tags**           | Tags and tag types, global or scoped to a database                                           | [Tags](tags.md)                     |
-| **Subscriptions**  | Event subscriptions and notification opt-in                                                  | [Subscriptions](subscriptions.md)   |
-| **Authorization**  | Permission constraints, API route listings, roles, user-role assignments, Cognito users, API keys | [Authorization](auth.md)         |
-| **Add-ons**        | Endpoints contributed by optional add-ons                                                    | [Add-ons](addon.md)                 |
+| Category           | Description                                                                                       | Documentation                       |
+| ------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Authentication** | Authentication providers, runtime configuration, web route authorization, login profiles          | [Authentication](authentication.md) |
+| **Databases**      | Database CRUD and the bucket configurations a database is created against                         | [Databases](databases.md)           |
+| **Assets**         | Asset CRUD, archive/unarchive, download, export, history, single-call ingest                      | [Assets](assets.md)                 |
+| **Asset Versions** | Asset version creation, retrieval, revert, archive/unarchive                                      | [Asset Versions](asset-versions.md) |
+| **Files**          | File listing, operations, upload, streaming, preview management                                   | [Files](files.md)                   |
+| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links, plus metadata schemas                | [Metadata](metadata.md)             |
+| **Search**         | Full-text and structured search across assets and files                                           | [Search](search.md)                 |
+| **Pipelines**      | Pipeline CRUD, configuration templates, and template tag schemas                                  | [Pipelines](pipelines.md)           |
+| **Workflows**      | Workflow CRUD, triggers, and execution launch, listing, detail, logs, re-run, and abort           | [Workflows](workflows.md)           |
+| **Asset Links**    | Relationships between assets, with optional tags and tree views                                   | [Asset Links](asset-links.md)       |
+| **Comments**       | Review comments attached to an asset version                                                      | [Comments](comments.md)             |
+| **Tags**           | Tags and tag types, global or scoped to a database                                                | [Tags](tags.md)                     |
+| **Subscriptions**  | Event subscriptions and notification opt-in                                                       | [Subscriptions](subscriptions.md)   |
+| **Authorization**  | Permission constraints, API route listings, roles, user-role assignments, Cognito users, API keys | [Authorization](auth.md)            |
+| **Add-ons**        | Endpoints contributed by optional add-ons                                                         | [Add-ons](addon.md)                 |

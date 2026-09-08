@@ -46,9 +46,9 @@ OCU capacity is set by `minIndexingOcu` / `maxIndexingOcu` / `minSearchOcu` / `m
 
 The two generations expose different collection endpoint hostnames, which require different VPC endpoint types for private access:
 
-| Generation                       | Collection endpoint hostname                      | Data-plane VPC endpoint                                                                                     |
-| -------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Next-generation (`nextGen=true`) | `{collection-id}.aoss.{region}.on.aws`        | Standard AWS PrivateLink interface endpoint (Amazon EC2 service `com.amazonaws.{region}.aoss-data`)       |
+| Generation                       | Collection endpoint hostname                  | Data-plane VPC endpoint                                                                                     |
+| -------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Next-generation (`nextGen=true`) | `{collection-id}.aoss.{region}.on.aws`        | Standard AWS PrivateLink interface endpoint (Amazon EC2 service `com.amazonaws.{region}.aoss-data`)         |
 | Classic (`nextGen=false`)        | `{collection-id}.{region}.aoss.amazonaws.com` | Amazon OpenSearch Serverless-managed endpoint, which provisions its own Amazon Route 53 private hosted zone |
 
 When `allowPublic = true`, the collection is reachable over the public internet (subject to data-access policies) and no VPC endpoint is needed. When `allowPublic = false` (recommended for production), the collection is reachable only through a VPC endpoint and requires:

@@ -228,10 +228,17 @@ MAX_PAGINATION_PAGE_SIZE = 10000
 
 def validate_pagination_info(queryParameters, defaultMaxItemsOverride=10000, defaultPageSizeOverride=3000):
     """
-    Sets the pagination infor from the query parameters
+    Sets the pagination info from the query parameters
+
     :param queryParameters: dictionary containing pagination info
-    :param defaultMaxItemsOverride: default max items to return, set to 10000 if not set
-    :param defaultPageSizeOverride: default page size to return, set to 3000 if not set
+    :param defaultMaxItemsOverride: the value used when the caller supplies neither `maxItems` nor
+        `pageSize`. So it is the default for BOTH, which is what keeps the two aligned for the many
+        callers that pass this one argument and nothing else -- `validate_pagination_info(params, 50)`
+        yields maxItems 50 and pageSize 50, not pageSize 3000 against a 50-item ceiling.
+    :param defaultPageSizeOverride: the fallback for a `pageSize` that was SUPPLIED but is not a
+        number. It is deliberately not the absent-key default: a caller who named no page size is
+        asking for the ceiling this helper was given, whereas a caller who sent garbage is asking for
+        something and gets a sane page instead.
     """
 
     if queryParameters is None:

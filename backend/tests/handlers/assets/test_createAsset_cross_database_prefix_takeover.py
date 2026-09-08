@@ -1386,3 +1386,113 @@ class TestMalformedOwnershipRecords:
 
         warnings = " ".join(str(c) for c in m.logger.warning.call_args_list)
         assert "no usable assetLocation.Key" not in warnings
+
+
+@pytest.mark.unit
+class TestAnAssetMayNotOwnThePrefixRoot:
+    """An asset occupies a location UNDER the bucket record's prefix root, never the root itself.
+
+    This closes the route that CREATES the S25-SEC-002 shape. A root-owning asset is a silent ancestor
+    of every asset later derived from an assetId, and neither ownership layer sees the relationship: the
+    record layer compares assetIds, which differ, and the S3 layer lists under the DERIVED child prefix,
+    where the ancestor's own objects never appear. The ancestor's owner then reads the newer asset's
+    files through its own listFiles.
+
+    `bucketExistingKey` was the only way to reach it. The under-base-prefix check that precedes this one
+    admits the root because `startswith` is satisfied by equality, and a key derived from an assetId
+    always adds a segment so it can never BE the root.
+
+    NOTE ON SCOPE, so the xfail above is not misread: this stops such an asset being created. It does
+    NOT retroactively shield children of a root-owning asset that a previous release already onboarded —
+    that still needs the ancestor-aware lookup the xfail describes.
+    """
+
+    @pytest.mark.parametrize("supplied,label", [
+        ("assets/", "the root exactly as the bucket record spells it"),
+        ("/assets/", "the root with a leading slash"),
+    ])
+    def test_a_key_resolving_to_the_prefix_root_is_rejected(self, supplied, label):
+        m = _load(fresh=True)
+        _wire(m, owned_records=[])
+
+        with pytest.raises(m.VAMSGeneralErrorResponse) as caught:
+            m.create_asset(
+                _request_model(m, bucket_existing_key=supplied), {"tokens": ["attacker"]})
+
+        assert "root" in str(caught.value).lower(), (
+            f"{label}: rejected, but not by the prefix-root rule -- {caught.value}")
+        _assert_nothing_persisted(m)
+
+    @pytest.mark.parametrize("supplied,resolves_to,why", [
+        ("assets", _BASE_PREFIX + "assets",
+         "normalize_s3_path PREPENDS the base when the key does not already start with it, so the "
+         "root's own name asks for a folder NAMED assets beneath the root, which is legitimate"),
+        ("supplied/", _BASE_PREFIX + "supplied/", "an ordinary folder under the root"),
+        ("assetsOther/model.glb", _BASE_PREFIX + "assetsOther/model.glb",
+         "shares the root's leading characters but is not the root; the comparison is equality on "
+         "prefix-folder semantics, not a string prefix"),
+    ])
+    def test_keys_that_only_LOOK_like_the_root_are_accepted(self, supplied, resolves_to, why):
+        """The rule must reject the root and nothing else.
+
+        These three are the near misses. Without them the rejection above is satisfied by a create that
+        refuses every supplied key, and the first case is the one that actually surprised: `"assets"` is
+        NOT a spelling of the root here.
+        """
+        m = _load(fresh=True)
+        _wire(m, owned_records=[])
+
+        response = m.create_asset(
+            _request_model(m, bucket_existing_key=supplied), {"tokens": ["user1"]})
+
+        assert response.assetId == _VICTIM_ASSET_ID, why
+        saved = m.save_asset_details.call_args.args[0]
+        assert saved["assetLocation"]["Key"] == resolves_to, why
+
+    def test_the_derived_key_branch_is_unaffected(self):
+        """Control. A key derived from the assetId adds a segment, so the rule must never fire there."""
+        m = _load(fresh=True)
+        _wire(m, owned_records=[])
+
+        response = m.create_asset(_request_model(m), {"tokens": ["user1"]})
+
+        assert response.assetId == _VICTIM_ASSET_ID
+        m.create_prefix_folder.assert_called_once_with(
+            _BUCKET_NAME, _BASE_PREFIX + _VICTIM_ASSET_ID + "/")
+
+    def test_an_empty_supplied_key_is_refused_by_the_request_model(self):
+        """An empty `bucketExistingKey` never reaches this rule, or either branch.
+
+        `CreateAssetRequestModel` declares `Field(None, min_length=1, ...)`, so the empty string fails
+        validation before `create_asset` runs. Recorded because the obvious reading is the opposite — an
+        empty key looks like it should resolve to the root and be caught by the rule above — and because
+        the protection is therefore the MODEL, not the rule. If that `min_length` were ever relaxed,
+        this test fails and points at the branch that would then need to handle it.
+        """
+        from pydantic import ValidationError
+
+        m = _load(fresh=True)
+        _wire(m, owned_records=[])
+
+        with pytest.raises(ValidationError):
+            _request_model(m, bucket_existing_key="")
+
+        _assert_nothing_persisted(m)
+
+    def test_a_bucket_record_with_no_base_prefix_cannot_have_its_root_taken_either(self):
+        """A bucket record with no `baseAssetsPrefix` roots at the bucket itself.
+
+        The bucket root is UNREACHABLE through this branch: the only key that would compare equal to an
+        empty root is an empty one, which is falsy and takes the derived branch. Asserted rather than
+        assumed, because "the guard does not fire here" and "the case cannot occur here" look identical
+        from the outside and only the second is safe.
+        """
+        m = _load(fresh=True)
+        _wire(m, owned_records=[], base_prefix="")
+
+        response = m.create_asset(
+            _request_model(m, bucket_existing_key="model.glb"), {"tokens": ["user1"]})
+
+        saved = m.save_asset_details.call_args.args[0]
+        assert saved["assetLocation"]["Key"] == "model.glb", (
+            "a key under an empty root must still be accepted")

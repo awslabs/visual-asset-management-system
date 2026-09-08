@@ -25,13 +25,13 @@ Update operations support two modes via `--update-type`:
 :::info[Supported value types]
 Each metadata item declares a `metadataValueType`. Values are always supplied as strings in JSON input; `object` and `array` values are JSON encoded into a string.
 
-| Type      | Description                      | Example value               |
-| --------- | -------------------------------- | --------------------------- |
-| `string`  | Text values                      | `"My Asset"`                |
-| `number`  | Integers or floats               | `"42"`, `"3.14"`            |
-| `boolean` | True/false                       | `"true"`, `"false"`         |
+| Type      | Description                      | Example value             |
+| --------- | -------------------------------- | ------------------------- |
+| `string`  | Text values                      | `"My Asset"`              |
+| `number`  | Integers or floats               | `"42"`, `"3.14"`          |
+| `boolean` | True/false                       | `"true"`, `"false"`       |
 | `object`  | JSON object (stored as a string) | `"{\"polygons\": 50000}"` |
-| `array`   | JSON array (stored as a string)  | `"[\"wood\", \"metal\"]"`   |
+| `array`   | JSON array (stored as a string)  | `"[\"wood\", \"metal\"]"` |
 
 File attributes (`--type attribute`) support only the `string` value type.
 :::
@@ -419,15 +419,15 @@ Create a metadata schema for one entity type in a database. The schema defines t
 vamscli metadata-schema create [OPTIONS]
 ```
 
-| Option                        | Type   | Required | Description                                                                     |
-| ----------------------------- | ------ | -------- | ------------------------------------------------------------------------------- |
-| `-d`, `--database-id`         | TEXT   | Yes      | Database the schema belongs to                                                  |
+| Option                        | Type   | Required | Description                                                                                            |
+| ----------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------ |
+| `-d`, `--database-id`         | TEXT   | Yes      | Database the schema belongs to                                                                         |
 | `-e`, `--entity-type`         | CHOICE | Yes      | Entity type: `databaseMetadata`, `assetMetadata`, `fileMetadata`, `fileAttribute`, `assetLinkMetadata` |
-| `-n`, `--schema-name`         | TEXT   | Yes      | Name of the schema                                                              |
-| `-f`, `--fields`              | TEXT   | Yes      | Field definitions as a JSON string or a path to a JSON file                     |
-| `--file-key-type-restriction` | TEXT   | No       | Comma-delimited file extensions the schema applies to, for example `.glb,.usd`    |
-| `--enabled` / `--disabled`    | FLAG   | No       | Whether the schema validates on write (default: `--enabled`)                     |
-| `--json-output`               | FLAG   | No       | Output raw JSON response                                                        |
+| `-n`, `--schema-name`         | TEXT   | Yes      | Name of the schema                                                                                     |
+| `-f`, `--fields`              | TEXT   | Yes      | Field definitions as a JSON string or a path to a JSON file                                            |
+| `--file-key-type-restriction` | TEXT   | No       | Comma-delimited file extensions the schema applies to, for example `.glb,.usd`                         |
+| `--enabled` / `--disabled`    | FLAG   | No       | Whether the schema validates on write (default: `--enabled`)                                           |
+| `--json-output`               | FLAG   | No       | Output raw JSON response                                                                               |
 
 ```bash
 vamscli metadata-schema create -d my-database -e assetMetadata -n "Asset core fields" -f '[{"name":"projectCode","type":"string","required":true}]'
@@ -448,14 +448,14 @@ Update a metadata schema in place. Only the options supplied are changed, so a c
 vamscli metadata-schema update [OPTIONS]
 ```
 
-| Option                        | Type | Required | Description                                                  |
-| ----------------------------- | ---- | -------- | ------------------------------------------------------------ |
-| `-s`, `--schema-id`           | TEXT | Yes      | Metadata schema ID                                           |
-| `-n`, `--schema-name`         | TEXT | No       | New name for the schema                                      |
-| `-f`, `--fields`              | TEXT | No       | Replacement field definitions, as JSON or a path to a file    |
-| `--file-key-type-restriction` | TEXT | No       | Replacement comma-delimited file extension list              |
-| `--enabled` / `--disabled`    | FLAG | No       | Whether the schema validates on write                        |
-| `--json-output`               | FLAG | No       | Output raw JSON response                                     |
+| Option                        | Type | Required | Description                                                |
+| ----------------------------- | ---- | -------- | ---------------------------------------------------------- |
+| `-s`, `--schema-id`           | TEXT | Yes      | Metadata schema ID                                         |
+| `-n`, `--schema-name`         | TEXT | No       | New name for the schema                                    |
+| `-f`, `--fields`              | TEXT | No       | Replacement field definitions, as JSON or a path to a file |
+| `--file-key-type-restriction` | TEXT | No       | Replacement comma-delimited file extension list            |
+| `--enabled` / `--disabled`    | FLAG | No       | Whether the schema validates on write                      |
+| `--json-output`               | FLAG | No       | Output raw JSON response                                   |
 
 ```bash
 vamscli metadata-schema update -s schema-abc123 -n "Asset core fields v2"
@@ -477,12 +477,12 @@ Delete a metadata schema. Metadata already stored against the schema is left exa
 vamscli metadata-schema delete [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                          |
-| --------------------- | ---- | -------- | ------------------------------------ |
-| `-d`, `--database-id` | TEXT | Yes      | Database the schema belongs to       |
-| `-s`, `--schema-id`   | TEXT | Yes      | Metadata schema ID                   |
-| `--confirm`           | FLAG | Yes      | Confirm the deletion                 |
-| `--json-output`       | FLAG | No       | Output raw JSON response             |
+| Option                | Type | Required | Description                    |
+| --------------------- | ---- | -------- | ------------------------------ |
+| `-d`, `--database-id` | TEXT | Yes      | Database the schema belongs to |
+| `-s`, `--schema-id`   | TEXT | Yes      | Metadata schema ID             |
+| `--confirm`           | FLAG | Yes      | Confirm the deletion           |
+| `--json-output`       | FLAG | No       | Output raw JSON response       |
 
 ```bash
 vamscli metadata-schema delete -d my-database -s schema-abc123 --confirm
@@ -494,6 +494,7 @@ Existing metadata is untouched by a schema delete, so values that the schema pre
 :::
 
 ---
+
 ## Workflow Examples
 
 ### Asset metadata lifecycle

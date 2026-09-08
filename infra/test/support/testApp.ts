@@ -96,9 +96,27 @@ export function stubDockerBundling(): void {
 export function newTestApp(props: cdk.AppProps = {}): cdk.App {
     stubDockerBundling();
 
-    // The second half of the Docker-free technique: tells CDK to bundle assets for no stack. A caller's
-    // own context wins, so a suite that genuinely wants bundling can still ask for it.
-    const context = { "aws:cdk:bundling-stacks": [], ...(props.context ?? {}) };
+    // Two context entries. The caller's own context is spread last, so it wins: a suite that genuinely
+    // wants bundling, or the staged copy, can ask for either.
+    //
+    // `aws:cdk:bundling-stacks: []` is the second half of the Docker-free technique: bundle assets for
+    // no stack.
+    //
+    // `aws:cdk:disable-asset-staging` stops CDK COPYING assets into the assembly. Staging copies every
+    // Lambda code directory and layer zip -- about 280 MB per full synth -- and a template assertion reads
+    // none of it: asset hashes are still computed from the source, and a jest-driven synth emits no
+    // `aws:asset:path` metadata (that needs `aws:cdk:enable-asset-metadata`, which the CDK CLI injects
+    // and cdk.json does not carry), so the emitted templates are byte-identical with or without the
+    // copy. The copy is also what fails under parallel test workers: on Windows a layer zip copy
+    // returned `UNKNOWN: unknown error, copyfile` under the concurrent I/O of 40-odd synth files, and the
+    // same volume of files is what made per-file teardown slow enough for jest to force-exit a worker.
+    // The one suite that asserts on a staged copy (`secretAssetStagingCleanup`) builds its own App with
+    // its own outdir and does not pass through here.
+    const context = {
+        [cxapi.BUNDLING_STACKS]: [],
+        [cxapi.DISABLE_ASSET_STAGING_CONTEXT]: true,
+        ...(props.context ?? {}),
+    };
 
     if (props.outdir) return new cdk.App({ ...props, context });
 

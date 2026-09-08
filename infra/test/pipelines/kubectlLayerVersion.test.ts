@@ -56,7 +56,10 @@ describe("kubectl layer version tracking", () => {
     });
 
     it("covers the version the shipped config templates request", () => {
-        // Ties the table to the configuration rather than leaving it a free-floating list.
+        // Ties the table to the configuration rather than leaving it a free-floating list. A version
+        // absent from the table throws inside the Docker bundling step at synth, so this is the arm
+        // that has to catch a version bump made without a matching table entry.
+        let checked = 0;
         for (const name of ["commercial", "govcloud", "eusovereign"]) {
             const template = JSON.parse(
                 fs.readFileSync(
@@ -67,6 +70,10 @@ describe("kubectl layer version tracking", () => {
             const version = template?.app?.pipelines?.useRapidPipeline?.useEks?.eksClusterVersion;
             if (!version) continue;
             expect(Object.keys(KUBECTL_RELEASE_PATHS)).toContain(String(version));
+            checked += 1;
         }
+        // The `continue` above is what makes this necessary: without it, a rename of the config key
+        // would skip all three templates and this test would report success having compared nothing.
+        expect(checked).toBe(3);
     });
 });

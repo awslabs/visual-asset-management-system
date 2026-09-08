@@ -8,7 +8,7 @@ ALLOWED_ASSET_LINKS = {
 #
 # Allowed-value lists are the validation source of truth; the *_LABELS / *_FIELDS
 # structures add the human-facing display values served by
-# GET /auth/constraints/objectTypes and consumed by the web editor and CLI.
+# GET /auth/constraints/permissionObjects and consumed by the web editor and CLI.
 # The labels/fields stay in sync with the allowed-value lists (enforced by tests).
 # ---------------------------------------------------------------------------
 

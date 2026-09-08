@@ -11,7 +11,7 @@ import functools
 import logging
 import sys
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 
 def _force_logging_to_stderr() -> None:
@@ -205,6 +205,26 @@ def list_allowed_api_routes() -> Dict[str, Any]:
     user's two-tier permissions bound every other tool, and a route missing here
     will be refused with a 403."""
     return CLIENT.api.list_allowed_api_routes()
+
+
+@mcp.tool()
+@tool_result
+def list_api_routes() -> Dict[str, Any]:
+    """List EVERY VAMS API route — `path` template, HTTP `methods`, `category`, and whether it is
+    `unauthenticated` — regardless of what the current user may call. This is the vocabulary an `api`
+    constraint is written against: its criteria match these route paths. It says nothing about what
+    this session is permitted to do; use list_allowed_api_routes for that."""
+    return CLIENT.api.list_api_routes()
+
+
+@mcp.tool()
+@tool_result
+def list_constraint_permission_objects() -> Dict[str, Any]:
+    """List the vocabulary a permission constraint is written in: `objectTypes` (each with the
+    `fields` its criteria may test), `operators`, `permissions`, and `permissionTypes`, all as
+    `{label, value}` pairs. Send the `value` when building a constraint — the `label` is display text.
+    The lists are fixed per deployment, so one call per session is enough."""
+    return CLIENT.api.list_constraint_permission_objects()
 
 
 @mcp.tool()
@@ -750,6 +770,44 @@ def generate_download_url(
 
 @mcp.tool()
 @tool_result
+def generate_download_urls_bulk(
+    database_id: str,
+    asset_id: str,
+    file_keys: List[Union[str, Dict[str, Any]]],
+    asset_version_id: Optional[str] = None,
+    asset_version_alias: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Generate presigned download URLs for MANY files of one asset in a single request.
+    Non-mutating: creates URLs, does not transfer data through this server.
+
+    `file_keys` holds up to 1500 entries, each either a relative file path string (latest version) or
+    `{"key": path, "versionId": s3VersionId}` to pin that one file. `asset_version_id` or
+    `asset_version_alias` instead pins EVERY key to an asset version snapshot, and cannot be combined
+    with per-key versionIds. A larger list, an empty one, or a mixed pin is refused as a 400 rather
+    than partially served.
+
+    The answer is per file: `files[]` entries carry `key`, `success`, and either `downloadUrl` +
+    `versionId` or `error`. A path that does not exist or is not downloadable is SKIPPED with
+    `success: false` while the call still succeeds, and the top-level `message` string counts the
+    skips — so check every entry's `success`, and never treat the top-level `downloadUrl` (the FIRST
+    successful URL only, kept for single-URL consumers) as the result. If no key can be signed the
+    whole call is an error.
+
+    Every URL is a bearer credential exactly as generate_download_url describes — it needs no further
+    authentication, is usable until `presignedUrlTimeoutSeconds` elapses (24 hours by default), and
+    lands in the agent transcript and whatever logs the host keeps — multiplied here by the number of
+    keys. Request only the files a download was actually asked for."""
+    return CLIENT.api.download_asset_files_bulk(
+        database_id,
+        asset_id,
+        file_keys,
+        asset_version_id=asset_version_id,
+        asset_version_alias=asset_version_alias,
+    )
+
+
+@mcp.tool()
+@tool_result
 def find_and_summarize(query: str, database_id: Optional[str] = None, size: int = 10) -> Dict[str, Any]:
     """Composite: search assets, then enrich each hit with details and version
     count in a single call. Best for 'find X and tell me about them' requests.
@@ -1278,11 +1336,8 @@ def get_api_key(api_key_id: str) -> Dict[str, Any]:
 
     Returns the key's metadata only — apiKeyName, the userId it acts as, expiry and enabled state.
     The key VALUE is shown once at creation and never again, and the stored hash is stripped by the
-    handler, so nothing usable as a credential is returned here. Creating, updating and revoking API
-    keys is deliberately not exposed by this server.
-
-    There is no list tool for API keys, so `api_key_id` has to come from outside this session — run
-    `vamscli api-key list`. A key that does not exist is reported as a 400 rather than a 404.
+    handler, so nothing usable as a credential is returned here. `api_key_id` comes from
+    list_api_keys(). A key that does not exist is reported as a 400 rather than a 404.
     """
     return CLIENT.api.get_api_key(api_key_id)
 
@@ -1294,9 +1349,56 @@ def get_user_api_key(api_key_id: str) -> Dict[str, Any]:
 
     Same metadata-only response as get_api_key(), scoped to the caller's keys: a key owned by another
     user is reported as not found, so this scope never reveals that it exists. `api_key_id` comes
-    from `vamscli api-key user list`.
+    from list_user_api_keys().
     """
     return CLIENT.api.get_user_api_key(api_key_id)
+
+
+@mcp.tool()
+@tool_result
+def list_api_keys(
+    max_items: Optional[int] = None, starting_token: Optional[str] = None
+) -> Dict[str, Any]:
+    """List API keys in the administrative (every user's keys) scope. Auto-paginated.
+
+    Returns key INVENTORY only — apiKeyId, apiKeyName, the userId each key acts as, expiry and
+    enabled state. The stored hash is stripped by the handler and the key value is never stored, so
+    nothing here is usable as a credential; it is still a map of who holds automation access, which
+    is why this tool is not in the README's `autoApprove` sample.
+
+    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it, and
+    `NextToken` continues the walk via `starting_token`. Never report a count, or conclude a key does
+    not exist, from a truncated result.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_api_keys(
+            page_size=params.get("pageSize"), starting_token=params.get("startingToken")
+        ),
+        max_items=max_items,
+        starting_token=starting_token,
+    )
+
+
+@mcp.tool()
+@tool_result
+def list_user_api_keys(
+    max_items: Optional[int] = None, starting_token: Optional[str] = None
+) -> Dict[str, Any]:
+    """List the AUTHENTICATED user's own API keys. Auto-paginated.
+
+    Same inventory-only rows as list_api_keys(), restricted to keys that act as the caller. Another
+    user's keys are never included, so an empty result says nothing about whether they exist.
+
+    The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it, and
+    `NextToken` continues the walk via `starting_token`. Never report a count from a truncated result.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_user_api_keys(
+            page_size=params.get("pageSize"), starting_token=params.get("startingToken")
+        ),
+        max_items=max_items,
+        starting_token=starting_token,
+    )
 
 
 # =========================================================================
@@ -1705,6 +1807,98 @@ if CONFIG.enable_writes:
         """
         return CLIENT.api.update_metadata_schema(metadata_schema_id, update_data)
 
+    @mcp.tool()
+    @tool_result
+    def create_api_key(
+        api_key_name: str, user_id: str, description: str, expires_at: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create an API key that acts AS `user_id`, in the administrative scope.
+
+        The response carries the key VALUE (`apiKey`). This is the only time it is ever shown: VAMS
+        stores a hash and cannot return the value again. That value is a bearer credential with every
+        permission `user_id` holds, and returning it here puts it in the agent transcript and the
+        host's conversation log. Keep this tool out of `autoApprove`, hand the value to the user at
+        once rather than repeating it, and prefer create_user_api_key() — a key for the caller's own
+        identity — unless a key acting as another user is really what is wanted.
+
+        `expires_at` is ISO 8601 (for example 2026-12-31T23:59:59Z); omitted, the key never expires.
+        """
+        payload: Dict[str, Any] = {
+            "apiKeyName": api_key_name,
+            "userId": user_id,
+            "description": description,
+        }
+        if expires_at:
+            payload["expiresAt"] = expires_at
+        return CLIENT.api.create_api_key(payload)
+
+    @mcp.tool()
+    @tool_result
+    def create_user_api_key(api_key_name: str, description: str, expires_at: str) -> Dict[str, Any]:
+        """Create an API key for the AUTHENTICATED user (self-service scope).
+
+        The response carries the key VALUE (`apiKey`), shown this one time only — the same bearer
+        credential exposure as create_api_key(), so keep this tool out of `autoApprove` and hand the
+        value to the user at once. The key acts as the caller and can do no more than the caller can.
+
+        `expires_at` is REQUIRED here (ISO 8601) and must fall within 365 days of creation; the
+        handler rejects a later date.
+        """
+        return CLIENT.api.create_user_api_key(
+            {"apiKeyName": api_key_name, "description": description, "expiresAt": expires_at}
+        )
+
+    @mcp.tool()
+    @tool_result
+    def update_api_key(
+        api_key_id: str,
+        description: Optional[str] = None,
+        expires_at: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Update an API key's description, expiry or enabled state (administrative scope).
+
+        Only the arguments given change; at least one is required. `is_active=False` is the
+        REVERSIBLE revoke — the key stops authenticating until it is set back to True, and its value
+        is untouched — so prefer it to delete_api_key() when access may need restoring. A key that
+        authenticated in the last ~30 seconds keeps working for the rest of that window (the API
+        Gateway authorizer caches its decision); a disabled key that was not in use is refused at
+        once. `expires_at` is ISO 8601; an empty string clears the expiry in this scope. The key value
+        is never returned.
+        """
+        payload: Dict[str, Any] = {}
+        if description is not None:
+            payload["description"] = description
+        if expires_at is not None:
+            payload["expiresAt"] = expires_at
+        if is_active is not None:
+            payload["isActive"] = "true" if is_active else "false"
+        return CLIENT.api.update_api_key(api_key_id, payload)
+
+    @mcp.tool()
+    @tool_result
+    def update_user_api_key(
+        api_key_id: str,
+        description: Optional[str] = None,
+        expires_at: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Update one of the AUTHENTICATED user's own API keys.
+
+        Same fields, the same reversible revoke (`is_active=False`) and the same ~30-second authorizer
+        cache window as update_api_key(), limited to the caller's keys — another user's key is reported
+        as not found. `expires_at` must stay within 365 days of the key's ORIGINAL creation date and
+        cannot be cleared in this scope.
+        """
+        payload: Dict[str, Any] = {}
+        if description is not None:
+            payload["description"] = description
+        if expires_at is not None:
+            payload["expiresAt"] = expires_at
+        if is_active is not None:
+            payload["isActive"] = "true" if is_active else "false"
+        return CLIENT.api.update_user_api_key(api_key_id, payload)
+
 
 # =========================================================================
 # DESTRUCTIVE TOOLS (require VAMS_ENABLE_DESTRUCTIVE=true AND writes enabled)
@@ -1881,7 +2075,8 @@ if CONFIG.enable_destructive:
         A different route from delete_subscription(), which removes the entire record. Takes a single
         user rather than a list because the endpoint removes only the first entry it is sent while
         unsubscribing every entry from the notification topic — so a list would leave the two out of
-        step. A user who is not subscribed is reported as not found rather than ignored.
+        step. A subscriber the record no longer lists is a success (the topic is still cleaned up);
+        only a missing subscription record is reported as not found.
         """
         return CLIENT.api.unsubscribe(event_name, entity_name, entity_id, subscriber)
 
@@ -1899,6 +2094,26 @@ if CONFIG.enable_destructive:
         # value, so the APIClient always sends true and there is nothing to surface as a parameter.
         # The controls on this tool are the destructive gate, its name, and this docstring.
         return CLIENT.api.delete_metadata_schema(database_id, metadata_schema_id)
+
+    @mcp.tool()
+    @tool_result
+    def delete_api_key(api_key_id: str) -> Dict[str, Any]:
+        """PERMANENTLY delete an API key (administrative scope). Irreversible.
+
+        Every client still presenting the key is locked out at once. Consider
+        update_api_key(is_active=False) first: it revokes the same access and can be undone.
+        """
+        return CLIENT.api.delete_api_key(api_key_id)
+
+    @mcp.tool()
+    @tool_result
+    def delete_user_api_key(api_key_id: str) -> Dict[str, Any]:
+        """PERMANENTLY delete one of the AUTHENTICATED user's own API keys. Irreversible.
+
+        Another user's key is reported as not found. Consider update_user_api_key(is_active=False)
+        first: it revokes the same access and can be undone.
+        """
+        return CLIENT.api.delete_user_api_key(api_key_id)
 
 
 def main() -> None:

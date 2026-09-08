@@ -16,10 +16,10 @@ When the add-on is enabled, VAMS emits events through its existing notification 
 
 Physna treats all content as a path-based tree of folders and assets within a tenant, where only files (called "assets" in Physna) can carry metadata. VAMS maps its concepts into that tree as follows:
 
-| VAMS concept         | Physna concept | Path representation                     |
-| -------------------- | -------------- | --------------------------------------- |
-| Database (`dbId`)    | Folder         | `{dbId}/`                             |
-| Asset (`assetId`)    | Folder         | `{dbId}/{assetId}/`                 |
+| VAMS concept         | Physna concept | Path representation               |
+| -------------------- | -------------- | --------------------------------- |
+| Database (`dbId`)    | Folder         | `{dbId}/`                         |
+| Asset (`assetId`)    | Folder         | `{dbId}/{assetId}/`               |
 | File (relative path) | Asset (file)   | `{dbId}/{assetId}/{relativePath}` |
 
 Folders are created implicitly when VAMS uploads the first file into each path via the `createMissingFolders=true` parameter on the Physna asset upload endpoint.
@@ -106,11 +106,11 @@ Extending either list requires a code change. When changing the viewer set, upda
 
 A file is uploaded to Physna in one multipart request, not in parts, and the sync Lambda holds the whole file while it does so. Three AWS Lambda quotas therefore bound the largest file that can be synced, and the tightest one wins:
 
-| Bound                | Value                                                          | Where it applies                                                    |
-| -------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Function memory      | `LAMBDA_MEMORY_SIZE` (`infra/config/config.ts`)                | Holds the file bytes **twice** while the request is built           |
-| Ephemeral storage    | `PHYSNA_SYNC_EPHEMERAL_STORAGE` (`physnaSyncFunctions.ts`)      | Holds the file once, staged in `/tmp` before the upload             |
-| Function timeout     | 15 minutes                                                     | Must cover the Amazon S3 download plus the upload to Physna         |
+| Bound             | Value                                                      | Where it applies                                            |
+| ----------------- | ---------------------------------------------------------- | ----------------------------------------------------------- |
+| Function memory   | `LAMBDA_MEMORY_SIZE` (`infra/config/config.ts`)            | Holds the file bytes **twice** while the request is built   |
+| Ephemeral storage | `PHYSNA_SYNC_EPHEMERAL_STORAGE` (`physnaSyncFunctions.ts`) | Holds the file once, staged in `/tmp` before the upload     |
+| Function timeout  | 15 minutes                                                 | Must cover the Amazon S3 download plus the upload to Physna |
 
 **Memory is the binding constraint, at roughly half the configured function memory.** The Lambda downloads the file to `/tmp`, reads it fully into memory, and the HTTP client then builds a second complete copy of those bytes as the multipart request body. Peak memory is therefore about twice the file size, which puts the practical ceiling near **2.4 GB** at the default 5308 MB function memory.
 

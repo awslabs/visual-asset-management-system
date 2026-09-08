@@ -56,11 +56,11 @@ When Garnet Framework integration is enabled, VAMS automatically creates and mai
 
 VAMS creates the following NGSI-LD entity types in the Garnet Framework:
 
-| Entity Type     | URN Format                                                     | Description                                |
-| --------------- | -------------------------------------------------------------- | ------------------------------------------ |
-| `VAMSDatabase`  | `urn:vams:database:{databaseId}`                             | Database entities with bucket associations |
-| `VAMSAsset`     | `urn:vams:asset:{databaseId}:{assetId}`                    | Asset entities with full metadata          |
-| `VAMSAssetLink` | `urn:vams:assetlink:{assetLinkId}`                           | Asset relationship entities                |
+| Entity Type     | URN Format                                               | Description                                |
+| --------------- | -------------------------------------------------------- | ------------------------------------------ |
+| `VAMSDatabase`  | `urn:vams:database:{databaseId}`                         | Database entities with bucket associations |
+| `VAMSAsset`     | `urn:vams:asset:{databaseId}:{assetId}`                  | Asset entities with full metadata          |
+| `VAMSAssetLink` | `urn:vams:assetlink:{assetLinkId}`                       | Asset relationship entities                |
 | `VAMSFile`      | `urn:vams:file:{databaseId}:{assetId}:{encodedFilePath}` | File entities with Amazon S3 details       |
 
 #### Event flow

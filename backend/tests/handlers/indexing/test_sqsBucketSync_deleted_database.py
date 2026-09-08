@@ -158,11 +158,109 @@ class TestLookupDatabasesExcludesDeleted:
             {"databaseId": "live-db", "defaultBucketId": "bucket-1"},
         ])
         m.lookup_databases("bucket-1")
-        cached = [c.args[0] for c in m.database_cache.set.call_args_list]
-        assert cached == ["database:live-db"]
+        cached = {c.args[0] for c in m.database_cache.set.call_args_list}
+        # Set containment over the two claims that matter, rather than an exact sequence: the order
+        # the cache is written in is not part of the contract, and pinning it makes the test fail on
+        # an unrelated reordering while saying nothing more about the filter.
+        assert "database:live-db" in cached, cached
+        assert not {key for key in cached if "#deleted" in key}, cached
 
     def test_a_scan_failure_still_returns_an_empty_list(self):
         # Unchanged behaviour, asserted so the filter cannot have moved the exception path.
         m, table = self._module_with_scan([])
         table.scan.side_effect = RuntimeError("scan blew up")
         assert m.lookup_databases("bucket-1") == []
+
+
+@pytest.mark.unit
+class TestLookupDatabasesPagesToExhaustion:
+    """`lookup_databases` must read every page, because a miss is not treated as an error.
+
+    The scan carries a `FilterExpression`, which DynamoDB applies AFTER reading each 1 MB page. So a
+    page whose Items are empty (or missing the match) alongside a `LastEvaluatedKey` is the ordinary
+    shape for "the match is on a later page" — not "no such database".
+
+    What makes stopping early dangerous here is the CALLER, not the read.
+    `get_or_create_database_for_bucket` does not fail on a miss: it mints a new databaseId with an md5
+    prefix hash (`create_new_database`) and ingests the object into that. So a first-page miss creates a
+    database nobody asked for, puts the object in it, and logs the sync as successful — a silent wrong
+    answer that grows with the size of the database table.
+    """
+
+    @staticmethod
+    def _module_with_pager(pager):
+        m = _load()
+        m.dynamodb = MagicMock()
+        table = MagicMock()
+        table.scan.side_effect = pager
+        m.dynamodb.Table.return_value = table
+        m.database_cache = MagicMock()
+        m.database_cache.get.return_value = None
+        return m, table
+
+    def test_a_match_on_a_later_page_is_found(self):
+        from backend.tests.pagingStub import Pager
+
+        pager = Pager(
+            # Page 1 matched nothing after the filter, but the scan is not finished.
+            {"Items": [], "LastEvaluatedKey": {"databaseId": "p1"}},
+            {"Items": [], "LastEvaluatedKey": {"databaseId": "p2"}},
+            {"Items": [{"databaseId": "live-db", "defaultBucketId": "bucket-1"}]},
+            name="lookup_databases scan",
+        )
+        m, _ = self._module_with_pager(pager)
+
+        found = m.lookup_databases("bucket-1")
+
+        assert [db["databaseId"] for db in found] == ["live-db"], (
+            "the match sat on page 3; a single-page read reports no database and the caller then "
+            "CREATES one")
+        pager.assert_paged_to_exhaustion()
+
+    def test_matches_spread_across_pages_are_all_returned(self):
+        from backend.tests.pagingStub import Pager
+
+        pager = Pager(
+            {"Items": [{"databaseId": "db-a", "defaultBucketId": "bucket-1"}],
+             "LastEvaluatedKey": {"databaseId": "p1"}},
+            {"Items": [{"databaseId": "gone#deleted", "defaultBucketId": "bucket-1"}],
+             "LastEvaluatedKey": {"databaseId": "p2"}},
+            {"Items": [{"databaseId": "db-b", "defaultBucketId": "bucket-1"}]},
+            name="lookup_databases scan",
+        )
+        m, _ = self._module_with_pager(pager)
+
+        found = [db["databaseId"] for db in m.lookup_databases("bucket-1")]
+
+        # Accumulated across pages, and the #deleted filter still applies to every page — not just the
+        # first, which is what a filter applied outside the loop would do.
+        assert found == ["db-a", "db-b"], found
+        pager.assert_paged_to_exhaustion()
+
+    def test_a_single_page_result_needs_no_continuation(self):
+        """Control. The loop must not require a second read when the first page ends the scan."""
+        from backend.tests.pagingStub import Pager
+
+        pager = Pager(
+            {"Items": [{"databaseId": "only-db", "defaultBucketId": "bucket-1"}]},
+            name="lookup_databases scan",
+        )
+        m, _ = self._module_with_pager(pager)
+
+        assert [db["databaseId"] for db in m.lookup_databases("bucket-1")] == ["only-db"]
+        assert pager.resumed_from == [], (
+            f"no continuation should have been needed, but the loop resumed from {pager.resumed_from}")
+
+    def test_the_loop_terminates_against_a_reader_that_never_ends(self):
+        """The termination test must be on key PRESENCE, not on the value.
+
+        A `MagicMock.get('LastEvaluatedKey')` returns a truthy child mock forever, so a value-form loop
+        never exits. `BareMockReader` is that shape: a presence-form loop reads once and stops, and the
+        value form runs to the cap and raises.
+        """
+        from backend.tests.pagingStub import BareMockReader
+
+        reader = BareMockReader(name="lookup_databases scan")
+        m, _ = self._module_with_pager(reader)
+
+        m.lookup_databases("bucket-1")

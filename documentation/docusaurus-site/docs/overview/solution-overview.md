@@ -53,17 +53,17 @@ VAMS delivers the following core capabilities:
 
 VAMS provides three primary methods for interacting with your visual asset management system. Each method is designed for different use cases and user profiles.
 
-| Feature               | Web Interface                        | Command Line Interface (CLI)                 | Direct API Access                  |
-| --------------------- | ------------------------------------ | -------------------------------------------- | ---------------------------------- |
-| **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations       | Custom integrations, applications  |
+| Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
+| --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
+| **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
 | **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 22 command groups | Full programmatic control via REST |
-| **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic            | Custom upload with presigned URLs  |
-| **3D Viewing**        | 20 interactive viewer plugins        | Not applicable                               | Not applicable                     |
-| **Automation**        | Manual operations                    | Full automation with profile support         | Complete automation control        |
-| **Bulk Operations**   | Limited                              | Optimized for bulk tasks                     | Custom bulk implementations        |
-| **CI/CD Integration** | Not suitable                         | Designed for pipeline integration            | Full integration flexibility       |
-| **Output Modes**      | Visual dashboard                     | JSON output mode (`--json-output`)           | Native JSON responses              |
-| **Learning Curve**    | Minimal                              | Moderate                                     | Requires API knowledge             |
+| **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
+| **3D Viewing**        | 20 interactive viewer plugins        | Not applicable                              | Not applicable                     |
+| **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
+| **Bulk Operations**   | Limited                              | Optimized for bulk tasks                    | Custom bulk implementations        |
+| **CI/CD Integration** | Not suitable                         | Designed for pipeline integration           | Full integration flexibility       |
+| **Output Modes**      | Visual dashboard                     | JSON output mode (`--json-output`)          | Native JSON responses              |
+| **Learning Curve**    | Minimal                              | Moderate                                    | Requires API knowledge             |
 
 ### Web Interface
 

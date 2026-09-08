@@ -94,19 +94,19 @@ The pipeline accepts transform parameters that control the coordinate reprojecti
 
 ### Parameter Reference
 
-| Parameter              | Type    | Required | Default | Description                                                           |
-| :--------------------- | :------ | :------- | :------ | :-------------------------------------------------------------------- |
-| `sourceCrs`            | string  | Yes      | --      | Source coordinate reference system (EPSG code, WKT, or PROJ string)   |
-| `targetCrs`            | string  | Yes      | --      | Target coordinate reference system (EPSG code, WKT, or PROJ string)   |
-| `outputFormats`        | array   | No       | `[laz]` | Output format(s): `laz`, `las`, `e57`, `ply`                          |
-| `sourceScaleFactor`    | number  | No       | `1.0`   | Scale factor for source grid                                          |
-| `targetScaleFactor`    | number  | No       | `1.0`   | Scale factor for target grid                                          |
-| `applyScaleCorrection` | boolean | No       | `true`  | Whether to apply scale factor correction during transformation        |
-| `combinedScaleFactor`  | number  | No       | --      | Override: apply a single combined scale factor directly               |
-| `chunkSize`            | number  | No       | 1000000 | Points transformed and written at a time -- see the note on memory     |
-| `enforceSourceCrs`     | boolean | No       | `true`  | Fail validation when the file records no CRS of its own               |
-| `onMismatch`           | string  | No       | `warn`  | Action on a failed CRS validation: `error`, `warn`, or `skip`         |
-| `compressLaz`          | boolean | No       | `true`  | Whether LAZ output is compressed; must agree with `outputFormats`     |
+| Parameter              | Type    | Required | Default | Description                                                         |
+| :--------------------- | :------ | :------- | :------ | :------------------------------------------------------------------ |
+| `sourceCrs`            | string  | Yes      | --      | Source coordinate reference system (EPSG code, WKT, or PROJ string) |
+| `targetCrs`            | string  | Yes      | --      | Target coordinate reference system (EPSG code, WKT, or PROJ string) |
+| `outputFormats`        | array   | No       | `[laz]` | Output format(s): `laz`, `las`, `e57`, `ply`                        |
+| `sourceScaleFactor`    | number  | No       | `1.0`   | Scale factor for source grid                                        |
+| `targetScaleFactor`    | number  | No       | `1.0`   | Scale factor for target grid                                        |
+| `applyScaleCorrection` | boolean | No       | `true`  | Whether to apply scale factor correction during transformation      |
+| `combinedScaleFactor`  | number  | No       | --      | Override: apply a single combined scale factor directly             |
+| `chunkSize`            | number  | No       | 1000000 | Points transformed and written at a time -- see the note on memory  |
+| `enforceSourceCrs`     | boolean | No       | `true`  | Fail validation when the file records no CRS of its own             |
+| `onMismatch`           | string  | No       | `warn`  | Action on a failed CRS validation: `error`, `warn`, or `skip`       |
+| `compressLaz`          | boolean | No       | `true`  | Whether LAZ output is compressed; must agree with `outputFormats`   |
 
 :::note[What `chunkSize` bounds, and what it does not]
 Transformed points are written to a spill file on the task's ephemeral volume as they are produced, and the LAS/LAZ output is appended from that file one chunk at a time. For a LAS or LAZ **input**, `chunkSize` therefore bounds the transform's peak memory: raising it trades memory for fewer, larger writes, and lowering it does the reverse. The point count of the file does not enter into it.
@@ -172,11 +172,11 @@ Two inputs record no CRS and so are subject to that choice. An E57 whose E57Root
 
 Each output file records the target CRS wherever its format provides for one, in the same place the pipeline reads a CRS from on the way in:
 
-| Format   | CRS recorded in the output                                                       |
-| :------- | :------------------------------------------------------------------------------- |
-| LAS, LAZ | Variable Length Records 34735 and 34737 (GeoTIFF GeoKeys), written as LAS 1.2     |
-| E57      | The `coordinateMetadata` string on the E57Root element                           |
-| PLY      | None -- the format has no CRS field                                              |
+| Format   | CRS recorded in the output                                                    |
+| :------- | :---------------------------------------------------------------------------- |
+| LAS, LAZ | Variable Length Records 34735 and 34737 (GeoTIFF GeoKeys), written as LAS 1.2 |
+| E57      | The `coordinateMetadata` string on the E57Root element                        |
+| PLY      | None -- the format has no CRS field                                           |
 
 Because LAS, LAZ, and E57 outputs carry their CRS, a second run can take one as its input and detect the source CRS from the file itself, including with `enforceSourceCrs` set to `true`. A PLY output records no CRS, which is one of the reasons PLY is an output format rather than an accepted input -- see [Supported Formats](#supported-formats).
 
@@ -228,19 +228,19 @@ This allows you to set different source and target CRS values for individual ass
 
 The following metadata key names are recognized (case-insensitive):
 
-| Metadata Key           | Maps To                | Notes                                           |
-| :--------------------- | :--------------------- | :---------------------------------------------- |
-| `sourceCrs`            | `sourceCrs`            | EPSG code, WKT, or PROJ string                  |
-| `targetCrs`            | `targetCrs`            | EPSG code, WKT, or PROJ string                  |
-| `outputFormats`        | `outputFormats`        | Comma-separated string (for example, `laz,e57`) |
-| `sourceScaleFactor`    | `sourceScaleFactor`    | Numeric value                                   |
-| `targetScaleFactor`    | `targetScaleFactor`    | Numeric value                                   |
-| `applyScaleCorrection` | `applyScaleCorrection` | `true` or `false`                               |
-| `combinedScaleFactor`  | `combinedScaleFactor`  | Numeric value                                   |
+| Metadata Key           | Maps To                | Notes                                                   |
+| :--------------------- | :--------------------- | :------------------------------------------------------ |
+| `sourceCrs`            | `sourceCrs`            | EPSG code, WKT, or PROJ string                          |
+| `targetCrs`            | `targetCrs`            | EPSG code, WKT, or PROJ string                          |
+| `outputFormats`        | `outputFormats`        | Comma-separated string (for example, `laz,e57`)         |
+| `sourceScaleFactor`    | `sourceScaleFactor`    | Numeric value                                           |
+| `targetScaleFactor`    | `targetScaleFactor`    | Numeric value                                           |
+| `applyScaleCorrection` | `applyScaleCorrection` | `true` or `false`                                       |
+| `combinedScaleFactor`  | `combinedScaleFactor`  | Numeric value                                           |
 | `chunkSize`            | `chunkSize`            | Numeric value; points transformed and written at a time |
-| `enforceSourceCrs`     | `enforceSourceCrs`     | `true` or `false`                               |
-| `onMismatch`           | `onMismatch`           | `error`, `warn`, or `skip`                      |
-| `compressLaz`          | `compressLaz`          | `true` or `false`; must agree with `outputFormats` |
+| `enforceSourceCrs`     | `enforceSourceCrs`     | `true` or `false`                                       |
+| `onMismatch`           | `onMismatch`           | `error`, `warn`, or `skip`                              |
+| `compressLaz`          | `compressLaz`          | `true` or `false`; must agree with `outputFormats`      |
 
 :::tip[Per-Asset CRS Configuration]
 Set `sourceCrs` and `targetCrs` as metadata on each asset to define the correct coordinate systems for that specific scan. This is particularly useful when a database contains point clouds from multiple survey sites with different native coordinate systems.
@@ -272,7 +272,7 @@ The following AWS resources are created when this pipeline is enabled:
 | :--------------------------- | :----------------- | :-------------------------------------------------------------------------------- |
 | Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                    |
 | Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                 |
-| Job Definition               | AWS Batch          | Container configuration (120 GiB ephemeral storage, for the transform spill)       |
+| Job Definition               | AWS Batch          | Container configuration (120 GiB ephemeral storage, for the transform spill)      |
 | Container Repository         | Amazon ECR         | Stores the coordinate transform container image                                   |
 | CodeBuild Project            | AWS CodeBuild      | Builds and pushes the container image to Amazon ECR                               |
 | Step Functions State Machine | AWS Step Functions | Workflow orchestration with 4-hour timeout                                        |

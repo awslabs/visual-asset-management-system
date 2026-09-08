@@ -385,6 +385,7 @@ did not match any database.
 -   Create the database first, then scope the tag or tag type to it.
 
 ---
+
 ### Tag or Tag Type Already Exists
 
 Creating a tag or tag type fails with a conflict.

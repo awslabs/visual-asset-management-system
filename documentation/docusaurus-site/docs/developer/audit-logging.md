@@ -557,7 +557,7 @@ The API Gateway authorizer runs before normal request processing and handles raw
 
 | Aspect         | Details                                                                                                                    |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Retention**  | Applied by the `LogRetentionAspect` CDK aspect; 1 year by default.                                                        |
+| **Retention**  | Applied by the `LogRetentionAspect` CDK aspect; 1 year by default.                                                         |
 | **Encryption** | Managed by the VAMS AWS KMS key when `useKmsCmkEncryption.enabled` is `true`. Key rotation is automatic.                   |
 | **Cleanup**    | Log groups are destroyed with stack deletion (`RemovalPolicy.DESTROY`).                                                    |
 | **Naming**     | Uses a unique 10-character hash derived from the stack name and account ID to prevent naming conflicts across deployments. |

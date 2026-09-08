@@ -292,16 +292,22 @@ expectAbsent("EventSourceMapping with Tags", withTags, {
 });
 ```
 
-Five rules for writing one:
+Six rules for writing one:
 
 1. **`expectAbsent()` requires a positive control.** A negative assertion on a restricted partition is
    satisfied equally by correct behaviour and by a template that emitted nothing. The control is a required
    argument so it cannot be forgotten.
-2. **Docker is not needed, but avoiding it takes two steps.** `lambdaLayersBuilder-nestedStack.ts:36` calls
-   `cdk.DockerImage.fromBuild()` as an _eager argument_ to `bundling.image`, so it runs before CDK consults
-   its bundling-skip logic. `aws:cdk:bundling-stacks: []` alone does **not** avoid the docker build; the
-   harness also stubs the static. `infra.test.ts` and `genAiPipelineConstructs.test.ts` do neither, which is
-   why `npm test` fails whenever Docker Desktop is not running.
+2. **Docker is not needed, but avoiding it takes three steps, and `newTestApp()` performs all three.**
+   `lambdaLayersBuilder-nestedStack.ts:36` calls `cdk.DockerImage.fromBuild()` as an _eager argument_ to
+   `bundling.image`, so it runs before CDK consults its bundling-skip logic. `aws:cdk:bundling-stacks: []`
+   alone does **not** avoid the docker build; the harness also stubs the static. The third is
+   `aws:cdk:disable-asset-staging`, which stops CDK copying assets into the assembly: staging copies ~280 MB
+   of Lambda code and layer zips per full synth that no template assertion reads -- hashes are computed from
+   the source, and a jest-driven synth emits no `aws:asset:path` metadata (that needs
+   `aws:cdk:enable-asset-metadata`, which only the CDK CLI injects), so the templates are identical either
+   way, proved by diffing two synths per setting. What the copy did do was fail under parallel workers
+   (`UNKNOWN: unknown error, copyfile` on a layer zip) and slow teardown until jest force-exited a worker.
+   `harnessGuards.test.ts` fails any file that constructs `cdk.App` directly, so every file gets all three.
 3. **Assert over the assembly, not one stack.** VAMS puts nearly everything in nested stacks, so
    `Template.fromStack(root)` sees ~17 resources out of ~600.
 4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
@@ -321,6 +327,12 @@ Five rules for writing one:
    changes nothing a subnet, endpoint or Batch assertion looks at: the public/private subnet condition
    (`vpcBuilder-nestedStack.ts:348`) and `needsEcsPrivate` (`:750`) both key on `useSplatToolbox.enabled`
    alone, and only the image source moves.
+6. **The worker pool is bounded in `jest.config.js`** (`maxWorkers`, lower again under `CI`), with
+   `workerIdleMemoryLimit` recycling a worker whose heap grew across files. Jest's default is one worker per
+   core minus one, and 44 files synthesize the whole app, so a 32-core host ran 31 concurrent full synths: one
+   file measured at 66 s alone took 768 s in such a run, and three full runs with no source change gave 14, 0
+   and 1 failures. Pinned by `test/support/testAppAssetStaging.test.ts`. A red full run on a heavy suite that
+   passes alone was this contention, not a regression -- re-run the named suite alone before attributing it.
 
 The harness resets `s3AssetBucketRecords` between synths — it is a module-level mutable array with no reset,
 so a second synth in the same process otherwise fails with `There is already a Construct with name
@@ -2604,6 +2616,21 @@ When changes affect development standards, architecture patterns, or quality req
 4. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping) — a stale skill actively scaffolds outdated code
 
 ---
+
+### **Rule 8: Names and Logical Ids MUST NOT Be Hashed From a Token**
+
+`generateUniqueNameHash(stackName, account, identifier)` must receive RESOLVED strings. A CDK Token
+(`fn.functionArn`, `role.roleArn`, a nested stack's `stackName`) stringifies to `${Token[TOKEN.n]}`, an
+allocation counter, so the hash encodes construct-creation order and changes whenever anything earlier in
+the tree allocates a different number of tokens. Used as a logical id, that replaces the resource on every
+deploy; used as a `name`, it renames -- and so replaces -- the live resource. Two synths of one unchanged
+configuration produced different values at every site that did this (7 of 47 API Gateway invoke
+permissions, both OpenSearch Serverless access policies).
+
+The helper **throws** on a Token, so a new site fails at synth with the argument named. Pass
+`construct.node.path` (unique and fixed by the code) or a literal that names the resource. Guard:
+`infra/test/security/hashedNamesAreDeterministic.test.ts` synthesizes the same template twice in one
+process -- the case where the token counter does not reset -- and requires identical ids and names.
 
 ## 📚 **Detailed Implementation Guide**
 

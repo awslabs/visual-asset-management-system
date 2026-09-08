@@ -10,12 +10,12 @@ The tags on this page classify assets. They are unrelated to a pipeline configur
 
 A tag type defines a named category that groups related tags together. Tag types provide organizational structure and can enforce tagging requirements on assets.
 
-| Field         | Description                                                                                                                                          |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tagTypeName` | Name for the tag type (for example, `Project Phase`, `Classification`, `Region`). Unique per database.                                              |
-| `description` | Description of the tag type's purpose. Required when creating or updating a tag type.                                                                |
+| Field         | Description                                                                                                                                                                            |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tagTypeName` | Name for the tag type (for example, `Project Phase`, `Classification`, `Region`). Unique per database.                                                                                 |
+| `description` | Description of the tag type's purpose. Required when creating or updating a tag type.                                                                                                  |
 | `required`    | When set to `"True"`, every asset must have at least one tag from this tag type, as long as the tag type has tags. Stored as the string `"True"` or `"False"` (defaults to `"False"`). |
-| `databaseId`  | Scope of the tag type. `GLOBAL` (or omitted) makes it available in every database; a database ID scopes it to that database. Fixed at creation.       |
+| `databaseId`  | Scope of the tag type. `GLOBAL` (or omitted) makes it available in every database; a database ID scopes it to that database. Fixed at creation.                                        |
 
 :::tip[Required tag types]
 Marking a tag type as required is useful for enforcing organizational standards. For example, a `Classification` tag type marked as required ensures that every asset is classified before it can be considered complete.
@@ -29,11 +29,11 @@ Enforcement is also scoped like the tags themselves. An asset is constrained by 
 
 A tag is an individual label associated with a tag type. Tags are assigned to assets and appear as filterable attributes in search and listing views.
 
-| Field         | Description                                                                      |
-| ------------- | -------------------------------------------------------------------------------- |
-| `tagName`     | The display name of the tag (for example, `Design`, `Construction`, `As-Built`). Unique per database. |
-| `description` | Description of the tag's purpose. Required when creating or updating a tag.      |
-| `tagTypeName` | The tag type this tag belongs to. Must be a tag type in the same scope as the tag. |
+| Field         | Description                                                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tagName`     | The display name of the tag (for example, `Design`, `Construction`, `As-Built`). Unique per database.                                      |
+| `description` | Description of the tag's purpose. Required when creating or updating a tag.                                                                |
+| `tagTypeName` | The tag type this tag belongs to. Must be a tag type in the same scope as the tag.                                                         |
 | `databaseId`  | Scope of the tag. `GLOBAL` (or omitted) makes it available in every database; a database ID scopes it to that database. Fixed at creation. |
 
 ## Global and database-specific tags
@@ -88,9 +88,9 @@ Global tags and tag types are shared across every database, so it is recommended
 
 Access to tags and tag types is controlled through dedicated object types in the permissions model.
 
-| Object Type | Constraint Field       | Description                                                                                     |
-| ----------- | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `tag`       | `tagName`, `databaseId` | Controls who can create, read, update, and delete individual tags. `databaseId` scopes administration to GLOBAL or a specific database. |
+| Object Type | Constraint Field            | Description                                                                                                                                 |
+| ----------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tag`       | `tagName`, `databaseId`     | Controls who can create, read, update, and delete individual tags. `databaseId` scopes administration to GLOBAL or a specific database.     |
 | `tagType`   | `tagTypeName`, `databaseId` | Controls who can create, read, update, and delete tag type categories. `databaseId` scopes administration to GLOBAL or a specific database. |
 
 ## Related topics

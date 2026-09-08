@@ -119,20 +119,24 @@ describe("EKS job timeout chain", () => {
         expect(ceilingSeconds).toBeGreaterThan(configuredTimeout());
     });
 
-    test("the pod deadline is passed to the handler from the same configured value", () => {
+    test("the pod deadline reaches the ONE function that builds the Job spec", () => {
         // Not hardcoded in the handler any more. If this env var were absent the handler would fall back
         // to its own default and the two links could drift apart again silently.
-        const handlers = synth
+        //
+        // The function IDENTITY is asserted, not merely that some function carries the variable. This
+        // arm previously checked `length > 0`, and the variable was in fact delivered to the sibling
+        // `vamsExecute` function, which reads nothing from it — so the link was broken while the test
+        // was green. `consolidated_handler.py` is the only reader and the only place
+        // activeDeadlineSeconds is set, and EKS_CLUSTER_NAME identifies it uniquely.
+        const carriers = synth
             .ofType("AWS::Lambda::Function")
             .filter(
                 (f) => "EKS_JOB_TIMEOUT_SECONDS" in (f.properties.Environment?.Variables ?? {})
             );
-        expect(handlers.length).toBeGreaterThan(0);
-        for (const handler of handlers) {
-            expect(Number(handler.properties.Environment.Variables.EKS_JOB_TIMEOUT_SECONDS)).toBe(
-                configuredTimeout()
-            );
-        }
+        expect(carriers.length).toBe(1);
+        const env = carriers[0].properties.Environment.Variables;
+        expect(env).toHaveProperty("EKS_CLUSTER_NAME");
+        expect(Number(env.EKS_JOB_TIMEOUT_SECONDS)).toBe(configuredTimeout());
     });
 
     test("the handler uses that variable rather than a literal deadline", () => {

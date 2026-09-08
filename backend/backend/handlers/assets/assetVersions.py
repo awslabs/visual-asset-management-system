@@ -705,7 +705,10 @@ def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: 
         assetVersionId: The asset version ID
 
     Returns:
-        Number of files that are not permanently deleted
+        The number of snapshot rows recorded for the version -- EVERY row, including ones
+        marked isPermanentlyDeleted. No such filter is applied, and this is the number the
+        version listing reports, so an assertion against it must compare with the unfiltered
+        file list (get_asset_version_details emits isPermanentlyDeleted rows too).
     """
     try:
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)

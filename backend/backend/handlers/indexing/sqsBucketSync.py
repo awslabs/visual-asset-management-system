@@ -614,17 +614,30 @@ def lookup_databases(bucket_id: str) -> List[Dict]:
         list: List of live database data
     """
     try:
-        # Scan the database table for matching bucket ID
+        # Scan the database table for matching bucket ID, paging to exhaustion.
+        #
+        # A FilterExpression is applied AFTER each 1 MB page is read, so a single call is not a lookup:
+        # empty (or partial) Items alongside a LastEvaluatedKey is the normal shape for "the match is on
+        # a later page". Stopping at the first page is a false negative that grows with the table, and
+        # the caller does not treat a miss as an error — it mints a NEW databaseId with a hash suffix
+        # (see create_new_database below) and ingests the object there. So the object lands in a
+        # database nobody expects, and the sync is logged as successful.
         table = dynamodb.Table(db_table_name)
-        response = table.scan(
-            FilterExpression=Key('defaultBucketId').eq(bucket_id)
-        )
-        
-        databases = [
-            db for db in response.get('Items', [])
-            if not str(db.get('databaseId', '')).endswith('#deleted')
-        ]
-        
+        databases = []
+        scan_kwargs = {'FilterExpression': Key('defaultBucketId').eq(bucket_id)}
+        while True:
+            response = table.scan(**scan_kwargs)
+            databases.extend(
+                db for db in response.get('Items', [])
+                if not str(db.get('databaseId', '')).endswith('#deleted')
+            )
+            # Presence, not truthiness: DynamoDB omits the key when the scan is exhausted and never
+            # returns a falsy one, so `in` is the accurate test — and the one that terminates against an
+            # under-stubbed reader, where `.get(...)` returns a truthy MagicMock on every iteration.
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
         # Cache each database individually by databaseId
         for db in databases:
             if 'databaseId' in db:

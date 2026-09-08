@@ -396,13 +396,29 @@ export class RapidPipelineEKSConstruct extends Construct {
         // 3. Add node group for pipeline processing
         cluster.addNodegroupCapacity("WorkerNodeGroup", {
             nodegroupName: `rapid-pipeline-eks-workers-${stackIdentifier}`,
-            instanceTypes: [ec2.InstanceType.of(ec2.InstanceClass.M5, ec2.InstanceSize.XLARGE2)],
+            // The configured type, not a fixed one. `nodeInstanceType` previously reached only the
+            // node LABEL below, so an operator who changed it got nodes of the hardcoded size wearing
+            // a label that claimed otherwise — and every consumer of that label was then wrong.
+            // Constructed from the string so any instance type is expressible; the shipped default is
+            // m5.2xlarge, which is what the hardcoded value resolved to, so this changes nothing for a
+            // deployment that has not set it.
+            instanceTypes: [
+                new ec2.InstanceType(
+                    props.config.app.pipelines.useRapidPipeline.useEks.nodeInstanceType
+                ),
+            ],
             minSize: props.config.app.pipelines.useRapidPipeline.useEks.minNodes,
             desiredSize: props.config.app.pipelines.useRapidPipeline.useEks.desiredNodes,
             maxSize: props.config.app.pipelines.useRapidPipeline.useEks.maxNodes,
             diskSize: 50,
             nodeRole: nodeGroupRole,
             capacityType: eks.CapacityType.ON_DEMAND,
+            // Stated rather than inherited. Amazon EKS derives the default AMI family from the cluster
+            // version, and Amazon Linux 2 AMIs stop at 1.32 while Kubernetes 1.35 drops cgroup v1, which
+            // AL2 uses — so on a version bump the family would change underneath this nodegroup and
+            // replace it, with nothing in the diff naming the cause. AL2023 is where every supported
+            // version lands, so it is declared here.
+            amiType: eks.NodegroupAmiType.AL2023_X86_64_STANDARD,
             labels: {
                 role: "pipeline-worker",
                 "node.kubernetes.io/instance-type":

@@ -411,7 +411,7 @@ class TestUpdateReserializesFields:
 
         response = svc.handle_put_request(_update_event())
 
-        assert _status(response) == 400
+        assert _status(response) == 404
         schema_table.put_item.assert_not_called()
 
 
@@ -450,7 +450,7 @@ class TestDeleteUsesTheStoredCompositeKey:
 
         response = svc.handle_delete_request(_delete_event())
 
-        assert _status(response) == 400
+        assert _status(response) == 404
         schema_table.delete_item.assert_not_called()
 
     def test_a_delete_with_no_body_is_rejected(self, enforcer, claims, schema_table):
@@ -665,3 +665,53 @@ class TestListingPaginationTokenRoundTrip:
 
         assert _status(response) == 400
         ddb_client.scan.assert_not_called()
+
+@pytest.mark.unit
+class TestMissingSchemaIsNotFoundOnEveryVerb:
+    """The single-schema GET, the update and the delete all begin by loading the row by id, and a
+    miss must answer 404 on each of them. The write paths report the miss by raising a
+    `VAMSGeneralErrorResponse` that carries its own status code, which the request handler has to
+    propagate: a handler that drops it falls back to the exception's 400 default, so the same
+    missing id is 404 on GET and 400 on PUT and DELETE."""
+
+    _VERBS = [
+        ("PUT", lambda: svc.handle_put_request(_update_event())),
+        ("DELETE", lambda: svc.handle_delete_request(_delete_event())),
+        ("GET", lambda: svc.handle_get_request(_get_event())),
+    ]
+
+    @pytest.mark.parametrize("verb, call", _VERBS, ids=[v for v, _ in _VERBS])
+    def test_a_missing_id_is_404_on_every_verb(self, enforcer, claims, schema_table, verb, call):
+        schema_table.query.return_value = {"Items": []}
+
+        response = call()
+
+        assert _status(response) == 404, verb
+        assert "Metadata schema not found" in _body(response)["message"], verb
+        schema_table.put_item.assert_not_called()
+        schema_table.delete_item.assert_not_called()
+
+    @pytest.mark.parametrize("verb, call", _VERBS, ids=[v for v, _ in _VERBS])
+    def test_a_present_id_still_succeeds_on_every_verb(
+            self, enforcer, claims, schema_table, verb, call):
+        """Positive control: the stored row from the fixture is found, and each verb completes."""
+        response = call()
+
+        assert _status(response) == 200, verb
+
+    @pytest.mark.parametrize(
+        "verb, call",
+        [(v, c) for v, c in _VERBS if v != "GET"],
+        ids=[v for v, _ in _VERBS if v != "GET"],
+    )
+    def test_a_lookup_failure_on_a_write_path_is_still_400(
+            self, enforcer, claims, schema_table, verb, call):
+        """Negative control for the status propagation: the other error the lookup can raise keeps
+        its default code, so only the miss moved to 404."""
+        schema_table.query.side_effect = Exception("table unavailable")
+
+        response = call()
+
+        assert _status(response) == 400, verb
+        assert "Error retrieving metadata schema" in _body(response)["message"], verb
+

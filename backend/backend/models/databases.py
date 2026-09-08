@@ -215,7 +215,10 @@ class DeleteDatabaseResponseModel(BaseModel, extra='ignore'):
 ######################## Bucket API Models ##########################
 class BucketModel(BaseModel, extra='ignore'):
     """Model for S3 bucket configuration"""
-    bucketId: str = Field(min_length=4, max_length=256, regex=id_pattern)
+    # 4-63 to match id_pattern's own ceiling of 63. A declared max_length of 256 was
+    # unreachable -- the regex rejected anything longer first -- so no single bound could be
+    # documented correctly.
+    bucketId: str = Field(min_length=4, max_length=63, regex=id_pattern)
     bucketName: str = Field(min_length=1, max_length=256)
     baseAssetsPrefix: str = Field(min_length=0, max_length=256)
     # Marks the single bucket that houses all VAMS-managed pipeline data (template config/webform

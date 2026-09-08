@@ -449,7 +449,9 @@ export class OpensearchServerlessConstruct extends Construct {
                 generateUniqueNameHash(
                     this.config.env.coreStackName,
                     this.config.env.account,
-                    "ac" + construct.role?.roleArn,
+                    // The construct path, not the role ARN: the ARN is a Token at synth, and a name
+                    // built from it changed between synths, replacing the live policy on every deploy.
+                    "ac" + construct.node.path,
                     20
                 ),
             type: "data",
@@ -505,7 +507,10 @@ export class OpensearchServerlessConstruct extends Construct {
                 generateUniqueNameHash(
                     this.config.env.coreStackName,
                     this.config.env.account,
-                    "acp" + principalsForAOSS.toString(),
+                    // One collection-wide policy per deployment, so a literal is all the name needs
+                    // -- the principals live in the policy body. The list is role ARNs (Tokens), and a
+                    // name built from them changed between synths.
+                    "acp" + "CollectionAccessPolicy",
                     20
                 ),
             type: "data",

@@ -272,7 +272,7 @@ const COMMERCIAL: ConfigShape = {
                     ecrContainerImageURI:
                         "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                     autoRegisterWithVAMS: true,
-                    eksClusterVersion: "1.31",
+                    eksClusterVersion: "1.36",
                     nodeInstanceType: "m5.2xlarge",
                     minNodes: 1,
                     maxNodes: 10,

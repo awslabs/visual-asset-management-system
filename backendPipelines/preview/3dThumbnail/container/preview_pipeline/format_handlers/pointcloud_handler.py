@@ -18,6 +18,10 @@ SUPPORTED_EXTENSIONS = {".las", ".laz", ".e57", ".ptx", ".pcd", ".fls", ".fws"}
 # Maximum points to render for performance (downsample if exceeded)
 MAX_POINTS_FOR_RENDER = 20_000_000
 
+# Points decoded per streaming iteration for LAS/LAZ. This is the memory floor of the read: one
+# chunk's decoded coordinates (and colours) are resident at a time, independent of file size.
+_LAS_CHUNK_POINTS = 2_000_000
+
 
 def can_handle(extension: str) -> bool:
     return extension.lower() in SUPPORTED_EXTENSIONS
@@ -63,35 +67,80 @@ def load(file_path: str) -> pv.PolyData:
     return pv_cloud
 
 
-def _load_las(file_path: str):
-    """Load LAS/LAZ files using laspy."""
+def _load_las(file_path: str, max_points: int = MAX_POINTS_FOR_RENDER):
+    """Load LAS/LAZ with laspy, bounded to `max_points` WITHOUT materialising the whole cloud.
+
+    `laspy.read()` decodes every point up front, and the previous shape then made two more full copies
+    of the coordinates — `np.vstack` builds a (3, N) array and `.T.astype(np.float64)` copies it again
+    because the transpose is not contiguous. Peak memory was therefore about three times the cloud's
+    coordinate size regardless of the render cap, which was applied afterwards and so bounded render
+    cost only. A cloud large enough to matter took the container down before it could be capped.
+
+    Here the file is streamed in chunks and sampled as it is read, so peak memory is one chunk plus the
+    bounded output, whatever the file's size. Sampling is a uniform stride rather than the random choice
+    the caller applies to other formats: it is decidable from the header's point count alone, needs no
+    second pass, and for a thumbnail an evenly spaced subset is at least as representative.
+    """
     import laspy
 
-    las = laspy.read(file_path)
-    points = np.vstack([las.x, las.y, las.z]).T.astype(np.float64)
+    with laspy.open(file_path) as reader:
+        total = int(reader.header.point_count)
+        if total <= 0:
+            raise ValueError(f"LAS/LAZ file contains no points: {file_path}")
 
-    # Try to extract colors
+        # Ceiling division, so the kept count never exceeds max_points.
+        stride = 1 if total <= max_points else (total + max_points - 1) // max_points
+        kept_total = (total + stride - 1) // stride
+        if stride > 1:
+            logger.info(
+                f"Streaming {total} points with stride {stride} -> {kept_total} kept "
+                f"(cap {max_points})")
+
+        points = np.empty((kept_total, 3), dtype=np.float64)
+
+        # Colours are accumulated at their stored 16-bit width and normalised at the end. Deciding the
+        # 16-bit-vs-8-bit scale per chunk would band the output, because LAS stores 8-bit values in the
+        # same uint16 fields and the deciding maximum is a property of the whole cloud; keeping only the
+        # SAMPLED colours bounds this the same way the coordinates are bounded.
+        point_format = reader.header.point_format
+        has_colour = all(name in point_format.dimension_names for name in ("red", "green", "blue"))
+        raw_colours = np.empty((kept_total, 3), dtype=np.uint16) if has_colour else None
+
+        written = 0
+        seen = 0
+        for chunk in reader.chunk_iterator(_LAS_CHUNK_POINTS):
+            count = len(chunk)
+            # Phase the stride across chunk boundaries so the sample stays uniform over the whole file
+            # rather than restarting within each chunk.
+            start = (-seen) % stride
+            if start < count:
+                taken = len(range(start, count, stride))
+                end = written + taken
+                selection = slice(start, count, stride)
+                points[written:end, 0] = chunk.x[selection]
+                points[written:end, 1] = chunk.y[selection]
+                points[written:end, 2] = chunk.z[selection]
+                if raw_colours is not None:
+                    try:
+                        raw_colours[written:end, 0] = chunk.red[selection]
+                        raw_colours[written:end, 1] = chunk.green[selection]
+                        raw_colours[written:end, 2] = chunk.blue[selection]
+                    except Exception as e:
+                        logger.warning(f"Could not extract colors from LAS: {e}")
+                        raw_colours = None
+                written = end
+            seen += count
+
+        points = points[:written]
+
     colors = None
-    try:
-        if hasattr(las, 'red') and hasattr(las, 'green') and hasattr(las, 'blue'):
-            r = np.array(las.red, dtype=np.float64)
-            g = np.array(las.green, dtype=np.float64)
-            b = np.array(las.blue, dtype=np.float64)
-
-            # LAS colors are often 16-bit, normalize to 0-255
-            max_val = max(r.max(), g.max(), b.max(), 1)
-            if max_val > 255:
-                r = (r / max_val * 255).astype(np.uint8)
-                g = (g / max_val * 255).astype(np.uint8)
-                b = (b / max_val * 255).astype(np.uint8)
-            else:
-                r = r.astype(np.uint8)
-                g = g.astype(np.uint8)
-                b = b.astype(np.uint8)
-
-            colors = np.column_stack([r, g, b])
-    except Exception as e:
-        logger.warning(f"Could not extract colors from LAS: {e}")
+    if raw_colours is not None and written > 0:
+        raw_colours = raw_colours[:written]
+        max_val = max(int(raw_colours.max()), 1)
+        if max_val > 255:
+            colors = (raw_colours.astype(np.float32) / max_val * 255).astype(np.uint8)
+        else:
+            colors = raw_colours.astype(np.uint8)
 
     return points, colors
 

@@ -176,9 +176,9 @@ This versioning also applies to file metadata and file attributes -- the snapsho
 
 VAMS indexes metadata into Amazon OpenSearch Service to enable full-text and filtered search. Metadata and attributes are each stored in one flat key-value object per record, under a field named for the source:
 
-| Field | Source                  | Indexed shape                                          |
-| ----- | ----------------------- | ------------------------------------------------------ |
-| `MD_` | Asset and file metadata | `"MD_": {"location": ..., "classification": ...}`      |
+| Field | Source                  | Indexed shape                                             |
+| ----- | ----------------------- | --------------------------------------------------------- |
+| `MD_` | Asset and file metadata | `"MD_": {"location": ..., "classification": ...}`         |
 | `AB_` | File attributes         | `"AB_": {"source_system": ..., "processing_status": ...}` |
 
 Keys are carried into those objects exactly as authored, with no prefix of their own. Keeping metadata and attributes in separate objects prevents key collisions between the two when they share a name, and lets a search target either one. Because each source occupies a single field, a deployment can introduce metadata keys freely without growing the index mapping.

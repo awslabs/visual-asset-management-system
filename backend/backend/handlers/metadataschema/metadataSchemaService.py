@@ -441,7 +441,7 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         # Get the existing schema
         schema = get_metadata_schema_details(metadataSchemaId)
         if not schema:
-            raise VAMSGeneralErrorResponse("Metadata schema not found")
+            raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
         
         # Check authorization
         auth_object = {
@@ -515,7 +515,7 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles):
         # Get the existing schema
         schema = get_metadata_schema_details(metadataSchemaId)
         if not schema:
-            raise VAMSGeneralErrorResponse("Metadata schema not found")
+            raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
         
         # Check authorization
         auth_object = {
@@ -740,7 +740,7 @@ def handle_post_request(event):
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
         return internal_error(event=event)
@@ -795,7 +795,7 @@ def handle_put_request(event):
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
         return internal_error(event=event)
@@ -874,7 +874,7 @@ def handle_delete_request(event):
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
@@ -916,7 +916,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)

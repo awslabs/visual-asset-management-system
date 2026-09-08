@@ -51,6 +51,14 @@ CLUSTER_NAME = os.environ.get('EKS_CLUSTER_NAME')
 # Maximum pod runtime. The default matches the shipped useEks.jobTimeout so a deployment whose Lambda
 # predates this variable behaves exactly as before rather than falling back to something shorter.
 JOB_TIMEOUT_SECONDS = int(os.environ.get('EKS_JOB_TIMEOUT_SECONDS') or 7200)
+# The rest of the job spec. Every default below is the literal this handler used to hardcode, and
+# each equals the shipped useEks value -- so a Lambda predating these variables, or a deployment
+# that has not tuned them, produces a byte-identical job spec.
+JOB_MEMORY = os.environ.get('EKS_JOB_MEMORY') or '16Gi'
+JOB_CPU = os.environ.get('EKS_JOB_CPU') or '2000m'
+JOB_BACKOFF_LIMIT = int(os.environ.get('EKS_JOB_BACKOFF_LIMIT') or 2)
+JOB_TTL_SECONDS_AFTER_FINISHED = int(
+    os.environ.get('EKS_JOB_TTL_SECONDS_AFTER_FINISHED') or 600)
 CONTAINER_IMAGE_URI = os.environ.get('CONTAINER_IMAGE_URI')
 NAMESPACE = os.environ.get('KUBERNETES_NAMESPACE', 'default')
 REGION = os.environ.get('AWS_REGION', 'us-west-2')
@@ -633,7 +641,7 @@ def handle_construct_pipeline(event):
                 }
             },
             "spec": {
-                "ttlSecondsAfterFinished": 600,  # Delete job 10 minutes after completion
+                "ttlSecondsAfterFinished": JOB_TTL_SECONDS_AFTER_FINISHED,
                 # From the same configuration value the state machine derives its poll ceiling from
                 # (useEks.jobTimeout), so a pod cannot outlive the poll that watches it — which reported
                 # the execution FAILED while the pod carried on writing output.
@@ -654,13 +662,15 @@ def handle_construct_pipeline(event):
                             "command": ["/bin/sh", "-c"],
                             "args": [processing_command],
                             "resources": {
+                                # limits match requests, which is what gives the pod Guaranteed
+                                # QoS -- so both sides read the same values and cannot drift.
                                 "requests": {
-                                    "memory": "16Gi",  # 16GB memory as specified in requirements
-                                    "cpu": "2000m"     # 2 vCPU as specified in requirements
+                                    "memory": JOB_MEMORY,
+                                    "cpu": JOB_CPU
                                 },
                                 "limits": {
-                                    "memory": "16Gi",  # Same as requests for guaranteed QoS
-                                    "cpu": "2000m"     # Same as requests for guaranteed QoS
+                                    "memory": JOB_MEMORY,
+                                    "cpu": JOB_CPU
                                 }
                             },
                             "env": [
@@ -706,7 +716,7 @@ def handle_construct_pipeline(event):
                         "tolerations": []
                     }
                 },
-                "backoffLimit": 2,  # Allow 2 retries for transient failures
+                "backoffLimit": JOB_BACKOFF_LIMIT,
                 "parallelism": 1,   # Ensure only one pod runs at a time
                 "completions": 1    # Job completes when one pod succeeds
             }

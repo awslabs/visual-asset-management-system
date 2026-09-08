@@ -33,11 +33,11 @@ For the authoritative per-field list, see [Restricted-partition constraints](con
 
 VAMS supports four authentication approaches. You must choose exactly one.
 
-| Option                       | Configuration                                               | Description                                                                                                                                                                                            |
-| ---------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Amazon Cognito** (default) | `authProvider.useCognito.enabled: true`                     | VAMS creates and manages an Amazon Cognito user pool. Users receive a temporary password by email. Supports optional SAML or OIDC federation.                                                           |
-| **Amazon Cognito with SAML** | `authProvider.useCognito.enabled: true` and `useSaml: true` | Amazon Cognito with federated SAML from an external identity provider (IdP). Provider details are configured in `infra/config/saml-config.ts`.                                                          |
-| **Amazon Cognito with OIDC** | `authProvider.useCognito.enabled: true` and `useOidc: true` | Amazon Cognito with federated OpenID Connect from an external IdP (for example, Okta, Microsoft Entra ID, PingFederate). Provider details are configured in `infra/config/oidc-config.ts`.               |
+| Option                       | Configuration                                               | Description                                                                                                                                                                                                     |
+| ---------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Amazon Cognito** (default) | `authProvider.useCognito.enabled: true`                     | VAMS creates and manages an Amazon Cognito user pool. Users receive a temporary password by email. Supports optional SAML or OIDC federation.                                                                   |
+| **Amazon Cognito with SAML** | `authProvider.useCognito.enabled: true` and `useSaml: true` | Amazon Cognito with federated SAML from an external identity provider (IdP). Provider details are configured in `infra/config/saml-config.ts`.                                                                  |
+| **Amazon Cognito with OIDC** | `authProvider.useCognito.enabled: true` and `useOidc: true` | Amazon Cognito with federated OpenID Connect from an external IdP (for example, Okta, Microsoft Entra ID, PingFederate). Provider details are configured in `infra/config/oidc-config.ts`.                      |
 | **External OAuth IdP**       | `authProvider.useExternalOAuthIdp.enabled: true`            | Bring your own OAuth 2.0 / OpenID Connect identity provider without an Amazon Cognito user pool. Requires configuring multiple IdP endpoint URLs and client credentials, plus a custom JWT issuer and audience. |
 
 :::note[Cognito federation constraints]
@@ -61,11 +61,11 @@ You cannot enable both Amazon CloudFront and ALB simultaneously. The deployment 
 
 Amazon OpenSearch Service provides full-text search, filtering, and map-view functionality in the VAMS web interface.
 
-| Option                     | Configuration                             | Notes                                                                                                    |
-| -------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| **OpenSearch Serverless**  | `openSearch.useServerless.enabled: true`  | Fully managed, pay-per-use. No VPC required. Default for commercial deployments.                         |
+| Option                     | Configuration                             | Notes                                                                                                                                                    |
+| -------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenSearch Serverless**  | `openSearch.useServerless.enabled: true`  | Fully managed, pay-per-use. No VPC required. Default for commercial deployments.                                                                         |
 | **OpenSearch Provisioned** | `openSearch.useProvisioned.enabled: true` | Dedicated cluster with configurable instance types. Requires a VPC spanning `availabilityZoneCount` Availability Zones (`2` by default, optionally `3`). |
-| **No OpenSearch**          | Both set to `false`                       | Search is disabled. The assets page returns all authorized assets without filtering.                     |
+| **No OpenSearch**          | Both set to `false`                       | Search is disabled. The assets page returns all authorized assets without filtering.                                                                     |
 
 :::note[Choose only one]
 You cannot enable both OpenSearch Serverless and OpenSearch Provisioned at the same time.
@@ -89,12 +89,12 @@ Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they 
 
 **Subnet sizing guidance:**
 
-| Feature                   | IPs per subnet                                   |
-| ------------------------- | ------------------------------------------------ |
-| ALB                       | Up to 8 (scales during runtime)                  |
-| Container-based pipelines | ~2 per active workflow execution                 |
-| Lambda functions in VPC   | 1 per deployed function per subnet               |
-| VPC interface endpoints   | 1 per endpoint per subnet                        |
+| Feature                   | IPs per subnet                     |
+| ------------------------- | ---------------------------------- |
+| ALB                       | Up to 8 (scales during runtime)    |
+| Container-based pipelines | ~2 per active workflow execution   |
+| Lambda functions in VPC   | 1 per deployed function per subnet |
+| VPC interface endpoints   | 1 per endpoint per subnet          |
 
 A minimum of 128 IPv4 addresses per subnet is recommended.
 

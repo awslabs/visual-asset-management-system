@@ -8,12 +8,12 @@ This page helps you choose a surface and points you at the reference material fo
 
 ## Choosing a surface
 
-| Surface             | Use it when                                                                                                            | Reference                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Surface             | Use it when                                                                                                             | Reference                                                              |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | **Web interface**   | You are working interactively -- browsing, viewing 3D files, reviewing results, or making one-off changes.              | The rest of this user guide                                            |
 | **VAMS CLI**        | You are scripting a repeatable task, operating on many assets at once, or running VAMS steps from a CI/CD pipeline.     | [CLI documentation](../cli/getting-started.md)                         |
 | **VAMS MCP server** | You want an AI agent to search, inspect, and report on a deployment in response to questions asked in natural language. | [VAMS MCP Server](../developer/agentic-development.md#vams-mcp-server) |
-| **REST API**        | You are building your own application, integration, or connector on top of VAMS.                                       | [API Overview](../api/overview.md)                                     |
+| **REST API**        | You are building your own application, integration, or connector on top of VAMS.                                        | [API Overview](../api/overview.md)                                     |
 
 :::note[Your permissions apply everywhere]
 Every surface enforces the same two-tier authorization. Automating a task does not widen what you can reach -- if you cannot see an asset in the web interface, a script running as you cannot see it either. See [Permissions](permissions.md).

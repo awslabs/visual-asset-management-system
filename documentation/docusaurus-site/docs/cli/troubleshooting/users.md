@@ -17,7 +17,7 @@ The `user cognito` commands operate against the Amazon Cognito user pool and req
 
 **Symptoms:**
 
--   Commands fail with a `Cognito Operation Error` referencing that Cognito is not enabled
+-   Commands fail with a `Cognito Operation Error` that begins `Cognito not enabled:` and carries the API's message `Cognito user management is not available` (the API answers this case with HTTP `400`, the same status as an invalid request; the CLI tells the two apart by the message)
 -   The CLI reports that the Cognito authentication provider is unavailable
 
 **Cause:**

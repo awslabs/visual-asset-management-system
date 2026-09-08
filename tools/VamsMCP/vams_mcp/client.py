@@ -134,9 +134,12 @@ class VamsClient:
 
         ``fetch_page`` is a callable taking a ``params`` dict and returning a
         response dict shaped like ``{"Items": [...], "NextToken": "..."}``.
-        ``items_key`` names the list field, which differs per endpoint
-        (``Items``, ``items``, ``versions``). Results are always returned under
-        ``Items`` so every list tool has one shape.
+        ``items_key`` names the list field, which differs per endpoint. It is a parameter, so
+        any field name works -- read the handler's response model rather than matching against
+        a list here, because an enumeration of the names in use has already gone stale once
+        (it omitted ``metadata``). Values passed today: ``Items`` (the default), ``items``,
+        ``versions`` and ``metadata``. Results are always returned under ``Items`` so every
+        list tool has one shape.
 
         ``starting_token`` resumes a walk a previous call stopped: it is sent as the FIRST page's
         ``startingToken``. When the walk stops with a token still in hand, that token is returned as

@@ -266,8 +266,8 @@ Field names follow type-prefixed conventions. Use `search mapping` to enumerate 
 | `date_*`          | Date      | `date_lastmodified`                                                                                            |
 | `bool_*`          | Boolean   | `bool_isdistributable`, `bool_archived`                                                                        |
 | `list_*`          | List      | `list_tags`                                                                                                    |
-| `MD_`             | Metadata  | One `flat_object` holding every metadata key, on both indexes                                                   |
-| `AB_`             | Attribute | One `flat_object` holding every file attribute, file index only                                                 |
+| `MD_`             | Metadata  | One `flat_object` holding every metadata key, on both indexes                                                  |
+| `AB_`             | Attribute | One `flat_object` holding every file attribute, file index only                                                |
 | `geo_MD_location` | geo_shape | Derived from `location` or `latitude` / `longitude` / `altitude` metadata                                      |
 
 Metadata is the one exception to the type-prefix convention. All of a record's metadata is stored in a single field named `MD_`, with the keys carried verbatim, so metadata `{"product": "Training"}` is stored as `"MD_": {"product": "Training"}` and `search mapping` lists `MD_` rather than a field per key. File attributes work the same way in `AB_`.

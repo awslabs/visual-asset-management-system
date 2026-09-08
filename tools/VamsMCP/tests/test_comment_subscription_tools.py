@@ -270,6 +270,23 @@ def test_the_api_key_reads_forward_the_id_and_return_the_record(mock_client, too
     getattr(mock_client.api, tool).assert_called_once_with("k1")
 
 
+@pytest.mark.parametrize("tool,method", [("list_api_keys", "list_api_keys"),
+                                         ("list_user_api_keys", "list_user_api_keys")])
+def test_the_api_key_listings_route_the_page_params_to_the_client_kwargs(mock_client, tool, method):
+    """`paginate()` hands its callback a params dict; the APIClient listing takes keyword arguments,
+    so the tool has to translate pageSize/startingToken by hand. A mistranslation returns page one
+    forever (the token is dropped) and would pass any test that only checks the paginate call."""
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    getattr(server, tool)(max_items=7, starting_token="t0")
+    kwargs = mock_client.paginate.call_args.kwargs
+    assert kwargs["max_items"] == 7 and kwargs["starting_token"] == "t0"
+    fetch_page = mock_client.paginate.call_args.args[0]
+    fetch_page({"pageSize": 50, "startingToken": "t1"})
+    getattr(mock_client.api, method).assert_called_once_with(page_size=50, starting_token="t1")
+    other = "list_user_api_keys" if method == "list_api_keys" else "list_api_keys"
+    getattr(mock_client.api, other).assert_not_called()
+
+
 # --- Registration and gating ------------------------------------------------
 
 
@@ -284,6 +301,8 @@ async def test_the_comment_subscription_and_api_key_reads_are_registered():
         "check_subscription",
         "get_api_key",
         "get_user_api_key",
+        "list_api_keys",
+        "list_user_api_keys",
     ):
         assert expected in names
 
@@ -298,6 +317,12 @@ async def test_the_new_mutating_tools_are_gated_off_by_default():
         "update_subscription",
         "create_metadata_schema",
         "update_metadata_schema",
+        "create_api_key",
+        "create_user_api_key",
+        "update_api_key",
+        "update_user_api_key",
+        "delete_api_key",
+        "delete_user_api_key",
         "delete_comment",
         "delete_subscription",
         "unsubscribe",
@@ -355,7 +380,9 @@ def test_unsubscribe_docstring_distinguishes_it_from_delete_subscription():
         ("check_subscription", "BOTH cases"),
         ("check_subscription", "unrecognizedResponse"),
         ("get_api_key", "never again"),
-        ("get_api_key", "vamscli api-key list"),
+        ("get_api_key", "list_api_keys()"),
+        ("list_api_keys", "INVENTORY"),
+        ("list_user_api_keys", "says nothing about whether they exist"),
         ("create_metadata_schema", '{"fields": [ ... ]}'),
         ("update_metadata_schema", "REPLACES"),
         ("delete_metadata_schema", "Irreversible"),

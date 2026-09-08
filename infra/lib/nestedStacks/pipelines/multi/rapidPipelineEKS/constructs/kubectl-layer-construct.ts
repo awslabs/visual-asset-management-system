@@ -24,6 +24,13 @@ export const KUBECTL_RELEASE_PATHS: Record<string, string> = {
     "1.30": "1.30.0/2024-05-12",
     "1.31": "1.31.0/2024-09-12",
     "1.32": "1.32.0/2024-12-20",
+    // Versions in standard support, plus 1.33. These share a release date because Amazon EKS republishes
+    // every supported minor together; each path was confirmed to return 200, since a plausible-looking
+    // date that was never published answers 404 inside the Docker bundling step.
+    "1.33": "1.33.13/2026-07-05",
+    "1.34": "1.34.9/2026-07-05",
+    "1.35": "1.35.6/2026-07-05",
+    "1.36": "1.36.2/2026-07-05",
 };
 
 export function kubectlDownloadUrl(eksClusterVersion: string): string {

@@ -164,15 +164,15 @@ The web application file selector for asset uploads supports folder selection in
 
 When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud, the following services are not available. Configuration validation rejects a deployment that enables any of them, naming the field.
 
-| Feature                                    | Restriction                                                                                                          |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| Amazon CloudFront                          | Not available; use ALB deployment mode                                                                               |
-| Amazon Location Service                    | Not available; map features are disabled                                                                             |
-| AWS Deadline Cloud                         | Not available; `app.pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                      |
-| Amazon Cognito SAML and OIDC federation    | Not available (both use the Cognito hosted UI); use the external OAuth identity provider option                       |
-| OpenSearch Serverless (next-generation)    | Not available; `app.openSearch.useServerless.nextGen` must be `false`                                                 |
-| OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there                             |
-| Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                                          |
+| Feature                                    | Restriction                                                                                     |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Amazon CloudFront                          | Not available; use ALB deployment mode                                                          |
+| Amazon Location Service                    | Not available; map features are disabled                                                        |
+| AWS Deadline Cloud                         | Not available; `app.pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                |
+| Amazon Cognito SAML and OIDC federation    | Not available (both use the Cognito hosted UI); use the external OAuth identity provider option |
+| OpenSearch Serverless (next-generation)    | Not available; `app.openSearch.useServerless.nextGen` must be `false`                           |
+| OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there       |
+| Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                     |
 
 A VPC is also required in these partitions (`app.useGlobalVpc.enabled` must be `true`). See [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints) for the authoritative per-field list.
 

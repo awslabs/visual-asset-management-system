@@ -153,17 +153,17 @@ The editor is a step-by-step wizard: **Basic information**, **Execution settings
 
 The workflow's own gate. Every execution is checked against these before any pipeline is considered:
 
-| Setting                                | Description                                                                                                                                                                |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Input file count**                   | `None`, `One file`, or `Multiple files`.                                                                                                                                   |
-| **Asset selection rules**              | The asset span, and whether a whole asset or a folder may be selected.                                                                                                     |
-| **Input file filters — allow/exclude** | The file patterns the workflow admits. Hidden when the workflow takes no input files.                                                                                      |
-| **Metadata provided to pipelines**     | Database metadata, asset metadata, file metadata, and file attributes.                                                                                                     |
-| **Output destination**                 | **Write to an asset**, or **Results only** for a workflow that records results text and logs and writes no asset output.                                                   |
-| **Allow choosing the output asset**    | Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.                                    |
+| Setting                                | Description                                                                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Input file count**                   | `None`, `One file`, or `Multiple files`.                                                                                                                               |
+| **Asset selection rules**              | The asset span, and whether a whole asset or a folder may be selected.                                                                                                 |
+| **Input file filters — allow/exclude** | The file patterns the workflow admits. Hidden when the workflow takes no input files.                                                                                  |
+| **Metadata provided to pipelines**     | Database metadata, asset metadata, file metadata, and file attributes.                                                                                                 |
+| **Output destination**                 | **Write to an asset**, or **Results only** for a workflow that records results text and logs and writes no asset output.                                               |
+| **Allow choosing the output asset**    | Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.                                |
 | **Default output path prefix**         | The prefix an execution is pre-filled with. It supports tags resolved per run, so `/{{executionId}}/` gives every run its own folder. Leave it blank to add no prefix. |
-| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A file recorded as written by this workflow does not re-fire it — see the warning below.     |
-| **Concurrency restriction**            | `None`, `One per asset`, or `One per input file` — whether a new execution waits while a conflicting one is still running.                                                 |
+| **Allow workflow trigger chaining**    | Whether a file written by another workflow may fire this workflow's triggers. A file recorded as written by this workflow does not re-fire it — see the warning below. |
+| **Concurrency restriction**            | `None`, `One per asset`, or `One per input file` — whether a new execution waits while a conflicting one is still running.                                             |
 
 These are **authored, not inherited** from the workflow's pipelines. Set the input file count to the **highest** value any pipeline and template combination in the workflow can require — a lower value rejects a selection a template would have accepted. The input file filters are applied **before** the pipelines' own, so a filter here that excludes a type one of its pipelines needs makes that pipeline unsatisfiable; the [Validation](#saving-the-workflow) panel warns when that happens.
 

@@ -116,6 +116,10 @@ jobs:
 
             - name: Infra tests
               working-directory: vams/infra
+              # jest.config.js keys its worker bound on CI: two workers here, where a forced worker exit
+              # was first reported. GitHub sets CI=true by default; stated so the coupling is visible.
+              env:
+                  CI: "true"
               run: npm test
 
             # - name: Npm audit infrastructure directory

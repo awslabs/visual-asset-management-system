@@ -79,7 +79,7 @@ Two things shorten a page, so page until `NextToken` is absent rather than until
 
 -   **The authorization filter.** Pipelines the caller cannot read are dropped after the page is read.
 -   **A 4 MB page budget**, measured over the serialized items. Each item carries its full `executionConfig`, which may hold a large inline job template, so a page of large configurations reaches the budget well inside the row cap. A page that reaches it stops accumulating and its `NextToken` resumes at the last item it kept, so the remaining rows are deferred rather than lost.
-:::
+    :::
 
 ### Error responses
 
@@ -971,8 +971,8 @@ A definition may contain only the fields above. An unrecognized key is rejected 
 
 When `configFormat` is `json`, the declared `type` determines where a tag's `{{tagKey}}` placeholder may sit, because it determines what the tag renders.
 
-| Tag type                                      | Renders                          | Placement in the body                                    |
-| --------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
+| Tag type                                      | Renders                          | Placement in the body                                |
+| --------------------------------------------- | -------------------------------- | ---------------------------------------------------- |
 | `integer`, `number`, `boolean`, `string-list` | A JSON number, boolean, or array | The whole value, unquoted: `"steps": {{STEPS}}`      |
 | `string`, `enum`                              | Text                             | Inside the string it fills: `"prompt": "{{PROMPT}}"` |
 

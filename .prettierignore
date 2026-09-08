@@ -5,6 +5,7 @@ cdk.out
 # .gitignore already covers as cdk.out.* . Without the same pattern here, one such directory
 # makes prettier-check report ~1900 generated CloudFormation templates as unformatted.
 cdk.out.*
+infra/cdk.context.json
 .mypy_cache
 .pytest_cache
 ash_cf2cdk_output
@@ -19,7 +20,7 @@ web/public/potree_libs
 web/public/viewers
 web/test-results
 web/playwright-report
-docs
+/docs
 .plans
 web/e2e/.auth
 web/e2e/.report

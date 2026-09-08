@@ -341,6 +341,15 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
+def _is_missing_object_error(e: ClientError) -> bool:
+    """Return True when a ClientError reports the S3 object as missing.
+
+    HeadObject reports a missing key as 404 / NotFound while GetObject reports
+    NoSuchKey, so callers deciding between "not found" and "archived" accept
+    all three spellings.
+    """
+    return e.response.get('Error', {}).get('Code') in ('NoSuchKey', '404', 'NotFound')
+
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """Determine if file is archived based on S3 delete markers.
 
@@ -382,9 +391,8 @@ def check_destination_file_exists(bucket: str, key: str, path_display: str) -> b
         s3_client.head_object(Bucket=bucket, Key=key)
         return True
     except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code')
-        # NoSuchKey or 404 means the file doesn't exist, which is what we want
-        if error_code == 'NoSuchKey' or error_code == '404':
+        # A missing object is the answer this check exists to give
+        if _is_missing_object_error(e):
             return False
         # For any other error, log details and raise a user-friendly message
         logger.exception(f"Error checking destination file {key} in bucket {bucket}: {e}")
@@ -1160,7 +1168,7 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
     
     except ClientError as e:
         logger.exception(f"Error getting S3 object metadata: {e}")
-        if e.response['Error']['Code'] == 'NoSuchKey' or e.response['Error']['Code'] == '404':
+        if _is_missing_object_error(e):
             # Check if the file is archived (has delete markers)
             try:
                 # Page through the full version history so archive status and
@@ -2245,7 +2253,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 
                 # If we get here, the file exists and is not archived
             except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
+                if _is_missing_object_error(e):
                     # File doesn't exist, check if it's archived
                     if is_file_archived(bucket, full_key):
                         raise VAMSGeneralErrorResponse(f"File is already archived.")
@@ -2262,7 +2270,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
             if 'Contents' not in response or len(response['Contents']) == 0:
                 raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             raise VAMSGeneralErrorResponse(f"File not found.")
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
@@ -2560,7 +2568,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     try:
         s3_client.head_object(Bucket=source_bucket, Key=source_key)
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             raise VAMSGeneralErrorResponse(f"Source file not found.")
         raise VAMSGeneralErrorResponse(f"Error checking source file.")
     
@@ -2669,7 +2677,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     try:
         source_object = s3_client.head_object(Bucket=bucket, Key=source_key)
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             # Check if file is archived
             if is_file_archived(bucket, source_key):
                 raise VAMSGeneralErrorResponse("Cannot move or rename archived file. Unarchive it first.")
@@ -2825,7 +2833,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
             raise VAMSGeneralErrorResponse("Version not found for file")
         
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             raise VAMSGeneralErrorResponse(f"File not found.")
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
@@ -3143,7 +3151,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
     try:
         current_object = s3_client.head_object(Bucket=bucket, Key=full_key)
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             # Check if file is archived
             if is_file_archived(bucket, full_key):
                 raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file")

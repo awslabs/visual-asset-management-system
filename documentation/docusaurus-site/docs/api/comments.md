@@ -17,15 +17,15 @@ All endpoints require a valid JWT token in the `Authorization` header. Comment e
 
 ### Comment fields
 
-| Field                      | Type   | Description                                                            |
-| -------------------------- | ------ | ---------------------------------------------------------------------- |
-| `assetId`                  | string | Asset the comment belongs to.                                          |
+| Field                      | Type   | Description                                                               |
+| -------------------------- | ------ | ------------------------------------------------------------------------- |
+| `assetId`                  | string | Asset the comment belongs to.                                             |
 | `assetVersionId:commentId` | string | Composite identifier: the asset version and the comment ID, colon-joined. |
-| `commentBody`              | string | Comment text.                                                          |
-| `commentOwnerID`           | string | User ID of the comment's creator.                                      |
-| `commentOwnerUsername`     | string | Display identity of the creator.                                       |
-| `dateCreated`              | string | ISO 8601 creation timestamp.                                           |
-| `dateEdited`               | string | ISO 8601 timestamp of the last edit. Present only on an edited comment. |
+| `commentBody`              | string | Comment text.                                                             |
+| `commentOwnerID`           | string | User ID of the comment's creator.                                         |
+| `commentOwnerUsername`     | string | Display identity of the creator.                                          |
+| `dateCreated`              | string | ISO 8601 creation timestamp.                                              |
+| `dateEdited`               | string | ISO 8601 timestamp of the last edit. Present only on an edited comment.   |
 
 ---
 
@@ -39,12 +39,12 @@ Retrieves every comment on an asset, across all of its versions, newest first.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                             |
-| --------------- | -------- | ------- | -------- | --------------------------------------- |
-| `assetId`       | path     | string  | Yes      | Asset identifier.                       |
-| `maxItems`      | query    | integer | No       | Maximum number of comments to return.   |
-| `pageSize`      | query    | integer | No       | Number of comments per page.            |
-| `startingToken` | query    | string  | No       | Pagination token.                       |
+| Parameter       | Location | Type    | Required | Description                           |
+| --------------- | -------- | ------- | -------- | ------------------------------------- |
+| `assetId`       | path     | string  | Yes      | Asset identifier.                     |
+| `maxItems`      | query    | integer | No       | Maximum number of comments to return. |
+| `pageSize`      | query    | integer | No       | Number of comments per page.          |
+| `startingToken` | query    | string  | No       | Pagination token.                     |
 
 **Response:**
 
@@ -67,13 +67,13 @@ Retrieves every comment on an asset, across all of its versions, newest first.
 
 **Error Responses:**
 
-| Status | Description                                                                  |
-| ------ | ---------------------------------------------------------------------------- |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
 | `400`  | Invalid `assetId`, or an `assetId` that resolves to more than one live asset. |
-| `403`  | Not authorized to read this asset.                                           |
-| `404`  | Asset not found.                                                             |
-| `405`  | Method not allowed.                                                          |
-| `500`  | Internal server error.                                                       |
+| `403`  | Not authorized to read this asset.                                            |
+| `404`  | Asset not found.                                                              |
+| `405`  | Method not allowed.                                                           |
+| `500`  | Internal server error.                                                        |
 
 ---
 
@@ -99,12 +99,12 @@ Same shape as [List comments for an asset](#list-comments-for-an-asset), restric
 
 **Error Responses:**
 
-| Status | Description                                                                  |
-| ------ | ---------------------------------------------------------------------------- |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
 | `400`  | Invalid `assetId`, or an `assetId` that resolves to more than one live asset. |
-| `403`  | Not authorized to read this asset.                                           |
-| `404`  | Asset not found.                                                             |
-| `500`  | Internal server error.                                                       |
+| `403`  | Not authorized to read this asset.                                            |
+| `404`  | Asset not found.                                                              |
+| `500`  | Internal server error.                                                        |
 
 ---
 
@@ -116,9 +116,9 @@ Retrieves a single comment.
 
 **Request Parameters:**
 
-| Parameter                  | Location | Type   | Required | Description                                                        |
-| -------------------------- | -------- | ------ | -------- | ------------------------------------------------------------------ |
-| `assetId`                  | path     | string | Yes      | Asset identifier.                                                  |
+| Parameter                  | Location | Type   | Required | Description                                                            |
+| -------------------------- | -------- | ------ | -------- | ---------------------------------------------------------------------- |
+| `assetId`                  | path     | string | Yes      | Asset identifier.                                                      |
 | `assetVersionId:commentId` | path     | string | Yes      | Asset version and comment ID, colon-joined (for example `2:c1a2b3c4`). |
 
 **Response:**
@@ -140,12 +140,12 @@ A comment that does not exist returns `200` with an empty `message` object rathe
 
 **Error Responses:**
 
-| Status | Description                                                                  |
-| ------ | ---------------------------------------------------------------------------- |
-| `400`  | Invalid `assetId` or comment ID, or a malformed composite path parameter.     |
-| `403`  | Not authorized to read this asset.                                           |
-| `404`  | Asset not found.                                                             |
-| `500`  | Internal server error.                                                       |
+| Status | Description                                                               |
+| ------ | ------------------------------------------------------------------------- |
+| `400`  | Invalid `assetId` or comment ID, or a malformed composite path parameter. |
+| `403`  | Not authorized to read this asset.                                        |
+| `404`  | Asset not found.                                                          |
+| `500`  | Internal server error.                                                    |
 
 ---
 
@@ -157,16 +157,16 @@ Adds a comment to a version of an asset. The caller supplies the comment ID as t
 
 **Request Parameters:**
 
-| Parameter                  | Location | Type   | Required | Description                                        |
-| -------------------------- | -------- | ------ | -------- | -------------------------------------------------- |
-| `assetId`                  | path     | string | Yes      | Asset identifier.                                  |
+| Parameter                  | Location | Type   | Required | Description                                           |
+| -------------------------- | -------- | ------ | -------- | ----------------------------------------------------- |
+| `assetId`                  | path     | string | Yes      | Asset identifier.                                     |
 | `assetVersionId:commentId` | path     | string | Yes      | Asset version and the new comment's ID, colon-joined. |
 
 **Request Body:**
 
-| Field         | Type   | Required | Description                              |
-| ------------- | ------ | -------- | ---------------------------------------- |
-| `commentBody` | string | Yes      | Comment text, up to 16,384 characters.   |
+| Field         | Type   | Required | Description                            |
+| ------------- | ------ | -------- | -------------------------------------- |
+| `commentBody` | string | Yes      | Comment text, up to 16,384 characters. |
 
 ```json
 {
@@ -184,12 +184,12 @@ Adds a comment to a version of an asset. The caller supplies the comment ID as t
 
 **Error Responses:**
 
-| Status | Description                                                                                          |
-| ------ | ---------------------------------------------------------------------------------------------------- |
+| Status | Description                                                                                                                                                           |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Missing or invalid path parameters, a missing or over-length `commentBody`, a comment that already exists, or an `assetId` that resolves to more than one live asset. |
-| `403`  | Not authorized to write this asset.                                                                  |
-| `404`  | Asset not found.                                                                                     |
-| `500`  | Internal server error.                                                                               |
+| `403`  | Not authorized to write this asset.                                                                                                                                   |
+| `404`  | Asset not found.                                                                                                                                                      |
+| `500`  | Internal server error.                                                                                                                                                |
 
 ---
 
@@ -201,15 +201,15 @@ Replaces a comment's text and records a `dateEdited` timestamp. Only the comment
 
 **Request Parameters:**
 
-| Parameter                  | Location | Type   | Required | Description                                        |
-| -------------------------- | -------- | ------ | -------- | -------------------------------------------------- |
-| `assetId`                  | path     | string | Yes      | Asset identifier.                                  |
-| `assetVersionId:commentId` | path     | string | Yes      | Asset version and comment ID, colon-joined.        |
+| Parameter                  | Location | Type   | Required | Description                                 |
+| -------------------------- | -------- | ------ | -------- | ------------------------------------------- |
+| `assetId`                  | path     | string | Yes      | Asset identifier.                           |
+| `assetVersionId:commentId` | path     | string | Yes      | Asset version and comment ID, colon-joined. |
 
 **Request Body:**
 
-| Field         | Type   | Required | Description                                       |
-| ------------- | ------ | -------- | ------------------------------------------------- |
+| Field         | Type   | Required | Description                                        |
+| ------------- | ------ | -------- | -------------------------------------------------- |
 | `commentBody` | string | Yes      | Replacement comment text, up to 16,384 characters. |
 
 **Response:**
@@ -222,12 +222,12 @@ Replaces a comment's text and records a `dateEdited` timestamp. Only the comment
 
 **Error Responses:**
 
-| Status | Description                                                                     |
-| ------ | ------------------------------------------------------------------------------- |
-| `400`  | Missing or invalid path parameters, or a missing or over-length `commentBody`.    |
-| `403`  | Not authorized to write this asset, or the caller does not own the comment.      |
-| `404`  | Asset not found, or the comment does not exist.                                 |
-| `500`  | Internal server error.                                                          |
+| Status | Description                                                                    |
+| ------ | ------------------------------------------------------------------------------ |
+| `400`  | Missing or invalid path parameters, or a missing or over-length `commentBody`. |
+| `403`  | Not authorized to write this asset, or the caller does not own the comment.    |
+| `404`  | Asset not found, or the comment does not exist.                                |
+| `500`  | Internal server error.                                                         |
 
 ---
 
@@ -254,12 +254,12 @@ Soft-deletes a comment. Only the comment's owner can delete it.
 
 **Error Responses:**
 
-| Status | Description                                                                |
-| ------ | -------------------------------------------------------------------------- |
-| `400`  | Missing path parameters, or a malformed composite path parameter.           |
+| Status | Description                                                                     |
+| ------ | ------------------------------------------------------------------------------- |
+| `400`  | Missing path parameters, or a malformed composite path parameter.               |
 | `403`  | Not authorized to delete on this asset, or the caller does not own the comment. |
-| `404`  | Asset not found, or the comment does not exist.                            |
-| `500`  | Internal server error.                                                     |
+| `404`  | Asset not found, or the comment does not exist.                                 |
+| `500`  | Internal server error.                                                          |
 
 ---
 

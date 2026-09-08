@@ -4403,6 +4403,15 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
     # replays the caller's NAMED selection (inputMetadataDatabaseId) rather than the captured set: a run
     # with input files derives its databases from those files, so the re-run derives the same ones from
     # the same inputFiles, and naming them here would instead be read as an arity-'none' selection.
+    #
+    # The source assets are the caller's own selection, so a list trimmed at capture cannot be
+    # re-resolved from anywhere. Checked before the list is read so a list trimmed all the way to
+    # empty fails here rather than replaying as no metadata sources at all.
+    if config_row.get("metadataSourceAssetsTruncated"):
+        raise VAMSGeneralErrorResponse(
+            "This execution's metadata source asset list was too large to store in full, so the run "
+            "cannot be reproduced exactly. Start a new execution with the metadata source assets "
+            "instead of re-running.")
     _metadata_source_databases, metadata_source_assets = _metadata_source_entities(config_row)
     body = {
         "inputFiles": input_files,

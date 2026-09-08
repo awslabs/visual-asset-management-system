@@ -128,13 +128,13 @@ Delete a comment.
 vamscli comment delete [OPTIONS]
 ```
 
-| Option                     | Type | Required | Description                       |
-| -------------------------- | ---- | -------- | --------------------------------- |
-| `-a`, `--asset-id`         | TEXT | Yes      | Asset the comment is on           |
-| `-v`, `--asset-version-id` | TEXT | Yes      | Asset version                     |
-| `-c`, `--comment-id`       | TEXT | Yes      | Comment ID                        |
-| `--confirm`                | FLAG | Yes      | Confirm the deletion              |
-| `--json-output`            | FLAG | No       | Output raw JSON response          |
+| Option                     | Type | Required | Description              |
+| -------------------------- | ---- | -------- | ------------------------ |
+| `-a`, `--asset-id`         | TEXT | Yes      | Asset the comment is on  |
+| `-v`, `--asset-version-id` | TEXT | Yes      | Asset version            |
+| `-c`, `--comment-id`       | TEXT | Yes      | Comment ID               |
+| `--confirm`                | FLAG | Yes      | Confirm the deletion     |
+| `--json-output`            | FLAG | No       | Output raw JSON response |
 
 ```bash
 vamscli comment delete -a my-asset -v version-001 -c review-signoff --confirm
@@ -166,10 +166,10 @@ vamscli subscription list [OPTIONS]
 
 | Option             | Type    | Required | Description                   |
 | ------------------ | ------- | -------- | ----------------------------- |
-| `--page-size`      | INTEGER | No       | Number of items read per page  |
-| `--max-items`      | INTEGER | No       | Maximum total items to return  |
-| `--starting-token` | TEXT    | No       | Token to resume from           |
-| `--json-output`    | FLAG    | No       | Output raw JSON response       |
+| `--page-size`      | INTEGER | No       | Number of items read per page |
+| `--max-items`      | INTEGER | No       | Maximum total items to return |
+| `--starting-token` | TEXT    | No       | Token to resume from          |
+| `--json-output`    | FLAG    | No       | Output raw JSON response      |
 
 ```bash
 vamscli subscription list
@@ -186,13 +186,13 @@ Create a subscription for one entity with one or more subscribers. Repeat `-s`, 
 vamscli subscription create [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                                     |
-| --------------------- | ---- | -------- | --------------------------------------------------------------- |
-| `-i`, `--entity-id`   | TEXT | Yes      | ID of the entity to subscribe to                                |
-| `-s`, `--subscriber`  | TEXT | Yes      | User to subscribe; repeat the option for several subscribers     |
-| `--event-name`        | TEXT | No       | Event to subscribe to (default: `Asset Version Change`)          |
-| `--entity-name`       | TEXT | No       | Entity type the ID refers to (default: `Asset`)                  |
-| `--json-output`       | FLAG | No       | Output raw JSON response                                        |
+| Option               | Type | Required | Description                                                  |
+| -------------------- | ---- | -------- | ------------------------------------------------------------ |
+| `-i`, `--entity-id`  | TEXT | Yes      | ID of the entity to subscribe to                             |
+| `-s`, `--subscriber` | TEXT | Yes      | User to subscribe; repeat the option for several subscribers |
+| `--event-name`       | TEXT | No       | Event to subscribe to (default: `Asset Version Change`)      |
+| `--entity-name`      | TEXT | No       | Entity type the ID refers to (default: `Asset`)              |
+| `--json-output`      | FLAG | No       | Output raw JSON response                                     |
 
 ```bash
 vamscli subscription create -i my-asset -s reviewer@example.com
@@ -211,13 +211,13 @@ Set the subscriber list for a subscription.
 vamscli subscription update [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                                    |
-| --------------------- | ---- | -------- | -------------------------------------------------------------- |
-| `-i`, `--entity-id`   | TEXT | Yes      | ID of the subscribed entity                                    |
-| `-s`, `--subscriber`  | TEXT | Yes      | Subscriber to keep; repeat the option for several subscribers   |
-| `--event-name`        | TEXT | No       | Event name of the subscription (default: `Asset Version Change`) |
-| `--entity-name`       | TEXT | No       | Entity type the ID refers to (default: `Asset`)                 |
-| `--json-output`       | FLAG | No       | Output raw JSON response                                       |
+| Option               | Type | Required | Description                                                      |
+| -------------------- | ---- | -------- | ---------------------------------------------------------------- |
+| `-i`, `--entity-id`  | TEXT | Yes      | ID of the subscribed entity                                      |
+| `-s`, `--subscriber` | TEXT | Yes      | Subscriber to keep; repeat the option for several subscribers    |
+| `--event-name`       | TEXT | No       | Event name of the subscription (default: `Asset Version Change`) |
+| `--entity-name`      | TEXT | No       | Entity type the ID refers to (default: `Asset`)                  |
+| `--json-output`      | FLAG | No       | Output raw JSON response                                         |
 
 ```bash
 vamscli subscription update -i my-asset -s reviewer@example.com -s lead@example.com
@@ -237,14 +237,14 @@ Delete a subscription entirely.
 vamscli subscription delete [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                                      |
-| --------------------- | ---- | -------- | ---------------------------------------------------------------- |
-| `-i`, `--entity-id`   | TEXT | Yes      | ID of the subscribed entity                                      |
-| `-s`, `--subscriber`  | TEXT | Yes      | Required by the API, and ignored: every subscriber is removed      |
-| `--event-name`        | TEXT | No       | Event name of the subscription (default: `Asset Version Change`)  |
-| `--entity-name`       | TEXT | No       | Entity type the ID refers to (default: `Asset`)                   |
-| `--confirm`           | FLAG | Yes      | Confirm the deletion                                             |
-| `--json-output`       | FLAG | No       | Output raw JSON response                                         |
+| Option               | Type | Required | Description                                                      |
+| -------------------- | ---- | -------- | ---------------------------------------------------------------- |
+| `-i`, `--entity-id`  | TEXT | Yes      | ID of the subscribed entity                                      |
+| `-s`, `--subscriber` | TEXT | Yes      | Required by the API, and ignored: every subscriber is removed    |
+| `--event-name`       | TEXT | No       | Event name of the subscription (default: `Asset Version Change`) |
+| `--entity-name`      | TEXT | No       | Entity type the ID refers to (default: `Asset`)                  |
+| `--confirm`          | FLAG | Yes      | Confirm the deletion                                             |
+| `--json-output`      | FLAG | No       | Output raw JSON response                                         |
 
 ```bash
 vamscli subscription delete -i my-asset -s reviewer@example.com --confirm
@@ -268,14 +268,14 @@ Remove one subscriber from a subscription, leaving the subscription and its othe
 vamscli subscription unsubscribe [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                                      |
-| --------------------- | ---- | -------- | ---------------------------------------------------------------- |
-| `-i`, `--entity-id`   | TEXT | Yes      | ID of the subscribed entity                                      |
-| `-s`, `--subscriber`  | TEXT | Yes      | The single subscriber to remove                                  |
-| `--event-name`        | TEXT | No       | Event name of the subscription (default: `Asset Version Change`)  |
-| `--entity-name`       | TEXT | No       | Entity type the ID refers to (default: `Asset`)                   |
-| `--confirm`           | FLAG | Yes      | Confirm the unsubscribe                                          |
-| `--json-output`       | FLAG | No       | Output raw JSON response                                         |
+| Option               | Type | Required | Description                                                      |
+| -------------------- | ---- | -------- | ---------------------------------------------------------------- |
+| `-i`, `--entity-id`  | TEXT | Yes      | ID of the subscribed entity                                      |
+| `-s`, `--subscriber` | TEXT | Yes      | The single subscriber to remove                                  |
+| `--event-name`       | TEXT | No       | Event name of the subscription (default: `Asset Version Change`) |
+| `--entity-name`      | TEXT | No       | Entity type the ID refers to (default: `Asset`)                  |
+| `--confirm`          | FLAG | Yes      | Confirm the unsubscribe                                          |
+| `--json-output`      | FLAG | No       | Output raw JSON response                                         |
 
 ```bash
 vamscli subscription unsubscribe -i my-asset -s reviewer@example.com --confirm
@@ -293,11 +293,11 @@ Report whether a user is subscribed to an asset.
 vamscli subscription check [OPTIONS]
 ```
 
-| Option              | Type | Required | Description              |
-| ------------------- | ---- | -------- | ------------------------ |
-| `-a`, `--asset-id`  | TEXT | Yes      | Asset to check           |
-| `-u`, `--user-id`   | TEXT | Yes      | User to check            |
-| `--json-output`     | FLAG | No       | Output raw JSON response |
+| Option             | Type | Required | Description              |
+| ------------------ | ---- | -------- | ------------------------ |
+| `-a`, `--asset-id` | TEXT | Yes      | Asset to check           |
+| `-u`, `--user-id`  | TEXT | Yes      | User to check            |
+| `--json-output`    | FLAG | No       | Output raw JSON response |
 
 ```bash
 vamscli subscription check -a my-asset -u reviewer@example.com

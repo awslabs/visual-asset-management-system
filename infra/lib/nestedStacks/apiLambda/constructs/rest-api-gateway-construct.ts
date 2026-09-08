@@ -297,12 +297,15 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         for (const r of registry.list()) {
             if (invokedFns.has(r.lambdaFn.functionArn)) continue;
             invokedFns.add(r.lambdaFn.functionArn);
+            // Keyed on the function's construct path, which is fixed by the code. The ARN is an
+            // unresolved Token at synth, and hashing its string form made seven of these ids differ
+            // between two synths of one unchanged configuration -- a replaced permission on every deploy.
             new cdk.aws_lambda.CfnPermission(
                 this,
                 `Invoke-${generateUniqueNameHash(
                     config.env.coreStackName,
                     config.env.account,
-                    r.lambdaFn.functionArn,
+                    r.lambdaFn.node.path,
                     10
                 )}`,
                 {

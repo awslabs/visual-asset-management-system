@@ -82,9 +82,18 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
             if file.lower().endswith(ext.Extensions.LAZ) or file.lower().endswith(ext.Extensions.LAS):
                 laz_filepath = file
                 break
-    # If input file is already LAZ/LAS, do nothing and just pass through
+    # A LAZ/LAS input needs no conversion, so it is never routed here: constructPipeline sends only
+    # PDAL_INPUT_EXTENSIONS (.e57, .ply) to this stage and gives LAZ/LAS straight to POTREE. Arriving
+    # here means the definition was built wrong, and it is reported rather than carried on with: this
+    # branch produced no converter output, so the upload loop below would dereference an unbound
+    # pipeline_response and end the container with an UnboundLocalError. Nothing above run() catches
+    # that, so the step would report nothing against its task token and wait out its full taskTimeout.
     elif local_filename_lowered.endswith(ext.Extensions.LAZ) or local_filename_lowered.endswith(ext.Extensions.LAS):
-        laz_filepath = local_filepath
+        return ext.error_response(stage,
+            "A LAZ/LAS input requires no PDAL conversion and must be sent to the POTREE stage "
+            "directly. Reaching the PDAL stage with one means the pipeline definition names the "
+            "wrong stage for this file type."
+        )
 
     # If we were given another file or we could not convert, error
     if laz_filepath is None:

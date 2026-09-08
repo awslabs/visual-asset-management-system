@@ -1038,7 +1038,25 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 )
                 if not is_valid:
                     raise VAMSGeneralErrorResponse(error_message)
-        
+
+    # Every remaining per-file rule is checked here, before any upload is initiated. Each reads only
+    # relativeKey, file_size and uploadType, so none of it depends on the per-file work below. Run
+    # inside that loop instead, a rejection on the second or later file leaves the earlier files with
+    # multipart uploads already created in S3 and no upload record to find them by, so they linger
+    # until the bucket lifecycle rule expires them.
+    for file in request_model.files:
+        if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
+            raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
+
+        # Validate the extension of an asset preview and of a .previewFile. file
+        if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
+            if not validate_preview_file_extension(file.relativeKey):
+                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+
+        # Validate file size for preview files
+        if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
+            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
+
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
         logger.info(f"Asset {assetId} already has a preview. The existing preview will be replaced.")
@@ -1059,20 +1077,9 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
+    # Every file has already passed validation above, so no rejection can occur once the first
+    # multipart upload has been created.
     for file in request_model.files:
-        # Validate file extension
-        if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-            raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
-        
-        # Validate the extension of an asset preview and of a .previewFile. file
-        if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
-            if not validate_preview_file_extension(file.relativeKey):
-                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
-
-        # Validate file size for preview files
-        if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
-            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
-        
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
@@ -1245,6 +1252,18 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # Process each file in the request
     for file in request_model.files:
         try:
+            # Validate the extension of an asset preview and of a .previewFile. file
+            if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
+                if not validate_preview_file_extension(file.relativeKey):
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",
+                        success=False,
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                    ))
+                    has_failures = True
+                    continue
+
             # Validate file extension if restrictions are configured
             # Only apply to regular asset files, not asset previews or file preview files
             if allowed_extensions and allowed_extensions.strip() != "" and uploadType == "assetFile":

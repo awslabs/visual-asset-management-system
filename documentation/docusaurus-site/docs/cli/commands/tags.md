@@ -37,7 +37,7 @@ vamscli tag create [OPTIONS]
 | `--description`   | TEXT | Conditional | Tag description (required unless using `--json-input`)   |
 | `--tag-type-name` | TEXT | Conditional | Tag type name (required unless using `--json-input`)     |
 | `--json-input`    | TEXT | No          | JSON string or path to a JSON file with tag data (batch) |
-| `--database`      | TEXT | No          | Scope the tag to this database (omit for a GLOBAL tag)    |
+| `--database`      | TEXT | No          | Scope the tag to this database (omit for a GLOBAL tag)   |
 | `--json-output`   | Flag | No          | Output raw JSON response                                 |
 
 When `--json-input` is not used, `--tag-name`, `--description`, and `--tag-type-name` are all required. The referenced tag type must already exist.
@@ -95,12 +95,12 @@ Permanently delete a tag from VAMS.
 vamscli tag delete <TAG_NAME> [OPTIONS]
 ```
 
-| Option          | Type | Required | Description                     |
-| --------------- | ---- | -------- | ------------------------------- |
-| `TAG_NAME`      | TEXT | Yes      | Tag name to delete (positional) |
-| `--confirm`     | Flag | Yes      | Confirm deletion                |
-| `--database`   | TEXT | No       | The database the tag is scoped to (omit for a GLOBAL tag) |
-| `--json-output` | Flag | No       | Output raw JSON response        |
+| Option          | Type | Required | Description                                               |
+| --------------- | ---- | -------- | --------------------------------------------------------- |
+| `TAG_NAME`      | TEXT | Yes      | Tag name to delete (positional)                           |
+| `--confirm`     | Flag | Yes      | Confirm deletion                                          |
+| `--database`    | TEXT | No       | The database the tag is scoped to (omit for a GLOBAL tag) |
+| `--json-output` | Flag | No       | Output raw JSON response                                  |
 
 :::warning[Confirmation required]
 The `--confirm` flag is required to prevent accidental deletions. Without it, the command exits with an error.
@@ -156,7 +156,7 @@ vamscli tag-type create [OPTIONS]
 | `--description`   | TEXT | Conditional | Tag type description (required unless using `--json-input`) |
 | `--required`      | Flag | No          | Mark this tag type as required for asset classification     |
 | `--json-input`    | TEXT | No          | JSON string or path to a JSON file with tag type data       |
-| `--database`      | TEXT | No          | Scope the tag type to this database (omit for GLOBAL)     |
+| `--database`      | TEXT | No          | Scope the tag type to this database (omit for GLOBAL)       |
 | `--json-output`   | Flag | No          | Output raw JSON response                                    |
 
 When `--json-input` is not used, `--tag-type-name` and `--description` are both required. When `--json-input` is supplied, it provides the tag type data directly and the individual options are not required.
@@ -196,7 +196,7 @@ vamscli tag-type update [OPTIONS]
 | `--description`                 | TEXT | No          | New tag type description                                       |
 | `--required` / `--not-required` | Flag | No          | Update the required flag                                       |
 | `--json-input`                  | TEXT | No          | JSON string or path to a JSON file with tag type data          |
-| `--database`      | TEXT | No          | Scope the tag type to this database (omit for GLOBAL)     |
+| `--database`                    | TEXT | No          | Scope the tag type to this database (omit for GLOBAL)          |
 | `--json-output`                 | Flag | No          | Output raw JSON response                                       |
 
 When not using `--json-input`, `--tag-type-name` is required and at least one of `--description` or `--required` / `--not-required` must be provided. The command retrieves the current tag type first and preserves any field not supplied.
@@ -218,12 +218,12 @@ Permanently delete a tag type from VAMS.
 vamscli tag-type delete <TAG_TYPE_NAME> [OPTIONS]
 ```
 
-| Option          | Type | Required | Description                          |
-| --------------- | ---- | -------- | ------------------------------------ |
-| `TAG_TYPE_NAME` | TEXT | Yes      | Tag type name to delete (positional) |
-| `--confirm`     | Flag | Yes      | Confirm deletion                     |
-| `--database`   | TEXT | No       | The database the tag is scoped to (omit for a GLOBAL tag) |
-| `--json-output` | Flag | No       | Output raw JSON response             |
+| Option          | Type | Required | Description                                               |
+| --------------- | ---- | -------- | --------------------------------------------------------- |
+| `TAG_TYPE_NAME` | TEXT | Yes      | Tag type name to delete (positional)                      |
+| `--confirm`     | Flag | Yes      | Confirm deletion                                          |
+| `--database`    | TEXT | No       | The database the tag is scoped to (omit for a GLOBAL tag) |
+| `--json-output` | Flag | No       | Output raw JSON response                                  |
 
 :::warning[Confirmation required]
 The `--confirm` flag is required to prevent accidental deletions. A tag type that is currently in use by one or more tags cannot be deleted; delete those tags first.

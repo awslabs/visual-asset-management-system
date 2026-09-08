@@ -227,6 +227,12 @@ paths:
                                         description: "Token for pagination"
                                 required:
                                     - Items
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -234,8 +240,8 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/listMaxItemsParam"
+              - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
@@ -971,6 +977,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -1109,7 +1121,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/listCognitoUsersResponse'
                 "400":
-                    description: Invalid pagination parameters.
+                    description: Invalid pagination parameters, or Cognito user management is not available (Cognito is not enabled in this deployment).
                     content:
                         application/json:
                             schema:
@@ -1122,12 +1134,6 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "503":
-                    description: Cognito user management is not available (Cognito not enabled).
                     content:
                         application/json:
                             schema:
@@ -1173,7 +1179,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/cognitoUserOperationResponse'
                 "400":
-                    description: Invalid parameters or user already exists.
+                    description: Invalid parameters, user already exists, or Cognito user management is not available (Cognito is not enabled in this deployment).
                     content:
                         application/json:
                             schema:
@@ -1186,12 +1192,6 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "503":
-                    description: Cognito user management is not available (Cognito not enabled).
                     content:
                         application/json:
                             schema:
@@ -1216,7 +1216,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/cognitoUserOperationResponse'
                 "400":
-                    description: Invalid parameters or no fields provided for update.
+                    description: Invalid parameters, no fields provided for update, the user does not exist, or Cognito user management is not available (Cognito is not enabled in this deployment).
                     content:
                         application/json:
                             schema:
@@ -1227,20 +1227,8 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-                "404":
-                    description: User not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "503":
-                    description: Cognito user management is not available (Cognito not enabled).
                     content:
                         application/json:
                             schema:
@@ -1265,7 +1253,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/cognitoUserOperationResponse'
                 "400":
-                    description: Invalid userId parameter.
+                    description: Invalid userId parameter, the user does not exist, or Cognito user management is not available (Cognito is not enabled in this deployment).
                     content:
                         application/json:
                             schema:
@@ -1276,20 +1264,8 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-                "404":
-                    description: User not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "503":
-                    description: Cognito user management is not available (Cognito not enabled).
                     content:
                         application/json:
                             schema:
@@ -1321,7 +1297,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/cognitoUserOperationResponse'
                 "400":
-                    description: Invalid parameters or confirmation not provided.
+                    description: Invalid parameters, confirmation not provided, the user does not exist, or Cognito user management is not available (Cognito is not enabled in this deployment).
                     content:
                         application/json:
                             schema:
@@ -1332,20 +1308,8 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-                "404":
-                    description: User not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "503":
-                    description: Cognito user management is not available (Cognito not enabled).
                     content:
                         application/json:
                             schema:
@@ -1397,6 +1361,12 @@ paths:
                     description: OK
                 "400":
                     description: No asset ID in API call.
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -1415,8 +1385,22 @@ paths:
                 description: "Show deleted comments flag."
                 schema:
                     type: boolean
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - name: maxItems
+                in: query
+                description: "Max number of comments that can be returned. Default is 10000; a larger value is reduced to 30000"
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 30000
+                    default: 10000
+              - name: pageSize
+                in: query
+                description: "Number of comments to be returned per page. Default is 10000; a larger value is reduced to 10000"
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 10000
+                    default: 10000
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
@@ -1428,6 +1412,12 @@ paths:
                     description: OK
                 "400":
                     description: No asset ID in API call.
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -1462,6 +1452,12 @@ paths:
                     description: OK
                 "400":
                     description: No asset ID in API call.
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -1630,6 +1626,18 @@ paths:
                                         description: "Token for pagination"
                                 required:
                                     - Items
+                "400":
+                    description: Invalid pagination parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -1637,8 +1645,22 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - name: maxItems
+                in: query
+                description: "Max number of databases that can be returned. Default is 10000; a value above 30000 is rejected with 400"
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 30000
+                    default: 10000
+              - name: pageSize
+                in: query
+                description: "Number of databases to be returned per page. Default is 10000; a value above 10000 is rejected with 400"
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 10000
+                    default: 10000
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
@@ -1652,6 +1674,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/database"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
                     description: Database not found.
                     content:
@@ -1664,10 +1692,6 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
         put:
             summary: "Update a database."
             description: "Update an existing database's description, default bucket, or configuration options. At least one field must be provided for update."
@@ -1757,6 +1781,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/getBucketsResponse"
+                "400":
+                    description: Invalid pagination parameters or continuation token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
                     content:
@@ -1770,8 +1800,22 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - name: maxItems
+                in: query
+                description: "Max number of bucket configurations that can be returned. Default is 3000; a value above 30000 is rejected with 400"
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 30000
+                    default: 3000
+              - name: pageSize
+                in: query
+                description: "Number of bucket configurations to be returned per page. Default is 3000; a value above 10000 is rejected with 400"
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 10000
+                    default: 3000
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
@@ -1781,8 +1825,14 @@ paths:
             responses:
                 "200":
                     description: OK
-                "404":
-                    description: Database not found.
+                "400":
+                    description: Invalid databaseId or query parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
                     content:
                         application/json:
                             schema:
@@ -1794,6 +1844,9 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
         parameters:
+            - $ref: "#/components/parameters/listMaxItemsParam"
+            - $ref: "#/components/parameters/listPageSizeParam"
+            - $ref: "#/components/parameters/startingTokenParam"
             - name: "databaseId"
               in: "path"
               description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
@@ -1816,8 +1869,14 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/asset"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR asset not found.
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -2017,23 +2076,14 @@ paths:
                         - Version parameters are not allowed for assetPreview downloads.
                         - No download URLs could be generated for the requested files (bulk request where every path was invalid).
                         - Ambiguous alias: multiple versions share this alias.
+                        - Asset, asset version, or file not found (also when no asset version carries the specified alias).
+                        - Asset not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-                "401":
-                    description: Asset not distributable.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: |
-                        Not found. Possible reasons:
-                        - Database OR Asset not found.
-                        - Asset version not found for asset.
-                        - File not found in asset version.
-                        - No asset version found with the specified alias.
+                "403":
+                    description: Not authorized.
                     content:
                         application/json:
                             schema:
@@ -2454,7 +2504,7 @@ paths:
                 "404":
                     description: |
                         Not found. Possible reasons:
-                        - Database, asset, or file not found.
+                        - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
                         - No asset version found with the specified alias.
@@ -2577,7 +2627,7 @@ paths:
                 "404":
                     description: |
                         Not found. Possible reasons:
-                        - Database, asset, or file not found.
+                        - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
                         - No asset version found with the specified alias.
@@ -2722,7 +2772,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, asset, or file not found.
+                    description: Asset or file not found.
                     content:
                         application/json:
                             schema:
@@ -2817,7 +2867,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, asset, or file not found.
+                    description: Asset or file not found.
                     content:
                         application/json:
                             schema:
@@ -2860,14 +2910,14 @@ paths:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/listAssetFilesResponse"
-                "403":
-                    description: Database OR Asset OR Version not found.
+                "400":
+                    description: Invalid parameters, or asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-                "404":
-                    description: Database OR Asset OR Version not found.
+                "403":
+                    description: Not authorized.
                     content:
                         application/json:
                             schema:
@@ -2881,20 +2931,20 @@ paths:
             parameters:
               - name: maxItems
                 in: query
-                description: "Maximum number of items to return. Default is 200 for full mode, 1500 for basic mode. Maximum allowed is 1500."
+                description: "Maximum number of items to return. Default is 10000. Bounds only the supplemental archived-marker listing; the current-file listing pages by pageSize and NextToken."
                 required: false
                 schema:
                     type: integer
                     minimum: 1
-                    maximum: 1500
+                    maximum: 30000
               - name: pageSize
                 in: query
-                description: "Number of items per page. Default is 200 for full mode, 1500 for basic mode. Maximum allowed is 1500."
+                description: "Number of items per page. Default is 100 for full mode, 1500 for basic mode."
                 required: false
                 schema:
                     type: integer
                     minimum: 1
-                    maximum: 1500
+                    maximum: 10000
               - $ref: "#/components/parameters/startingTokenParam"
               - name: databaseId
                 in: path
@@ -3619,6 +3669,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/getVersions:
         get:
             summary: "Get all versions for an asset."
+            description: "List the versions of an asset. maxItems and pageSize both default to 1000, which is also the ceiling for each; a larger value is rejected with 400."
             responses:
                 "200":
                     description: OK
@@ -4748,7 +4799,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Pipeline not found.
+                    description: Pipeline not found.
                     content:
                         application/json:
                             schema:
@@ -4789,6 +4840,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "404":
+                    description: Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -4796,9 +4853,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -4845,8 +4899,8 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/pipelineWorkflowMaxItemsParam'
+              - $ref: '#/components/parameters/pipelineWorkflowPageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
               - name: databaseId
                 in: path
@@ -4892,7 +4946,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database not found.
+                    description: A referenced pipeline was not found.
                     content:
                         application/json:
                             schema:
@@ -4948,9 +5002,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -5001,7 +5052,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Workflow not found.
+                    description: Workflow not found, or a referenced pipeline was not found.
                     content:
                         application/json:
                             schema:
@@ -5055,9 +5106,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -5100,7 +5148,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Workflow not found.
+                    description: Workflow not found.
                     content:
                         application/json:
                             schema:
@@ -5147,7 +5195,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, Workflow, OR Trigger not found.
+                    description: Workflow or trigger not found.
                     content:
                         application/json:
                             schema:
@@ -5213,7 +5261,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Workflow not found.
+                    description: Workflow not found.
                     content:
                         application/json:
                             schema:
@@ -5263,7 +5311,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, Workflow, OR Trigger not found.
+                    description: Workflow or trigger not found.
                     content:
                         application/json:
                             schema:
@@ -6135,8 +6183,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 schema:
                     type: string
                     enum: [databaseMetadata, assetMetadata, fileMetadata, fileAttribute, assetLinkMetadata]
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/listMaxItemsParam'
+              - $ref: '#/components/parameters/listPageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
             security:
                 - DefaultCognitoAuthorizer: []
@@ -6259,8 +6307,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/pipelineWorkflowMaxItemsParam"
+              - $ref: "#/components/parameters/pipelineWorkflowPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
               - name: includeArchived
                 in: query
@@ -6310,8 +6358,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/pipelineWorkflowMaxItemsParam"
+              - $ref: "#/components/parameters/pipelineWorkflowPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
               - name: databaseId
                 in: path
@@ -6357,12 +6405,6 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
                     content:
                         application/json:
                             schema:
@@ -6429,7 +6471,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Pipeline not found.
+                    description: Pipeline not found.
                     content:
                         application/json:
                             schema:
@@ -6509,7 +6551,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database OR Pipeline not found.
+                    description: Pipeline not found.
                     content:
                         application/json:
                             schema:
@@ -6559,7 +6601,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, Pipeline, OR Template not found.
+                    description: Pipeline or template not found.
                     content:
                         application/json:
                             schema:
@@ -6620,7 +6662,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, Pipeline, OR Template not found.
+                    description: Pipeline or template not found.
                     content:
                         application/json:
                             schema:
@@ -6680,7 +6722,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, Pipeline, OR Template not found.
+                    description: Pipeline or template not found.
                     content:
                         application/json:
                             schema:
@@ -6736,7 +6778,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, Pipeline, OR Template not found.
+                    description: Pipeline or template not found.
                     content:
                         application/json:
                             schema:
@@ -6797,7 +6839,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Database, Pipeline, OR Template not found.
+                    description: Pipeline or template not found.
                     content:
                         application/json:
                             schema:
@@ -6857,8 +6899,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/listMaxItemsParam"
+              - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
@@ -7001,8 +7043,20 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - name: maxItems
+                in: query
+                description: "Max number of subscriptions that can be returned. Default is 10000; no maximum is enforced"
+                schema:
+                    type: integer
+                    minimum: 1
+                    default: 10000
+              - name: pageSize
+                in: query
+                description: "Number of subscriptions to be returned per page. Default is 10000; no maximum is enforced"
+                schema:
+                    type: integer
+                    minimum: 1
+                    default: 10000
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
@@ -7029,10 +7083,6 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
         post:
@@ -7138,8 +7188,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/listMaxItemsParam"
+              - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
               - name: databaseId
                 in: query
@@ -7317,8 +7367,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/listMaxItemsParam"
+              - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
               - name: databaseId
                 in: query
@@ -7519,8 +7569,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters: 
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/listMaxItemsParam"
+              - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
@@ -7780,8 +7830,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/pipelineWorkflowMaxItemsParam'
+              - $ref: '#/components/parameters/pipelineWorkflowPageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
               - in: query
                 name: hasTriggers
@@ -8237,7 +8287,8 @@ Several triggers of one type are supported: address each with its own key ('<typ
 
                 Reconstruction runs before the re-launch and can refuse on its own. A configuration
                 value that was too large to record in full on the original run — a pipeline step's
-                template tag values, or the custom configuration body of a template-less step — cannot
+                template tag values, the custom configuration body of a template-less step, or the
+                execution's metadata source asset list — cannot
                 be reproduced exactly, so the re-run is answered 400 instead of launching a run that
                 differs from the original. Start a new execution supplying those values.
             parameters:
@@ -14503,7 +14554,7 @@ components:
       pageSizeParam:
         name: pageSize
         in: query
-        description: "Number of items to be returned per page. Default is 100"
+        description: "Number of items to be returned per page. Default is 100 for the metadata listings; the asset-version listing shares this component and states its own default of 1000 in its operation description"
         schema:
             type: integer
             minimum: 1
@@ -14583,3 +14634,39 @@ components:
             minimum: 1
             maximum: 10000
             default: 3000
+      listMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Max number of items that can be returned. Default is 30000, which is also the ceiling. Most listings reject a larger value with 400; the roles, tags and tag types listings reduce it to the ceiling instead."
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 30000
+            default: 30000
+      listPageSizeParam:
+        name: pageSize
+        in: query
+        description: "Number of items to be returned per page. Default is 3000, ceiling 10000. Most listings reject a larger value with 400; the roles, tags and tag types listings reduce it to the ceiling instead."
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 3000
+      pipelineWorkflowMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Max number of pipelines or workflows that can be returned in one page. Default is 100, clamped to 500; follow NextToken for the rest"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      pipelineWorkflowPageSizeParam:
+        name: pageSize
+        in: query
+        description: "Number of pipelines or workflows to be returned per page. Default is 100, clamped to maxItems and to 500"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100

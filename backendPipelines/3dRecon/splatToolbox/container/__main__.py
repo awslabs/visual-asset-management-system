@@ -359,18 +359,29 @@ RESERVED_CONFIG_KEYS = frozenset({
 })
 
 
+class ConfigAllowlistError(RuntimeError):
+    """The runtime allowlist `config.json` could not be read, so no config key can be exported."""
+
+
 def set_config_parameters(params: dict, metadata: dict):
     """
     Set environment variables for valid config parameters.
     Metadata takes priority over parameters if both exist.
     """
-    # Load valid config parameters
+    # The runtime allowlist decides which keys may be exported. Without it there is no way to tell a
+    # legal setting from an arbitrary metadata key, so the launch stops here instead of running on
+    # upstream defaults and reporting success.
+    allowlist_path = os.path.abspath('config.json')
     try:
-        with open('config.json', 'r') as f:
-            config_keys = set(json.load(f).keys())
-    except:
-        print("Warning: Could not load config.json")
-        return
+        with open(allowlist_path, 'r') as f:
+            allowlist = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigAllowlistError(
+            f"Could not load the config allowlist at {allowlist_path}: {e}") from e
+    if not isinstance(allowlist, dict):
+        raise ConfigAllowlistError(
+            f"The config allowlist at {allowlist_path} is not a JSON object")
+    config_keys = set(allowlist.keys())
 
     params = params if isinstance(params, dict) else {}
     metadata = metadata if isinstance(metadata, dict) else {}

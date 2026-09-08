@@ -56,6 +56,10 @@ WRITE_TOOLS = (
     "update_subscription",
     "create_metadata_schema",
     "update_metadata_schema",
+    "create_api_key",
+    "create_user_api_key",
+    "update_api_key",
+    "update_user_api_key",
 )
 
 DESTRUCTIVE_TOOLS = (
@@ -74,6 +78,8 @@ DESTRUCTIVE_TOOLS = (
     "delete_subscription",
     "unsubscribe",
     "delete_metadata_schema",
+    "delete_api_key",
+    "delete_user_api_key",
 )
 
 GATE_VARS = ("VAMS_ENABLE_WRITES", "VAMS_ENABLE_DESTRUCTIVE")
@@ -542,3 +548,96 @@ async def test_the_module_is_restored_to_the_default_gates_afterwards():
     names = {tool.name for tool in await server_module.mcp.list_tools()}
     for gated_name in ("create_asset", "delete_asset", "abort_execution"):
         assert gated_name not in names
+
+
+# --- API keys ---------------------------------------------------------------
+
+
+def test_create_api_key_payload_keys_and_optional_expiry(gated):
+    """The administrative create carries the acting userId; the expiry is sent only when given, so an
+    omitted expiry reaches the handler as 'never expires' rather than as an empty string it rejects."""
+    mod, client = gated
+    mod.create_api_key("ci", "bot@example.com", "automation")
+    client.api.create_api_key.assert_called_once_with(
+        {"apiKeyName": "ci", "userId": "bot@example.com", "description": "automation"}
+    )
+    client.api.create_api_key.reset_mock()
+    mod.create_api_key("ci", "bot@example.com", "automation", expires_at="2026-12-31T23:59:59Z")
+    payload = client.api.create_api_key.call_args.args[0]
+    assert payload["expiresAt"] == "2026-12-31T23:59:59Z"
+
+
+def test_create_user_api_key_sends_the_required_expiry_and_no_user_id(gated):
+    """The self-service create binds the key to the caller server-side: sending a userId would be
+    ignored at best, so the payload must not carry one, and the expiry the model requires must."""
+    mod, client = gated
+    mod.create_user_api_key("ci", "automation", "2026-12-31T23:59:59Z")
+    client.api.create_user_api_key.assert_called_once_with(
+        {"apiKeyName": "ci", "description": "automation", "expiresAt": "2026-12-31T23:59:59Z"}
+    )
+    assert "userId" not in client.api.create_user_api_key.call_args.args[0]
+
+
+def test_create_api_key_returns_the_one_time_key_unaltered(gated):
+    """The value is shown once; the tool must not strip or rename it on the way through."""
+    mod, client = gated
+    client.api.create_api_key.return_value = {"apiKeyId": "k1", "apiKey": "vams_secret_once"}
+    result = mod.create_api_key("ci", "bot@example.com", "automation")
+    assert result["apiKey"] == "vams_secret_once"
+
+
+@pytest.mark.parametrize("tool,method", [("update_api_key", "update_api_key"),
+                                         ("update_user_api_key", "update_user_api_key")])
+def test_update_api_key_maps_the_boolean_to_the_models_string_and_omits_unset_fields(gated, tool, method):
+    """UpdateApiKeyRequestModel declares isActive as the string 'true'/'false'; a Python bool sent
+    raw fails its regex. Unset arguments must be absent, not None, or the model rejects them."""
+    mod, client = gated
+    getattr(mod, tool)("k1", is_active=False)
+    getattr(client.api, method).assert_called_once_with("k1", {"isActive": "false"})
+    getattr(client.api, method).reset_mock()
+    getattr(mod, tool)("k1", description="rotated", expires_at="2027-01-01T00:00:00Z", is_active=True)
+    getattr(client.api, method).assert_called_once_with(
+        "k1", {"description": "rotated", "expiresAt": "2027-01-01T00:00:00Z", "isActive": "true"}
+    )
+
+
+def test_update_api_key_forwards_an_empty_expiry_so_the_admin_scope_can_clear_it(gated):
+    mod, client = gated
+    mod.update_api_key("k1", expires_at="")
+    client.api.update_api_key.assert_called_once_with("k1", {"expiresAt": ""})
+
+
+@pytest.mark.parametrize("tool,method", [("delete_api_key", "delete_api_key"),
+                                         ("delete_user_api_key", "delete_user_api_key")])
+def test_delete_api_key_forwards_the_id_to_the_matching_scope(gated, tool, method):
+    mod, client = gated
+    client.api.__getattr__(method).return_value = {"message": "deleted"}
+    assert getattr(mod, tool)("k1") == {"message": "deleted"}
+    getattr(client.api, method).assert_called_once_with("k1")
+    other = "delete_user_api_key" if method == "delete_api_key" else "delete_api_key"
+    getattr(client.api, other).assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "tool,fragment",
+    [
+        ("create_api_key", "only time"),
+        ("create_api_key", "bearer credential"),
+        ("create_api_key", "autoApprove"),
+        ("create_user_api_key", "one time"),
+        ("create_user_api_key", "autoApprove"),
+        ("create_user_api_key", "365 days"),
+        ("update_api_key", "is_active=False"),
+        ("update_api_key", "REVERSIBLE"),
+        ("update_user_api_key", "365 days"),
+        ("delete_api_key", "Irreversible"),
+        ("delete_api_key", "is_active=False"),
+        ("delete_user_api_key", "Irreversible"),
+    ],
+)
+def test_api_key_tool_docstrings_state_the_exposure_and_the_reversible_alternative(enabled_server, tool, fragment):
+    """The agent reads the docstring as the contract: the one-time key value is a credential that
+    lands in the transcript, and disabling is the reversible form of revoking."""
+    docstring = getattr(enabled_server, tool).__doc__ or ""
+    assert docstring, f"{tool} has no docstring, so this assertion would be vacuous"
+    assert fragment in docstring, f"{tool} docstring does not say {fragment!r}"

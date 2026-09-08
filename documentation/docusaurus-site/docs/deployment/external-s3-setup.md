@@ -58,14 +58,14 @@ External buckets are defined in the VAMS CDK configuration file at `infra/config
 
 Each entry in the `externalAssetBuckets` array supports the following fields:
 
-| Field                   | Type   | Required                            | Description                                                                                                                                           |
-| ----------------------- | ------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bucketArn`             | String | Yes                                 | The full Amazon Resource Name (ARN) of the external S3 bucket.                                                                                        |
-| `baseAssetsPrefix`      | String | Yes                                 | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root.                                                   |
-| `defaultSyncDatabaseId` | String | Yes                                 | The VAMS database ID that assets discovered in this bucket are assigned to.                                                                           |
-| `bucketAccountId`       | String | Recommended for cross-account       | The 12-digit AWS account ID that owns the bucket. Enables VAMS to import the bucket as cross-account and to scope event-notification source policies. |
-| `bucketRegion`          | String | Optional                            | The AWS Region of the bucket. **Must equal the VAMS deployment Region** — Amazon S3 requires an event-notification destination to be in the bucket's Region, and VAMS creates its notification topics in the deployment Region. Defaults to the deployment Region when omitted; a differing value is rejected at synth. |
-| `bucketKmsKeyArn`       | String | Required if the bucket uses SSE-KMS | The ARN of the AWS KMS key the bucket is encrypted with. VAMS grants this key to its Lambda and pipeline roles so they can read and write objects.    |
+| Field                   | Type    | Required                            | Description                                                                                                                                                                                                                                                                                                                     |
+| ----------------------- | ------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucketArn`             | String  | Yes                                 | The full Amazon Resource Name (ARN) of the external S3 bucket.                                                                                                                                                                                                                                                                  |
+| `baseAssetsPrefix`      | String  | Yes                                 | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root.                                                                                                                                                                                                                             |
+| `defaultSyncDatabaseId` | String  | Yes                                 | The VAMS database ID that assets discovered in this bucket are assigned to.                                                                                                                                                                                                                                                     |
+| `bucketAccountId`       | String  | Recommended for cross-account       | The 12-digit AWS account ID that owns the bucket. Enables VAMS to import the bucket as cross-account and to scope event-notification source policies.                                                                                                                                                                           |
+| `bucketRegion`          | String  | Optional                            | The AWS Region of the bucket. **Must equal the VAMS deployment Region** — Amazon S3 requires an event-notification destination to be in the bucket's Region, and VAMS creates its notification topics in the deployment Region. Defaults to the deployment Region when omitted; a differing value is rejected at synth.         |
+| `bucketKmsKeyArn`       | String  | Required if the bucket uses SSE-KMS | The ARN of the AWS KMS key the bucket is encrypted with. VAMS grants this key to its Lambda and pipeline roles so they can read and write objects.                                                                                                                                                                              |
 | `isDefault`             | Boolean | Required if no bucket is created    | Marks this bucket as the VAMS default asset bucket, which holds every pipeline template body and all workflow run I/O. At most one entry may set it to `true`. When `app.assetBuckets.createNewBucket` is `false`, exactly one entry must set it; when a bucket is created, an entry that sets it overrides the created bucket. |
 
 :::note[Registering a bucket under multiple prefixes]
@@ -505,14 +505,14 @@ The `assetId` is a unique identifier generated by VAMS (or specified by the user
 
 VAMS reserves several prefixes within the `baseAssetsPrefix` for internal use:
 
-| Prefix                                         | Purpose          | Description                                                              |
-| ---------------------------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `{baseAssetsPrefix}{assetId}/`             | Asset files      | All files belonging to an asset, including subdirectories                |
-| `{baseAssetsPrefix}previews/{assetId}/`    | File previews    | Thumbnail and preview images generated by pipelines or uploaded manually |
-| `{baseAssetsPrefix}temp-uploads/`            | Upload staging   | Temporary storage for multipart uploads; cleaned up after completion     |
-| `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/` | Pipeline outputs | Files, previews, metadata, and results a pipeline produced, in a per-execution folder holding `files/`, `previews/`, `metadata/`, and `results/`. Written only in the bucket registered as the default (`isDefault`) |
-| `{baseAssetsPrefix}pipelines/workflowExecutionInputs/{executionId}/` | Execution inputs | Resolved manifest, per-step configuration body, and metadata envelope for one workflow execution. Written only in the bucket registered as the default (`isDefault`) |
-| `{baseAssetsPrefix}pipelines/templates/{databaseId}/{pipelineId}/{templateId}/` | Pipeline template bodies | Configuration body, web form, and tag schema of a pipeline template too large to store inline. Written only in the bucket registered as the default (`isDefault`) |
+| Prefix                                                                          | Purpose                  | Description                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{baseAssetsPrefix}{assetId}/`                                                  | Asset files              | All files belonging to an asset, including subdirectories                                                                                                                                                            |
+| `{baseAssetsPrefix}previews/{assetId}/`                                         | File previews            | Thumbnail and preview images generated by pipelines or uploaded manually                                                                                                                                             |
+| `{baseAssetsPrefix}temp-uploads/`                                               | Upload staging           | Temporary storage for multipart uploads; cleaned up after completion                                                                                                                                                 |
+| `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/`    | Pipeline outputs         | Files, previews, metadata, and results a pipeline produced, in a per-execution folder holding `files/`, `previews/`, `metadata/`, and `results/`. Written only in the bucket registered as the default (`isDefault`) |
+| `{baseAssetsPrefix}pipelines/workflowExecutionInputs/{executionId}/`            | Execution inputs         | Resolved manifest, per-step configuration body, and metadata envelope for one workflow execution. Written only in the bucket registered as the default (`isDefault`)                                                 |
+| `{baseAssetsPrefix}pipelines/templates/{databaseId}/{pipelineId}/{templateId}/` | Pipeline template bodies | Configuration body, web form, and tag schema of a pipeline template too large to store inline. Written only in the bucket registered as the default (`isDefault`)                                                    |
 
 Workflow run I/O — the execution input definitions and every pipeline output — is written inside the default bucket's `baseAssetsPrefix`, alongside asset files and template bodies. A bucket policy scoped to `{baseAssetsPrefix}*` therefore covers every object VAMS writes, including workflow executions; no additional statement for `pipelines/*` at the bucket root is needed. When the default bucket is registered with an empty prefix or `/`, the run area sits at the bucket root and `pipelines/*` is that same area.
 
@@ -520,10 +520,10 @@ The run area is shared across the deployment: one execution resolves a single de
 
 The auxiliary bucket (a separate bucket managed by VAMS) stores:
 
-| Prefix                                 | Purpose        | Description                                                                |
-| -------------------------------------- | -------------- | -------------------------------------------------------------------------- |
+| Prefix                             | Purpose        | Description                                                                |
+| ---------------------------------- | -------------- | -------------------------------------------------------------------------- |
 | `metadata/{databaseId}/{assetId}/` | Metadata files | Metadata files produced by pipelines (JSON, XMP)                           |
-| `{assetId}/`                         | Viewer data    | Non-versioned data for specific viewers (for example, Potree octree files) |
+| `{assetId}/`                       | Viewer data    | Non-versioned data for specific viewers (for example, Potree octree files) |
 
 ### How databases, buckets, and assets relate
 

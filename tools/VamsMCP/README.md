@@ -89,6 +89,8 @@ secrets** — just the command:
             "disabled": false,
             "autoApprove": [
                 "list_allowed_api_routes",
+                "list_api_routes",
+                "list_constraint_permission_objects",
                 "list_databases",
                 "get_database",
                 "list_assets",
@@ -111,13 +113,13 @@ To use a non-default profile, add `"env": { "VAMS_PROFILE": "myprofile" }`.
 
 ### Read / search (always available)
 
-`list_allowed_api_routes`, `list_databases`, `get_database`, `list_buckets`,
-`list_assets`, `get_asset`, `list_asset_files`, `get_asset_metadata`,
-`get_database_metadata`, `list_asset_versions`, `get_asset_version`,
-`get_asset_history`, `get_asset_links`, `search_assets`, `search_files`,
-`get_search_fields`, `list_workflows`, `list_workflow_executions`, `list_tags`,
-`list_tag_types`, `list_metadata_schemas`, `generate_download_url`,
-`find_and_summarize`.
+`list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
+`list_databases`, `get_database`, `list_buckets`, `list_assets`, `get_asset`,
+`list_asset_files`, `get_asset_metadata`, `get_database_metadata`,
+`list_asset_versions`, `get_asset_version`, `get_asset_history`, `get_asset_links`,
+`search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
+`list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,
+`generate_download_url`, `generate_download_urls_bulk`, `find_and_summarize`.
 
 `list_tags` and `list_tag_types` accept an optional `database` (return ONLY that
 database's tags/tag types — global ones are not included) and `scope` (`global`
@@ -132,7 +134,7 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
-`check_subscription`, `get_api_key`, `get_user_api_key`.
+`check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination
@@ -220,6 +222,25 @@ database whose id is a hyphen-token prefix of another (`proj` vs `proj-archive`)
 does not leak into the results; `GLOBAL` is not an asset database and is treated
 as unscoped.
 
+`list_api_routes` and `list_constraint_permission_objects` are the two
+vocabularies a permission constraint is written in, and neither is scoped to the
+caller: the first returns every API route (`path`, `methods`, `category`,
+`unauthenticated`) that an `api` constraint can name, the second the
+`objectTypes` (with the `fields` a criterion may test), `operators`,
+`permissions`, and `permissionTypes` as `{label, value}` pairs — send the
+`value`. Both are fixed per deployment. `list_allowed_api_routes` remains the
+one that says what this session may do.
+
+`generate_download_urls_bulk` signs up to 1500 files of one asset in a single
+request. `file_keys` entries are either a relative path (latest version) or
+`{"key", "versionId"}`; `asset_version_id` / `asset_version_alias` pin every key
+to an asset version instead, and cannot be combined with per-key versionIds. The
+response is per file: each `files[]` entry carries `success` and either
+`downloadUrl` + `versionId` or `error`. A missing or non-downloadable path is
+skipped with `success: false` while the call itself succeeds, so read every
+entry rather than the top-level `downloadUrl`, which is only the first signed
+URL.
+
 **Every paginated list tool is BOUNDED.** The walk stops at `max_items`, or at the
 `VAMS_MAX_PAGES` work bound, whichever comes first. The result then carries
 `truncated: true`, a `note` naming which bound fired, and — when a continuation
@@ -281,6 +302,23 @@ no-op, rejecting the whole call.
 bare list, and `update_metadata_schema` replaces the whole field list rather than
 merging into it — send the complete set.
 
+API keys: `create_api_key`, `create_user_api_key`, `update_api_key`,
+`update_user_api_key`.
+
+`create_api_key` and `create_user_api_key` return the key VALUE (`apiKey`) in
+their response, and that is the only time VAMS ever shows it — a hash is stored,
+the value is not. The value is a bearer credential carrying every permission of
+the user the key acts as, and because it is returned as tool output it lands in
+the host's conversation log and telemetry. Keep both create tools out of
+`autoApprove`, and relay the value to the user once rather than repeating it.
+`create_api_key` (administrative) mints a key acting as ANY `user_id`;
+`create_user_api_key` (self-service) always binds the key to the authenticated
+user and requires an expiry within 365 days. `update_*_api_key` with
+`is_active=False` is the reversible revoke: the key stops authenticating until it
+is re-enabled, and nothing is destroyed. A key that authenticated within the last
+~30 seconds keeps working for the rest of that window — the API Gateway authorizer
+caches its decision — while a disabled key not in use is refused on its next call.
+
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
@@ -313,26 +351,42 @@ unrecoverable from an agent's position. `delete_metadata_schema` is not
 reversible and has no archived state; metadata already stored against the schema
 is left in place, unvalidated.
 
+API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
+out every client still presenting the key at once; `update_api_key` /
+`update_user_api_key` with `is_active=False` revokes the same access reversibly
+and is the better first move.
+
 ## Security notes
 
 -   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC).
 -   Writes and destructive tools are **off by default**. Keep destructive tools
     out of `autoApprove`.
--   `generate_download_url` returns a presigned Amazon S3 URL, which is a bearer
-    credential: it needs no further authentication and anyone holding it can
-    download the object until it expires (`app.authProvider.presignedUrlTimeoutSeconds`,
-    24 hours by default). Because it is returned as tool output it also lands in
-    the host's conversation log and telemetry. Where the URL can be used is
-    bounded only by the deployment's
-    `app.assetBuckets.presignedUrlNetworkRestrictions`, which is unset by default.
--   `get_api_key`, `get_user_api_key`, and `list_subscriptions` are reads, but they
-    return credential inventory and user identifiers respectively — API key names
-    and the users they act as, or the subscriber lists behind a deployment's
-    notifications. Neither returns a usable credential, and both are bound by the
-    caller's own route permissions, but their output lands in the host's
-    conversation log like any other, so they are deliberately absent from the
-    `autoApprove` sample above. Creating, updating, and revoking API keys is not
-    exposed by this server at all.
+-   `generate_download_url` and `generate_download_urls_bulk` return presigned Amazon S3 URLs
+    (one per requested file for the bulk tool), each a bearer credential: it
+    needs no further authentication and anyone holding it can download the
+    object until it expires (`app.authProvider.presignedUrlTimeoutSeconds`, 24
+    hours by default). Because they are returned as tool output they also land in
+    the host's conversation log and telemetry, so neither tool is in the
+    `autoApprove` sample above. Where a URL can be used is bounded only by the
+    deployment's `app.assetBuckets.presignedUrlNetworkRestrictions`, which is
+    unset by default.
+-   `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`, and
+    `list_subscriptions` are reads, but they return credential inventory and user
+    identifiers respectively — API key names and the users they act as, or the
+    subscriber lists behind a deployment's notifications. None returns a usable
+    credential, and all are bound by the caller's own route permissions, but their
+    output lands in the host's conversation log like any other, so they are
+    deliberately absent from the `autoApprove` sample above.
+-   `create_api_key` and `create_user_api_key` (write tier) return a real
+    credential: the one-time key VALUE, a bearer token carrying every permission
+    of the user it acts as. It is returned as tool output, so it is recorded
+    wherever the host records tool output. Never place either in `autoApprove`,
+    and treat a transcript that contains one as holding a live secret until the
+    key is disabled (`update_api_key` / `update_user_api_key` with
+    `is_active=False`, reversible) or deleted (`delete_api_key` /
+    `delete_user_api_key`, permanent). The administrative create can mint a key
+    acting as any user the caller's role may name — it is only as safe as the
+    caller's own API-key route permissions.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
 

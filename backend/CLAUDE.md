@@ -11,7 +11,7 @@
 -   **Validation**: Pydantic **1.10.13** (NOT v2) via aws-lambda-powertools
 -   **Auth**: Casbin ABAC/RBAC with DynamoDB policy storage
 -   **ORM**: boto3 DynamoDB resource + client APIs
--   **Search**: OpenSearch (opensearch-py 2.5.0)
+-   **Search**: OpenSearch (opensearch-py 2.7.1)
 -   **Logging**: aws-lambda-powertools Logger with custom redaction
 -   **Tests**: pytest 9.0.3 + moto 5.1.0 (see `backend/tests/CLAUDE.md`)
 -   **Gold Standard**: `backend/handlers/assets/assetService.py` (handler), `backend/models/assetsV3.py` (model)
@@ -858,7 +858,7 @@ New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Stand
 
 ## Key Dependencies
 
-Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.5.0, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
+Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.7.1, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
 
 Dev only: `moto` 5.1.0 (AWS mocks), `pytest` 9.0.3, `mypy` 1.0.0, `flake8` 6.0.0.
 

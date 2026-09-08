@@ -738,6 +738,8 @@ export class SplatToolboxConstruct extends Construct {
         gitHubLink: string,
         gitHubCommitHash: string
     ): void {
+        // Declared outside the try so the finally below can remove it whichever way this exits.
+        let tempDir: string | undefined;
         try {
             const targetDir = path.resolve(
                 __dirname,
@@ -758,11 +760,14 @@ export class SplatToolboxConstruct extends Construct {
             console.log(
                 `Downloading/Syncing Splat Toolbox repository (commit: ${gitHubCommitHash})...`
             );
-            const tempDir = path.join(os.tmpdir(), "splat-toolbox-repo");
-
-            if (fs.existsSync(tempDir)) {
-                fs.rmSync(tempDir, { recursive: true, force: true });
-            }
+            // A UNIQUE directory per invocation, not a fixed "splat-toolbox-repo". A fixed path has to
+            // be deleted before cloning, and on Windows that rmSync fails with EBUSY whenever anything
+            // still holds a file under it -- an antivirus scan, a file watcher, or an interrupted
+            // earlier clone leaving a `tmp_pack_*`. That aborts the whole synth (and therefore any
+            // deploy) before AWS is touched, and the holder need not be a CDK or git process at all,
+            // so it cannot be waited out. A unique directory also removes the race between two
+            // concurrent CDK invocations, where one deletes the tree the other is cloning into.
+            tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "splat-toolbox-"));
 
             // execFileSync with an argument array: no shell, so the repo URL and commit hash are
             // passed to git verbatim rather than interpolated into a command string.
@@ -912,8 +917,6 @@ export class SplatToolboxConstruct extends Construct {
                 assertRecordedPinPosture(finalDockerfile);
             }
 
-            fs.rmSync(tempDir, { recursive: true, force: true });
-
             // Record the commit the local container directory now holds, so a later synth can tell
             // whether the sources match the pinned hash.
             fs.writeFileSync(
@@ -926,11 +929,28 @@ export class SplatToolboxConstruct extends Construct {
             // Fail the synth rather than silently building from whatever is on disk. A stale local
             // container directory would otherwise produce an image that does not match the pinned
             // commit, with no signal that the sync never ran.
+            //
+            // The clone directory is named in the message because the failure is usually about IT, not
+            // about the container directory: an earlier version of this text told the operator to
+            // delete backendPipelines/3dRecon/splatToolbox/container, which is both the wrong directory
+            // and destructive -- VAMS-owned files live there alongside the synced ones.
             throw new Error(
                 `Splat Toolbox container source sync failed for commit ${gitHubCommitHash}. ` +
-                    `The local container directory may be stale or partially written; delete ` +
-                    `backendPipelines/3dRecon/splatToolbox/container and re-run. Cause: ${error}`
+                    `Clone directory: ${tempDir ?? "(not created)"}. If that path or the local ` +
+                    `container directory is locked by another process, the clone cannot proceed. ` +
+                    `Cause: ${error}`
             );
+        } finally {
+            // In a finally so a failed sync does not leave a ~220 MB clone behind on every retry.
+            // force:true makes an already-absent directory a no-op, and a cleanup failure must not
+            // replace the real error, so it is swallowed deliberately rather than by oversight.
+            if (tempDir) {
+                try {
+                    fs.rmSync(tempDir, { recursive: true, force: true });
+                } catch {
+                    /* the clone is in the OS temp directory; leaving it is harmless */
+                }
+            }
         }
     }
 }

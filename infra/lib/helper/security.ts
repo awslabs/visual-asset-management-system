@@ -12,7 +12,7 @@ import * as Config from "../../config/config";
 import { Construct } from "constructs";
 import { Service, IAMArn } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
-import { Stack } from "aws-cdk-lib";
+import { Stack, Token } from "aws-cdk-lib";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as s3AssetBuckets from "./s3AssetBuckets";
 import { readFileSync, rmSync } from "fs";
@@ -463,13 +463,38 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
     return policyStatement;
 }
 
+/**
+ * A deployment-unique, deterministic name fragment: the SHA-1 of the stack name, account and a
+ * resource identifier, truncated.
+ *
+ * Every input must be a resolved string. An unresolved CDK Token (a `functionArn`, a `roleArn`, a
+ * nested stack's `stackName`) stringifies to `${Token[TOKEN.n]}`, where `n` is a process-wide allocation
+ * counter -- so the hash encodes construct-creation ORDER, not the resource, and moves whenever anything
+ * earlier in the tree allocates a different number of tokens. Emitted as a logical id that makes
+ * CloudFormation replace the resource on every deploy; emitted as a `name`, it renames (and so replaces)
+ * the live resource. Two real synths of one unchanged configuration produced different values at every
+ * site that did this, which is why a Token is refused here rather than hashed: a synth-time error names
+ * the call site, a deploy-time replacement names nothing.
+ */
 export function generateUniqueNameHash(
     stackName: string,
     accountId: string,
     resourceIdentifier: string,
     maxLength = 32
 ) {
-    const hash = crypto.getHashes();
+    for (const [label, value] of [
+        ["stackName", stackName],
+        ["accountId", accountId],
+        ["resourceIdentifier", resourceIdentifier],
+    ] as const) {
+        if (Token.isUnresolved(value)) {
+            throw new Error(
+                `generateUniqueNameHash: ${label} is an unresolved CDK Token (${value}). Its string form ` +
+                    `is an allocation counter, not the resource, so the hash would change between synths. ` +
+                    `Pass a resolved string -- the construct's node.path, or a literal that names the resource.`
+            );
+        }
+    }
     const hashPwd = crypto
         .createHash("sha1")
         .update(stackName + accountId + resourceIdentifier)

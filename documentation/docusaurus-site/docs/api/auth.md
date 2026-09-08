@@ -31,11 +31,11 @@ GET /auth/constraints
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                         |
-| --------------- | ------ | -------- | ------- | ----------------------------------------------------------------------------------- |
-| `maxItems`      | number | No       | `30000` | Ceiling on the constraints returned in one response (1-30000).                      |
-| `pageSize`      | number | No       | `3000`  | Constraints per page (1-10000). A value above 3000 is served in 3000-item pages.    |
-| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                             |
+| Parameter       | Type   | Required | Default | Description                                                                      |
+| --------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `30000` | Ceiling on the constraints returned in one response (1-30000).                   |
+| `pageSize`      | number | No       | `3000`  | Constraints per page (1-10000). A value above 3000 is served in 3000-item pages. |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                         |
 
 The page served is the smallest of `pageSize`, `maxItems`, and 3,000 — the bound that keeps a page of whole constraints, each carrying its criteria and permission lists, within the AWS Lambda response limit.
 
@@ -67,11 +67,11 @@ The page served is the smallest of `pageSize`, `maxItems`, and 3,000 — the bou
 
 #### Error responses
 
-| Status | Description                                        |
-| ------ | -------------------------------------------------- |
+| Status | Description                                         |
+| ------ | --------------------------------------------------- |
 | `400`  | `startingToken` is not a token this listing emitted |
-| `403`  | Not authorized                                     |
-| `500`  | Internal server error                              |
+| `403`  | Not authorized                                      |
+| `500`  | Internal server error                               |
 
 ---
 
@@ -609,7 +609,7 @@ This endpoint deletes **all** role assignments for the given `userId`. It does n
 These endpoints manage users in the Amazon Cognito user pool. They are only available when Cognito authentication is enabled in the deployment.
 
 :::note[Cognito required]
-These endpoints return an error if Cognito is not enabled in the deployment configuration (`app.authProvider.useCognito.enabled`).
+These endpoints return `400` with the message `Cognito user management is not available` when Cognito is not enabled in the deployment configuration (`app.authProvider.useCognito.enabled`).
 :::
 
 ### List Cognito users
@@ -620,11 +620,11 @@ GET /user/cognito
 
 #### Query parameters
 
-| Parameter       | Type    | Required | Default | Description                                                        |
-| --------------- | ------- | -------- | ------- | ------------------------------------------------------------------ |
-| `maxItems`      | number  | No       | `60`    | Maximum number of users to return (1-60).                          |
-| `pageSize`      | number  | No       | `60`    | Number of users per page (1-60). Takes precedence over `maxItems`. |
-| `startingToken` | string  | No       | `null`  | Pagination token from a previous response's `NextToken`.           |
+| Parameter       | Type   | Required | Default | Description                                                        |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------ |
+| `maxItems`      | number | No       | `60`    | Maximum number of users to return (1-60).                          |
+| `pageSize`      | number | No       | `60`    | Number of users per page (1-60). Takes precedence over `maxItems`. |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.           |
 
 #### Response
 
@@ -770,11 +770,11 @@ GET /auth/api-keys
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                       |
-| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------- |
-| `maxItems`      | number | No       | `3000`  | Maximum number of keys in one response (1-3000). Values above 3000 are clamped.    |
-| `pageSize`      | number | No       | `1000`  | Number of keys read per page. Clamped to `maxItems`.                              |
-| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                           |
+| Parameter       | Type   | Required | Default | Description                                                                     |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `3000`  | Maximum number of keys in one response (1-3000). Values above 3000 are clamped. |
+| `pageSize`      | number | No       | `1000`  | Number of keys read per page. Clamped to `maxItems`.                            |
+| `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                        |
 
 #### Response
 
@@ -942,8 +942,8 @@ Returns the same response shape as the admin list, filtered to the requesting us
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                    |
-| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
+| Parameter       | Type   | Required | Default | Description                                                                     |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------- |
 | `maxItems`      | number | No       | `3000`  | Maximum number of keys in one response (1-3000). Values above 3000 are clamped. |
 | `pageSize`      | number | No       | `1000`  | Number of keys read per page. Clamped to `maxItems`.                            |
 | `startingToken` | string | No       | `null`  | Pagination token from a previous response's `NextToken`.                        |

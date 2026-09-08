@@ -275,12 +275,12 @@ DELETE /asset-links/{assetLinkId}
 
 ### Error responses
 
-| Status | Description                                                       |
-| ------ | ----------------------------------------------------------------- |
-| `400`  | Invalid parameters or linked assets no longer exist               |
-| `403`  | Not authorized (requires DELETE permission on both linked assets) |
-| `404`  | Asset link not found                                              |
-| `500`  | Internal server error                                             |
+| Status | Description                                                                         |
+| ------ | ----------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters                                                                  |
+| `403`  | Not authorized (requires DELETE permission on every linked asset that still exists) |
+| `404`  | Asset link not found                                                                |
+| `500`  | Internal server error                                                               |
 
 ---
 

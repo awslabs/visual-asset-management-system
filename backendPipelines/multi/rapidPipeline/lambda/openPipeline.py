@@ -207,7 +207,11 @@ def lambda_handler(event, context):
 
     # Loop through responses and see if any have errors; If so return 500 error response
     for response in responses:
-        if "error" in response['body']:
+        # Keyed on the status code, not on an "error" key. Every failure route above appends a
+        # body carrying only "message", so the key test matched nothing and execution fell
+        # through to the success return below -- which dereferences sfn_response, unbound
+        # whenever the failure happened before it was assigned.
+        if response.get('statusCode', 200) >= 400:
             return response
 
     # Return success 200 response

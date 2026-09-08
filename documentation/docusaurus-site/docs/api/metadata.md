@@ -802,24 +802,24 @@ A schema is scoped to one database and one entity type. Use `GLOBAL` as the `dat
 
 ### Entity types
 
-| Entity type           | Applies to                                                                |
-| --------------------- | ------------------------------------------------------------------------- |
-| `databaseMetadata`    | Database-level metadata                                                   |
-| `assetMetadata`       | Asset-level metadata                                                      |
-| `fileMetadata`        | File-level metadata                                                       |
-| `fileAttribute`       | File attributes. Only the `string` value type is accepted on these fields |
-| `assetLinkMetadata`   | Asset-link metadata                                                       |
+| Entity type         | Applies to                                                                |
+| ------------------- | ------------------------------------------------------------------------- |
+| `databaseMetadata`  | Database-level metadata                                                   |
+| `assetMetadata`     | Asset-level metadata                                                      |
+| `fileMetadata`      | File-level metadata                                                       |
+| `fileAttribute`     | File attributes. Only the `string` value type is accepted on these fields |
+| `assetLinkMetadata` | Asset-link metadata                                                       |
 
 ### Field definitions
 
 A schema's `fields` object holds a `fields` array of 1 to 500 field definitions. Field key names must be unique within a schema.
 
-| Field                       | Type          | Required | Description                                                                                                                                                    |
-| --------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Field                       | Type          | Required | Description                                                                                                                                                     |
+| --------------------------- | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `metadataFieldKeyName`      | string        | Yes      | Field key name (1-256 chars). Matches the `metadataKey` of the metadata record it governs.                                                                      |
 | `metadataFieldValueType`    | string        | Yes      | One of the [supported value types](#supported-value-types). Accepted case-insensitively.                                                                        |
-| `required`                  | boolean       | No       | Whether a value must be supplied for this field. Defaults to `false`.                                                                                          |
-| `sequence`                  | number        | No       | Display order, 0-based; lower numbers appear first.                                                                                                            |
+| `required`                  | boolean       | No       | Whether a value must be supplied for this field. Defaults to `false`.                                                                                           |
+| `sequence`                  | number        | No       | Display order, 0-based; lower numbers appear first.                                                                                                             |
 | `dependsOnFieldKeyName`     | array[string] | No       | Field key names this field depends on, at most 500 entries of 256 characters each.                                                                              |
 | `controlledListKeys`        | array[string] | No       | Allowed values, at most 1,000 entries of 256 characters each. Required when `metadataFieldValueType` is `inline_controlled_list`, and rejected for other types. |
 | `defaultMetadataFieldValue` | string        | No       | Default value. Validated against `metadataFieldValueType`, and for a controlled list must be one of `controlledListKeys`.                                       |
@@ -836,13 +836,13 @@ GET /metadataschema
 
 #### Query parameters
 
-| Parameter            | Type   | Required | Default | Description                                                                    |
-| -------------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
-| `databaseId`         | string | No       | `null`  | Return only the schemas scoped to this database. `GLOBAL` is accepted.          |
-| `metadataEntityType` | string | No       | `null`  | Return only the schemas for this entity type. Accepted case-insensitively.      |
-| `maxItems`           | number | No       | `30000` | Maximum number of items to return                                              |
-| `pageSize`           | number | No       | `3000`  | Number of items per page                                                       |
-| `startingToken`      | string | No       | `null`  | Pagination token from a previous response's `NextToken`                         |
+| Parameter            | Type   | Required | Default | Description                                                                |
+| -------------------- | ------ | -------- | ------- | -------------------------------------------------------------------------- |
+| `databaseId`         | string | No       | `null`  | Return only the schemas scoped to this database. `GLOBAL` is accepted.     |
+| `metadataEntityType` | string | No       | `null`  | Return only the schemas for this entity type. Accepted case-insensitively. |
+| `maxItems`           | number | No       | `30000` | Maximum number of items to return                                          |
+| `pageSize`           | number | No       | `3000`  | Number of items per page                                                   |
+| `startingToken`      | string | No       | `null`  | Pagination token from a previous response's `NextToken`                    |
 
 #### Response
 
@@ -906,10 +906,10 @@ GET /database/{databaseId}/metadataSchema/{metadataSchemaId}
 
 #### Path parameters
 
-| Parameter          | Type   | Required | Description                                     |
-| ------------------ | ------ | -------- | ----------------------------------------------- |
-| `databaseId`       | string | Yes      | Database identifier. `GLOBAL` is accepted.      |
-| `metadataSchemaId` | string | Yes      | Metadata schema identifier                      |
+| Parameter          | Type   | Required | Description                                |
+| ------------------ | ------ | -------- | ------------------------------------------ |
+| `databaseId`       | string | Yes      | Database identifier. `GLOBAL` is accepted. |
+| `metadataSchemaId` | string | Yes      | Metadata schema identifier                 |
 
 #### Response
 
@@ -917,12 +917,12 @@ Returns a single schema object in the same format as the items in the list respo
 
 #### Error responses
 
-| Status | Description                 |
-| ------ | --------------------------- |
-| `400`  | Invalid path parameters     |
-| `403`  | Not authorized              |
-| `404`  | Metadata schema not found   |
-| `500`  | Internal server error       |
+| Status | Description               |
+| ------ | ------------------------- |
+| `400`  | Invalid path parameters   |
+| `403`  | Not authorized            |
+| `404`  | Metadata schema not found |
+| `500`  | Internal server error     |
 
 ---
 
@@ -936,14 +936,14 @@ POST /metadataschema
 
 #### Request body
 
-| Field                      | Type    | Required | Description                                                                                                                                         |
-| -------------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`               | string  | Yes      | Database the schema applies to. Use `GLOBAL` for a schema that applies across every database. The database must exist.                               |
-| `metadataSchemaEntityType` | string  | Yes      | Entity type the schema governs. See [Entity types](#entity-types).                                                                                   |
-| `schemaName`               | string  | Yes      | Schema name (1-256 chars).                                                                                                                          |
-| `fields`                   | object  | Yes      | Field definitions. See [Field definitions](#field-definitions).                                                                                     |
+| Field                      | Type    | Required | Description                                                                                                                                           |
+| -------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`               | string  | Yes      | Database the schema applies to. Use `GLOBAL` for a schema that applies across every database. The database must exist.                                |
+| `metadataSchemaEntityType` | string  | Yes      | Entity type the schema governs. See [Entity types](#entity-types).                                                                                    |
+| `schemaName`               | string  | Yes      | Schema name (1-256 chars).                                                                                                                            |
+| `fields`                   | object  | Yes      | Field definitions. See [Field definitions](#field-definitions).                                                                                       |
 | `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each at most 10 characters. Accepted only for `fileMetadata` and `fileAttribute` entity types. |
-| `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                 |
+| `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                   |
 
 #### Request body example
 
@@ -987,11 +987,11 @@ POST /metadataschema
 
 #### Error responses
 
-| Status | Description                                                                       |
-| ------ | --------------------------------------------------------------------------------- |
+| Status | Description                                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------------------------- |
 | `400`  | Validation error, a `fileKeyTypeRestriction` on an unsupported entity type, or a `databaseId` that does not exist |
-| `403`  | Not authorized                                                                    |
-| `500`  | Internal server error                                                             |
+| `403`  | Not authorized                                                                                                    |
+| `500`  | Internal server error                                                                                             |
 
 ---
 
@@ -1007,13 +1007,13 @@ PUT /metadataschema
 
 At least one field other than `metadataSchemaId` must be provided. Supplying `fields` replaces the schema's entire field set.
 
-| Field                    | Type    | Required | Description                                                         |
-| ------------------------ | ------- | -------- | ------------------------------------------------------------------- |
-| `metadataSchemaId`       | string  | Yes      | Identifier of the schema to update                                  |
-| `schemaName`             | string  | No       | Updated schema name (1-256 chars)                                   |
+| Field                    | Type    | Required | Description                                                                 |
+| ------------------------ | ------- | -------- | --------------------------------------------------------------------------- |
+| `metadataSchemaId`       | string  | Yes      | Identifier of the schema to update                                          |
+| `schemaName`             | string  | No       | Updated schema name (1-256 chars)                                           |
 | `fields`                 | object  | No       | Replacement field definitions. See [Field definitions](#field-definitions). |
-| `fileKeyTypeRestriction` | string  | No       | Updated comma-delimited file extensions                             |
-| `enabled`                | boolean | No       | Toggle schema enforcement                                           |
+| `fileKeyTypeRestriction` | string  | No       | Updated comma-delimited file extensions                                     |
+| `enabled`                | boolean | No       | Toggle schema enforcement                                                   |
 
 #### Response
 
@@ -1029,11 +1029,12 @@ At least one field other than `metadataSchemaId` must be provided. Supplying `fi
 
 #### Error responses
 
-| Status | Description                                                                     |
-| ------ | ------------------------------------------------------------------------------- |
-| `400`  | Validation error, no updatable field supplied, or the schema does not exist      |
-| `403`  | Not authorized                                                                  |
-| `500`  | Internal server error                                                           |
+| Status | Description                                     |
+| ------ | ----------------------------------------------- |
+| `400`  | Validation error or no updatable field supplied |
+| `403`  | Not authorized                                  |
+| `404`  | Metadata schema not found                       |
+| `500`  | Internal server error                           |
 
 ---
 
@@ -1056,8 +1057,8 @@ DELETE /database/{databaseId}/metadataSchema/{metadataSchemaId}
 
 The request body is required and must confirm the deletion.
 
-| Field           | Type    | Required | Description                                  |
-| --------------- | ------- | -------- | -------------------------------------------- |
+| Field           | Type    | Required | Description                                      |
+| --------------- | ------- | -------- | ------------------------------------------------ |
 | `confirmDelete` | boolean | Yes      | Must be `true`; the delete is rejected otherwise |
 
 ```json
@@ -1080,11 +1081,12 @@ The request body is required and must confirm the deletion.
 
 #### Error responses
 
-| Status | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `400`  | Invalid path parameters, `confirmDelete` not `true`, or the schema does not exist    |
-| `403`  | Not authorized                                                                     |
-| `500`  | Internal server error                                                              |
+| Status | Description                                           |
+| ------ | ----------------------------------------------------- |
+| `400`  | Invalid path parameters or `confirmDelete` not `true` |
+| `403`  | Not authorized                                        |
+| `404`  | Metadata schema not found                             |
+| `500`  | Internal server error                                 |
 
 ---
 
