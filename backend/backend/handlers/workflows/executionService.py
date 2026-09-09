@@ -219,16 +219,24 @@ DEFAULT_EXECUTION_LOOKBACK_DAYS = 90
 # unbounded page. Excess is paged via NextToken.
 MAX_GLOBAL_LIST_PAGE_SIZE = 100
 
-# Upper bound on the by-date GSI queries one global-list request issues while filling a page. Both the
+# Upper bound on the index queries one global-list request issues while filling a page. Both the
 # equality FilterExpression and the per-execution visibility check drop rows AFTER the query's Limit is
 # spent, so a narrowly-scoped caller (or a narrow filter) needs several queries to collect one page's
-# worth of visible rows. Also bounds the read pressure on the index's single constant partition: each
-# query reads at most page_size rows, so a request examines at most 20 x page_size <= 2000 candidates,
-# four times the endpoint's own 500-distinct-asset authorization breadth budget — the query cap can
-# therefore never be the reason a page is short before that budget has had its say. Pure query time at
-# this cap is ~0.3 s, about 1% of the API Gateway ceiling below, so it is free in the cheap-denial
-# regime and exists to terminate a walk that makes no progress at all.
-MAX_GLOBAL_LIST_QUERIES_PER_REQUEST = 20
+# worth of visible rows. The wall-clock budget below is the authoritative meter; this cap only
+# terminates a walk that makes no progress at all. At GLOBAL_LIST_QUERY_LIMIT rows per query it admits
+# 100,000 candidates — a whole deployment's executions in a date window — in well under the budget
+# (one 500-row query is tens of milliseconds), so a filter matching a few hundred rows among tens of
+# thousands still fills its page. A FilterExpression drops rows BEFORE any asset is resolved, so the
+# entity budget says nothing about how many candidates a filtered walk has to read.
+MAX_GLOBAL_LIST_QUERIES_PER_REQUEST = 200
+# Rows one query EVALUATES. DynamoDB applies Limit before the FilterExpression and before the
+# visibility check, so a query limited to the display page size (50) against a filter — or a caller —
+# that admits one row in a hundred returns half a row on average, and twenty such queries examined only
+# the newest 1,000 executions of an index holding tens of thousands: the page ended empty with a "work
+# budget" warning although matching executions existed further down. Five hundred stays well under
+# DynamoDB's 1 MB page; the page itself is cut at page_size visible rows by the walk, so a permissive
+# caller's unfiltered page costs one query either way.
+GLOBAL_LIST_QUERY_LIMIT = 500
 
 # Wall-clock budget for one global-list page-filling walk, and the authoritative meter: it is the only
 # bound robust to per-row cost variance, DynamoDB throttling and adaptive retries, and the only one that
@@ -4052,18 +4060,57 @@ def _global_list_matches_filters(main_item, filters):
     return True
 
 
-def _global_list_row_key(main_item):
-    """The ExclusiveStartKey that resumes the by-date GSI query after this row.
+# The global list is served from whichever index the request's filters key on. Each entry names the
+# index, its partition-key attribute, and every attribute a continuation key for that index carries:
+# the index's own keys plus the base table's (workflowExecutionId + workflowDatabaseId:workflowId).
+# The two scoped indexes are the ones a workflow page or a group view read; the by-date index serves
+# everything else. A FilterExpression against the constant by-date partition would otherwise have to
+# examine every execution newer than the wanted ones before finding the first match.
+GLOBAL_LIST_INDEXES = {
+    "workflow": {
+        "IndexName": "WorkflowExecutionsByWorkflowGSI",
+        "partitionKey": "workflowDatabaseId:workflowId",
+        "keyAttributes": ("workflowDatabaseId:workflowId", "executionStartDate", "workflowExecutionId"),
+    },
+    "group": {
+        "IndexName": "WorkflowExecutionsByGroupGSI",
+        "partitionKey": "executionGroupId",
+        "keyAttributes": ("executionGroupId", "executionStartDate", "workflowExecutionId",
+                          "workflowDatabaseId:workflowId"),
+    },
+    "date": {
+        "IndexName": "WorkflowExecutionsByDateGSI",
+        "partitionKey": "allListPartition",
+        "keyAttributes": ("allListPartition", "executionStartDate", "workflowExecutionId",
+                          "workflowDatabaseId:workflowId"),
+    },
+}
+
+
+def _select_global_list_index(filters):
+    """(index descriptor, partition value, filter keys the key condition already answers).
+
+    A workflow scope needs BOTH halves of the composite key; a workflow id on its own falls back to the
+    by-date index with the id as a filter, which is the one case the web never sends (it always carries
+    the scope's database). A group id keys the group index. Everything else walks the by-date index."""
+    if filters.get("workflowId") and filters.get("workflowDatabaseId"):
+        return (GLOBAL_LIST_INDEXES["workflow"],
+                er.workflow_composite_key(filters["workflowDatabaseId"], filters["workflowId"]),
+                ("workflowId", "workflowDatabaseId"))
+    if filters.get("groupId"):
+        return GLOBAL_LIST_INDEXES["group"], filters["groupId"], ("groupId",)
+    return GLOBAL_LIST_INDEXES["date"], er.ALL_EXECUTIONS_LIST_PARTITION, ()
+
+
+def _global_list_row_key(main_item, index=None):
+    """The ExclusiveStartKey that resumes the walked index's query after this row.
 
     A GSI continuation names both the index's own keys and the base table's, so a synthesized one
-    carries all four. Returns None when the row is missing any of them, so a malformed row yields no
-    token rather than one that resumes from the wrong place."""
-    key = {
-        "allListPartition": main_item.get("allListPartition"),
-        "executionStartDate": main_item.get("executionStartDate"),
-        "workflowExecutionId": main_item.get("workflowExecutionId"),
-        "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId"),
-    }
+    carries every attribute the index descriptor lists (the by-date index when none is given). Returns
+    None when the row is missing any of them, so a malformed row yields no token rather than one that
+    resumes from the wrong place."""
+    index = index or GLOBAL_LIST_INDEXES["date"]
+    key = {name: main_item.get(name) for name in index["keyAttributes"]}
     return key if all(key.values()) else None
 
 
@@ -4127,8 +4174,11 @@ def get_global_executions(event, query_params):
     page_size = min(max(1, page_size), MAX_GLOBAL_LIST_PAGE_SIZE)
     main_table = dynamodb.Table(workflow_execution_database_v2)
 
-    # By-date GSI key condition: constant partition + executionStartDate range (newest-first below).
-    key_cond = Key("allListPartition").eq(er.ALL_EXECUTIONS_LIST_PARTITION)
+    # Key condition: the selected index's partition + executionStartDate range (newest-first below).
+    # Every global-list index sorts on executionStartDate, so the date window is a key condition on all
+    # three and a workflow or group scope reads only its own executions.
+    list_index, partition_value, keyed_filters = _select_global_list_index(filters)
+    key_cond = Key(list_index["partitionKey"]).eq(partition_value)
     if filter_start_date and filter_end_date:
         key_cond = key_cond & Key("executionStartDate").between(filter_start_date, filter_end_date)
     elif filter_start_date:
@@ -4136,14 +4186,9 @@ def get_global_executions(event, query_params):
     elif filter_end_date:
         key_cond = key_cond & Key("executionStartDate").lte(filter_end_date)
 
-    query_kwargs = {
-        "IndexName": "WorkflowExecutionsByDateGSI",
-        "KeyConditionExpression": key_cond,
-        "ScanIndexForward": False,  # newest first
-        "Limit": page_size,
-    }
-    # Equality filters (status/trigger/workflow/group/user) as a FilterExpression so unmatched rows
-    # drop before the per-row visibility fan-out. The Python filter below stays as a safety net.
+    # Remaining equality filters (status/trigger/workflow/group/user) as a FilterExpression so unmatched
+    # rows drop before the per-row visibility fan-out. The Python filter below stays as a safety net,
+    # and still checks the keyed filters too.
     _filter_attr = {
         "workflowId": "workflowId", "workflowDatabaseId": "workflowDatabaseId",
         "status": "executionStatus", "triggerType": "triggerType",
@@ -4151,9 +4196,18 @@ def get_global_executions(event, query_params):
     }
     filter_expr = None
     for fkey, attr_name in _filter_attr.items():
-        if filters.get(fkey):
+        if filters.get(fkey) and fkey not in keyed_filters:
             cond = Attr(attr_name).eq(filters[fkey])
             filter_expr = cond if filter_expr is None else (filter_expr & cond)
+    query_kwargs = {
+        "IndexName": list_index["IndexName"],
+        "KeyConditionExpression": key_cond,
+        "ScanIndexForward": False,  # newest first
+        # DynamoDB applies Limit BEFORE the FilterExpression and before the visibility check, so a
+        # query evaluates more rows than the page shows; the walk cuts the page at page_size visible
+        # rows itself (see GLOBAL_LIST_QUERY_LIMIT).
+        "Limit": GLOBAL_LIST_QUERY_LIMIT,
+    }
     if filter_expr is not None:
         query_kwargs["FilterExpression"] = filter_expr
     starting_token = query_params.get("startingToken") or query_params.get("NextToken")
@@ -4197,9 +4251,21 @@ def get_global_executions(event, query_params):
             # `query_kwargs` is built ONCE above, so IndexName, the key condition, ScanIndexForward,
             # Limit and the equality FilterExpression ride on every query of the walk; only the
             # continuation key below changes.
-            last_resp = main_table.query(**query_kwargs)
+            try:
+                last_resp = main_table.query(**query_kwargs)
+            except botocore.exceptions.ClientError as e:
+                # A continuation token names the keys of the index it was minted on. Sent back with
+                # filters that select another index, DynamoDB rejects it as an invalid start key; that
+                # is the caller's token, not a server fault.
+                if ("ExclusiveStartKey" in query_kwargs
+                        and e.response.get("Error", {}).get("Code") == "ValidationException"):
+                    return validation_error(
+                        body={"message": "startingToken does not belong to this listing's filters."},
+                        event=event)
+                raise
             queries_issued += 1
-            for main_item in last_resp.get("Items", []):
+            page_rows = last_resp.get("Items", [])
+            for main_item in page_rows:
                 # Checked per ROW, not per query: one row's authorization is a few round trips, one
                 # query's is up to a hundred rows' worth, so the per-row check is what keeps the
                 # overshoot past the budget bounded (see GLOBAL_LIST_WALK_BUDGET_SECONDS).
@@ -4207,11 +4273,19 @@ def get_global_executions(event, query_params):
                     work_budget_reached = True
                     stopped_mid_page = True
                     break
+                # The page is full. Rows left in this query page are unread, so the continuation is the
+                # last row evaluated rather than the query's own LastEvaluatedKey, which points past them.
+                # A page that fills on the query's final row leaves nothing unread and falls through to
+                # the query-boundary check, so the query's own continuation (or its absence, at the end
+                # of the index) stands.
+                if len(items) >= page_size:
+                    stopped_mid_page = True
+                    break
                 execution_id = main_item.get("workflowExecutionId", "")
                 if not execution_id or execution_id in seen:
                     continue
                 seen.add(execution_id)
-                row_key = _global_list_row_key(main_item)
+                row_key = _global_list_row_key(main_item, list_index)
                 rows_examined += 1
                 if _global_list_matches_filters(main_item, filters):
                     # AT MOST one configuration read per execution, shared by the visibility check (which
@@ -4241,12 +4315,9 @@ def get_global_executions(event, query_params):
                         items.append(_global_list_row(main_item, _config_row()))
                 # Only a row that was fully evaluated advances the cursor.
                 last_row_key = row_key
-            if entity_bound_reached or work_budget_reached:
+            if entity_bound_reached or work_budget_reached or stopped_mid_page:
                 break
-            # The page is checked full at the QUERY boundary, never mid-query, so `Items` is never
-            # truncated client-side: DynamoDB honours Limit, so one query cannot over-deliver, and a walk
-            # spanning several queries may exceed pageSize by up to page_size - 1 rows rather than
-            # needing a synthesized resume key for the ordinary case.
+            # Full exactly on the last row of this query: the query's own continuation applies.
             if len(items) >= page_size:
                 break
             if "LastEvaluatedKey" not in last_resp:

@@ -33,7 +33,9 @@ distinct assets it resolves for permission checks, and its per-request work budg
 named in a `Warnings` block (a `warnings` array under `--json-output`), and a next token accompanies it
 whenever the walk can continue. A page shorter than `--page-size`, or an empty page carrying a token, is
 therefore a stated bound rather than an absence of matching executions. `--auto-paginate` collects the
-bounds from every page it walked.
+bounds from every page it walked. A listing filtered to one workflow (`--workflow-id` with
+`--workflow-database-id`) or one group (`--group-id`) reads that scope's own index, so the work budget
+is not expected to fire there.
 :::
 
 Each execution reports its output target — `Output Type` (`asset`, or `none` for a results-only run)

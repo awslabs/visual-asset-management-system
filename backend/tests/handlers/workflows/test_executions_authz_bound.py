@@ -254,8 +254,11 @@ class TestEntityResolutionBound:
         # shared assets must page normally however long the page is.
         rows = _main_rows(200)
         message = _run_global_list(rows, lambda eid: [("db", "shared")], _allow_all())
-        assert len(message["Items"]) == 200
+        # The page is cut at pageSize (100) with a continuation, not by the entity bound: no warning,
+        # and the rest of the rows stay reachable.
+        assert len(message["Items"]) == 100
         assert "warnings" not in message
+        assert "NextToken" in message
 
     def test_the_withheld_rows_stay_reachable_through_the_next_token(self):
         per_row = 10
