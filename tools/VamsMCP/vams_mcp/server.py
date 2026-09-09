@@ -1860,11 +1860,12 @@ if CONFIG.enable_writes:
 
         Only the arguments given change; at least one is required. `is_active=False` is the
         REVERSIBLE revoke — the key stops authenticating until it is set back to True, and its value
-        is untouched — so prefer it to delete_api_key() when access may need restoring. A key that
-        authenticated in the last ~30 seconds keeps working for the rest of that window (the API
-        Gateway authorizer caches its decision); a disabled key that was not in use is refused at
-        once. `expires_at` is ISO 8601; an empty string clears the expiry in this scope. The key value
-        is never returned.
+        is untouched — so prefer it to delete_api_key() when access may need restoring. The API
+        Gateway authorizer caches its decision for ~30 seconds in BOTH directions: a key that
+        authenticated in that window keeps working until it expires, and a key refused in that window
+        stays refused for the same time after being re-enabled; a disabled key that was not in use is
+        refused at once. `expires_at` is ISO 8601; an empty string clears the expiry in this scope. The
+        key value is never returned.
         """
         payload: Dict[str, Any] = {}
         if description is not None:
