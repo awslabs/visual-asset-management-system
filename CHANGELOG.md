@@ -18,7 +18,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Troubleshooting
 
-## [2.6.0] (2026-08-30)
+## [2.6.0] (2026-09-11)
 
 ### Major Change Summary:
 
