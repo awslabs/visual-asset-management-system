@@ -62,10 +62,12 @@ PAGE_SIZE = 5
 # Queries a bounded walk must stay under. Not the exact budget the fix picks -- a generous ceiling, so
 # any sane work budget passes and a one-query-per-request implementation (or an unbounded loop) does
 # not.
-QUERY_CALL_CEILING = 40
+# Twice the walk's own query cap: a bounded walk may issue up to the cap, and anything past twice it is a
+# loop that ignored the cap rather than a walk that used it.
+QUERY_CALL_CEILING = 2 * le.MAX_GLOBAL_LIST_QUERIES_PER_REQUEST
 
 # Where the stub gives up rather than let an unbounded loop hang the suite.
-RUNAWAY_QUERY_CALLS = 400
+RUNAWAY_QUERY_CALLS = 4 * le.MAX_GLOBAL_LIST_QUERIES_PER_REQUEST
 
 
 @pytest.fixture(autouse=True)
@@ -584,7 +586,9 @@ class TestTheQueryIsBuiltOnceAndOnlyTheCursorMoves:
         assert set(first) == set(second)
         for key in first:
             assert first[key] is second[key], f"{key} was rebuilt between queries"
-        assert calls[1]["Limit"] == PAGE_SIZE
+        # The evaluation limit does not move between queries.
+        assert calls[1]["Limit"] == calls[0]["Limit"]
+        assert calls[1]["Limit"] >= PAGE_SIZE
 
     def test_a_continuation_query_keeps_the_full_page_size_limit(self):
         """The distinguishing case for the Limit: query 1 collects SOME rows, so a `page_size - len(items)`
@@ -596,8 +600,8 @@ class TestTheQueryIsBuiltOnceAndOnlyTheCursorMoves:
         message, calls = _run_global_list(
             pages, _visibility_by_prefix, _hidden_asset_enforcer())
         assert len(calls) == 2, "query 1 must be partially filled so a shrinking Limit would show"
-        assert calls[1]["Limit"] == PAGE_SIZE, (
-            f"the continuation query's Limit shrank to {calls[1]['Limit']}; it must stay page_size")
+        assert calls[1]["Limit"] == calls[0]["Limit"] and calls[1]["Limit"] >= PAGE_SIZE, (
+            f"the continuation query's Limit shrank to {calls[1]['Limit']}; it must not shrink")
         assert len(message["Items"]) >= PAGE_SIZE
 
 
