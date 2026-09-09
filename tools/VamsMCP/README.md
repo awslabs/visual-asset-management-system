@@ -315,9 +315,11 @@ the host's conversation log and telemetry. Keep both create tools out of
 `create_user_api_key` (self-service) always binds the key to the authenticated
 user and requires an expiry within 365 days. `update_*_api_key` with
 `is_active=False` is the reversible revoke: the key stops authenticating until it
-is re-enabled, and nothing is destroyed. A key that authenticated within the last
-~30 seconds keeps working for the rest of that window — the API Gateway authorizer
-caches its decision — while a disabled key not in use is refused on its next call.
+is re-enabled, and nothing is destroyed. The API Gateway authorizer caches its
+decision for about 30 seconds in both directions: a key that authenticated within
+that window keeps working until it expires, a key refused within it stays refused
+for the same time after re-enabling, and a disabled key not in use is refused on
+its next call.
 
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
