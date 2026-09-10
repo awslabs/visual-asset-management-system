@@ -81,7 +81,7 @@ This software includes third party software subject to the following copyrights:
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
-| maplibre-gl                         | ^5.8.0        | BSD-3-Clause            |
+| maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
 | moment                              | ^2.29.4       | MIT                     |
 | papaparse                           | ^5.4.1        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
@@ -135,7 +135,7 @@ This software includes third party software subject to the following copyrights:
 | online-3d-viewer           | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
 | playcanvas                 | [2.19.6](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
-| supersplat                 | [v2.27.4](https://github.com/playcanvas/supersplat)          | MIT                   |
+| supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
 | three                      | [0.182.0](https://threejs.org/)                              | MIT                   |
 | occt-import-js             | [0.0.22](https://github.com/kovacsv/occt-import-js)          | LGPL-2.1\*            |
 | web-ifc                    | [0.0.77, 0.0.68](https://github.com/ThatOpen/engine_web-ifc) | MPL-2.0\*\*           |

@@ -47,7 +47,7 @@
         "geojson": "^0.5.0",
         "jodit-react": "^5.3.21",
         "localforage": "^1.10.0",
-        "maplibre-gl": "^5.8.0",
+        "maplibre-gl": "^6.9.0",
         "moment": "^2.29.4",
         "papaparse": "^5.4.1",
         "prop-types": "^15.8.1",
@@ -84,7 +84,7 @@
         "react-router": "^7.18.2",
         "dompurify": "^3.4.11",
         "@istanbuljs/load-nyc-config": {
-            "js-yaml": "^3.15.1"
+            "js-yaml": "^3.15.2"
         }
     },
     "engines": {
