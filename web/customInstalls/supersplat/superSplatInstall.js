@@ -11,7 +11,7 @@ const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 // Configuration
 const viewerId = "supersplat-viewer";
 const SUPERSPLAT_REPO = "https://github.com/playcanvas/supersplat.git";
-const SUPERSPLAT_TAG = "v2.27.4"; // pinned stable release; bump deliberately to upgrade
+const SUPERSPLAT_TAG = "v3.1.1"; // pinned stable release; bump deliberately to upgrade
 const BASE_HREF = "/viewers/supersplat/"; // MUST match the public hosting sub-path
 
 const cloneDir = path.resolve(__dirname, "src-clone");

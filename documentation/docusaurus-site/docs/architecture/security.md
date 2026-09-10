@@ -455,9 +455,9 @@ the built HTML rather than maintained by hand.
 
 The hash list is specific to `index.html`. The policy is delivered as a response header for the whole web
 distribution, so it also governs the other HTML documents served from the web bucket — including the
-SuperSplat editor's own `index.html` under `/viewers/supersplat/`, whose upstream inline service-worker
-registration carries no hash and therefore does not run. That block registers an offline cache for the
-editor; the editor itself loads from an external script file, which `'self'` matches. A served document that
+SuperSplat editor's own `index.html` under `/viewers/supersplat/`, whose upstream inline script carries
+no hash and therefore does not run. That block removes the offline-cache service worker that earlier
+SuperSplat releases installed; the editor itself loads from an external script file, which `'self'` matches. A served document that
 requires an inline script needs hashes computed from that document.
 
 A Content Security Policy may allow inline script by hash **or** by `'unsafe-inline'`, never both — when a

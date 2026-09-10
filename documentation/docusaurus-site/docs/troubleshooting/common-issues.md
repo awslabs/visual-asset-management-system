@@ -254,6 +254,19 @@ Safari does not fully support the cross-origin isolation requirements needed by 
 
 Use a Chromium-based browser (Google Chrome, Microsoft Edge) or Mozilla Firefox for WASM-dependent viewers. Non-WASM viewers and standard mesh formats work in all supported browsers.
 
+### SuperSplat Editor Reports That WebGPU Is Required
+
+The SuperSplat Editor renders through WebGPU and has no WebGL fallback.
+
+**Symptoms:**
+
+-   Opening a `.ply`, `.sog`, `.splat`, or `.lcc` file in the SuperSplat Editor shows the message "SuperSplat requires WebGPU, which this browser does not support" instead of the editor
+-   The BabylonJS and PlayCanvas Gaussian Splat viewers render the same `.ply` and `.sog` files
+
+**Resolution:**
+
+Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` files with the BabylonJS or PlayCanvas Gaussian Splat viewer and `.sog` files with the PlayCanvas Gaussian Splat viewer instead; `.lcc` and `.splat` files have no alternative viewer.
+
 ### Login Loop or Configuration Fetch Failures
 
 Users may experience a login loop where the application repeatedly redirects to the sign-in page.
