@@ -41,6 +41,7 @@ import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../visualizerPlugin/core/types";
+import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
 import { EYE_ICON_SVG } from "../../visualizerPlugin/components/EyeIconSvg";
 import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 import {
@@ -650,14 +651,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     }>({});
     const [viewerFiles, setViewerFiles] = useState<FileInfo[]>([]);
     const [showViewerModal, setShowViewerModal] = useState(false);
+    // Which mode FileViewerModal opens in. "Compare Selected" opens directly on the compare surface;
+    // "View Selected" opens on visualize. The in-modal toggle lets the user flip either way after.
+    const [viewerInitialMode, setViewerInitialMode] = useState<ViewerMode>("visualize");
 
-    const openViewer = (files: FileInfo[]) => {
+    const openViewer = (files: FileInfo[], initialMode: ViewerMode = "visualize") => {
         const viewable = files.filter((f) => !!f.key);
         if (viewable.length === 0) {
             onShowToast?.("Nothing to preview", "No selected files can be visualized");
             return;
         }
         setViewerFiles(viewable);
+        setViewerInitialMode(initialMode);
         setShowViewerModal(true);
     };
 
@@ -1288,6 +1293,28 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                                     {state.viewerSelection?.length || 0})
                                                 </Button>
                                             </span>
+                                            <span
+                                                title={
+                                                    (state.viewerSelection?.length || 0) < 2
+                                                        ? "Select at least two files to compare."
+                                                        : selectionHasViewer
+                                                        ? undefined
+                                                        : "No compare viewer can display this combination of file types together."
+                                                }
+                                            >
+                                                <Button
+                                                    disabled={
+                                                        (state.viewerSelection?.length || 0) < 2 ||
+                                                        !selectionHasViewer
+                                                    }
+                                                    onClick={() =>
+                                                        openViewer(state.viewerSelection, "compare")
+                                                    }
+                                                >
+                                                    Compare Selected (
+                                                    {state.viewerSelection?.length || 0})
+                                                </Button>
+                                            </span>
                                             <Button
                                                 disabled={!state.viewerSelection?.length}
                                                 onClick={() => {
@@ -1399,9 +1426,11 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     files={viewerFiles}
                     databaseId={viewerFiles[0].databaseId || ""}
                     assetId={viewerFiles[0].assetId || ""}
+                    initialMode={viewerInitialMode}
                     onDismiss={() => {
                         setShowViewerModal(false);
                         setViewerFiles([]);
+                        setViewerInitialMode("visualize");
                     }}
                 />
             )}

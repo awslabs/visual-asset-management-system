@@ -52,8 +52,10 @@ class ViewerErrorBoundary extends Component<
 import {
     PluginRegistry,
     getFileExtensions,
+    deriveCompareShape,
     ViewerPlugin,
     ViewerPluginMetadata,
+    ViewerMode,
 } from "../core/PluginRegistry";
 import { FileInfo } from "../core/types";
 import { StylesheetManager } from "../core/StylesheetManager";
@@ -72,6 +74,9 @@ export interface DynamicViewerProps {
     hideFullscreenControls?: boolean;
     /** "viewport" uses calc(100vh - 300px) for modals, "container" uses 100% to fill parent */
     sizingMode?: "viewport" | "container";
+    /** Which surface this render serves. "compare" filters to compare-capable viewers and passes
+     *  the ordered `files` to the viewer as compareFiles. Defaults to "visualize" (unchanged path). */
+    mode?: ViewerMode;
 }
 
 export const DynamicViewer: React.FC<DynamicViewerProps> = ({
@@ -86,6 +91,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     onDeletePreview,
     hideFullscreenControls = false,
     sizingMode = "viewport",
+    mode = "visualize",
 }) => {
     const [selectedViewerId, setSelectedViewerId] = useState<string | null>(null);
     const [compatibleViewers, setCompatibleViewers] = useState<ViewerPluginMetadata[]>([]);
@@ -129,22 +135,29 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         const fileExtensions = getFileExtensions(files);
         const isMultiFile = files.length > 1;
 
-        console.log("Finding viewers for:", { fileExtensions, isMultiFile, isPreviewMode });
+        console.log("Finding viewers for:", { fileExtensions, isMultiFile, isPreviewMode, mode });
 
-        const viewerMetadata = registry.getCompatibleViewers(
-            fileExtensions,
-            isMultiFile,
-            isPreviewMode
-        );
+        const viewerMetadata =
+            mode === "compare"
+                ? registry.getCompatibleViewers(fileExtensions, isMultiFile, false, "compare", {
+                      fileCount: files.length,
+                      shape: deriveCompareShape(files),
+                  })
+                : registry.getCompatibleViewers(fileExtensions, isMultiFile, isPreviewMode);
         setCompatibleViewers(viewerMetadata);
 
         if (viewerMetadata.length === 0) {
             // Customize error message based on whether multiple files are selected
-            const errorMessage = isMultiFile
-                ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
-                      ", "
-                  )}`
-                : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
+            const errorMessage =
+                mode === "compare"
+                    ? `No compatible compare viewers found for file types: ${fileExtensions.join(
+                          ", "
+                      )}`
+                    : isMultiFile
+                    ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
+                          ", "
+                      )}`
+                    : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
             setSelectedViewerId(null);
             setLoadedViewer(null);
             setError(errorMessage);
@@ -174,7 +187,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
             setLoadedViewer(null);
             setLoading(false); // Stop loading state to show the selector
         }
-    }, [files, isPreviewMode, registryInitialized]); // Removed selectedViewerId from dependencies
+    }, [files, isPreviewMode, registryInitialized, mode]); // Removed selectedViewerId from dependencies
 
     // Load selected viewer lazily
     useEffect(() => {
@@ -351,7 +364,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                 header={
                     <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
                         <Box>
-                            <Header variant="h2">Visualizer</Header>
+                            <Header variant="h2">
+                                {mode === "compare" ? "Compare" : "Visualizer"}
+                            </Header>
                         </Box>
                         <Box textAlign="right">
                             {showViewerSelector && compatibleViewers.length > 0 && (
@@ -364,6 +379,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                     selectedViewerId={selectedViewerId}
                                     onViewerChange={handleViewerChange}
                                     className="visualizer-segment-control"
+                                    mode={mode}
                                 />
                             )}
                         </Box>
@@ -442,6 +458,10 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                 onViewerModeChange={onViewerModeChange}
                                                 onDeletePreview={onDeletePreview}
                                                 isPreviewFile={isPreviewMode}
+                                                compareMode={mode === "compare"}
+                                                compareFiles={
+                                                    mode === "compare" ? files : undefined
+                                                }
                                                 customParameters={
                                                     loadedViewer.config.customParameters
                                                 }

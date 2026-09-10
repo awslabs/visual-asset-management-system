@@ -26,6 +26,8 @@ import { useNavigate, useParams } from "react-router";
 import { AssetVersionContext, FileVersion, AssetVersionMetadataItem } from "../AssetVersionManager";
 import { downloadAsset } from "../../../../services/APIService";
 import Synonyms from "../../../../synonyms";
+import FileViewerModal from "../../../filemanager/modals/FileViewerModal";
+import { FileInfo } from "../../../../visualizerPlugin/core/types";
 
 export const FileVersionsList: React.FC = () => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
@@ -103,6 +105,41 @@ export const FileVersionsList: React.FC = () => {
 
     // State for tabs
     const [activeTabId, setActiveTabId] = useState<string>("files");
+
+    // Files handed to the compare host. "Compare with current" diffs a file at its snapshot version
+    // against the same asset-relative key's current/latest content (both share the key, so the
+    // registry classifies the pair as "same-file-versions").
+    const [compareFiles, setCompareFiles] = useState<FileInfo[] | null>(null);
+
+    const handleCompareFile = (file: FileVersion) => {
+        if (file.isPermanentlyDeleted) {
+            return;
+        }
+        const filename = file.relativeKey.split("/").pop() || file.relativeKey;
+        // Left = this file pinned to its S3 versionId from the snapshot; right = same key, latest.
+        // FileInfo carries an S3 versionId (not the asset-version number), which downloadAsset uses
+        // to fetch the exact bytes; omitting it on the right side fetches the current content.
+        const snapshotEntry: FileInfo = {
+            filename,
+            key: file.relativeKey,
+            isDirectory: false,
+            assetId: assetId || undefined,
+            databaseId: databaseId || undefined,
+            versionId: file.versionId,
+            size: file.size,
+            dateCreatedCurrentVersion: file.lastModified,
+            isArchived: file.isArchived,
+        };
+        const currentEntry: FileInfo = {
+            filename,
+            key: file.relativeKey,
+            isDirectory: false,
+            assetId: assetId || undefined,
+            databaseId: databaseId || undefined,
+            isArchived: file.isArchived,
+        };
+        setCompareFiles([snapshotEntry, currentEntry]);
+    };
 
     // State for metadata filtering
     const [metadataTypeFilter, setMetadataTypeFilter] = useState<string>("all");
@@ -525,6 +562,13 @@ export const FileVersionsList: React.FC = () => {
                             View File
                         </Button>
                         <Button
+                            onClick={() => handleCompareFile(item)}
+                            iconName="copy"
+                            disabled={item.isPermanentlyDeleted}
+                        >
+                            Compare
+                        </Button>
+                        <Button
                             onClick={() => handleDownloadFile(item)}
                             iconName="download"
                             loading={downloadingFile === item.relativeKey}
@@ -895,34 +939,46 @@ export const FileVersionsList: React.FC = () => {
     };
 
     return (
-        <Container
-            header={<Header variant="h3">Version v{selectedVersion?.Version} Details</Header>}
-        >
-            {downloadError && (
-                <Alert type="error" dismissible onDismiss={() => setDownloadError(null)}>
-                    {downloadError}
-                </Alert>
+        <>
+            <Container
+                header={<Header variant="h3">Version v{selectedVersion?.Version} Details</Header>}
+            >
+                {downloadError && (
+                    <Alert type="error" dismissible onDismiss={() => setDownloadError(null)}>
+                        {downloadError}
+                    </Alert>
+                )}
+                <Tabs
+                    activeTabId={activeTabId}
+                    onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
+                    tabs={[
+                        {
+                            id: "files",
+                            label: `Files (${totalFiles})`,
+                            content: renderFilesTab(),
+                        },
+                        {
+                            id: "metadata",
+                            label: `Metadata${
+                                selectedVersionDetails?.versionedMetadata
+                                    ? ` (${selectedVersionDetails.versionedMetadata.length})`
+                                    : ""
+                            }`,
+                            content: renderMetadataTab(),
+                        },
+                    ]}
+                />
+            </Container>
+            {compareFiles && compareFiles.length > 0 && (
+                <FileViewerModal
+                    visible={true}
+                    files={compareFiles}
+                    assetId={assetId || ""}
+                    databaseId={databaseId || ""}
+                    initialMode="compare"
+                    onDismiss={() => setCompareFiles(null)}
+                />
             )}
-            <Tabs
-                activeTabId={activeTabId}
-                onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
-                tabs={[
-                    {
-                        id: "files",
-                        label: `Files (${totalFiles})`,
-                        content: renderFilesTab(),
-                    },
-                    {
-                        id: "metadata",
-                        label: `Metadata${
-                            selectedVersionDetails?.versionedMetadata
-                                ? ` (${selectedVersionDetails.versionedMetadata.length})`
-                                : ""
-                        }`,
-                        content: renderMetadataTab(),
-                    },
-                ]}
-            />
-        </Container>
+        </>
     );
 };

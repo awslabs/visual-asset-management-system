@@ -53,6 +53,7 @@
         "prop-types": "^15.8.1",
         "react": "^18.3.1",
         "react-data-grid": "7.0.0-beta.16",
+        "react-diff-viewer-continued": "4.4.0",
         "react-dom": "^18.3.1",
         "react-error-boundary": "^4.0.9",
         "react-hook-form": "^7.53.0",

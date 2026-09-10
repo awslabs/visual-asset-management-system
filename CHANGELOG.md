@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   Compare-Mode Visualizers - The viewer plugin framework now supports a compare mode alongside the existing visualize path. Compare-capable viewers declare a `compareMode` block (file-count window plus same-file-versions vs different-files gating) and are surfaced only in compare mode. Reachable from search results multi-select ("Compare Selected"), the version-comparison Compare actions, and per-file compare in the version file list, all hosted by a Visualize/Compare toggle in the file viewer modal. Ships a new Text Diff Viewer plugin (`react-diff-viewer-continued`, side-by-side/inline, syntax highlighting, dark-mode aware) that dynamically loads its diff library so it stays out of the base bundle.
+
 ### Bug Fixes
 
 ### Chores

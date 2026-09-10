@@ -32,6 +32,7 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
 | `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
+| `text-diff-viewer`                 | Text Diff Viewer               | document | same as `text-viewer` (.txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc.)                                                         | enabled (compare mode: 2 files)                     |
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
@@ -44,6 +45,29 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter. The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+
+---
+
+## Compare Mode
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` takes a
+`mode` of `"visualize"` (default, unchanged behavior) or `"compare"`. In compare mode the registry
+surfaces **only** viewers that declare a `compareMode` block with `enabled: true`, whose
+`[minFiles, maxFiles]` window admits the selected file count, and whose shape flags admit the
+selection: N versions of one asset-relative key requires `allowSameFileDifferentVersions`, N
+distinct keys requires `allowDifferentFiles` (see `deriveCompareShape`).
+
+`DynamicViewer` renders compare mode when passed `mode="compare"`; it forwards the ordered files to
+the viewer as `compareFiles` (index 0 = left/base) and sets `compareMode={true}`. Compare-capable
+viewers read `compareFiles` instead of the single-file props.
+
+Compare mode is reached from three surfaces, all hosted by `FileViewerModal` (which has a
+Visualize/Compare toggle): the search results multi-select "Compare Selected" action, and the
+version-comparison "Compare" actions in `AssetVersionComparison.tsx` and
+`FileVersionsList.tsx` (diffing versions of the same file). The first compare viewer is
+`text-diff-viewer` (`TextDiffViewerPlugin`), which diffs two text files via
+`react-diff-viewer-continued` (dynamically imported by its `dependencies.ts` so it stays out of the
+base bundle).
 
 ---
 

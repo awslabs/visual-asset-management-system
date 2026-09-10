@@ -23,6 +23,21 @@ export interface ViewerPluginMetadata {
     isLoaded: boolean;
 }
 
+/** Which surface is asking for viewers. "visualize" is the default single/multi-file render path;
+ *  "compare" surfaces only compare-capable viewers. */
+export type ViewerMode = "visualize" | "compare";
+
+/** The shape of a compare selection, used to gate allowSameFileDifferentVersions vs
+ *  allowDifferentFiles. */
+export type CompareShape = "same-file-versions" | "different-files";
+
+export interface CompareContext {
+    /** Number of files in the compare selection. */
+    fileCount: number;
+    /** Whether the selection is N versions of one key or N distinct keys. */
+    shape: CompareShape;
+}
+
 export class PluginRegistry {
     private static instance: PluginRegistry;
     private plugins: Map<string, ViewerPlugin> = new Map();
@@ -302,7 +317,9 @@ export class PluginRegistry {
     getCompatibleViewers(
         fileExtensions: string[],
         isMultiFile: boolean,
-        isPreview = false
+        isPreview = false,
+        mode: ViewerMode = "visualize",
+        compareContext?: CompareContext
     ): ViewerPluginMetadata[] {
         if (!this.initialized) {
             console.warn("PluginRegistry not initialized. Call initialize() first.");
@@ -313,6 +330,20 @@ export class PluginRegistry {
         if (isPreview) {
             return Array.from(this.pluginMetadata.values())
                 .filter((metadata) => metadata.config.isPreviewViewer)
+                .sort((a, b) => a.config.priority - b.config.priority);
+        }
+
+        // Compare mode: surface only viewers that opt in via compareMode.enabled and admit the
+        // current selection (file count window + same-key-versions vs distinct-keys gating). The
+        // visualize path below is untouched.
+        if (mode === "compare") {
+            return Array.from(this.pluginMetadata.values())
+                .filter((metadata) => {
+                    if (metadata.config.isPreviewViewer) {
+                        return false;
+                    }
+                    return this.canCompare(metadata.config, fileExtensions, compareContext);
+                })
                 .sort((a, b) => a.config.priority - b.config.priority);
         }
 
@@ -342,6 +373,54 @@ export class PluginRegistry {
 
         // Every selected file must be renderable by this viewer — see supportsAllExtensions.
         return supportsAllExtensions(config.supportedExtensions, fileExtensions);
+    }
+
+    /**
+     * Compare-mode compatibility gate. A viewer is offered in compare mode only when ALL hold:
+     *  - it declares `compareMode.enabled`
+     *  - the selected file count is within [minFiles, maxFiles]
+     *  - it can render every selected extension (supportsAllExtensions)
+     *  - the selection SHAPE is allowed: N versions of one key requires
+     *    `allowSameFileDifferentVersions`, N distinct keys requires `allowDifferentFiles`.
+     *
+     * `compareContext` describes the selection shape. When absent, only the count/extension checks
+     * apply (the caller has not resolved the shape yet).
+     */
+    private canCompare(
+        config: ViewerPluginConfig,
+        fileExtensions: string[],
+        compareContext?: CompareContext
+    ): boolean {
+        const compare = config.compareMode;
+        if (!compare || !compare.enabled) {
+            return false;
+        }
+
+        // File-count window.
+        const count = compareContext?.fileCount ?? fileExtensions.length;
+        if (count < compare.minFiles || count > compare.maxFiles) {
+            return false;
+        }
+
+        // Extension support: every selected extension must be renderable.
+        if (!supportsAllExtensions(config.supportedExtensions, fileExtensions)) {
+            return false;
+        }
+
+        // Selection-shape gating.
+        if (compareContext) {
+            if (
+                compareContext.shape === "same-file-versions" &&
+                !compare.allowSameFileDifferentVersions
+            ) {
+                return false;
+            }
+            if (compareContext.shape === "different-files" && !compare.allowDifferentFiles) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     getViewer(id: string): ViewerPlugin | undefined {
@@ -516,4 +595,14 @@ export function getFileExtensions(
     });
 
     return Array.from(extensions);
+}
+
+/**
+ * Classify a compare selection into its shape. When every file shares one asset-relative key (and
+ * only their versionIds differ), the selection is N versions of one file; otherwise it spans
+ * distinct keys. Files are compared by their `key`.
+ */
+export function deriveCompareShape(files: Array<{ key: string }>): CompareShape {
+    const uniqueKeys = new Set(files.map((f) => f.key));
+    return uniqueKeys.size <= 1 ? "same-file-versions" : "different-files";
 }

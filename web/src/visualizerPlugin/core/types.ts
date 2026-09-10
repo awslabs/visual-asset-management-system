@@ -26,6 +26,25 @@ export interface ViewerPluginConfig {
     customParameters?: Record<string, any>;
     featuresEnabledRestriction?: string[];
     enabled?: boolean;
+    /**
+     * Optional compare-mode capability. When present and `enabled`, this viewer is offered in
+     * compare mode ("mode" === "compare" in PluginRegistry.getCompatibleViewers). A viewer without
+     * this block is never surfaced in compare mode; the visualize path ignores it entirely.
+     */
+    compareMode?: CompareModeConfig;
+}
+
+export interface CompareModeConfig {
+    /** Whether this viewer participates in compare mode at all. */
+    enabled: boolean;
+    /** Minimum number of files the compare view accepts (inclusive). */
+    minFiles: number;
+    /** Maximum number of files the compare view accepts (inclusive). */
+    maxFiles: number;
+    /** Allow comparing N versions of a SINGLE file (one asset-relative key, distinct versionIds). */
+    allowSameFileDifferentVersions: boolean;
+    /** Allow comparing N DISTINCT files (different asset-relative keys). */
+    allowDifferentFiles: boolean;
 }
 
 export interface ViewerPluginProps {
@@ -45,6 +64,13 @@ export interface ViewerPluginProps {
     onDeletePreview?: () => void;
     isPreviewFile?: boolean;
     customParameters?: Record<string, any>;
+    /** True when the viewer is being rendered in compare mode. Viewers that declare
+     *  `compareMode.enabled` should read `compareFiles` (ordered) instead of the single-file props. */
+    compareMode?: boolean;
+    /** Ordered files to compare (compare mode only). Order is significant — index 0 is the base /
+     *  "left" side. Each entry keeps its own versionId (and per-file assetId/databaseId, Decision #3)
+     *  so a viewer can compare N versions of one key or N distinct keys. */
+    compareFiles?: FileInfo[];
 }
 
 export interface FileInfo {
