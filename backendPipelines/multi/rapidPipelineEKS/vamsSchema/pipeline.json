@@ -1,0 +1,40 @@
+{
+    "pipelineName": "RapidPipeline (EKS)",
+    "category": "Conversion",
+    "description": "RapidPipeline 3D Processor (EKS) - optimize and convert 3D models to GLB using DGG RapidPipeline on EKS",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [
+                "*.glb",
+                "*.gltf",
+                "*.obj",
+                "*.fbx",
+                "*.stl",
+                "*.ply",
+                "*.usd",
+                "*.usdz",
+                "*.dae",
+                "*.abc"
+            ],
+            "exclude": []
+        }
+    }
+}

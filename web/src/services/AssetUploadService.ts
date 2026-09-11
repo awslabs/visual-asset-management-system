@@ -114,7 +114,7 @@ export class AssetUploadService {
             const response = await apiClient.post("assets", {
                 "Content-type": "application/json",
                 body: assetData,
-            });
+            } as any);
             return response;
         } catch (error) {
             console.error("Error creating asset:", error);
@@ -132,7 +132,7 @@ export class AssetUploadService {
             const response = await apiClient.post("asset-links", {
                 "Content-type": "application/json",
                 body: linkData,
-            });
+            } as any);
             return response;
         } catch (error) {
             console.error("Error creating asset link:", error);
@@ -195,7 +195,7 @@ export class AssetUploadService {
             const response = await apiClient.post("uploads", {
                 "Content-type": "application/json",
                 body: uploadRequest,
-            });
+            } as any);
             return response;
         } catch (error) {
             console.error("Error initializing upload:", error);
@@ -255,7 +255,7 @@ export class AssetUploadService {
                 body: {
                     metadata: metadataArray, // New bulk API format
                 },
-            });
+            } as any);
             return response;
         } catch (error) {
             console.error("Error creating asset link metadata:", error);
@@ -277,7 +277,7 @@ export class AssetUploadService {
             const response = await apiClient.post(`uploads/${uploadId}/complete`, {
                 "Content-type": "application/json",
                 body: completionData,
-            });
+            } as any);
             return response;
         } catch (error) {
             console.error("Error completing upload:", error);

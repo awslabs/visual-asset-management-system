@@ -1,0 +1,21 @@
+{
+    "workflowName": "NVIDIA Cosmos Video-to-World 14B v2",
+    "category": "WFM",
+    "description": "NVIDIA Cosmos Video-to-World 14B v2 - Generate high-quality videos from video + text input (Predict2.5)",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.mp4", "*.mov"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:nvidia-cosmos-predict2-video2world-14b": "cosmos-predict-video2world-14b"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "one"
+    }
+}

@@ -6,10 +6,13 @@
 from typing import Optional, Literal
 from pydantic import Field, validator
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
-from common.validators import validate
+from common.validators import validate, normalize_userid, trim_name
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="UserModels")
+
+# Opaque Cognito pagination token bound, matching the other listing models.
+MAX_LIST_TOKEN_LENGTH = 4096
 
 ######################## Cognito User Management API Models ##########################
 
@@ -17,18 +20,24 @@ class ListCognitoUsersRequestModel(BaseModel, extra='ignore'):
     """Request model for listing Cognito users"""
     maxItems: Optional[int] = Field(default=60, ge=1, le=60)
     pageSize: Optional[int] = Field(default=60, ge=1, le=60)
-    startingToken: Optional[str] = None
+    startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
 class CreateCognitoUserRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a Cognito user"""
-    userId: str = Field(min_length=3, max_length=256, strip_whitespace=True)
-    email: str = Field(min_length=3, max_length=256, strip_whitespace=True)
+    userId: str = Field(min_length=3, max_length=256)
+    email: str = Field(min_length=3, max_length=256)
     phone: Optional[str] = Field(None, min_length=10, max_length=20)
+
+    _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_fields(cls, values):
         """Validate userId, email, and phone format"""
+        # The normalized form is what gets validated and what the handler creates the user with,
+        # so the id checked here is the id stored in the pool.
+        values['userId'] = normalize_userid(values.get('userId'))
+
         # Validate userId
         (valid, message) = validate({
             'userId': {
@@ -115,9 +124,13 @@ class ResetPasswordRequestModel(BaseModel, extra='ignore'):
     """Request model for resetting a Cognito user's password"""
     confirmReset: bool = Field(default=False)
 
-    @validator('confirmReset')
+    @validator('confirmReset', always=True)
     def validate_confirmation(cls, v):
-        """Ensure confirmation is provided for password reset"""
+        """Ensure confirmation is provided for password reset
+
+        always=True is required: a plain v1 validator does not run when the field is absent from
+        the body, so the default would satisfy the interlock it exists to enforce.
+        """
         if not v:
             raise ValueError("confirmReset must be true to reset password")
         return v

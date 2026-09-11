@@ -1,15 +1,20 @@
 #!/bin/bash
 set -e
 
-# Use CUDA forward-compat libraries to bridge host driver/container CUDA version gaps.
-# The compat libcuda.so symlink and ldconfig entry are set up in the Dockerfile.
-# At runtime, prepend to LD_LIBRARY_PATH so the compat libs take precedence.
-COMPAT_DIR=$(find /usr/local/cuda*/compat -maxdepth 0 2>/dev/null | head -1)
-if [ -n "$COMPAT_DIR" ] && [ -d "$COMPAT_DIR" ]; then
-    export LD_LIBRARY_PATH="${COMPAT_DIR}:${LD_LIBRARY_PATH}"
+# The upstream framework commit the image was built from, so a run's log names the inference
+# code it actually ran.
+if [ -f /opt/cosmos-reason2/VAMS_UPSTREAM_COMMIT ]; then
+    echo "cosmos-reason2 commit: $(cat /opt/cosmos-reason2/VAMS_UPSTREAM_COMMIT)"
 fi
 
-# Re-run ldconfig at runtime to pick up host-mounted NVIDIA driver libraries
+# The CUDA forward-compatibility libraries in /usr/local/cuda*/compat are deliberately NOT placed on
+# LD_LIBRARY_PATH. Forward compatibility only applies when the host driver is OLDER than the
+# container's CUDA version; the AL2023 NVIDIA AMI ships a newer driver, so a compat libcuda.so.1 that
+# precedes the host-mounted driver makes CUDA initialization fail with error 803, "system has
+# unsupported display driver / cuda driver combination". The compat directory stays on disk for
+# Triton's compile-time linking (see the Dockerfile's library_dirs injection).
+
+# Pick up the host-mounted NVIDIA driver libraries the container runtime injects.
 ldconfig 2>/dev/null || true
 
 # Ensure Python.h is findable for Triton JIT compilation.
@@ -47,6 +52,22 @@ cd /opt/cosmos-reason2
 
 # Ensure deps are synced (fast if already done during build)
 uv sync --locked --extra=${CUDA_NAME:-cu128} 2>/dev/null || true
+
+# Preventive: disable hf_xet chunked transfer (the xet client can deadlock
+# in futex_wait partway through multi-GB checkpoint downloads while holding
+# the HF cache lockfile). Reason uses huggingface_hub's snapshot_download
+# rather than cosmos's uvx hf path, but the xet transport is still used
+# underneath and carries the same risk.
+export HF_HUB_DISABLE_XET=1
+export HF_XET_DISABLE=1
+
+# Sweep stale xet/hf download artifacts from prior crashed runs.
+HF_CACHE=${HF_HOME:-/mnt/efs/cosmos-models/hf_cache}
+if [ -d "$HF_CACHE" ]; then
+    find "$HF_CACHE" -name "*.incomplete" -delete 2>/dev/null || true
+    find "$HF_CACHE" -name "*.lock"       -delete 2>/dev/null || true
+    rm -rf "$HF_CACHE/xet" 2>/dev/null || true
+fi
 
 cd /opt/ml/code
 

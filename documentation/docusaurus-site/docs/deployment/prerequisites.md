@@ -10,7 +10,7 @@ The following software must be installed on the machine used to build and deploy
 | -------------------------- | --------------------- | ---------------------------------------------------- |
 | Python                     | 3.12                  | AWS Lambda runtime, backend dependencies             |
 | Docker                     | Latest stable         | Container builds for AWS Lambda layers and pipelines |
-| Node.js                    | 20.18.1               | Frontend build tooling, AWS CDK CLI                  |
+| Node.js                    | 22.22.3               | Frontend build tooling, AWS CDK CLI                  |
 | npm                        | Included with Node.js | Package management for frontend and infrastructure   |
 | Node Version Manager (nvm) | Latest stable         | Ensures the correct Node.js version is active        |
 | AWS CLI                    | v2 (latest)           | AWS account authentication and resource management   |
@@ -22,7 +22,7 @@ Run the following commands to confirm your tools are at the required versions:
 ```bash
 python --version   # 3.12+
 docker --version
-node --version     # v20.18.1+
+node --version     # v22.22.3+
 npm --version
 nvm --version
 aws --version      # aws-cli/2.x
@@ -71,7 +71,7 @@ The IAM principal used for deployment must have sufficient permissions to create
 -   Amazon S3 buckets and policies
 -   Amazon DynamoDB tables
 -   AWS Lambda functions and layers
--   Amazon API Gateway HTTP APIs
+-   Amazon API Gateway REST APIs
 -   Amazon Cognito user pools and identity pools
 -   Amazon CloudFront distributions (commercial deployments)
 -   Elastic Load Balancing Application Load Balancers (ALB deployments)
@@ -112,6 +112,15 @@ cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 :::info[GovCloud endpoint resolution]
 When bootstrapping an AWS GovCloud account, you must set the `AWS_REGION` environment variable so the AWS SDK resolves to GovCloud endpoints. Without this variable, the SDK defaults to commercial endpoints and the bootstrap operation will fail.
 :::
+
+**AWS European Sovereign Cloud Regions:**
+
+```bash
+export AWS_REGION=eusc-de-east-1
+cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
+```
+
+As with GovCloud, set the `AWS_REGION` environment variable so the AWS SDK resolves to the European Sovereign Cloud partition endpoints.
 
 ### FIPS endpoint configuration
 

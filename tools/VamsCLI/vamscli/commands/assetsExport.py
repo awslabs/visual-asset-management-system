@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -9,9 +10,13 @@ from typing import Dict, Any, Optional, List
 import click
 
 from ..constants import (
-    API_ASSET_EXPORT, DEFAULT_PARALLEL_DOWNLOADS, DEFAULT_DOWNLOAD_TIMEOUT
+    API_ASSET_EXPORT, DEFAULT_PARALLEL_DOWNLOADS, DEFAULT_DOWNLOAD_TIMEOUT,
+    DEFAULT_EXPORT_MAX_ASSETS, MAX_EXPORT_MAX_ASSETS,
+    DEFAULT_EXPORT_MAX_FILES, MAX_EXPORT_MAX_FILES
 )
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.decorators import (
+    requires_setup_and_auth, get_profile_manager_from_context, invoked_from_another_command
+)
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_info, output_warning
 from ..utils.exceptions import (
@@ -19,7 +24,8 @@ from ..utils.exceptions import (
     FileDownloadError
 )
 from ..utils.download_manager import (
-    DownloadManager, DownloadFileInfo, DownloadProgress, format_file_size, format_duration
+    DownloadManager, DownloadFileInfo, DownloadProgress, format_file_size, format_duration,
+    parse_remote_timestamp
 )
 
 
@@ -54,6 +60,33 @@ def normalize_file_extensions(extensions: List[str]) -> List[str]:
     return normalized
 
 
+def merge_paged_asset(all_assets: List[Dict[str, Any]], index: Dict[tuple, int],
+                      asset: Dict[str, Any]) -> None:
+    """Add one page's asset entry to the accumulated list, merging a repeated one.
+
+    An asset holding more files than one page's file budget is returned on more than one page,
+    each entry carrying a different slice of its files and reporting `files_truncated`. Appending
+    each entry would give the combined result two records for one asset, each looking like the
+    whole of it, so the entries are folded together on their identity and the file lists joined.
+    """
+    key = (asset.get('databaseid'), asset.get('assetid'))
+    if None in key:
+        # An unauthorized-asset placeholder carries databaseId/assetId instead and no files.
+        all_assets.append(asset)
+        return
+
+    existing_position = index.get(key)
+    if existing_position is None:
+        index[key] = len(all_assets)
+        all_assets.append(asset)
+        return
+
+    existing = all_assets[existing_position]
+    existing.setdefault('files', []).extend(asset.get('files', []))
+    # The combined entry holds every file the export returned for this asset.
+    existing['files_truncated'] = False
+
+
 def export_with_auto_pagination(
     api_client: APIClient,
     database_id: str,
@@ -63,23 +96,24 @@ def export_with_auto_pagination(
 ) -> Dict[str, Any]:
     """
     Automatically fetch all pages and combine results.
-    
+
     Args:
         api_client: API client instance
         database_id: Database ID
         asset_id: Asset ID
         export_params: Export parameters
         json_output: Whether JSON output mode is enabled
-    
+
     Returns:
         Combined export data from all pages
     """
     all_assets = []
+    asset_positions = {}
     all_relationships = []
     total_assets_in_tree = 0
     next_token = None
     page_count = 0
-    
+
     while True:
         page_count += 1
         
@@ -100,8 +134,9 @@ def export_with_auto_pagination(
         result = api_client.export_asset(database_id, asset_id, export_params)
         
         # Accumulate results
-        all_assets.extend(result.get('assets', []))
-        
+        for asset in result.get('assets', []):
+            merge_paged_asset(all_assets, asset_positions, asset)
+
         # Relationships only on first page
         if page_count == 1 and result.get('relationships'):
             all_relationships = result.get('relationships', [])
@@ -258,7 +293,8 @@ async def download_export_files(
                 relative_key=f"{asset_id}/{file['relativePath']}",
                 local_path=file_local_path,
                 download_url=presigned_url,
-                file_size=file.get('size')
+                file_size=file.get('size'),
+                last_modified=parse_remote_timestamp(file.get('dateCreatedCurrentVersion'))
             ))
     
     if not download_files:
@@ -442,9 +478,14 @@ def assets_export():
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID (root of tree)')
 @click.option('--auto-paginate/--no-auto-paginate', default=True,
               help='[OPTIONAL, default: True] Automatically fetch all pages and combine results')
-@click.option('--max-assets', type=int, default=100,
-              help='[OPTIONAL, default: 100] Maximum assets per page (1-1000)')
-@click.option('--starting-token', 
+@click.option('--max-assets', type=int, default=DEFAULT_EXPORT_MAX_ASSETS,
+              help=f'[OPTIONAL, default: {DEFAULT_EXPORT_MAX_ASSETS}] Maximum assets per page '
+                   f'(1-{MAX_EXPORT_MAX_ASSETS})')
+@click.option('--max-files', type=int, default=DEFAULT_EXPORT_MAX_FILES,
+              help=f'[OPTIONAL, default: {DEFAULT_EXPORT_MAX_FILES}] Maximum files per page '
+                   f'across all of the page\'s assets (1-{MAX_EXPORT_MAX_FILES}). An asset '
+                   f'holding more is returned over successive pages.')
+@click.option('--starting-token',
               help='[OPTIONAL] Pagination token from previous response (manual pagination)')
 @click.option('--generate-presigned-urls', is_flag=True,
               help='[OPTIONAL] Generate presigned download URLs for files')
@@ -494,6 +535,7 @@ def export_command(
     asset_id: str,
     auto_paginate: bool,
     max_assets: int,
+    max_files: int,
     starting_token: Optional[str],
     generate_presigned_urls: bool,
     download_files: bool,
@@ -540,7 +582,11 @@ def export_command(
     - File information with metadata and version details
     - Asset link relationships with metadata (unless --no-fetch-relationships)
     - Optional presigned URLs for file downloads
-    
+
+    With --download-files, the command exits non-zero when any file failed to download, so a partial
+    export is distinguishable from a complete one. `downloadResults` still reports
+    `overall_success` and `failed_downloads`.
+
     \b
     Relationship Fetching Options:
         By default, the command fetches asset relationships (parent-child links).
@@ -600,6 +646,7 @@ def export_command(
             asset_id = json_data.get('assetId', asset_id)
             auto_paginate = json_data.get('autoPaginate', auto_paginate)
             max_assets = json_data.get('maxAssets', max_assets)
+            max_files = json_data.get('maxFiles', max_files)
             starting_token = json_data.get('startingToken', starting_token)
             generate_presigned_urls = json_data.get('generatePresignedUrls', generate_presigned_urls)
             download_files = json_data.get('downloadFiles', download_files)
@@ -651,12 +698,19 @@ def export_command(
             )
         
         # Validate max_assets range
-        if max_assets < 1 or max_assets > 1000:
+        if max_assets < 1 or max_assets > MAX_EXPORT_MAX_ASSETS:
             raise click.BadParameter(
-                "max-assets must be between 1 and 1000",
+                f"max-assets must be between 1 and {MAX_EXPORT_MAX_ASSETS}",
                 param_hint="--max-assets"
             )
-        
+
+        # Validate max_files range
+        if max_files < 1 or max_files > MAX_EXPORT_MAX_FILES:
+            raise click.BadParameter(
+                f"max-files must be between 1 and {MAX_EXPORT_MAX_FILES}",
+                param_hint="--max-files"
+            )
+
         # Build export parameters
         export_params = {
             'generatePresignedUrls': generate_presigned_urls,
@@ -669,7 +723,8 @@ def export_command(
             'fetchEntireChildrenSubtrees': fetch_entire_subtrees,
             'includeParentRelationships': include_parent_relationships,
             'includeArchivedFiles': include_archived_files,
-            'maxAssets': max_assets
+            'maxAssets': max_assets,
+            'maxFiles': max_files
         }
         
         # Add file extensions if provided
@@ -754,9 +809,18 @@ def export_command(
             success_message=success_msg,
             cli_formatter=format_export_result_cli
         )
-        
+
+        # Same contract as `file upload` / `assets download`: a download that did not fully apply
+        # must not exit 0, or a CI step cannot tell a partial export from a complete one. Only the
+        # download half can partially fail; the export call itself either returns or raises.
+        download_results = result.get('downloadResults')
+        if (isinstance(download_results, dict)
+                and download_results.get('overall_success') is False
+                and not invoked_from_another_command(ctx)):
+            sys.exit(1)
+
         return result
-        
+
     except AssetNotFoundError as e:
         output_error(
             e,

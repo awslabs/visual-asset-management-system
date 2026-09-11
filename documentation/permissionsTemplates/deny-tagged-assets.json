@@ -21,7 +21,7 @@
             "name": "{{ROLE_NAME}}-deny-tagged-{{TAG_VALUE}}",
             "description": "Deny editing of assets tagged with '{{TAG_VALUE}}'",
             "objectType": "asset",
-            "criteriaAnd": [{ "field": "tags", "operator": "contains", "value": "{{TAG_VALUE}}" }],
+            "criteriaAnd": [{ "field": "tags", "operator": "is_one_of", "value": "{{TAG_VALUE}}" }],
             "criteriaOr": [],
             "groupPermissions": [
                 { "action": "PUT", "type": "deny" },

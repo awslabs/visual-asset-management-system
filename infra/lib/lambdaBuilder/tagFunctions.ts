@@ -16,6 +16,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Config from "../../config/config";
@@ -44,10 +45,7 @@ export function buildTagService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            TAGS_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
-            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
-        },
+        environment: {},
     });
 
     storageResources.dynamo.tagStorageTable.grantReadWriteData(fun);
@@ -55,6 +53,7 @@ export function buildTagService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -82,16 +81,15 @@ export function buildCreateTagFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            TAGS_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
-            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
-        },
+        environment: {},
     });
 
     storageResources.dynamo.tagStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }

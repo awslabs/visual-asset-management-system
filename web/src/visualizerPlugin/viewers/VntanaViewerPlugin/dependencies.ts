@@ -5,6 +5,8 @@
  * Follows VAMS plugin dependency management patterns similar to Potree.
  */
 
+import { loadExternalScript } from "../../core/loadExternalScript";
+
 import { StylesheetManager } from "../../core/StylesheetManager";
 
 export class VntanaDependencyManager {
@@ -111,29 +113,12 @@ export class VntanaDependencyManager {
     /**
      * Load a script dynamically
      */
-    private static loadScript(src: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            if (this.loadedDependencies.has(src)) {
-                resolve(); // Already loaded
-                return;
-            }
-
-            if (document.querySelector(`script[src="${src}"]`)) {
-                this.loadedDependencies.add(src);
-                resolve(); // Already in DOM
-                return;
-            }
-
-            const script = document.createElement("script");
-            script.src = src;
-            script.onload = () => {
-                this.loadedDependencies.add(src);
-                console.log(`[${this.PLUGIN_ID}] Loaded script: ${src}`);
-                resolve();
-            };
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.head.appendChild(script);
-        });
+    // Resolving on the mere presence of a tag returned before an in-flight download had executed,
+    // handing the caller a library whose global was still undefined.
+    private static async loadScript(src: string): Promise<void> {
+        await loadExternalScript(src);
+        this.loadedDependencies.add(src);
+        console.log(`[${this.PLUGIN_ID}] Loaded script: ${src}`);
     }
 
     /**

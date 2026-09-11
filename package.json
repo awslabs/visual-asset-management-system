@@ -1,10 +1,13 @@
 {
     "name": "project-root",
-    "version": "2.5.3",
+    "version": "2.6.0",
     "license": "Apache-2.0",
+    "engines": {
+        "node": ">=22.0.0"
+    },
     "scripts": {
         "buildanddeploy.dev": "npm run build && npm run deploy.dev",
-        "build": "cd web && yarn install && npm run build",
+        "build": "cd web && npm install && npm run build",
         "deploy.dev": "cd infra && npm install && npm run deploy.dev",
         "release": "standard-version",
         "prettier-check": "prettier -c --config .prettierrc -u --ignore-path .prettierignore .",
@@ -23,8 +26,5 @@
     "dependencies": {
         "@types/sanitize-html": "^2.9.0",
         "minimist": "^1.2.7"
-    },
-    "resolutions": {
-        "semver": "^7.5.2"
     }
 }

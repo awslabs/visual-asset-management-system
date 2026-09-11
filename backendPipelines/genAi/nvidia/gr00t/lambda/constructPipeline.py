@@ -24,12 +24,15 @@ def lambda_handler(event, context):
     inputOutput_s3_assetAuxiliary_files_path = event.get("inputOutputS3AssetAuxiliaryFilesPath", "")
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
-    input_metadata = event.get("inputMetadata", "")
-    input_parameters = event.get("inputParameters", "")
+    input_metadata_s3_location = event.get("inputMetadataS3Location", "")
+    input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     groot_config = event.get("gr00tConfig", "{}")
     external_sfn_task_token = event.get("externalSfnTaskToken", "")
+    # finetune (default) trains; evaluate scores an existing checkpoint. Threaded through the
+    # definition so both modes share one Batch job definition, queue, and state machine.
+    mode = str(event.get("mode", "") or "finetune").strip().lower()
 
-    job_name = f"gr00t-finetune-{str(uuid.uuid4())[:8]}"
+    job_name = f"gr00t-{'eval' if mode == 'evaluate' else 'finetune'}-{str(uuid.uuid4())[:8]}"
 
     definition = {
         "jobName": job_name,
@@ -40,10 +43,11 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "assetId": asset_id,
         "databaseId": database_id,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "gr00tConfig": groot_config,
-        "externalSfnTaskToken": external_sfn_task_token
+        "externalSfnTaskToken": external_sfn_task_token,
+        "mode": mode
     }
 
     logger.info(f"Definition: {definition}")
@@ -51,8 +55,8 @@ def lambda_handler(event, context):
     return {
         "jobName": job_name,
         "definition": ["python", "__main__.py", json.dumps(definition)],
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
         "status": "STARTING"
     }

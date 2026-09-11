@@ -57,7 +57,7 @@ export const useMetadataFetch = (
             }
 
             try {
-                console.log("[useMetadataFetch] Fetching count for other file type");
+                //console.log("[useMetadataFetch] Fetching count for other file type");
 
                 // Fetch count for the OTHER type (not the one we just fetched)
                 const otherType: FileMetadataType =
@@ -77,11 +77,11 @@ export const useMetadataFetch = (
                     setMetadataCount(otherResponse.metadata?.length || 0);
                 }
 
-                console.log(
-                    "[useMetadataFetch] Other type count updated:",
-                    otherType,
-                    otherResponse.metadata?.length || 0
-                );
+                // console.log(
+                //     "[useMetadataFetch] Other type count updated:",
+                //     otherType,
+                //     otherResponse.metadata?.length || 0
+                // );
             } catch (err) {
                 console.error("[useMetadataFetch] Error fetching other file type count:", err);
                 // Don't set error state for count fetching failures
@@ -116,13 +116,13 @@ export const useMetadataFetch = (
         setError(null);
 
         try {
-            console.log("[useMetadataFetch] Fetching metadata:", {
-                entityType,
-                entityId,
-                databaseId,
-                filePath,
-                fileType,
-            });
+            // console.log("[useMetadataFetch] Fetching metadata:", {
+            //     entityType,
+            //     entityId,
+            //     databaseId,
+            //     filePath,
+            //     fileType,
+            // });
 
             const response: MetadataAPIResponse = await fetchMetadata(
                 entityType,
@@ -133,7 +133,7 @@ export const useMetadataFetch = (
                 assetVersionId
             );
 
-            console.log("[useMetadataFetch] Response:", response);
+            //console.log("[useMetadataFetch] Response:", response);
 
             if (response.metadata) {
                 setData(response.metadata);

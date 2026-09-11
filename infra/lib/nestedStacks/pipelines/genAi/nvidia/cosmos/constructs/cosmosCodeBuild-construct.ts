@@ -15,6 +15,7 @@ import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../../config/config";
+import { contentImageTag } from "../../../../../../helper/containerImageTag";
 
 export interface CosmosCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -22,6 +23,10 @@ export interface CosmosCodeBuildConstructProps extends cdk.StackProps {
     vpc: ec2.IVpc;
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
+    /** Build the Predict/Reason/Transfer repos (useNvidiaCosmos.useCodeBuild). */
+    buildCosmosRepos: boolean;
+    /** Build the Cosmos3 omni repo (useNvidiaCosmos3.useCodeBuild). */
+    buildCosmos3Repos: boolean;
 }
 
 export interface PipelineEcrRepo {
@@ -36,7 +41,9 @@ export interface PipelineEcrRepo {
  * Builds Cosmos container images via CodeBuild and pushes them to ECR.
  * This avoids local Docker builds of 35GB+ GPU images, which are extremely slow.
  *
- * For each enabled pipeline group (predictV2, reason, transfer), this construct creates:
+ * A group is built only when its own family opted into CodeBuild (`buildCosmosRepos` for
+ * predictV2/reason/transfer, `buildCosmos3Repos` for cosmos3) AND one of its models is enabled.
+ * For each such group this construct creates:
  * - An ECR repository for the container image
  * - An S3 asset upload of the container source directory
  * - A CodeBuild project configured with Docker layer caching
@@ -46,6 +53,7 @@ export class CosmosCodeBuildConstruct extends Construct {
     public predictV2Repo?: PipelineEcrRepo;
     public reasonRepo?: PipelineEcrRepo;
     public transferRepo?: PipelineEcrRepo;
+    public cosmos3Repo?: PipelineEcrRepo;
 
     constructor(parent: Construct, name: string, props: CosmosCodeBuildConstructProps) {
         super(parent, name);
@@ -81,17 +89,24 @@ export class CosmosCodeBuildConstruct extends Construct {
                 exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env"],
             });
 
+            // Content-addressed image tag, supplied to the build and consumed at the pull site from
+            // this one literal so the two sides cannot name different images.
+            const imageTag = contentImageTag(sourceAsset.assetHash);
+
             // CodeBuild Project — runs in the same private VPC/subnets as pipeline Batch compute.
             // Private subnets have NAT Gateway egress for pulling Docker base images and cloning repos.
             const project = new codebuild.Project(this, `CodeBuild-${pipelineKey}`, {
                 description: `Build Cosmos ${pipelineKey} container image and push to ECR`,
                 environment: {
-                    buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+                    buildImage: Config.CODEBUILD_BUILD_IMAGE,
                     computeType: codebuild.ComputeType.LARGE,
                     privileged: true,
                     environmentVariables: {
                         ECR_REPO_URI: {
                             value: repository.repositoryUri,
+                        },
+                        IMAGE_TAG: {
+                            value: imageTag,
                         },
                         AWS_ACCOUNT_ID: {
                             value: account,
@@ -135,7 +150,7 @@ export class CosmosCodeBuildConstruct extends Construct {
                 this,
                 `BuildTrigger-${pipelineKey}`,
                 {
-                    runtime: cdk.aws_lambda.Runtime.PYTHON_3_12,
+                    runtime: Config.LAMBDA_PYTHON_RUNTIME,
                     handler: "index.handler",
                     timeout: Duration.minutes(1),
                     code: cdk.aws_lambda.Code.fromInline(`
@@ -179,8 +194,8 @@ def handler(event, context):
                 },
             });
 
-            // Image URI: latest tag
-            const imageUri = `${repository.repositoryUri}:latest`;
+            // Image URI at the content-addressed tag the build pushes.
+            const imageUri = `${repository.repositoryUri}:${imageTag}`;
 
             /**
              * CDK Nag Suppressions
@@ -258,10 +273,11 @@ def handler(event, context):
          * Enabled if any of the v2 predict models are enabled.
          */
         const anyPredictV2Enabled =
-            cosmosConfig.modelsPredict.text2world2B_v2?.enabled ||
-            cosmosConfig.modelsPredict.video2world2B_v2?.enabled ||
-            cosmosConfig.modelsPredict.text2world14B_v2?.enabled ||
-            cosmosConfig.modelsPredict.video2world14B_v2?.enabled;
+            props.buildCosmosRepos &&
+            (cosmosConfig.modelsPredict.text2world2B_v2?.enabled ||
+                cosmosConfig.modelsPredict.video2world2B_v2?.enabled ||
+                cosmosConfig.modelsPredict.text2world14B_v2?.enabled ||
+                cosmosConfig.modelsPredict.video2world14B_v2?.enabled);
 
         if (anyPredictV2Enabled) {
             this.predictV2Repo = createPipelineBuild(
@@ -280,8 +296,9 @@ def handler(event, context):
          * Enabled if reason2B or reason8B is enabled.
          */
         const anyReasonEnabled =
-            cosmosConfig.modelsReason?.reason2B?.enabled ||
-            cosmosConfig.modelsReason?.reason8B?.enabled;
+            props.buildCosmosRepos &&
+            (cosmosConfig.modelsReason?.reason2B?.enabled ||
+                cosmosConfig.modelsReason?.reason8B?.enabled);
 
         if (anyReasonEnabled) {
             this.reasonRepo = createPipelineBuild(
@@ -299,7 +316,8 @@ def handler(event, context):
          * Conditional creation: transfer
          * Enabled if transfer2B is enabled.
          */
-        const anyTransferEnabled = cosmosConfig.modelsTransfer?.transfer2B?.enabled;
+        const anyTransferEnabled =
+            props.buildCosmosRepos && cosmosConfig.modelsTransfer?.transfer2B?.enabled;
 
         if (anyTransferEnabled) {
             this.transferRepo = createPipelineBuild(
@@ -310,6 +328,31 @@ def handler(event, context):
                 value: this.transferRepo.codeBuildProjectName,
                 description:
                     "CodeBuild project name for Cosmos Transfer container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+            });
+        }
+
+        /**
+         * Conditional creation: cosmos3
+         * Enabled if any Cosmos 3 omni variant is enabled.
+         */
+        const cosmos3Config = props.config.app.pipelines.useNvidiaCosmos3;
+        const anyCosmos3Enabled =
+            props.buildCosmos3Repos &&
+            cosmos3Config?.enabled &&
+            (cosmos3Config.modelsOmni?.nano16B?.enabled ||
+                cosmos3Config.modelsOmni?.super64B?.enabled ||
+                cosmos3Config.modelsOmni?.superText2Image64B?.enabled ||
+                cosmos3Config.modelsOmni?.superImage2Video64B?.enabled);
+
+        if (anyCosmos3Enabled) {
+            this.cosmos3Repo = createPipelineBuild(
+                "cosmos3",
+                "../../../../../../../../backendPipelines/genAi/nvidia/cosmos/3/container"
+            );
+            new cdk.CfnOutput(this, "Cosmos3CodeBuildProject", {
+                value: this.cosmos3Repo.codeBuildProjectName,
+                description:
+                    "CodeBuild project name for Cosmos 3 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
             });
         }
     }

@@ -16,7 +16,7 @@ VEERUM viewer and package is a paid license that can be purchased at [veerum.com
 -   Webpack bundles the viewer and all dependencies (Three.js, lodash, rxjs, etc.) into a single UMD file
 -   React and ReactDOM are externalized to use the host application's versions
 -   Bundle files are copied to public folder for dynamic loading
--   Dependency manager loads files via script tags and provides React 17 compatibility polyfills
+-   Dependency manager loads files via script tags and installs React compatibility shims
 -   No runtime dependency on node_modules
 
 ## Prerequisites
@@ -153,7 +153,7 @@ The dependency manager:
 
 1. Dynamically imports React and ReactDOM from the host application
 2. Exposes them globally on window object
-3. Creates React 18 API polyfills for React 17 compatibility:
+3. Installs React API compatibility shims:
     - `ReactDOM.createRoot` polyfill
     - `React['jsx-runtime']` polyfill
 4. Loads JavaScript bundle via script tag injection
@@ -168,7 +168,7 @@ The Veerum viewer supports:
     -   Uses `PointCloudModel` class
     -   Requires Potree preprocessing (auxiliary preview files)
     -   Loads from: `auxiliaryPreviewAssets/stream/{fileKey}/preview/PotreeViewer/metadata.json`
-    -   **Important**: The Potree pipeline viewer must be enabled in `infra/config/config.json` during VAMS deployment for point cloud files to be preprocessed and viewable. Set `"enablePotreePipeline": true` in the pipelines configuration.
+    -   **Important**: The Potree pipeline viewer must be enabled in `infra/config/config.json` during VAMS deployment for point cloud files to be preprocessed and viewable. Set `app.pipelines.usePreviewPcPotreeViewer.enabled` to `true` in the pipelines configuration.
 
 -   **3D Tilesets**: .json
 
@@ -180,12 +180,12 @@ The Veerum viewer supports:
 
 ## React Compatibility
 
-The Veerum viewer is built with React 18, but VAMS uses React 17. The dependency manager provides compatibility through:
+The Veerum viewer is built with React 18, and VAMS now runs React 18 as well. The dependency manager still installs the compatibility shims it needed when VAMS ran React 17, so its `createRoot` shim routes through the legacy `ReactDOM.render` path rather than React 18's own `createRoot`. The viewer is a licensed, disabled-by-default plugin; revisit the shims when re-enabling it.
 
 ### React 18 API Polyfills
 
 ```typescript
-// createRoot polyfill (React 18 → React 17)
+// createRoot shim (routes through the legacy render path)
 ReactDOM.createRoot = function (container) {
     return {
         render: (element) => ReactDOM.render(element, container),
@@ -274,7 +274,7 @@ If you see React-related errors:
 1. Check that createRoot polyfill is being created
 2. Verify jsx-runtime is exposed on React object
 3. Check browser console for "[veerum-viewer]" log messages
-4. Ensure React 17 is installed in the main web application
+4. Ensure React is installed in the main web application
 
 ### Point Cloud Loading Fails
 
@@ -392,8 +392,8 @@ These are NOT bundled (provided by host app):
 
 -   React (^17.0.2 in host app, ^18.3.1 in Veerum)
 -   ReactDOM (^17.0.2 in host app, ^18.3.1 in Veerum)
--   react-dom/client (polyfilled for React 17)
--   react/jsx-runtime (polyfilled for React 17)
+-   react-dom/client (provided by the shim)
+-   react/jsx-runtime (provided by the shim)
 
 ### Webpack Configuration
 
@@ -449,7 +449,7 @@ Features:
 -   Automatic file type detection based on extension
 -   Proper URL construction for each file type
 -   JWT authorization via Headers object
--   React 17 compatibility via polyfills
+-   React compatibility via shims
 -   Error handling and loading states
 
 ### Dependency Manager
@@ -459,7 +459,7 @@ Located at: `web/src/visualizerPlugin/viewers/VeerumViewerPlugin/dependencies.ts
 Responsibilities:
 
 -   Load React and ReactDOM from host application
--   Create React 18 API polyfills for React 17
+-   Install the React API compatibility shims
 -   Load Veerum bundle from public folder
 -   Expose VeerumViewerModule on window object
 -   Manage cleanup and state

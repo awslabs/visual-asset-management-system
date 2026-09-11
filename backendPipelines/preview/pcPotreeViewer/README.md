@@ -1,6 +1,6 @@
 # Point Cloud Pipeline (PCP) Developer Guide
 
-The Point Cloud Pipeline (PCP) provides functionality for converting a input pipeline into an octree LOD structure for streaming and real-time rendering of massive point clouds in a website visualizer. This primary component of this pipeline is in the [./visual-asset-management-system-v1.2.0-a8994dd/backendVisualizerProcessor/pc_pipeline](../../visual-asset-management-system-v1.2.0-a8994dd/backendVisualizerProcessor/pc_pipeline) which is two Docker container application using the Point Data Abstraction (PDAL) and Potree Converter Libraries.
+The Point Cloud Pipeline (PCP) provides functionality for converting a input pipeline into an octree LOD structure for streaming and real-time rendering of massive point clouds in a website visualizer. This primary component of this pipeline is in the [./container](./container) which is two Docker container application using the Point Data Abstraction (PDAL) and Potree Converter Libraries.
 
 ## Contents
 
@@ -15,7 +15,7 @@ The Point Cloud Pipeline (PCP) provides functionality for converting a input pip
 
 ## Architecture
 
-![PCP Diagram](../../diagrams/visualizerpipeline_pointcloud.png)
+See the [Point Cloud Potree Viewer pipeline](https://awslabs.github.io/visual-asset-management-system/pipelines/potree-viewer) documentation for the pipeline architecture diagram.
 
 ### Overview
 

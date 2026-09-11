@@ -9,6 +9,8 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as events from "aws-cdk-lib/aws-events";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -21,6 +23,7 @@ import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 
 export function buildVamsExecuteModelOpsFunction(
@@ -61,6 +64,20 @@ export function buildVamsExecuteModelOpsFunction(
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -73,6 +90,8 @@ export function buildOpenPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -100,12 +119,16 @@ export function buildOpenPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
+    orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
     const stateTaskPolicy = new iam.PolicyStatement({
@@ -116,6 +139,7 @@ export function buildOpenPipelineFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -166,8 +190,25 @@ export function buildConstructPipelineFunction(
         })
     );
 
+    grantReadPermissionsToAllAssetBuckets(fun);
+
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    // constructPipeline reports the external workflow token when it rejects an input before the
+    // container starts, so nothing downstream can report for it. Without this grant the
+    // SendTaskFailure raises AccessDeniedException, is logged, and the task waits out its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -222,5 +263,6 @@ export function buildPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

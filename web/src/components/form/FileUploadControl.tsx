@@ -8,7 +8,7 @@ import { Button, FormField, Grid, SpaceBetween, TextContent } from "@cloudscape-
 import { AssetContext } from "../../context/AssetContext";
 
 //@link https://stackoverflow.com/questions/10420352/converting-file-size-in-bytes-to-human-readable-string/10420404
-export const formatFileSize = (bytes, si = false, dp = 1) => {
+export const formatFileSize = (bytes: any, si = false, dp = 1) => {
     const thresh = si ? 1000 : 1024;
     if (Math.abs(bytes) < thresh) {
         return bytes + " B";
@@ -26,11 +26,11 @@ export const formatFileSize = (bytes, si = false, dp = 1) => {
     return bytes.toFixed(dp) + " " + units[u];
 };
 
-const FileUploadControl = (props) => {
+const FileUploadControl = (props: any) => {
     const { disabled, controlName, fileFormats } = props;
-    const { formValues, setFormValues, formErrors } = useContext(AssetContext);
-    const [file, setFile] = useState(null);
-    const inputRef = useRef();
+    const { formValues, setFormValues, formErrors } = useContext(AssetContext) as any;
+    const [file, setFile] = useState<any>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         setFile(formValues[controlName]);
@@ -54,18 +54,17 @@ const FileUploadControl = (props) => {
                     accept={fileFormats}
                     style={{ display: "none" }}
                     onChange={(e) => {
-                        setFile(e.target.files[0]);
+                        setFile(e.target.files![0]);
                     }}
                 />
                 <SpaceBetween size="l">
                     <Button
                         disabled={disabled}
                         variant="normal"
-                        multiple
-                        type="file"
+                        {...({ multiple: true, type: "file" } as any)}
                         iconName="upload"
                         onClick={(e) => {
-                            inputRef.current.click();
+                            inputRef.current!.click();
                         }}
                     >
                         Choose File

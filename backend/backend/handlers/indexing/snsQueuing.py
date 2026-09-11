@@ -11,13 +11,15 @@ SPDX-License-Identifier: Apache-2.0
 
 import os
 import boto3
+from botocore.config import Config
 import json
 from typing import Dict, List, Any
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 
 # Initialize AWS clients
-sns_client = boto3.client('sns')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+sns_client = boto3.client('sns', config=retry_config)
 logger = safeLogger(service_name="SnsQueuing")
 
 # Load environment variables

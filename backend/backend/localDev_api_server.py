@@ -1,4 +1,5 @@
-from flask import Flask, Blueprint, request, redirect, url_for
+import os
+from flask import Flask, Blueprint, request, redirect, url_for, make_response
 import jwt as pyjwt
 
 from handlers.auth import routes as routes_api
@@ -6,6 +7,15 @@ from handlers.auth import routes as routes_api
 from localMockData.mockRoles import mockRoles
 
 vams = Blueprint('vams', __name__)
+
+# Local-dev toggle: when enabled, the database list endpoints return a 403
+# Forbidden so the frontend's permission-denied handling can be exercised
+# without a real backend. Initial value from SIMULATE_DB_403 env var; can be
+# flipped at runtime via GET /_test/db403/on and /_test/db403/off.
+_DB_403_STATE = {'on': os.environ.get('SIMULATE_DB_403', '').lower() in ('1', 'true', 'yes')}
+
+def _simulate_db_403():
+  return _DB_403_STATE['on']
 
 @vams.after_request
 def after_request(response):
@@ -36,9 +46,14 @@ def amplifyConfig():
 @vams.route('/secure-config', methods=['GET'])
 def secureConfig():
   return {
-    'featuresEnabled': False,
+    'featuresEnabled': [],   # Frontend expects an array (config.featuresEnabled.includes(...))
     'bucket': 'TODO'
   }
+
+@vams.route('/auth/routes/api/allowed', methods=['GET'])
+def allowedApiRoutes():
+  # Local-dev: report no specific allowed-API-routes restriction.
+  return {'routes': []}
 
 @vams.route('/auth/loginProfile/<userId>', methods=['POST'])
 def authLoginProfile(userId):
@@ -68,6 +83,13 @@ def routes():
   routes = request.get_json()
   print(routes)
 
+  # Local-dev default: allow every requested web route so all pages render
+  # (the mock test user has no Casbin roles, which would otherwise gate every
+  # page out). Set ALLOW_ALL_ROUTES=false to delegate to the real handler.
+  if os.environ.get('ALLOW_ALL_ROUTES', 'true').lower() in ('1', 'true', 'yes'):
+    requested = (routes or {}).get('routes', [])
+    return {'allowedRoutes': requested}
+
   response = routes_api.lambda_handler({
     'body': request.get_json(),
     'requestContext': {
@@ -95,8 +117,19 @@ def decode_access_token(access_token):
   print('header', header)
   print('claims', claims)
 
+@vams.route('/_test/db403/<state>', methods=['GET'])
+def toggle_db403(state):
+  _DB_403_STATE['on'] = (state == 'on')
+  return {'simulate_db_403': _DB_403_STATE['on']}
+
+# The frontend calls apiClient.get("database") (singular); keep the plural alias too.
+@vams.route('/database', methods=['GET'])
 @vams.route('/databases', methods=['GET'])
 def databases():
+  # Simulate a permission-denied error to exercise the frontend's error display.
+  if _simulate_db_403():
+    return make_response({'message': 'Not Authorized'}, 403)
+
   access_token = request.headers['Authorization'].split('Bearer ')[1]
   decode_access_token(access_token)
 

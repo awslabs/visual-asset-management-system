@@ -1,0 +1,5 @@
+{
+    "workflowName": "RapidPipeline 3D Processor",
+    "category": "Conversion",
+    "description": "Automated workflow for 3D model optimization and conversion using RapidPipeline 3D Processor."
+}

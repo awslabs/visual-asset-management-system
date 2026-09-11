@@ -7,7 +7,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { appCache } from "../../services/appCache";
 import { useNavigate } from "react-router-dom";
-import { Grid, Alert, SegmentedControl, Box } from "@cloudscape-design/components";
+import { Grid, SegmentedControl, Box } from "@cloudscape-design/components";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { SearchContainerProps, MetadataFilter, getTotalResultCount } from "./types";
 import { useSearchState } from "./hooks/useSearchState";
@@ -24,6 +24,7 @@ import ListPage from "../../pages/ListPage";
 import { AssetListDefinition } from "../list/list-definitions/AssetListDefinition";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
+import { initializePluginRegistry } from "../../visualizerPlugin";
 import Synonyms from "../../synonyms";
 
 const ModernSearchContainer: React.FC<SearchContainerProps> = ({
@@ -92,6 +93,16 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
             searchState.setQuery(initialQuery);
         }
     }, [initialQuery]);
+
+    // Eagerly initialize the visualizer plugin registry so isViewableExtension()
+    // works on the file-search list before any viewer modal mounts. Without this,
+    // the registry stays uninitialized on the search page and every row is treated
+    // as non-viewable, so the multi-select viewer counter never increments.
+    useEffect(() => {
+        initializePluginRegistry().catch((err) =>
+            console.log("Failed to initialize visualizer plugin registry for search:", err)
+        );
+    }, []);
 
     // Initialize database filter from URL parameter
     useEffect(() => {
@@ -371,7 +382,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         setCurrentView(view);
 
         // When switching TO map view, add location metadata filters
-        if (view === "map" && previousView !== "map" && recordType === "asset") {
+        if (view === "map" && previousView !== "map") {
             // Add location metadata filters (disabled from editing)
             // Include both lowercase and capitalized versions to handle different capitalizations
             const locationFilters: MetadataFilter[] = [
@@ -429,9 +440,6 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     if (useNoOpenSearch) {
         return (
             <Box>
-                <Alert type="info" header="Limited Search Mode">
-                    {`OpenSearch is disabled. Using basic ${Synonyms.asset} listing instead.`}
-                </Alert>
                 <ListPage
                     singularName={Synonyms.Asset}
                     singularNameTitleCase={Synonyms.Asset}
@@ -459,7 +467,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         // if (allowedViews.includes('card')) {
         //     viewOptions.push({ text: 'Grid', id: 'card' });
         // }
-        if (allowedViews.includes("map") && useMapView && recordType === "asset") {
+        if (allowedViews.includes("map") && useMapView) {
             viewOptions.push({ text: "Map", id: "map" });
         }
 
@@ -503,7 +511,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 );
 
             case "map":
-                if (useMapView && recordType === "asset") {
+                if (useMapView) {
                     return <SearchPageMapView state={searchState} dispatch={() => {}} />;
                 }
                 // Fall through to table view if map not available
@@ -511,6 +519,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <SearchPageListView
                         state={{
                             ...searchState,
+                            // The visible column list below is chosen by recordType, so the view has
+                            // to judge file mode by the same value rather than by the _rectype
+                            // filter, which trails it by a render (see isFileMode there).
+                            recordType,
                             tablePreferences: {
                                 pageSize: preferences.pageSize,
                                 visibleContent:
@@ -635,6 +647,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <SearchPageListView
                         state={{
                             ...searchState,
+                            // The visible column list below is chosen by recordType, so the view has
+                            // to judge file mode by the same value rather than by the _rectype
+                            // filter, which trails it by a render (see isFileMode there).
+                            recordType,
                             tablePreferences: {
                                 pageSize: preferences.pageSize,
                                 visibleContent:

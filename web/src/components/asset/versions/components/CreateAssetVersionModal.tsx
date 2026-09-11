@@ -327,7 +327,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                     databaseId,
                     assetId,
                     useLatestFiles: false,
-                    files: selectedFiles,
+                    files: selectedFiles as never[],
                     comment,
                     versionAlias,
                 });

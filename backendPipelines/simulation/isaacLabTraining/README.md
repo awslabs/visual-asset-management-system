@@ -33,7 +33,7 @@ It leverages AWS Batch for scalable GPU compute with automatic checkpoint manage
 
 8. **Asset Bucket Output** - The Amazon S3 Asset Bucket receives the final metadata JSON file. Location of this file and how it is processed depends on how this pipeline was executed. If this was called from a VAMS workflow, the workflow provides a temporary pipeline output location for the particular job. The workflow then has a final AWS Lambda step to process metadata JSON objects back into VAMS Asset-viewable metadata.
 
-9. **Elastic File System** - Amazon Elastic File System (EFS) provides durable storage between batch runs for multi-node parallel jobs, including checkpoints for the trained behavior models as well as logs.
+9. **Elastic File System** - Amazon Elastic File System (EFS) provides durable storage between batch runs, including checkpoints for the trained behavior models as well as logs.
 
 10. **CloudWatch Logging** - Amazon CloudWatch stores log files for the VPC flow traffic, step functions states, and Fargate Container processes.
 
@@ -64,11 +64,8 @@ Training configs are used to train new RL policies from scratch.
     "task": "string",         // Isaac Lab task name (e.g., "Isaac-Ant-Direct-v0")
     "numEnvs": number,        // Number of parallel environments (typically 1024-8192)
     "maxIterations": number,  // Training iterations (policy updates)
-    "rlLibrary": "string",    // RL library: "rsl_rl" or "rl_games"
+    "rlLibrary": "string",    // RL library: "rsl_rl", "rl_games", or "skrl"
     "customEnvironmentPath": "string" // Optional: relative path to custom env package
-  },
-  "computeConfig": {
-    "numNodes": number        // Number of GPU nodes (1 for single-node training)
   }
 }
 ```
@@ -87,9 +84,6 @@ Simple balancing task - good for testing the pipeline:
         "numEnvs": 4096,
         "maxIterations": 500,
         "rlLibrary": "rsl_rl"
-    },
-    "computeConfig": {
-        "numNodes": 1
     }
 }
 ```
@@ -108,25 +102,28 @@ Quadruped locomotion - more complex task:
         "numEnvs": 4096,
         "maxIterations": 1000,
         "rlLibrary": "rsl_rl"
-    },
-    "computeConfig": {
-        "numNodes": 1
     }
 }
 ```
 
 #### Training Parameters Guide
 
-| Parameter                      | Type   | Required | Description                                                                                                                                          |
-| ------------------------------ | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                         | string | Yes      | Display name for the job shown in VAMS UI and logs                                                                                                   |
-| `description`                  | string | Yes      | Human-readable description of the training job purpose                                                                                               |
-| `trainingConfig.mode`          | string | Yes      | Must be `"train"` for training jobs                                                                                                                  |
-| `trainingConfig.task`          | string | Yes      | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct-v0"`, `"Isaac-Cartpole-Direct-v0"`)                                                        |
-| `trainingConfig.numEnvs`       | number | Yes      | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192                              |
-| `trainingConfig.maxIterations` | number | Yes      | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity |
-| `trainingConfig.rlLibrary`     | string | Yes      | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"`                                      |
-| `computeConfig.numNodes`       | number | Yes      | Number of GPU nodes for distributed training. Use `1` for single-node training                                                                       |
+These are the parameters of the JSON config file supplied with the asset. `task`, `numEnvs`,
+`maxIterations`, `rlLibrary` and `seed` are also fields on the execute form, supplied by the
+`isaaclab-training-cartpole` template's `TASK`, `NUM_ENVS`, `MAX_ITERATIONS`, `RL_LIBRARY` and `SEED`
+tags. Wherever both name the same parameter the form's value wins. The numeric and choice fields always
+carry a value, so they always decide; `SEED` is the one that can be left blank, which falls through to
+the config file.
+
+| Parameter                      | Type   | Required | Description                                                                                                                                                                                                                                            |
+| ------------------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`                         | string | Yes      | Display name for the job shown in VAMS UI and logs                                                                                                                                                                                                     |
+| `description`                  | string | Yes      | Human-readable description of the training job purpose                                                                                                                                                                                                 |
+| `trainingConfig.mode`          | string | Yes      | Must be `"train"` for training jobs                                                                                                                                                                                                                    |
+| `trainingConfig.task`          | string | Yes      | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct-v0"`, `"Isaac-Cartpole-Direct-v0"`)                                                                                                                                                          |
+| `trainingConfig.numEnvs`       | number | Yes      | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192                                                                                                                                |
+| `trainingConfig.maxIterations` | number | Yes      | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity                                                                                                   |
+| `trainingConfig.rlLibrary`     | string | Yes      | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set, before a GPU node is provisioned — it is not substituted |
 
 ---
 
@@ -148,9 +145,6 @@ Evaluation configs are used to evaluate trained policies and generate video reco
     "numEpisodes": number,    // Number of episodes to run
     "stepsPerEpisode": number,// Steps per episode (task-dependent)
     "rlLibrary": "string"     // RL library (must match training)
-  },
-  "computeConfig": {
-    "numNodes": number        // Always 1 for evaluation
   }
 }
 ```
@@ -165,10 +159,10 @@ The pipeline supports three methods to specify the checkpoint file (in priority 
     "checkpointPath": "checkpoints/model_300.pt"
     ```
 
-2. **`policyS3Uri`**: Full S3 URI to the checkpoint
+2. **`policyS3Uri`**: Full S3 URI to the checkpoint, which must name the executing asset's own bucket
 
     ```json
-    "policyS3Uri": "s3://bucket/path/to/model.pt"
+    "policyS3Uri": "s3://asset-bucket/asset-123/checkpoints/model_300.pt"
     ```
 
 3. **Auto-discovery** (legacy): Place a `.pt` file in the same directory as the evaluation config
@@ -187,9 +181,6 @@ The pipeline supports three methods to specify the checkpoint file (in priority 
         "numEpisodes": 10,
         "stepsPerEpisode": 500,
         "rlLibrary": "rsl_rl"
-    },
-    "computeConfig": {
-        "numNodes": 1
     }
 }
 ```
@@ -208,9 +199,6 @@ The pipeline supports three methods to specify the checkpoint file (in priority 
         "numEpisodes": 5,
         "stepsPerEpisode": 900,
         "rlLibrary": "rsl_rl"
-    },
-    "computeConfig": {
-        "numNodes": 1
     }
 }
 ```
@@ -230,28 +218,32 @@ This example uses auto-discovery - place a `.pt` file in the same directory as t
         "numEpisodes": 10,
         "stepsPerEpisode": 500,
         "rlLibrary": "rsl_rl"
-    },
-    "computeConfig": {
-        "numNodes": 1
     }
 }
 ```
 
 #### Evaluation Parameters Guide
 
-| Parameter                        | Type   | Required    | Description                                                                                            |
-| -------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------------------------------ |
-| `name`                           | string | Yes         | Display name for the job shown in VAMS UI and logs                                                     |
-| `description`                    | string | Yes         | Human-readable description of the evaluation job purpose                                               |
-| `trainingConfig.mode`            | string | Yes         | Must be `"evaluate"` for evaluation jobs                                                               |
-| `trainingConfig.task`            | string | Yes         | Isaac Lab task/environment name. Must match the task used during training                              |
-| `trainingConfig.checkpointPath`  | string | Recommended | Relative path to the trained model checkpoint within the asset (e.g., `"checkpoints/model_499.pt"`)    |
-| `trainingConfig.policyS3Uri`     | string | Optional    | Full S3 URI to checkpoint file. Use for cross-asset or external checkpoints                            |
-| `trainingConfig.numEnvs`         | number | Yes         | Number of parallel environments. **Keep low (1-16) for video recording to avoid out-of-memory errors** |
-| `trainingConfig.numEpisodes`     | number | Yes         | Number of evaluation episodes to run. Each episode generates video frames                              |
-| `trainingConfig.stepsPerEpisode` | number | Yes         | Simulation steps per episode. Task-dependent: Cartpole ~500, Ant ~900, Humanoid ~1000                  |
-| `trainingConfig.rlLibrary`       | string | Yes         | RL library used during training. Must match the training configuration                                 |
-| `computeConfig.numNodes`         | number | Yes         | Always `1` for evaluation jobs                                                                         |
+These are the parameters of the JSON config file supplied with the asset. `task`, `checkpointPath`,
+`numEnvs`, `numEpisodes`, `stepsPerEpisode`, `recordVideo` and `rlLibrary` are also fields on the
+execute form, supplied by the `isaaclab-evaluation-cartpole` template's `TASK`, `CHECKPOINT_PATH`,
+`NUM_ENVS`, `NUM_EPISODES`, `STEPS_PER_EPISODE`, `RECORD_VIDEO` and `RL_LIBRARY` tags. Wherever both
+name the same parameter the form's value wins. The numeric, boolean and choice fields always carry a
+value, so they always decide; `CHECKPOINT_PATH` is the one that can be left blank, which falls through
+to the config file and then to auto-discovery.
+
+| Parameter                        | Type   | Required    | Description                                                                                                                                                                            |
+| -------------------------------- | ------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                           | string | Yes         | Display name for the job shown in VAMS UI and logs                                                                                                                                     |
+| `description`                    | string | Yes         | Human-readable description of the evaluation job purpose                                                                                                                               |
+| `trainingConfig.mode`            | string | Yes         | Must be `"evaluate"` for evaluation jobs                                                                                                                                               |
+| `trainingConfig.task`            | string | Yes         | Isaac Lab task/environment name. Must match the task used during training                                                                                                              |
+| `trainingConfig.checkpointPath`  | string | Recommended | Relative path to the trained model checkpoint within the asset (e.g., `"checkpoints/model_499.pt"`)                                                                                    |
+| `trainingConfig.policyS3Uri`     | string | Optional    | Full S3 URI to a checkpoint inside the executing asset's own bucket                                                                                                                    |
+| `trainingConfig.numEnvs`         | number | Yes         | Number of parallel environments. **Keep low (1-16) for video recording to avoid out-of-memory errors**                                                                                 |
+| `trainingConfig.numEpisodes`     | number | Yes         | Number of evaluation episodes to run. Each episode generates video frames                                                                                                              |
+| `trainingConfig.stepsPerEpisode` | number | Yes         | Simulation steps per episode. Task-dependent: Cartpole ~500, Ant ~900, Humanoid ~1000                                                                                                  |
+| `trainingConfig.rlLibrary`       | string | Yes         | RL library used during training. Must match the training configuration. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than being substituted |
 
 #### Steps Per Episode by Task
 
@@ -294,7 +286,7 @@ The pipeline supports three methods to locate the checkpoint file:
 | Method         | Config Field     | Example                         | Use Case                                                      |
 | -------------- | ---------------- | ------------------------------- | ------------------------------------------------------------- |
 | Relative path  | `checkpointPath` | `"checkpoints/model_300.pt"`    | **Recommended** - reference checkpoints within the same asset |
-| Full S3 URI    | `policyS3Uri`    | `"s3://bucket/path/model.pt"`   | Cross-asset or external checkpoints                           |
+| Full S3 URI    | `policyS3Uri`    | `"s3://bucket/path/model.pt"`   | Absolute path inside the same asset's bucket                  |
 | Auto-discovery | (none)           | Place `.pt` in config directory | Legacy - backward compatibility                               |
 
 **Asset Directory Structure Example:**
@@ -327,7 +319,7 @@ Pipeline outputs are organized under the job UUID for easy identification when r
     │   ├── model_200.pt
     │   └── model_*.pt
     ├── metrics.csv           # Training metrics from TensorBoard
-    ├── training-config.json  # Copy of input configuration
+    ├── train-config.json     # Copy of input configuration
     └── *.txt                 # Log files
 ```
 
@@ -339,7 +331,7 @@ Pipeline outputs are organized under the job UUID for easy identification when r
     ├── videos/
     │   └── *.mp4             # Recorded evaluation videos
     ├── metrics.csv           # Evaluation metrics
-    ├── evaluation-config.json
+    ├── evaluate-config.json  # Copy of input configuration
     └── *.txt                 # Log files
 ```
 
@@ -460,4 +452,3 @@ isaacLabTraining/
 -   [User Guide](./USER_GUIDE.md)
 -   [Isaac Lab Documentation](https://isaac-sim.github.io/IsaacLab/)
 -   [Isaac Lab Docker Guide](https://isaac-sim.github.io/IsaacLab/main/source/deployment/docker.html)
--   [AWS Batch Multi-Node Parallel Jobs](https://docs.aws.amazon.com/batch/latest/userguide/multi-node-parallel-jobs.html)

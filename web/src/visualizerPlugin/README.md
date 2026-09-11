@@ -146,7 +146,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 7. ColumnarViewerPlugin
 
--   **Extensions**: `.rds`, `.fcs`, `.csv`
+-   **Extensions**: `.fcs`, `.csv`
 -   **Features**: Tabular data display using DataGrid
 -   **Multi-file**: No
 -   **Dependencies**: react-data-grid, FCS parser
@@ -162,19 +162,16 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 9. CesiumViewerPlugin
 
 -   **Extensions**: `.json`
--   **Features**: 3D Tileset viewing with CesiumJS using streaming API, optimized for large-scale 3D Tiles
+-   **Features**: 3D Tileset viewing with the CesiumJS engine (`@cesium/engine`) using streaming API, optimized for large-scale 3D Tiles. VAMS custom scene controls provide home, 3D/2D/2.5D scene mode, fullscreen, and a picked-feature properties panel.
 -   **Multi-file**: Yes (can load multiple tilesets simultaneously)
--   **Dependencies**: `cesium`
+-   **Dependencies**: `@cesium/engine` (via `customInstalls/cesium`)
 -   **Priority**: 2
--   **Feature Requirements**: `ALLOWUNSAFEEVAL` - CesiumJS requires unsafe eval permissions for WebGL shader compilation and dynamic code execution
 -   **Special**: Streams 3D Tileset data directly from VAMS API with authentication, provides Level-of-Detail (LOD) streaming
 -   **Custom Parameters**:
     -   `cesiumIonToken`: Cesium Ion access token for enhanced features (terrain, high-resolution imagery, geocoding)
 -   **CSP Requirements**:
-    -   **Required**: `ALLOWUNSAFEEVAL` feature flag must be enabled in CDK config.json configuration file
     -   **Optional**: If providing a Cesium Ion access token, add `https://api.cesium.com` to the CDK CSP `connectSrc` configuration file in `infra\config\csp\cspAdditionalConfig.json` to enable Cesium ION functionality
--   **Configuration**: To enable CesiumJS viewer, ensure `allowUnsafeEvalFeatures` is turned on in the `config.json` CDK configuration
--   **Note**: Designed for 3D Tileset (.json) files that reference collections of .glb/.gltf tiles. Uses VAMS streaming API for authenticated access to tileset data. Additional functionality (terrain, enhanced imagery) can be unlocked by providing a Cesium Ion token. This viewer will not be available if `ALLOWUNSAFEEVAL` is not enabled due to CesiumJS's requirement for dynamic code execution in WebGL shaders.
+-   **Note**: Designed for 3D Tileset (.json) files that reference collections of .glb/.gltf tiles. Uses VAMS streaming API for authenticated access to tileset data. Additional functionality (terrain, enhanced imagery) can be unlocked by providing a Cesium Ion token. Tilesets using KTX2/Basis compressed textures require the `ALLOWUNSAFEEVAL` deployment configuration (Emscripten embind in the KTX2 transcoder worker).
 
 ### 10. TextViewerPlugin
 
@@ -254,6 +251,16 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Priority**: 1
 -   **Category**: 3d
 -   **Note**: ⚠️ **Requires CloudFront deployment** - This viewer uses WebAssembly (WASM) and requires headers to be set by either CloudFront or the implemented COI web service worker script. Local debugging is supported.
+
+### 17. ThatOpenWebIfcViewerPlugin
+
+-   **Extensions**: `.ifc`, `.ifczip`
+-   **Features**: IFC (Industry Foundation Classes) Building Information Model viewing via the open-source That Open Engine (web-ifc, WebAssembly). Spatial model tree (by building storey / category), element property inspection on selection, hide/isolate, clipping/section planes, and length/area measurements. `.ifczip` archives are unzipped client-side.
+-   **Multi-file**: No
+-   **Dependencies**: `@thatopen/components`, `@thatopen/components-front`, `@thatopen/fragments`, `web-ifc` (all vendored in a self-contained `customInstalls/thatopenwebifc` UMD bundle; nothing added to the core `web` dependencies)
+-   **Priority**: 1
+-   **Category**: 3d
+-   **Note**: Uses the multithreaded `web-ifc-mt.wasm` when cross-origin isolation is available (COI service worker) and falls back to single-thread otherwise. Does **not** require `ALLOWUNSAFEEVAL`.
 
 ## 🚀 Usage
 
@@ -1313,7 +1320,7 @@ If your viewer plugin can't connect to external APIs:
 4. **Deploy and test** in your development environment
 5. **Document the requirements** for other developers
 
-For more detailed information about CSP configuration, see the [Developer Guide CSP Configuration section](../../../DeveloperGuide.md#csp-configuration).
+For more detailed information about CSP configuration, see [Content Security Policy](https://awslabs.github.io/visual-asset-management-system/architecture/security#content-security-policy-csp) in the security documentation, and [Viewer plugins](https://awslabs.github.io/visual-asset-management-system/developer/viewer-plugins) for the plugin-specific requirements.
 
 ## 📞 Support
 

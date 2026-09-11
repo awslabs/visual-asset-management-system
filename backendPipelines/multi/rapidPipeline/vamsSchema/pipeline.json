@@ -1,0 +1,40 @@
+{
+    "pipelineName": "RapidPipeline 3D Processor",
+    "category": "Conversion",
+    "description": "RapidPipeline 3D Processor - optimize and convert 3D models using DGG RapidPipeline. Target format is selected per execution via the template.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [
+                "*.glb",
+                "*.gltf",
+                "*.obj",
+                "*.fbx",
+                "*.stl",
+                "*.ply",
+                "*.usd",
+                "*.usdz",
+                "*.dae",
+                "*.abc"
+            ],
+            "exclude": []
+        }
+    }
+}

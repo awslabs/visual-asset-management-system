@@ -44,7 +44,11 @@ const setEndpointSSM = async (paramName: string, value: string | undefined) => {
  * Get the OpenSearch index mapping schema for dual-index system with flat object fields
  * This schema uses flat_object type for metadata (MD_) and attributes (AB_) to prevent field explosion
  */
-const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
+const getDualIndexMappingSchema = (
+    indexType: "asset" | "file",
+    numberOfReplicas: number,
+    numberOfShards: number
+) => {
     const baseMapping = {
         mappings: {
             dynamic_templates: [
@@ -109,11 +113,16 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
                 MD_: {
                     type: "flat_object",
                 },
+                // Geo shape derived from metadata (location key, or lat/lon/altitude fields).
+                // Populated by indexers; supports Point and Polygon/MultiPolygon GeoJSON.
+                geo_MD_location: {
+                    type: "geo_shape",
+                },
             } as any,
         },
         settings: {
-            number_of_shards: 1,
-            number_of_replicas: 0,
+            number_of_shards: numberOfShards,
+            number_of_replicas: numberOfReplicas,
             analysis: {
                 analyzer: {
                     default: {
@@ -171,6 +180,41 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
     return baseMapping;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Poll the OpenSearch endpoint until it responds, to absorb the propagation/cold-start delay of a
+ * freshly-created collection or VPC endpoint. Retries with linear backoff for up to ~11 minutes (well within
+ * the function's timeout), then throws so the failure surfaces rather than hanging on the first index call.
+ */
+const waitForEndpointReady = async (client: Client): Promise<void> => {
+    const maxAttempts = 60;
+    const delayMs = 10000;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            // A lightweight call that requires the data plane to be serving. indices.exists on a sentinel
+            // index returns quickly (true/false) once the endpoint is reachable and warm.
+            await client.indices.exists({ index: "vams-readiness-probe" });
+            console.log(`OpenSearch endpoint reachable after ${attempt} attempt(s)`);
+            return;
+        } catch (error) {
+            lastError = error;
+            console.log(
+                `OpenSearch endpoint not ready yet (attempt ${attempt}/${maxAttempts}): ${error}`
+            );
+            if (attempt < maxAttempts) {
+                await sleep(delayMs);
+            }
+        }
+    }
+
+    throw new Error(
+        `OpenSearch endpoint did not become reachable after ${maxAttempts} attempts: ${lastError}`
+    );
+};
+
 export const handler: Handler = async function (event: any) {
     console.log("the event ", event);
 
@@ -191,6 +235,11 @@ export const handler: Handler = async function (event: any) {
     const endpointSSMParam = event?.ResourceProperties?.endpointSSMParam;
     const assetIndexNameSSMParam = event?.ResourceProperties?.assetIndexNameSSMParam;
     const fileIndexNameSSMParam = event?.ResourceProperties?.fileIndexNameSSMParam;
+    // Index replica count. Defaults to 0 (single copy) when not provided (e.g. serverless). A 3-AZ
+    // provisioned domain with Multi-AZ with Standby passes 2 (3 copies) to meet the multiple-of-3 rule.
+    const numberOfReplicas = Number(event?.ResourceProperties?.numberOfReplicas ?? 0);
+    // Primary shard count. Defaults to 1 when not provided (e.g. serverless).
+    const numberOfShards = Number(event?.ResourceProperties?.numberOfShards ?? 1);
 
     // Determine deployment type and extract endpoint
     const isServerless = event?.ResourceProperties?.collectionEndpoint !== undefined;
@@ -218,18 +267,40 @@ export const handler: Handler = async function (event: any) {
     console.log("File Index Name", fileIndexName);
     console.log("EndpointSSMParam", endpointSSMParam);
 
-    // Set SSM parameters
-    setEndpointSSM(endpointSSMParam, endpoint);
+    // Set SSM parameters (awaited so the parameters are written before the function returns)
+    await setEndpointSSM(endpointSSMParam, endpoint);
 
     // Set index name parameters
     if (assetIndexNameSSMParam && assetIndexName) {
-        setIndexNameSSM(assetIndexNameSSMParam, assetIndexName);
+        await setIndexNameSSM(assetIndexNameSSMParam, assetIndexName);
     }
     if (fileIndexNameSSMParam && fileIndexName) {
-        setIndexNameSSM(fileIndexNameSSMParam, fileIndexName);
+        await setIndexNameSSM(fileIndexNameSSMParam, fileIndexName);
     }
 
-    // Initialize OpenSearch client with appropriate service type
+    // In deferred mode the data-plane VPC endpoint and network access policy have not been created (private
+    // NEXTGEN with addVpcEndpoints=false), so the collection is not reachable. The SSM parameters above are
+    // written so the runtime Lambdas are configured, but index creation is skipped and the custom resource
+    // succeeds. The operator creates the standard aoss-data endpoint and network policy, then reindexes.
+    const deferIndexCreation = event?.ResourceProperties?.deferIndexCreation === "true";
+    if (deferIndexCreation) {
+        console.log(
+            "deferIndexCreation=true: VPC endpoint/network policy not yet created. Wrote SSM parameters " +
+                "and skipped index creation. Create the endpoint and network policy, then reindex."
+        );
+        return {
+            StackId: event.StackId,
+            RequestId: event.RequestId,
+            LogicalResourceId: event.LogicalResourceId,
+            PhysicalResourceId: event.PhysicalResourceId,
+            Status: "SUCCESS",
+            Reason: "Deferred: wrote SSM parameters, skipped index creation (VPC endpoint pending manual creation)",
+        };
+    }
+
+    // Initialize OpenSearch client with appropriate service type. Use a short per-request timeout so a
+    // not-yet-reachable endpoint fails fast and is retried by the readiness loop below, rather than hanging
+    // for the client default (30s) on a single call.
     const client = new Client({
         ...AwsSigv4Signer({
             region: process.env["AWS_REGION"] ?? "us-east-1",
@@ -240,7 +311,14 @@ export const handler: Handler = async function (event: any) {
             },
         }),
         node: endpoint,
+        requestTimeout: 10000,
+        maxRetries: 1,
     });
+
+    // A freshly created collection (and, for a private collection, its VPC endpoint and DNS) can take
+    // several minutes to become reachable, and a NEXTGEN scale-to-zero collection adds a 10-30s cold start on
+    // the first request. Poll with backoff until the cluster responds before attempting index operations.
+    await waitForEndpointReady(client);
 
     console.log("established opensearch client connection");
 
@@ -276,7 +354,11 @@ export const handler: Handler = async function (event: any) {
             }
 
             // Create index with appropriate schema
-            const indexSchema = getDualIndexMappingSchema(indexInfo.type as "asset" | "file");
+            const indexSchema = getDualIndexMappingSchema(
+                indexInfo.type as "asset" | "file",
+                numberOfReplicas,
+                numberOfShards
+            );
 
             console.log(
                 `Creating ${indexInfo.type} index ${indexInfo.name} with schema:`,
@@ -305,6 +387,37 @@ export const handler: Handler = async function (event: any) {
                 message: `Error creating index: ${error}`,
             });
         }
+    }
+
+    // A failed index creation must fail the deployment. Reporting SUCCESS here left a green deploy on
+    // a cluster with no usable index: search returns nothing for every query, which is
+    // indistinguishable from a deployment that has no content yet, and recovery needs the indexes
+    // deleted and recreated plus a full reindex.
+    //
+    // "EXISTS" is not an error — the resource is idempotent by design and a redeploy hits that path for
+    // every index. The legitimate not-yet-reachable case is absorbed earlier by the readiness poll and
+    // by the deferIndexCreation branch, which returns before this loop, so an ERROR remaining here is a
+    // real fault.
+    const failed = results.filter((r) => r.status === "ERROR");
+    if (failed.length > 0) {
+        const detail = failed.map((r) => `${r.index}: ${r.message}`).join("; ");
+        console.error(`Index creation failed for ${failed.length} of ${results.length}: ${detail}`);
+        return {
+            StackId: event.StackId,
+            RequestId: event.RequestId,
+            LogicalResourceId: event.LogicalResourceId,
+            PhysicalResourceId: event.PhysicalResourceId,
+            Status: "FAILED",
+            Reason: `Index creation failed for ${failed.length} of ${results.length} index(es): ${detail}`.slice(
+                0,
+                // CloudFormation truncates a custom-resource Reason past 1 KB, and a truncated
+                // JSON-ish string is harder to read than a short one.
+                1000
+            ),
+            Data: {
+                Results: results,
+            },
+        };
     }
 
     return {

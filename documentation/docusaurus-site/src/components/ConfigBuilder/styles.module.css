@@ -1,0 +1,417 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Scoped styles for the config builder. Uses Docusaurus Infima CSS variables
+   (--ifm-*) so the component respects light/dark theme automatically. */
+
+.builder {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+}
+
+@media (max-width: 996px) {
+    .builder {
+        grid-template-columns: 1fr;
+    }
+}
+
+.formColumn {
+    min-width: 0;
+}
+
+.outputColumn {
+    min-width: 0;
+    position: sticky;
+    top: calc(var(--ifm-navbar-height, 60px) + 1rem);
+}
+
+/* --- Toolbar / profile switcher --- */
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--ifm-color-emphasis-300);
+}
+
+.profileGroup {
+    display: inline-flex;
+    border: 1px solid var(--ifm-color-emphasis-300);
+    border-radius: var(--ifm-button-border-radius, 0.4rem);
+    overflow: hidden;
+}
+
+.profileButton {
+    padding: 0.4rem 0.9rem;
+    background: var(--ifm-background-surface-color);
+    color: var(--ifm-font-color-base);
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.profileButton:not(:last-child) {
+    border-right: 1px solid var(--ifm-color-emphasis-300);
+}
+
+.profileButtonActive {
+    background: var(--ifm-color-primary);
+    color: var(--ifm-color-primary-contrast-foreground, #fff);
+}
+
+.toolbarLabel {
+    font-weight: 600;
+    margin-right: 0.25rem;
+}
+
+.toolbarSpacer {
+    flex: 1 1 auto;
+}
+
+/* --- Section panel --- */
+.section {
+    border: 1px solid var(--ifm-color-emphasis-200);
+    border-radius: var(--ifm-card-border-radius, 0.6rem);
+    margin-bottom: 1rem;
+    background: var(--ifm-background-surface-color);
+    overflow: hidden;
+}
+
+.sectionHeader {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.85rem 1rem;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    color: var(--ifm-heading-color);
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.sectionHeader:hover {
+    background: var(--ifm-color-emphasis-100);
+}
+
+.sectionCaret {
+    display: inline-block;
+    width: 1rem;
+    transition: transform 0.15s ease;
+    color: var(--ifm-color-emphasis-600);
+}
+
+.sectionCaretOpen {
+    transform: rotate(90deg);
+}
+
+.sectionBadge {
+    margin-left: auto;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.1rem 0.5rem;
+    border-radius: 1rem;
+    background: var(--ifm-color-danger);
+    color: #fff;
+}
+
+.sectionBadgeWarn {
+    background: var(--ifm-color-warning);
+    color: #3a2f00;
+}
+
+.sectionBody {
+    padding: 0.5rem 1rem 1rem;
+}
+
+.sectionDescription {
+    color: var(--ifm-color-emphasis-700);
+    font-size: 0.85rem;
+    margin: 0 0 0.75rem;
+}
+
+.advancedToggle {
+    margin-top: 0.75rem;
+    background: none;
+    border: none;
+    color: var(--ifm-link-color);
+    cursor: pointer;
+    padding: 0.25rem 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.advancedArea {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px dashed var(--ifm-color-emphasis-300);
+}
+
+/* --- Fields --- */
+.field {
+    margin-bottom: 0.9rem;
+}
+
+.fieldLabel {
+    display: block;
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+    color: var(--ifm-font-color-base);
+}
+
+.fieldHelp {
+    display: block;
+    color: var(--ifm-color-emphasis-600);
+    font-size: 0.8rem;
+    margin-top: 0.2rem;
+}
+
+.fieldError {
+    display: block;
+    color: var(--ifm-color-danger);
+    font-size: 0.8rem;
+    margin-top: 0.2rem;
+}
+
+.input,
+.select {
+    width: 100%;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--ifm-color-emphasis-300);
+    border-radius: var(--ifm-global-radius, 0.4rem);
+    background: var(--ifm-background-color);
+    color: var(--ifm-font-color-base);
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+
+.inputInvalid {
+    border-color: var(--ifm-color-danger);
+}
+
+.checkboxRow {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.checkboxRow input {
+    margin-top: 0.2rem;
+    flex: 0 0 auto;
+}
+
+/* --- String array / IP range / external buckets editors --- */
+.listRow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.listInput {
+    flex: 1 1 auto;
+}
+
+.iconButton {
+    flex: 0 0 auto;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--ifm-color-emphasis-300);
+    border-radius: var(--ifm-global-radius, 0.4rem);
+    background: var(--ifm-background-surface-color);
+    color: var(--ifm-font-color-base);
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.iconButton:hover {
+    background: var(--ifm-color-emphasis-200);
+}
+
+.addButton {
+    margin-top: 0.25rem;
+    color: var(--ifm-link-color);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.2rem 0;
+}
+
+.bucketCard {
+    border: 1px solid var(--ifm-color-emphasis-200);
+    border-radius: var(--ifm-global-radius, 0.4rem);
+    padding: 0.6rem;
+    margin-bottom: 0.5rem;
+}
+
+/* --- Validation summary --- */
+.summary {
+    border-radius: var(--ifm-card-border-radius, 0.6rem);
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.summaryOk {
+    border-color: var(--ifm-color-success);
+    background: var(--ifm-color-success-contrast-background, rgba(0, 164, 0, 0.1));
+}
+
+.summaryError {
+    border-color: var(--ifm-color-danger);
+    background: var(--ifm-color-danger-contrast-background, rgba(250, 56, 62, 0.1));
+}
+
+.summaryTitle {
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+}
+
+.summaryList {
+    margin: 0;
+    padding-left: 1.1rem;
+}
+
+.summaryItemError {
+    color: var(--ifm-color-danger-dark, #c92a2a);
+    margin-bottom: 0.25rem;
+}
+
+.summaryItemWarn {
+    color: var(--ifm-color-warning-dark, #997404);
+    margin-bottom: 0.25rem;
+}
+
+.govButton {
+    margin-top: 0.6rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px solid var(--ifm-color-primary);
+    border-radius: var(--ifm-button-border-radius, 0.4rem);
+    background: var(--ifm-color-primary);
+    color: var(--ifm-color-primary-contrast-foreground, #fff);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+/* --- Derived (auto-adjusted) notice --- */
+.derivedNotice {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    border: 1px solid var(--ifm-color-info);
+    background: var(--ifm-color-info-contrast-background, rgba(84, 199, 236, 0.1));
+    border-radius: var(--ifm-global-radius, 0.4rem);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+}
+
+.derivedDismiss {
+    margin-left: auto;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--ifm-color-emphasis-700);
+    font-size: 1rem;
+    line-height: 1;
+}
+
+/* --- Output panel --- */
+.outputActions {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.primaryButton {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: var(--ifm-button-border-radius, 0.4rem);
+    background: var(--ifm-color-primary);
+    color: var(--ifm-color-primary-contrast-foreground, #fff);
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.secondaryButton {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--ifm-color-emphasis-300);
+    border-radius: var(--ifm-button-border-radius, 0.4rem);
+    background: var(--ifm-background-surface-color);
+    color: var(--ifm-font-color-base);
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.preview {
+    max-height: 60vh;
+    overflow: auto;
+    border-radius: var(--ifm-global-radius, 0.4rem);
+    font-size: 0.8rem;
+    margin: 0;
+}
+
+.previewPlain {
+    max-height: 60vh;
+    overflow: auto;
+    border-radius: var(--ifm-global-radius, 0.4rem);
+    font-size: 0.8rem;
+    padding: 1rem;
+    background: var(--ifm-code-background);
+    margin: 0;
+    white-space: pre;
+}
+
+/* --- Download confirmation card (replaces the native confirm dialog) --- */
+.confirmCard {
+    border: 1px solid var(--ifm-color-warning);
+    background: var(--ifm-color-warning-contrast-background, rgba(255, 196, 0, 0.12));
+    border-radius: var(--ifm-card-border-radius, 0.6rem);
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.confirmHeader {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    color: var(--ifm-color-warning-dark, #997404);
+    margin-bottom: 0.5rem;
+}
+
+.confirmIcon {
+    font-size: 1.05rem;
+    line-height: 1;
+}
+
+.confirmList {
+    margin: 0 0 0.75rem;
+    padding-left: 1.1rem;
+    font-size: 0.85rem;
+    color: var(--ifm-font-color-base);
+}
+
+.confirmList li {
+    margin-bottom: 0.25rem;
+}
+
+.confirmActions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}

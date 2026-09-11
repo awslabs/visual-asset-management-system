@@ -5,13 +5,28 @@
 
 import PropTypes from "prop-types";
 
-export default function OptionDefinition(props) {
+interface OptionDefinition {
+    label: any;
+    value: any;
+}
+
+interface OptionDefinitionConstructor {
+    new (props: any): OptionDefinition;
+    propTypes: any;
+}
+
+function OptionDefinitionImpl(this: OptionDefinition, props: any) {
     const { label, value } = props;
     this.label = label;
     this.value = value;
 }
 
-OptionDefinition.propTypes = {
+(OptionDefinitionImpl as any).propTypes = {
     label: PropTypes.string.isRequired,
     value: PropTypes.string.isRequired,
 };
+
+const OptionDefinition = OptionDefinitionImpl as unknown as OptionDefinitionConstructor;
+
+export default OptionDefinition;
+export type { OptionDefinition };

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState, useCallback, useEffect } from "react";
-import { Container, Header, Tabs } from "@cloudscape-design/components";
+import React, { Suspense, useState } from "react";
+import { Container, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
 import Synonyms from "../../synonyms";
@@ -12,7 +12,7 @@ import Synonyms from "../../synonyms";
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
 const AssetLinksTab = React.lazy(() => import("./tabs/AssetLinksTab"));
-const WorkflowTab = React.lazy(() => import("./tabs/WorkflowTab"));
+const AssetExecutionsTab = React.lazy(() => import("./tabs/AssetExecutionsTab"));
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
 
@@ -20,38 +20,22 @@ interface TabbedContainerProps {
     assetName: string;
     assetId: string;
     databaseId: string;
-    onExecuteWorkflow: () => void;
-    onWorkflowExecuted?: () => void; // Callback when workflow execution is complete
-    workflowExecutedTrigger?: number; // Trigger value that changes when workflow is executed
     filePathToNavigate?: string; // Optional file path to navigate to in File Manager
     assetVersionId?: string; // Optional version ID to filter files and metadata
+    /** Bubbled-up notification when the user changes the file/folder selection. */
+    onSelectedPathChange?: (path: string | null) => void;
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     assetName,
     assetId,
     databaseId,
-    onExecuteWorkflow,
-    onWorkflowExecuted,
-    workflowExecutedTrigger,
     filePathToNavigate,
     assetVersionId,
+    onSelectedPathChange,
 }) => {
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
-    const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
-
-    // Watch for changes in the parent's trigger value
-    useEffect(() => {
-        if (workflowExecutedTrigger !== undefined && workflowExecutedTrigger > 0) {
-            console.log(
-                "TabbedContainer: workflowExecutedTrigger changed to",
-                workflowExecutedTrigger,
-                "- incrementing local trigger"
-            );
-            setWorkflowRefreshTrigger((prev) => prev + 1);
-        }
-    }, [workflowExecutedTrigger]);
 
     return (
         <ErrorBoundary componentName="Tabbed Container">
@@ -74,6 +58,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                             assetName={assetName}
                                             filePathToNavigate={filePathToNavigate}
                                             assetVersionId={assetVersionId}
+                                            onSelectedPathChange={onSelectedPathChange}
                                         />
                                     </Suspense>
                                 ),
@@ -98,17 +83,15 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                             },
                             {
                                 id: "workflows",
-                                label: "Workflows",
+                                label: "Executions",
                                 content: (
                                     <Suspense
-                                        fallback={<LoadingSpinner text="Loading Workflows..." />}
+                                        fallback={<LoadingSpinner text="Loading Executions..." />}
                                     >
-                                        <WorkflowTab
+                                        <AssetExecutionsTab
                                             databaseId={databaseId}
                                             assetId={assetId}
                                             isActive={activeTabId === "workflows"}
-                                            onExecuteWorkflow={onExecuteWorkflow}
-                                            refreshTrigger={workflowRefreshTrigger}
                                         />
                                     </Suspense>
                                 ),

@@ -3,100 +3,108 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { render } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 
-import createWrapper, { ElementWrapper } from "@cloudscape-design/components/test-utils/dom";
+import createWrapper from "@cloudscape-design/components/test-utils/dom";
 
 import { Navigation } from "./Navigation";
+import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck";
 
-function createUser(roles: string[]) {
-    return {
-        signInUserSession: {
-            idToken: {
-                payload: {
-                    "vams:roles": JSON.stringify(roles),
-                },
-            },
-        },
-    };
+// Navigation filters its items through the server-side web route permission
+// check (auth/routes via the batched webRoutesCheck helper).
+jest.mock("../services/webRoutesCheck", () => ({
+    checkWebRoutesAllowed: jest.fn(),
+}));
+
+const mockCheckWebRoutesAllowed = checkWebRoutesAllowed as jest.MockedFunction<
+    typeof checkWebRoutesAllowed
+>;
+
+/** Resolve the permission check by allowing only the given route paths. */
+function allowRoutes(...allowedPaths: string[]) {
+    mockCheckWebRoutesAllowed.mockImplementation(async (routes: WebRouteCheck[]) =>
+        routes.filter((route) => allowedPaths.includes(route.route__path))
+    );
 }
-function expectSideNavLinks(wrapper: ElementWrapper<Element>, ...links: string[]) {
-    links.forEach((link) => {
-        expect(wrapper.findSideNavigation()?.findLinkByHref(link)).toBeTruthy();
+
+async function renderNavigation() {
+    const { container } = render(<Navigation activeHref={"#/databases"} user={undefined} />);
+    // Wait for the async permission check to resolve and the nav to render
+    await waitFor(() => {
+        expect(mockCheckWebRoutesAllowed).toHaveBeenCalled();
     });
+    return container;
 }
-function expectNoSideNavLinks(wrapper: ElementWrapper<Element>, ...links: string[]) {
-    links.forEach((link) => {
-        expect(wrapper.findSideNavigation()?.findLinkByHref(link)).toBeFalsy();
-    });
+
+function findNavLink(container: HTMLElement, href: string) {
+    return createWrapper(container).findSideNavigation()?.findLinkByHref(href);
 }
 
 describe("Navigation", () => {
-    it("should render all links for super-admin", async () => {
-        const { container } = render(
-            <Navigation activeHref={"#/assets"} user={createUser(["super-admin"])} />
-        );
-        const wrapper = createWrapper(container);
-        expectSideNavLinks(
-            wrapper,
-            "#/assets",
-            "#/upload",
-            "#/comments",
-            "#/pipelines",
-            "#/workflows",
-            "#/auth/constraints"
-        );
+    beforeEach(() => {
+        jest.clearAllMocks();
     });
 
-    it("should render assets and visualizer links for the assets role", async () => {
-        const { container } = render(
-            <Navigation activeHref={"#/assets"} user={createUser(["assets"])} />
-        );
-        const wrapper = createWrapper(container);
-        expectSideNavLinks(wrapper, "#/assets", "#/upload", "#/comments");
-        expectNoSideNavLinks(wrapper, "#/pipelines", "#/workflows", "#/auth/constraints");
+    it("renders only the links the user has access to", async () => {
+        allowRoutes("/databases/", "/assets/");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/assets/")).toBeTruthy();
+        expect(findNavLink(container, "#/pipelines/")).toBeFalsy();
+        expect(findNavLink(container, "#/workflows/")).toBeFalsy();
+        expect(findNavLink(container, "#/auth/constraints/")).toBeFalsy();
     });
 
-    it("should render pipelines for the pipeline role", async () => {
-        const { container } = render(
-            <Navigation activeHref={"#/assets"} user={createUser(["pipelines"])} />
-        );
-        const wrapper = createWrapper(container);
-        expectSideNavLinks(wrapper, "#/pipelines");
-        expectNoSideNavLinks(
-            wrapper,
-            "#/assets",
-            "#/upload",
-            "#/comments",
-            "#/workflows",
-            "#/auth/constraints"
-        );
+    it("renders admin auth links when allowed", async () => {
+        allowRoutes("/auth/constraints/", "/auth/roles/", "/auth/userroles/");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/auth/constraints/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/auth/roles/")).toBeTruthy();
+        expect(findNavLink(container, "#/auth/userroles/")).toBeTruthy();
+        expect(findNavLink(container, "#/databases/")).toBeFalsy();
     });
 
-    it("should render workflows for the workflow role", async () => {
-        const { container } = render(
-            <Navigation activeHref={"#/assets"} user={createUser(["workflows"])} />
-        );
-        const wrapper = createWrapper(container);
-        expectSideNavLinks(wrapper, "#/workflows");
-        expectNoSideNavLinks(
-            wrapper,
-            "#/assets",
-            "#/comments",
-            "#/pipelines",
-            "#/auth/constraints"
-        );
+    it("renders the User section with API Key Management when allowed", async () => {
+        allowRoutes("/auth/api-keys/");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/auth/api-keys/")).toBeTruthy();
+        });
     });
 
-    it("should render combined links for assets, piplines, and workflows roles", async () => {
-        const { container } = render(
-            <Navigation
-                activeHref={"#/assets"}
-                user={createUser(["assets", "pipelines", "workflows"])}
-            />
-        );
-        const wrapper = createWrapper(container);
-        expectSideNavLinks(wrapper, "#/assets", "#/comments", "#/pipelines", "#/workflows");
-        expectNoSideNavLinks(wrapper, "#/auth/constraints");
+    it("hides the User section when API Key Management is not allowed", async () => {
+        allowRoutes("/databases/");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/auth/api-keys/")).toBeFalsy();
+        expect(screen.queryByText("User")).not.toBeInTheDocument();
+    });
+
+    it("shows the no-access message when no routes are allowed", async () => {
+        allowRoutes(/* none */);
+        await renderNavigation();
+
+        await waitFor(() => {
+            expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
+        });
+    });
+
+    it("shows the no-access message when the permission check fails", async () => {
+        mockCheckWebRoutesAllowed.mockRejectedValue(new Error("auth/routes failed"));
+        await renderNavigation();
+
+        await waitFor(() => {
+            expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
+        });
     });
 });

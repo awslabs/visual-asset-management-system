@@ -1,0 +1,132 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Tailwind preflight is disabled globally (so it can't bleed into Cloudscape pages), which
+ * leaves button elements inside the orchestration module with the browser default gray
+ * chrome. Scope a minimal button reset to the module root so ghost/icon buttons render flat.
+ * Background and border utilities on primary buttons win on specificity and are unaffected.
+ */
+@layer base {
+    /*
+     * Tailwind's border utilities only set border-WIDTH and border-COLOR; preflight normally supplies
+     * `border-style: solid`. Preflight is disabled here (so it cannot bleed into Cloudscape pages), so
+     * a `border` utility alone paints NOTHING — which is why the RUNNING badge's spinner, the section
+     * and table outlines, and the secondary buttons' boxes were all invisible.
+     *
+     * Enabled deliberately per component rather than with a `*` reset: this module has ~130 elements
+     * carrying a border utility (dividers, chips, inline rows, nested panels), and turning them all on
+     * at once outlines every small thing and reads as visual noise. Cloudscape itself only outlines
+     * containers, tables, and form controls, so only those opt in here.
+     */
+    :where(.orchestration-root) .orch-outline,
+    :where(.orchestration-root) section,
+    :where(.orchestration-root) table,
+    :where(.orchestration-root) input,
+    :where(.orchestration-root) select,
+    :where(.orchestration-root) textarea {
+        /*
+         * All THREE of preflight's border declarations are needed, not just style+color. CSS's initial
+         * `border-width` is `medium` (~3px), so an element matched here that carries no explicit
+         * border-width utility painted a 3px line — visibly heavier than the 1px containers beside it.
+         * That was the thick table box and tab-bar rule.
+         */
+        border-width: 0;
+        border-style: solid;
+        /*
+         * Preflight also sets a default `border-color`. Without it the CSS initial value is
+         * `currentColor`, so any bordered element whose own colour utility resolves differently painted
+         * its border in the TEXT colour — black-ish on light mode, near-white on dark, and varying per
+         * row depending on the text colour in that row. That is the inconsistent border colour seen on
+         * the executions rows and in the asset-view tab. Pin the default; an explicit
+         * `border-<color>` utility still wins.
+         */
+        border-color: var(--vams-border-default);
+    }
+
+    /*
+     * Typography parity with Cloudscape. `body` sets a system font stack, which Cloudscape's own
+     * components override internally with their base family — so only THIS module inherited the
+     * system stack, making the new pages render in a visibly different typeface from every Cloudscape
+     * page. Adopt Cloudscape's own family/size/line-height variables (with its published values as
+     * fallbacks) so text matches rather than merely being close.
+     */
+    :where(.orchestration-root) {
+        font-family: var(
+            --font-family-base-gmnpzl,
+            "Open Sans",
+            "Helvetica Neue",
+            Roboto,
+            Arial,
+            sans-serif
+        );
+        font-size: var(--font-size-body-m-a7nh2n, 14px);
+        line-height: var(--line-height-body-m-2mh3ke, 20px);
+    }
+
+    /*
+     * Preflight also zeroes the browser's default block margins. With it disabled, every h1-h6, p, ul,
+     * ol and figure in this module still carries the UA margin (~1em above AND below), which is what
+     * made stacked text inside a row balloon and forced rows far apart — the `mt-*` utilities were
+     * fighting a margin that was never reset. Zero them here so vertical rhythm comes only from the
+     * explicit spacing utilities, exactly as it would with preflight on.
+     */
+    :where(.orchestration-root) h1,
+    :where(.orchestration-root) h2,
+    :where(.orchestration-root) h3,
+    :where(.orchestration-root) h4,
+    :where(.orchestration-root) h5,
+    :where(.orchestration-root) h6,
+    :where(.orchestration-root) p,
+    :where(.orchestration-root) ul,
+    :where(.orchestration-root) ol,
+    :where(.orchestration-root) dl,
+    :where(.orchestration-root) figure,
+    :where(.orchestration-root) blockquote,
+    :where(.orchestration-root) pre {
+        margin: 0;
+    }
+
+    /* Cloudscape's h1 is 24px / weight 700 / 30px line-height with -0.02em tracking. Page titles in
+     * this module were a mix of font-bold and font-semibold at Tailwind's own metrics, so they did not
+     * match a Cloudscape Header and did not match each other. */
+    :where(.orchestration-root) h1 {
+        font-size: var(--font-size-heading-xl-wvkbur, 24px);
+        line-height: var(--line-height-heading-xl-hko6p0, 30px);
+        font-weight: var(--font-weight-heading-xl-u3m4we, 700);
+        letter-spacing: var(--letter-spacing-heading-xl-ckkb6u, -0.02em);
+    }
+
+    /*
+     * Page shell padding, matched to the Cloudscape list pages (`Box padding={{ top: "m",
+     * horizontal: "l" }}` in src/pages/ListPage.tsx) = 16px top / 20px sides. The module's pages used
+     * px-6 (24px), which read as a few px more inset than every Cloudscape page beside them. Bound to
+     * Cloudscape's scaled-space variables so a density change moves both together.
+     */
+    .orchestration-page {
+        /* Cloudscape list pages start their content at space-scaled-s (12px), not m — the earlier 16px
+         * still read as sitting lower than the Cloudscape pages beside it. */
+        padding-top: var(--space-scaled-s-8ozaad, 12px);
+        padding-inline: var(--space-scaled-l-sej05l, 20px);
+        padding-bottom: var(--space-scaled-l-sej05l, 20px);
+    }
+
+    /* where() contributes zero specificity, so this matches Tailwind preflight own
+     * low-specificity element reset; utility classes on primary buttons still override it. */
+    :where(.orchestration-root) button {
+        background-color: transparent;
+        border: 0;
+        padding: 0;
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        -webkit-appearance: none;
+        appearance: none;
+    }
+}

@@ -214,8 +214,20 @@ export function CreateAssetLinkModal({
                 }
 
                 try {
-                    await createAssetLink(assetLinkBody);
-                    successCount++;
+                    // createAssetLink resolves to [true, data] on success and
+                    // [false, message] on failure -- it does not throw on API
+                    // errors, so the result tuple must be checked.
+                    const result: any = await createAssetLink(assetLinkBody);
+                    if (Array.isArray(result) && result[0] === false) {
+                        console.error("Error creating asset link:", result[1]);
+                        errorCount++;
+                        errors.push({
+                            assetName: selectedAsset.assetName,
+                            message: result[1] || "Unknown error",
+                        });
+                    } else {
+                        successCount++;
+                    }
                 } catch (err: any) {
                     console.error("Error creating asset link:", err);
                     errorCount++;

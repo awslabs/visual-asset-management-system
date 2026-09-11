@@ -11,6 +11,7 @@ from customLogging.logger import safeLogger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success, 
     validation_error, general_error, authorization_error, 
     VAMSGeneralErrorResponse
@@ -24,23 +25,26 @@ from models.assetsV3 import (
 
 # Configure AWS clients
 region = os.environ['AWS_REGION']
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'},
+                   retries={'max_attempts': 5, 'mode': 'adaptive'})
 s3 = boto3.client('s3', region_name=region, config=s3_config)
 
-lambda_client = boto3.client('lambda')
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+lambda_client = boto3.client('lambda', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 logger = safeLogger(service_name="IngestAsset")
 
 # Load environment variables
 try:
-    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     # Lambda functions for cross-calls
     create_asset_lambda = os.environ["CREATE_ASSET_LAMBDA_FUNCTION_NAME"]
     file_upload_lambda = os.environ["FILE_UPLOAD_LAMBDA_FUNCTION_NAME"]
 except Exception as e:
-    logger.exception(f"Failed loading environment variables: {e}")
+    logger.exception(f"Failed loading environment variables or resolving resource names: {e}")
     raise e
 
 #######################
@@ -320,12 +324,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         }
 
         event_auth = event['requestContext']['authorizer']
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event)):
-                return authorization_error()
-        
+
+        # Fail closed: with no authenticated identity no authorization can be
+        # evaluated, so deny rather than fall through to the mutation.
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not (casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event)):
+            return authorization_error()
+
         # Process request based on stage
         if is_complete_stage:
             # Stage 2 - Complete upload
@@ -338,7 +346,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

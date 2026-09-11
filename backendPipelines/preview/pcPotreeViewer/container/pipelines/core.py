@@ -35,6 +35,17 @@ def run(params: dict) -> PipelineExecutionParams:
         current_stage = PipelineStage(**definition.stages.pop(0))
         definition.currentStage = current_stage
         logger.info(f"Pipeline Current Stage: {current_stage}")
+    else:
+        # A resumed definition already carries its stage. It arrives deserialized from JSON, where
+        # the stage is a plain dict, so it is coerced back; an in-process definition already holds
+        # the object. Without this branch current_stage is unbound and the reference below raises
+        # UnboundLocalError -- and nothing above run() catches it, so the container ends without
+        # reporting against the workflow's task token and the step waits out its full taskTimeout.
+        current_stage = (
+            PipelineStage(**definition.currentStage)
+            if isinstance(definition.currentStage, dict)
+            else definition.currentStage
+        )
 
     # import pipeline based on pipeline type
     if current_stage.type == PipelineType.PDAL:
@@ -47,8 +58,8 @@ def run(params: dict) -> PipelineExecutionParams:
             definition.jobName,
             current_stage.type,
             [definition.to_json()],
-            definition.inputMetadata,
-            definition.inputParameters,
+            definition.inputMetadataS3Location,
+            definition.inputConfigurationS3Location,
             definition.externalSfnTaskToken,
             PipelineStatus.FAILED,
         )
@@ -59,7 +70,7 @@ def run(params: dict) -> PipelineExecutionParams:
         return output
 
     # run core pipeline
-    resultStageCompleted = pipeline.run(current_stage, definition.inputMetadata, definition.inputParameters, definition.localTest == 'True')
+    resultStageCompleted = pipeline.run(current_stage, definition.inputMetadataS3Location, definition.inputConfigurationS3Location, definition.localTest == 'True')
     logger.info(f"Pipeline Result: {resultStageCompleted}")
 
     if len(definition.stages) > 0 and definition.stages[0] != None:
@@ -78,8 +89,8 @@ def run(params: dict) -> PipelineExecutionParams:
         definition.jobName,
         next_stage_type,
         [definition.to_json()],
-        definition.inputMetadata,
-        definition.inputParameters,
+        definition.inputMetadataS3Location,
+        definition.inputConfigurationS3Location,
         definition.externalSfnTaskToken,
         resultStageCompleted.status,
     )

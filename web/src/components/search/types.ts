@@ -51,7 +51,26 @@ export interface SearchFilters {
     str_assetname?: {
         value: string;
     } | null;
+    geo_filter?: GeoSearchFilter | null;
     [key: string]: any;
+}
+
+/**
+ * Geospatial filter against the geo_MD_location field on search documents.
+ * Mirrors the backend GeoSearchModel: exactly one of point, bbox, or geoJson.
+ */
+export interface GeoSearchFilter {
+    relation?: "intersects" | "within" | "contains" | "disjoint";
+    point?: {
+        lat: number;
+        lon: number;
+        radiusMeters?: number;
+    };
+    bbox?: {
+        topLeft: { lat: number; lon: number };
+        bottomRight: { lat: number; lon: number };
+    };
+    geoJson?: any;
 }
 
 export interface MetadataFilter {
@@ -362,7 +381,7 @@ export const FIELD_MAPPINGS: FieldMapping = {
         filterable: true,
         searchable: false,
     },
-    _rectype: {
+    str_rectype: {
         label: "Record Type",
         type: "string",
         sortable: true,

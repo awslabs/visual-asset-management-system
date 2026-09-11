@@ -30,7 +30,12 @@ export default function ResetCognitoUserPassword({
         setSuccess(false);
 
         try {
-            const response = await resetCognitoUserPassword({ userId: user.userId });
+            // The endpoint only resets on an explicit confirmation, which is this dialog's
+            // Reset Password button
+            const response = await resetCognitoUserPassword({
+                userId: user.userId,
+                confirmReset: true,
+            });
 
             if (response && response[0]) {
                 setSuccess(true);

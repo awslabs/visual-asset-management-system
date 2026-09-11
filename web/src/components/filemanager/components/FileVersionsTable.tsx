@@ -15,8 +15,10 @@ import {
     Alert,
     Spinner,
 } from "@cloudscape-design/components";
+import Popover from "@cloudscape-design/components/popover";
 import { downloadAsset, revertFileVersion } from "../../../services/APIService";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
+import { getChangeSourceLabel } from "../utils/changeSourceLabels";
 import { useNavigate } from "react-router";
 import Synonyms from "../../../synonyms";
 
@@ -31,6 +33,14 @@ interface FileVersion {
     isArchived: boolean;
     currentAssetVersionFileVersionMismatch?: boolean;
     assetVersionIds?: { id: string; label: string }[];
+    changeSource?: string;
+    changeUserId?: string;
+    changeWorkflowId?: string;
+    changeWorkflowExecutionId?: string;
+    changeAssetIdFrom?: string;
+    changeDatabaseIdFrom?: string;
+    changeAssetFilePathFrom?: string;
+    changeAssetFileVersionFrom?: string;
 }
 
 interface FileVersionsTableProps {
@@ -183,13 +193,13 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // Handle download version
     const handleDownloadVersion = async (versionId: string) => {
         try {
-            const [success, downloadUrl] = await downloadAsset({
+            const [success, downloadUrl] = (await downloadAsset({
                 databaseId,
                 assetId,
                 key: filePath,
                 versionId: versionId,
                 downloadType: "assetFile",
-            });
+            })) as [boolean, any];
 
             if (success && downloadUrl) {
                 const link = document.createElement("a");
@@ -353,6 +363,115 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
             sortingField: "lastModified",
         },
         {
+            id: "change",
+            header: "Change Source",
+            cell: (item: FileVersion) => {
+                const changeSourceLabel = getChangeSourceLabel(item.changeSource);
+
+                // Build the list of populated provenance detail rows. Each field is
+                // independent — any one of them may be present without the others.
+                const details: { label: string; value: string }[] = [];
+                if (changeSourceLabel) {
+                    details.push({ label: "Source", value: changeSourceLabel });
+                }
+                if (item.changeUserId) {
+                    details.push({ label: "User", value: item.changeUserId });
+                }
+                if (item.changeWorkflowId) {
+                    details.push({ label: "Workflow", value: item.changeWorkflowId });
+                }
+                if (item.changeWorkflowExecutionId) {
+                    details.push({
+                        label: "Workflow Execution",
+                        value: item.changeWorkflowExecutionId,
+                    });
+                }
+
+                // "Changed From" grouping for asset-copy provenance
+                const changedFrom: string[] = [];
+                if (item.changeDatabaseIdFrom) {
+                    changedFrom.push(`${Synonyms.Database}: ${item.changeDatabaseIdFrom}`);
+                }
+                if (item.changeAssetIdFrom) {
+                    changedFrom.push(`${Synonyms.Asset}: ${item.changeAssetIdFrom}`);
+                }
+                if (item.changeAssetFilePathFrom) {
+                    changedFrom.push(`Path: ${item.changeAssetFilePathFrom}`);
+                }
+                if (item.changeAssetFileVersionFrom) {
+                    changedFrom.push(`Version: ${item.changeAssetFileVersionFrom}`);
+                }
+
+                // No provenance recorded at all (e.g. a legacy version).
+                if (details.length === 0 && changedFrom.length === 0) {
+                    return <Box color="text-status-inactive">--</Box>;
+                }
+
+                // Primary inline text is the change source when known; otherwise fall
+                // back to the acting user so the cell still surfaces who changed the
+                // file, and finally to a neutral placeholder.
+                const primaryText = changeSourceLabel || item.changeUserId || "Unknown";
+
+                // The richer provenance (workflow / changed-from) is revealed in a
+                // Popover so the row height stays consistent. Source and user are shown
+                // inline directly.
+                const hasExtraDetail =
+                    Boolean(item.changeWorkflowId) ||
+                    Boolean(item.changeWorkflowExecutionId) ||
+                    changedFrom.length > 0;
+
+                // The user is shown as a secondary muted line only when it is not
+                // already the primary text (avoids duplicating it when the source is
+                // unknown and the user became the primary text).
+                const showUserSecondary =
+                    Boolean(item.changeUserId) && primaryText !== item.changeUserId;
+
+                const primaryContent = hasExtraDetail ? (
+                    <Popover
+                        dismissButton={false}
+                        position="top"
+                        size="medium"
+                        triggerType="custom"
+                        content={
+                            <SpaceBetween direction="vertical" size="xs">
+                                {details.map((d) => (
+                                    <div key={d.label}>
+                                        <Box variant="awsui-key-label">{d.label}</Box>
+                                        <Box>{d.value}</Box>
+                                    </div>
+                                ))}
+                                {changedFrom.length > 0 && (
+                                    <div>
+                                        <Box variant="awsui-key-label">From</Box>
+                                        {changedFrom.map((cf) => (
+                                            <Box key={cf}>{cf}</Box>
+                                        ))}
+                                    </div>
+                                )}
+                            </SpaceBetween>
+                        }
+                    >
+                        <Button variant="inline-link" iconName="status-info" iconAlign="right">
+                            {primaryText}
+                        </Button>
+                    </Popover>
+                ) : (
+                    <Box>{primaryText}</Box>
+                );
+
+                return (
+                    <SpaceBetween direction="vertical" size="xxxs">
+                        {primaryContent}
+                        {showUserSecondary && (
+                            <Box fontSize="body-s" color="text-status-inactive">
+                                {item.changeUserId}
+                            </Box>
+                        )}
+                    </SpaceBetween>
+                );
+            },
+        },
+        {
             id: "size",
             header: "File Size",
             cell: (item: FileVersion) => formatFileSize(item.size),
@@ -433,13 +552,13 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                             }
                         />
 
-                        {totalPages > 1 && (
+                        <Box textAlign="center">
                             <Pagination
                                 currentPageIndex={currentPage}
                                 pagesCount={totalPages}
                                 onChange={({ detail }) => setCurrentPage(detail.currentPageIndex)}
                             />
-                        )}
+                        </Box>
                     </>
                 )}
             </SpaceBetween>

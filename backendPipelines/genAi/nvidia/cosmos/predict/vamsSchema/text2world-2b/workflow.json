@@ -1,0 +1,12 @@
+{
+    "workflowName": "NVIDIA Cosmos Text-to-World 2B v2",
+    "category": "WFM",
+    "description": "NVIDIA Cosmos Text-to-World 2B v2 - Generate videos from text prompts (Predict2.5)",
+    "systemConfig": {
+        "inputFileArity": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": true
+        }
+    }
+}

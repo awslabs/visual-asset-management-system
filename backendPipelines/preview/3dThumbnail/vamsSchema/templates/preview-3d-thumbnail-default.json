@@ -1,0 +1,29 @@
+{
+    "templateId": "preview-3d-thumbnail-default",
+    "templateName": "GIF/JPG/PNG thumbnails",
+    "description": "Generate a GIF, JPG, or PNG preview thumbnail, overwriting any existing preview files.",
+    "configFormat": "json",
+    "configBody": "{\"overwriteExistingPreviewFiles\":{{OVERWRITE_EXISTING_PREVIEW_FILES}},\"outputType\":\"{{OUTPUT_TYPE}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "overwriteExistingPreviewFiles (true/false) controls whether existing .previewFile.* thumbnails are replaced, and is set by the \"Overwrite existing preview files\" field. outputType selects the thumbnail format written for the input file and is set by the \"Thumbnail format\" field: auto writes an animated GIF when the renderer produces several frames and a JPG otherwise, while gif, jpg and png write that format for every input.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "OVERWRITE_EXISTING_PREVIEW_FILES",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Overwrite existing preview files",
+            "description": "Replace an existing .previewFile.* thumbnail for the input file. Clear it to leave an existing thumbnail in place, which reports the run successful without regenerating."
+        },
+        {
+            "tagKey": "OUTPUT_TYPE",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "gif", "jpg", "png"],
+            "label": "Thumbnail format",
+            "description": "The preview file format. auto writes an animated GIF when the renderer produces several frames and a JPG otherwise; gif, jpg and png write that format for every input."
+        }
+    ]
+}

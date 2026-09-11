@@ -15,7 +15,7 @@ import {
 import { appLayoutLabels, externalLinkProps } from "./helpers/labels";
 import { getHeaderCounterText, getServerHeaderCounterText } from "./helpers/tableCounterStrings";
 
-export const EmptyState = ({ title, subtitle, action }) => {
+export const EmptyState = ({ title, subtitle, action }: any) => {
     return (
         <Box textAlign="center" color="inherit">
             <Box variant="strong" textAlign="center" color="inherit">
@@ -29,7 +29,7 @@ export const EmptyState = ({ title, subtitle, action }) => {
     );
 };
 
-export const InfoLink = ({ id, onFollow }) => (
+export const InfoLink = ({ id, onFollow }: { id?: any; onFollow: any }) => (
     <Link variant="info" id={id} onFollow={onFollow}>
         Info
     </Link>
@@ -37,7 +37,7 @@ export const InfoLink = ({ id, onFollow }) => (
 
 // a special case of external link, to be used within a link group, where all of them are external
 // and we do not repeat the icon
-export const ExternalLinkItem = ({ href, text }) => (
+export const ExternalLinkItem = ({ href, text }: any) => (
     <Link
         href={href}
         ariaLabel={`${text} ${externalLinkProps.externalIconAriaLabel}`}
@@ -47,7 +47,7 @@ export const ExternalLinkItem = ({ href, text }) => (
     </Link>
 );
 
-export const TableNoMatchState = (props) => (
+export const TableNoMatchState = (props: any) => (
     <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
         <SpaceBetween size="xxs">
             <div>
@@ -61,7 +61,7 @@ export const TableNoMatchState = (props) => (
     </Box>
 );
 
-export const TableEmptyState = ({ resourceName, showCreateButton = true }) => (
+export const TableEmptyState = ({ resourceName, showCreateButton = true }: any) => (
     <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
         <SpaceBetween size="xxs">
             <div>
@@ -75,7 +75,7 @@ export const TableEmptyState = ({ resourceName, showCreateButton = true }) => (
     </Box>
 );
 
-function getCounter(props) {
+function getCounter(props: any) {
     if (props.counter) {
         return props.counter;
     }
@@ -88,7 +88,7 @@ function getCounter(props) {
     return getHeaderCounterText(props.totalItems, props.selectedItems);
 }
 
-export const TableHeader = (props) => {
+export const TableHeader = (props: any) => {
     return (
         <Header
             counter={getCounter(props)}
@@ -127,7 +127,7 @@ export function DevSameOriginWarning() {
     return null;
 }
 
-export function CustomAppLayout(props) {
+export function CustomAppLayout(props: any) {
     return (
         <AppLayout
             {...props}

@@ -74,8 +74,8 @@ const ModeSelector: React.FC<ModeSelectorProps> = ({
                         Show preview thumbnails
                     </Toggle>
 
-                    {/* Show map thumbnail toggle only for assets when maps are enabled */}
-                    {useMapView && recordType === "asset" && onMapThumbnailToggle && (
+                    {/* Show map thumbnail toggle when maps are enabled (assets and files) */}
+                    {useMapView && onMapThumbnailToggle && (
                         <Toggle
                             onChange={onMapThumbnailToggle}
                             checked={showMapThumbnails}

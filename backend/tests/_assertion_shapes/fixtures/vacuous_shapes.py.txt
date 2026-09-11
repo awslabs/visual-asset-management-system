@@ -1,0 +1,34 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# A FIXTURE, not a test module. Read as TEXT by test_assertion_shapes.py; never imported, executed,
+# or collected -- hence the .py.txt extension and the undefined helper names.
+#
+# Every line marked "# PLANT: <category>" is a deliberate instance of the VACUOUS direction: an
+# assertion that passes when the collection it iterates is EMPTY, so a change that stops issuing the
+# read entirely cannot fail it. The detector must report each of them and nothing else here.
+
+
+def all_over_recorded_reads_with_no_guard():
+    pager = Pager(FIRST_PAGE, LAST_PAGE)
+    read_everything(pager)
+    assert all(call["IndexName"] == "someIndex" for call in pager.calls)  # PLANT: vacuous-recorded-iteration
+
+
+def a_for_loop_whose_body_holds_the_only_assertion():
+    table = RecordingTable()
+    read_everything(table)
+    for call in table.calls:                                       # PLANT: vacuous-recorded-iteration
+        assert "ProjectionExpression" in call
+
+
+def a_negated_any_over_recorded_writes():
+    deletes = record_deletes()
+    assert not any("conv-v2" in path for path in deletes)          # PLANT: vacuous-recorded-iteration
+
+
+def the_same_mistake_one_variable_removed():
+    table = RecordingTable()
+    read_everything(table)
+    projections = [call.get("ProjectionExpression") for call in table.calls]
+    assert all(projection for projection in projections)           # PLANT: vacuous-recorded-iteration

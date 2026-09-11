@@ -27,7 +27,6 @@ import { fetchAsset, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
-import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
@@ -93,11 +92,18 @@ export default function ViewFile() {
     const location = useLocation();
     const navigate = useNavigate();
     const { state } = location as { state: ViewFileState };
-    const { databaseId, assetId, pathViewType } = useParams<{
+    const { databaseId, assetId } = useParams<{
         databaseId: string;
         assetId: string;
-        pathViewType?: string;
     }>();
+
+    // This view requires an asset to render. If no asset context is available
+    // (e.g. the route was reached without an assetId), redirect to the assets list.
+    useEffect(() => {
+        if (!assetId) {
+            navigate("/assets");
+        }
+    }, [assetId, navigate]);
 
     // Extract file path from URL for direct path access
     const getFilePathFromUrl = (): string | null => {
@@ -213,6 +219,12 @@ export default function ViewFile() {
     const [reload, setReload] = useState(true);
     const [viewType, setViewType] = useState<string | null>(null);
     const [asset, setAsset] = useState<Asset>({});
+    // The file and preview streaming APIs refuse a non-distributable asset, so the visualizer and its
+    // view selector are left out entirely and the page shows only versions and metadata. This page is
+    // normally reached from the file manager, which hides its own entry points for such an asset; a
+    // direct link is still allowed to land here. Compared against false so an asset record that
+    // predates the field, and the empty record held before the fetch resolves, both render the viewer.
+    const isNotDistributable = asset?.isDistributable === false;
 
     usePageTitle(
         databaseId,
@@ -389,10 +401,11 @@ export default function ViewFile() {
             } catch (error: any) {
                 console.error("Error loading file from direct path:", error);
 
-                // Check for specific error types
-                if (error?.response?.status === 403) {
+                // Check for specific error types. The apiClient throws an ApiError
+                // carrying the HTTP status in `.status` and the backend message in `.message`.
+                if (error?.status === 403) {
                     setDirectPathError("You don't have permission to access this file.");
-                } else if (error?.response?.status === 404) {
+                } else if (error?.status === 404) {
                     setDirectPathError(
                         "The file you're looking for doesn't exist or has been moved."
                     );
@@ -536,10 +549,10 @@ export default function ViewFile() {
                 }
             }
         };
-        if (reload && !pathViewType) {
+        if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId, pathViewType]);
+    }, [reload, assetId, databaseId]);
 
     // Update URL when version changes to keep URL copy/paste accurate
     useEffect(() => {
@@ -738,7 +751,7 @@ export default function ViewFile() {
                                                 justifyContent: "flex-end",
                                             }}
                                         >
-                                            {viewerOptions.length > 0 && (
+                                            {viewerOptions.length > 0 && !isNotDistributable && (
                                                 <SegmentedControl
                                                     label="Visualizer Control"
                                                     options={viewerOptions}
@@ -763,66 +776,78 @@ export default function ViewFile() {
                                 {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) &&
                                 !hasArchivedFiles ? (
                                     <SpaceBetween direction="vertical" size="xs">
-                                        {/* Viewer */}
-                                        <div
-                                            style={{
-                                                height: "65vh",
-                                                maxHeight: "700px",
-                                                minHeight: "100px",
-                                                position: "relative",
-                                                overflow: "hidden",
-                                            }}
-                                        >
+                                        {/* Viewer — omitted for a non-distributable asset */}
+                                        {isNotDistributable ? (
+                                            <Container>
+                                                <Box
+                                                    padding="m"
+                                                    textAlign="center"
+                                                    color="text-status-inactive"
+                                                >
+                                                    {`Visualizer is not available because this ${Synonyms.asset} is not marked as distributable.`}
+                                                </Box>
+                                            </Container>
+                                        ) : (
                                             <div
-                                                id="view-edit-asset-right-column"
-                                                className={viewerMode}
                                                 style={{
-                                                    height: "100%",
-                                                    width: "100%",
-                                                    position: "absolute",
-                                                    top: 0,
-                                                    left: 0,
+                                                    height: "65vh",
+                                                    maxHeight: "700px",
+                                                    minHeight: "100px",
+                                                    position: "relative",
                                                     overflow: "hidden",
                                                 }}
                                             >
-                                                <DynamicViewer
-                                                    key={`${viewType}-${assetId}-${
-                                                        effectiveAssetVersionId ||
-                                                        singleFileInfo?.versionId ||
-                                                        "no-version"
-                                                    }`}
-                                                    files={
-                                                        isMultiFileMode || viewType === "files"
-                                                            ? currentFiles
-                                                            : singleFileInfo
-                                                            ? [
-                                                                  {
-                                                                      ...singleFileInfo,
-                                                                      versionId:
-                                                                          effectiveAssetVersionId
-                                                                              ? undefined
-                                                                              : singleFileInfo.versionId,
-                                                                      key:
-                                                                          viewType === "preview"
-                                                                              ? singleFileInfo.previewFile ||
-                                                                                singleFileInfo.key
-                                                                              : singleFileInfo.key,
-                                                                  },
-                                                              ]
-                                                            : []
-                                                    }
-                                                    assetId={assetId!}
-                                                    databaseId={databaseId!}
-                                                    assetVersionId={effectiveAssetVersionId}
-                                                    viewerMode={viewerMode}
-                                                    onViewerModeChange={changeViewerMode}
-                                                    showViewerSelector={true}
-                                                    isPreviewMode={viewType === "preview"}
-                                                    onDeletePreview={undefined}
-                                                    sizingMode="container"
-                                                />
+                                                <div
+                                                    id="view-edit-asset-right-column"
+                                                    className={viewerMode}
+                                                    style={{
+                                                        height: "100%",
+                                                        width: "100%",
+                                                        position: "absolute",
+                                                        top: 0,
+                                                        left: 0,
+                                                        overflow: "hidden",
+                                                    }}
+                                                >
+                                                    <DynamicViewer
+                                                        key={`${viewType}-${assetId}-${
+                                                            effectiveAssetVersionId ||
+                                                            singleFileInfo?.versionId ||
+                                                            "no-version"
+                                                        }`}
+                                                        files={
+                                                            isMultiFileMode || viewType === "files"
+                                                                ? currentFiles
+                                                                : singleFileInfo
+                                                                ? [
+                                                                      {
+                                                                          ...singleFileInfo,
+                                                                          versionId:
+                                                                              effectiveAssetVersionId
+                                                                                  ? undefined
+                                                                                  : singleFileInfo.versionId,
+                                                                          key:
+                                                                              viewType === "preview"
+                                                                                  ? singleFileInfo.previewFile ||
+                                                                                    singleFileInfo.key
+                                                                                  : singleFileInfo.key,
+                                                                      },
+                                                                  ]
+                                                                : []
+                                                        }
+                                                        assetId={assetId!}
+                                                        databaseId={databaseId!}
+                                                        assetVersionId={effectiveAssetVersionId}
+                                                        viewerMode={viewerMode}
+                                                        onViewerModeChange={changeViewerMode}
+                                                        showViewerSelector={true}
+                                                        isPreviewMode={viewType === "preview"}
+                                                        onDeletePreview={undefined}
+                                                        sizingMode="container"
+                                                    />
+                                                </div>
                                             </div>
-                                        </div>
+                                        )}
 
                                         {/* File list (multi-file mode only) */}
                                         {isMultiFileMode && (
@@ -989,7 +1014,6 @@ export default function ViewFile() {
                     )}
                 </>
             )}
-            {pathViewType && <AssetSelectorWithModal pathViewType={pathViewType} />}
             <div style={{ paddingBottom: "20px" }} />
         </div>
     );

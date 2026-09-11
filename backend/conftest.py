@@ -13,6 +13,7 @@ import os
 
 # Set environment variables for testing
 os.environ['AWS_REGION'] = 'us-east-1'
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'  # boto3 clients created at module import time
 os.environ['REGION'] = 'us-east-1'  # Some handlers use REGION instead of AWS_REGION
 os.environ['COGNITO_AUTH_ENABLED'] = 'true'
 os.environ['COGNITO_AUTH'] = 'cognito-idp.us-east-1.amazonaws.com/us-east-1_example'
@@ -40,6 +41,26 @@ os.environ['AUTH_TABLE_NAME'] = 'example-auth-table'
 os.environ['CONSTRAINTS_TABLE_NAME'] = 'test-constraint-table'
 os.environ['USER_ROLES_TABLE_NAME'] = 'example-user-roles-table'
 
+# The subscription handlers resolve these at module load and RAISE when they cannot, so the test
+# environment has to supply them or importing any of the three fails at collection. The break-glass env
+# override is the documented path for pytest (backend/CLAUDE.md Rule 10 resolution order); without it a
+# handler that correctly fails closed is indistinguishable from one that is broken.
+os.environ['SUBSCRIPTIONS_STORAGE_TABLE_NAME'] = 'subscriptionsStorageTable'
+os.environ['USER_STORAGE_TABLE_NAME'] = 'userStorageTable'
+
+# Pipeline/workflow V2 data-model tables (break-glass env overrides so V2 handlers resolve test
+# names without an SSM call at import).
+os.environ['PIPELINE_STORAGE_TABLE_V2_NAME'] = 'pipelineStorageTableV2'
+os.environ['PIPELINE_TEMPLATES_STORAGE_TABLE_NAME'] = 'pipelineTemplatesStorageTable'
+os.environ['PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE_NAME'] = 'pipelineTemplateTagSchemaStorageTable'
+os.environ['WORKFLOW_STORAGE_TABLE_V2_NAME'] = 'workflowStorageTableV2'
+os.environ['WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME'] = 'workflowTriggersStorageTable'
+# setdefault (not assignment): some handler test modules pin their own value for this table via
+# os.environ.setdefault at import and assert on it (e.g. test_processOutput_records). Seed a
+# default only when unset so workflowService can resolve it at import without overriding those.
+os.environ.setdefault('WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME', 'workflowExecutionsStorageTableV2')
+os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
+
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
 os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'
@@ -61,6 +82,59 @@ sys.path.append(os.path.abspath('tests/mocks'))
 backend_path = os.path.join(os.path.dirname(__file__), 'backend')
 if not os.path.exists(backend_path):
     os.makedirs(backend_path, exist_ok=True)
+
+# Early setup: load common.auth modules BEFORE test collection (handlers import them at module level)
+import importlib.util
+
+def import_module_from_path_early(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+# Load common.auth package and apiEvent module early (handlers import at top-level)
+common_auth_pkg = import_module_from_path_early(
+    'common.auth',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', '__init__.py')
+)
+sys.modules['common.auth'] = common_auth_pkg
+
+common_auth_apievent = import_module_from_path_early(
+    'common.auth.apiEvent',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', 'apiEvent.py')
+)
+sys.modules['common.auth.apiEvent'] = common_auth_apievent
+
+# Load resourceNames and syncTracking early too: addon handler test modules
+# (tests/handlers/addon/physna) import the real handler modules at collection
+# time, and those handlers import common.syncTracking at module level.
+common_resource_names_early = import_module_from_path_early(
+    'common.resourceNames',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'resourceNames.py')
+)
+sys.modules['common.resourceNames'] = common_resource_names_early
+
+common_sync_tracking_early = import_module_from_path_early(
+    'common.syncTracking',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
+)
+sys.modules['common.syncTracking'] = common_sync_tracking_early
+
+# logRedaction is pure regex logic; load early since executionService imports it at module level.
+common_log_redaction_early = import_module_from_path_early(
+    'common.logRedaction',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'logRedaction.py')
+)
+sys.modules['common.logRedaction'] = common_log_redaction_early
+
+# tagScope is imported at module level by the tag/tagType handlers.
+common_tag_scope_early = import_module_from_path_early(
+    'common.tagScope',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
+)
+sys.modules['common.tagScope'] = common_tag_scope_early
 
 # Set up mock imports
 import pytest
@@ -94,11 +168,107 @@ def setup_mock_imports():
     validators_module = import_module_from_path('common.validators', os.path.join(mocks_base_path, 'common', 'validators.py'))
     sys.modules['common.validators'] = validators_module
     
-    constants_module = import_module_from_path('common.constants', os.path.join(mocks_base_path, 'common', 'constants.py'))
+    # constants is pure data with no AWS dependencies, so load the real module
+    # (single source of truth) rather than a duplicate mock copy.
+    constants_module = import_module_from_path(
+        'common.constants',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'constants.py')
+    )
     sys.modules['common.constants'] = constants_module
     
     dynamodb_module = import_module_from_path('common.dynamodb', os.path.join(mocks_base_path, 'common', 'dynamodb.py'))
     sys.modules['common.dynamodb'] = dynamodb_module
+
+    # s3MetadataKeys is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    s3_metadata_keys_module = import_module_from_path(
+        'common.s3MetadataKeys',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 's3MetadataKeys.py')
+    )
+    sys.modules['common.s3MetadataKeys'] = s3_metadata_keys_module
+
+    # s3PathPatterns is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    s3_path_patterns_module = import_module_from_path(
+        'common.s3PathPatterns',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 's3PathPatterns.py')
+    )
+    sys.modules['common.s3PathPatterns'] = s3_path_patterns_module
+
+    # dynamoDbMetadataKeys is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    dynamodb_metadata_keys_module = import_module_from_path(
+        'common.dynamoDbMetadataKeys',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'dynamoDbMetadataKeys.py')
+    )
+    sys.modules['common.dynamoDbMetadataKeys'] = dynamodb_metadata_keys_module
+
+    # apiRoutes is pure constants with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    api_routes_module = import_module_from_path(
+        'common.apiRoutes',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')
+    )
+    sys.modules['common.apiRoutes'] = api_routes_module
+
+    # logRedaction is pure regex logic with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    log_redaction_module = import_module_from_path(
+        'common.logRedaction',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'logRedaction.py')
+    )
+    sys.modules['common.logRedaction'] = log_redaction_module
+
+    # resourceNames is a real module with boto3 and logger dependencies, load it
+    resource_names_module = import_module_from_path(
+        'common.resourceNames',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'resourceNames.py')
+    )
+    sys.modules['common.resourceNames'] = resource_names_module
+
+    # assetHistory is a real module (asset lifecycle history writer); load it
+    asset_history_module = import_module_from_path(
+        'common.assetHistory',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'assetHistory.py')
+    )
+    sys.modules['common.assetHistory'] = asset_history_module
+
+    # syncTracking is a real module (outbound system sync writer); load it
+    sync_tracking_module = import_module_from_path(
+        'common.syncTracking',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
+    )
+    sys.modules['common.syncTracking'] = sync_tracking_module
+
+    # tagScope is a real module (tag/tag-type scope helpers); load it
+    tag_scope_module = import_module_from_path(
+        'common.tagScope',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'tagScope.py')
+    )
+    sys.modules['common.tagScope'] = tag_scope_module
+
+    # common.auth modules are pure logic with no AWS state dependencies - load real modules
+    auth_pkg_module = import_module_from_path(
+        'common.auth',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', '__init__.py')
+    )
+    sys.modules['common.auth'] = auth_pkg_module
+
+    api_event_module = import_module_from_path(
+        'common.auth.apiEvent',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', 'apiEvent.py')
+    )
+    sys.modules['common.auth.apiEvent'] = api_event_module
+
+    # s3 is a simple validation module; load the mock by path
+    s3_mock_module = import_module_from_path('common.s3', os.path.join(mocks_base_path, 'common', 's3.py'))
+    sys.modules['common.s3'] = s3_mock_module
+
+    indexing_pkg_module = import_module_from_path('common.indexing', os.path.join(mocks_base_path, 'common', 'indexing', '__init__.py'))
+    sys.modules['common.indexing'] = indexing_pkg_module
+
+    geolocation_module = import_module_from_path('common.indexing.geoLocation', os.path.join(mocks_base_path, 'common', 'indexing', 'geoLocation.py'))
+    sys.modules['common.indexing.geoLocation'] = geolocation_module
     
     # Import customLogging modules
     customLogging_module = import_module_from_path('customLogging', os.path.join(mocks_base_path, 'customLogging', '__init__.py'))
@@ -124,11 +294,20 @@ def setup_mock_imports():
     # Mock handlers.auth and handlers.authz
     sys.modules['handlers.auth'] = MockModule()
     sys.modules['handlers.authz'] = MockModule()
-    
+
     # Mock handlers.comments
     sys.modules['handlers.comments'] = MockModule()
     sys.modules['handlers.comments.commentService'] = MockModule()
     sys.modules['handlers.comments.editComment'] = MockModule()
+
+    # Mock handlers.assets.assetVersions (imported by assetFiles and metadataService)
+    if 'handlers.assets' not in sys.modules:
+        sys.modules['handlers.assets'] = MockModule()
+    sys.modules['handlers.assets.assetVersions'] = MockModule(
+        validate_asset_version_exists=MagicMock(),
+        get_all_asset_versions=MagicMock(),
+        get_asset_metadata_version=MagicMock()
+    )
     
     # Create a base mock class with common attributes
     class MockModule:
@@ -497,52 +676,7 @@ def setup_mock_imports():
     # Add mock modules for pipelines
     if 'backend.handlers.pipelines' not in sys.modules:
         sys.modules['backend.handlers.pipelines'] = MockModule()
-    if 'backend.handlers.pipelines.createPipeline' not in sys.modules:
-        class CreatePipeline:
-            def __init__(self, dynamodb=None, cloudformation=None, lambda_client=None, env=None):
-                self.dynamodb = dynamodb
-                self.cloudformation = cloudformation
-                self.lambda_client = lambda_client
-                self.env = env or {}
-                self._now = lambda: "2023-06-14 19:53:45"
-                
-            def createLambdaPipeline(self, body):
-                if self.lambda_client:
-                    self.lambda_client.create_function(
-                        FunctionName=body.get('pipelineId', ''),
-                        Role=self.env.get('ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE', ''),
-                        PackageType='Zip',
-                        Code={
-                            'S3Bucket': self.env.get('LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET', ''),
-                            'S3Key': self.env.get('LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY', ''),
-                        },
-                        Handler='lambda_function.lambda_handler',
-                        Runtime='python3.12'
-                    )
-                return {}
-                
-            def upload_Pipeline(self, body):
-                if self.dynamodb:
-                    table = self.dynamodb.Table(self.env.get('PIPELINE_STORAGE_TABLE_NAME', ''))
-                    date_created = self._now()
-                    item = {
-                        'dateCreated': '"{}"'.format(date_created),
-                        'userProvidedResource': '{"isProvided": false, "resourceId": ""}',
-                        'enabled': False
-                    }
-                    item.update(body)
-                    table.put_item(
-                        Item=item,
-                        ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
-                    )
-                    self.createLambdaPipeline(body)
-                return {}
-                
-        sys.modules['backend.handlers.pipelines.createPipeline'] = MockModule(
-            CreatePipeline=CreatePipeline
-        )
-    
-    
+
     # Add mock modules for metadata
     if 'backend.handlers.metadata' not in sys.modules:
         sys.modules['backend.handlers.metadata'] = MockModule()

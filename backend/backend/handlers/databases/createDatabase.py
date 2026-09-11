@@ -1,30 +1,33 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 import datetime
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_DATABASE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import CreateDatabaseRequestModel, CreateDatabaseResponseModel
 
 # Configure AWS clients
-dynamodb = boto3.resource('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="CreateDatabase")
 
 # Load environment variables
 try:
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 #######################
@@ -96,7 +99,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         
         # Check if this is the correct API route for database creation
-        if http_method == 'POST' and path.endswith('/database'):
+        if http_method == 'POST' and API_DATABASE.matches(path):
 
             # Parse request body with enhanced error handling
             body = event.get('body')
@@ -132,11 +135,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 "databaseId": request_model.databaseId
             }
             
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(database, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
+            # Fail closed: with no authenticated identity no authorization can be
+            # evaluated, so deny rather than fall through to the mutation.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not (casbin_enforcer.enforce(database, "POST") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+
             # Process request
             response = create_database(request_model)
             return success(body=response.dict())
@@ -147,7 +154,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

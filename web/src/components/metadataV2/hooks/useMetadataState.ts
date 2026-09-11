@@ -41,7 +41,7 @@ export const useMetadataState = (initialData: MetadataRecord[] = []): UseMetadat
 
     // Initialize rows from data
     const initializeRows = useCallback((data: MetadataRecord[]) => {
-        console.log("[useMetadataState] Initializing rows with data:", data);
+        //console.log("[useMetadataState] Initializing rows with data:", data);
         const rowState = convertToRowState(data);
         const sorted = sortRows(rowState);
         setRows(sorted);
@@ -53,22 +53,22 @@ export const useMetadataState = (initialData: MetadataRecord[] = []): UseMetadat
     const lastInitialDataRef = React.useRef<string>("");
 
     useEffect(() => {
-        console.log(
-            "[useMetadataState] useEffect called - hasInitialized:",
-            hasInitialized.current
-        );
+        // console.log(
+        //     "[useMetadataState] useEffect called - hasInitialized:",
+        //     hasInitialized.current
+        // );
 
         // Only initialize once on mount with initialData
         if (!hasInitialized.current && initialData.length >= 0) {
-            console.log(
-                "[useMetadataState] Initial mount - initializing with initialData:",
-                initialData
-            );
+            // console.log(
+            //     "[useMetadataState] Initial mount - initializing with initialData:",
+            //     initialData
+            // );
             initializeRows(initialData);
             lastInitialDataRef.current = JSON.stringify(initialData);
             hasInitialized.current = true;
         } else {
-            console.log("[useMetadataState] Skipping initialization - already initialized");
+            //console.log("[useMetadataState] Skipping initialization - already initialized");
         }
         // After initial mount, ignore changes to initialData
         // The component manages its own state and only syncs back via onDataChange when committing
@@ -83,7 +83,7 @@ export const useMetadataState = (initialData: MetadataRecord[] = []): UseMetadat
     // Update a specific row
     const updateRow = useCallback(
         (index: number, updates: Partial<MetadataRowState>) => {
-            console.log("[useMetadataState] updateRow called - index:", index, "updates:", updates);
+            //console.log("[useMetadataState] updateRow called - index:", index, "updates:", updates);
             setRows((prev) =>
                 prev.map((row, i) => {
                     if (i !== index) return row;

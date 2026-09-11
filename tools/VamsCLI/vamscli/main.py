@@ -1,5 +1,6 @@
 """Main CLI entry point for VamsCLI."""
 
+import json
 import sys
 from typing import Optional
 
@@ -17,9 +18,14 @@ from .commands.tag import tag
 from .commands.tag_type import tag_type
 from .commands.metadata import metadata
 from .commands.metadata_schema import metadata_schema
+from .commands.comment import comment
+from .commands.subscription import subscription
 from .commands.features import features
 from .commands.search import search
+from .commands.sync import sync
 from .commands.workflow import workflow
+from .commands.pipeline import pipeline
+from .commands.execution import execution
 from .commands.industry import industry
 from .commands.user import user
 from .commands.roleUserConstraints import role
@@ -58,11 +64,14 @@ def check_setup_required(ctx: click.Context, param: click.Parameter, value: Opti
     if '--version' in sys.argv or ctx.info_name == 'version':
         return value
     
-    # Get profile name from context if available
+    # Requested profile, else the active one (never a blind fall back to the default).
     profile_name = DEFAULT_PROFILE_NAME
-    if ctx.obj and 'profile_name' in ctx.obj:
+    if ctx.obj and ctx.obj.get('profile_name'):
         profile_name = ctx.obj['profile_name']
-    
+    else:
+        from .utils.profile import read_active_profile_name
+        profile_name = read_active_profile_name()
+
     profile_manager = ProfileManager(profile_name)
     if not profile_manager.has_config():
         raise SetupRequiredError(
@@ -73,10 +82,17 @@ def check_setup_required(ctx: click.Context, param: click.Parameter, value: Opti
 
 
 def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Optional[str]) -> Optional[str]:
-    """Handle global profile option."""
+    """Handle global profile option.
+
+    With no --profile, the profile `profile switch` selected is used. Defaulting to the literal
+    default profile here made `profile switch` a no-op for every command: the default name was
+    written into the context as though the caller had asked for it, so commands ran against
+    whichever deployment `default` pointed at while reporting success.
+    """
     if value is None:
-        value = DEFAULT_PROFILE_NAME
-    
+        from .utils.profile import read_active_profile_name
+        value = read_active_profile_name()
+
     # Validate profile name
     from .constants import validate_profile_name
     if not validate_profile_name(value):
@@ -96,11 +112,15 @@ def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Opt
 @click.group(invoke_without_command=True)
 @click.option('--version', is_flag=True, help='Show version information')
 @click.option('--verbose', is_flag=True, help='Enable verbose output with detailed error information, API requests/responses, and timing')
-@click.option('--profile', 
-              default=DEFAULT_PROFILE_NAME,
+@click.option('--profile',
+              # No Click default: the callback resolves an omitted --profile to the ACTIVE profile.
+              # Declaring a default here made Click pass 'default' rather than None, so the callback
+              # could not tell "not supplied" from "explicitly asked for the default profile" and
+              # `profile switch` was ignored by every command.
+              default=None,
               callback=handle_profile_option,
               expose_value=False,
-              help=f'Profile name to use (default: {DEFAULT_PROFILE_NAME})')
+              help='Profile name to use (default: the active profile set by `profile switch`)')
 @click.option('--setup-check', is_flag=True, hidden=True, callback=check_setup_required, expose_value=False, is_eager=False)
 @click.pass_context
 @handle_global_exceptions()
@@ -160,9 +180,14 @@ cli.add_command(tag)
 cli.add_command(tag_type)
 cli.add_command(metadata)
 cli.add_command(metadata_schema)
+cli.add_command(comment)
+cli.add_command(subscription)
 cli.add_command(features)
 cli.add_command(search)
+cli.add_command(sync)
 cli.add_command(workflow)
+cli.add_command(pipeline)
+cli.add_command(execution)
 cli.add_command(industry)
 cli.add_command(user)
 cli.add_command(role)
@@ -175,10 +200,79 @@ def version():
     click.echo(f"VamsCLI version {get_version()}")
 
 
+def _use_utf8_output():
+    """Emit UTF-8 on stdout/stderr regardless of the ambient locale.
+
+    Python picks the encoding for stdout from the locale whenever stdout is not a console, which on a
+    default Windows install is the ANSI code page (cp1252). The CLI's human-readable output uses box
+    glyphs, check marks and status dots throughout, none of which exist in cp1252, so redirecting or
+    piping a command raised UnicodeEncodeError and printed a codec error instead of the output —
+    `vamscli profile list > profiles.txt` produced a single line naming a charmap failure. Scripting,
+    logging and CI all redirect, so this affected exactly the non-interactive uses.
+
+    `errors="replace"` is the second layer: a stream that genuinely cannot represent a character
+    substitutes it rather than turning a working command into a failed one. Setting the encoding at the
+    entry point covers every command at once; the alternative, removing the characters, has to be
+    repeated for each of the several hundred occurrences and holds only until the next one is added.
+
+    A stream that has been replaced by something without `reconfigure` (a StringIO under Click's test
+    runner, for instance) is left alone.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            # A detached or already-closed stream cannot be reconfigured. Output encoding is not worth
+            # failing the invocation over.
+            pass
+
+
 @handle_global_exceptions()
 def main():
-    """Main entry point for the CLI."""
-    cli()
+    """Main entry point for the CLI.
+
+    Click reports a bad or missing option by printing usage text and exiting, which happens before any
+    command body runs — so `--json-output` would otherwise be answered with plain text and break a
+    caller that parses stdout. Catching UsageError here keeps the contract total: every invocation
+    carrying the flag emits JSON and nothing else, whatever the failure.
+    """
+    _use_utf8_output()
+    try:
+        cli(standalone_mode=False)
+    except click.UsageError as e:
+        if '--json-output' in sys.argv:
+            payload = {
+                'error': e.format_message(),
+                'error_type': 'UsageError',
+            }
+            # The command path helps a caller tell which subcommand rejected the arguments.
+            if e.ctx is not None:
+                payload['command'] = e.ctx.command_path
+            click.echo(json.dumps(payload, indent=2))
+            sys.exit(e.exit_code)
+        e.show()
+        sys.exit(e.exit_code)
+    except click.ClickException as e:
+        if '--json-output' in sys.argv:
+            click.echo(json.dumps({'error': e.format_message(),
+                                   'error_type': type(e).__name__}, indent=2))
+            sys.exit(e.exit_code)
+        e.show()
+        sys.exit(e.exit_code)
+    except click.exceptions.Abort:
+        # Ctrl-C, or a prompt the user declined. Click converts the interrupt into `Abort` and, under
+        # standalone_mode=False, re-raises it here having printed nothing but a blank line — so this
+        # is the only place the --json-output contract can be honoured. Without it the consumer's
+        # json.loads() fails on empty input instead of reading a structured cancellation.
+        if '--json-output' in sys.argv:
+            click.echo(json.dumps({'error': 'Operation cancelled by user',
+                                   'error_type': 'Aborted'}, indent=2))
+        else:
+            click.echo("Operation cancelled by user.", err=True)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

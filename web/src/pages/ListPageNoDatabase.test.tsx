@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { render } from "@testing-library/react";
-import { act } from "react-dom/test-utils";
+import { render, waitFor, act } from "@testing-library/react";
 
 import ListPageNoDatabase from "./ListPageNoDatabase";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
@@ -73,6 +72,36 @@ describe("ListPageNoDatabase", () => {
         expect(wrapper.findTable()?.findRows()).toHaveLength(1);
 
         expect(wrapper.findButton("[data-testid=create-new-element-button]")).toBeTruthy();
+    });
+
+    it("shows an error (and stops loading) when fetch returns a non-array error result", async () => {
+        // On a network failure the service layer resolves with the error message
+        // string (not an array). The list must surface it instead of spinning forever.
+        const promise = Promise.resolve("Failed to fetch");
+        const fetchAllElements = jest.fn(() => promise);
+
+        const { container } = render(
+            <ListPageNoDatabase
+                singularName={"thing"}
+                singularNameTitleCase={"Thing"}
+                pluralName={"things"}
+                pluralNameTitleCase={"Things"}
+                listDefinition={listDef}
+                fetchAllElements={fetchAllElements}
+                fetchElements={fetchAllElements}
+                onCreateCallback={jest.fn()}
+            />
+        );
+
+        const wrapper = createWrapper(container!);
+        // The error Alert appears once the failed fetch settles.
+        await waitFor(() => {
+            const alert = wrapper.findAlert();
+            expect(alert).toBeTruthy();
+            expect(alert?.findContent()?.getElement().textContent).toContain("Failed to fetch");
+        });
+        // The table is no longer in the loading state (no infinite spinner).
+        expect(wrapper.findTable()?.findLoadingText()).toBeFalsy();
     });
 
     // test('renders the correct text', () => {

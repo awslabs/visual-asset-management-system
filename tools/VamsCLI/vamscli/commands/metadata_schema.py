@@ -7,7 +7,18 @@ from typing import Dict, Any, Optional
 from ..utils.api_client import APIClient
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.json_output import output_status, output_result, output_error
-from ..utils.exceptions import DatabaseNotFoundError, APIError
+from ..utils.exceptions import (
+    DatabaseNotFoundError,
+    APIError,
+    InvalidMetadataSchemaDataError,
+    MetadataSchemaDeletionError,
+    MetadataSchemaNotFoundError,
+)
+
+# The entity types a schema can describe, as the API spells them. Accepted case-insensitively.
+METADATA_SCHEMA_ENTITY_TYPES = [
+    'databaseMetadata', 'assetMetadata', 'fileMetadata', 'fileAttribute', 'assetLinkMetadata',
+]
 
 
 def parse_json_input(json_input: str) -> Dict[str, Any]:
@@ -173,9 +184,8 @@ def metadata_schema():
 
 @metadata_schema.command()
 @click.option('-d', '--database-id', help='Filter by database ID')
-@click.option('-e', '--entity-type', 
-              type=click.Choice(['databaseMetadata', 'assetMetadata', 'fileMetadata', 'fileAttribute', 'assetLinkMetadata'], 
-                               case_sensitive=False),
+@click.option('-e', '--entity-type',
+              type=click.Choice(METADATA_SCHEMA_ENTITY_TYPES, case_sensitive=False),
               help='Filter by entity type')
 @click.option('--page-size', type=int, help='Number of items per page')
 @click.option('--max-items', type=int, help='Maximum total items to fetch')
@@ -339,4 +349,282 @@ def get(ctx: click.Context, database_id: str, schema_id: str, json_output: bool)
             )
         else:
             output_error(e, json_output, error_type="API Error")
+        raise click.ClickException(str(e))
+
+
+def normalize_fields_input(fields_input: str) -> Dict[str, Any]:
+    """Parse a --fields value into the {'fields': [...]} shape the API takes.
+
+    A bare array is accepted as well as the wrapped object, so a schema file can hold either.
+    """
+    parsed = parse_json_input(fields_input)
+    if isinstance(parsed, dict):
+        if 'fields' not in parsed:
+            raise click.BadParameter(
+                "--fields object must carry a 'fields' array of field definitions"
+            )
+        return parsed
+    if isinstance(parsed, (type([]), type((1,)))):
+        return {'fields': [*parsed]}
+    raise click.BadParameter(
+        "--fields must be an array of field definitions, or an object carrying one under 'fields'"
+    )
+
+
+def format_operation_output(result: Dict[str, Any]) -> str:
+    """Format a create/update/delete result for CLI output."""
+    lines = []
+    lines.append(f"  Metadata Schema ID: {result.get('metadataSchemaId', 'N/A')}")
+    lines.append(f"  Operation: {result.get('operation', 'N/A')}")
+    lines.append(f"  Message: {result.get('message', 'N/A')}")
+    if result.get('timestamp'):
+        lines.append(f"  Timestamp: {result.get('timestamp')}")
+    return '\n'.join(lines)
+
+
+@metadata_schema.command()
+@click.option('-d', '--database-id', required=True,
+              help="[REQUIRED] Database ID, or GLOBAL for a schema that applies to every database")
+@click.option('-e', '--entity-type', required=True,
+              type=click.Choice(METADATA_SCHEMA_ENTITY_TYPES, case_sensitive=False),
+              help='[REQUIRED] Entity type the schema describes')
+@click.option('-n', '--schema-name', required=True, help='[REQUIRED] Schema name')
+@click.option('-f', '--fields', 'fields_input', required=True,
+              help='[REQUIRED] Field definitions as a JSON array, or a file path holding one')
+@click.option('--file-key-type-restriction', default=None,
+              help='Comma-delimited file extensions the schema applies to '
+                   '(fileMetadata and fileAttribute schemas only)')
+@click.option('--enabled/--disabled', default=True, show_default=True,
+              help='Whether the schema is enforced on metadata writes')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def create(ctx: click.Context, database_id: str, entity_type: str, schema_name: str,
+           fields_input: str, file_key_type_restriction: Optional[str], enabled: bool,
+           json_output: bool):
+    """
+    Create a metadata schema.
+
+    A schema declares the metadata fields an entity can carry, their value types, and which of
+    them are required. Once enabled, metadata writes for that entity type are validated against it.
+
+    Each field definition takes metadataFieldKeyName and metadataFieldValueType, plus optional
+    required, sequence, dependsOnFieldKeyName, controlledListKeys and defaultMetadataFieldValue.
+    A field of type inlineControlledList must declare controlledListKeys; no other type may.
+    A fileAttribute schema supports only the string value type.
+
+    Examples:
+        # From a file holding the field definitions
+        vamscli metadata-schema create -d my-database -e assetMetadata -n "Review" -f fields.json
+
+        # Inline, with a required field
+        vamscli metadata-schema create -d my-database -e assetMetadata -n "Review" \\
+            -f '[{"metadataFieldKeyName":"reviewer","metadataFieldValueType":"string","required":true}]'
+
+        # Scoped to file types, created disabled
+        vamscli metadata-schema create -d my-database -e fileMetadata -n "CAD" -f fields.json \\
+            --file-key-type-restriction ".stp,.step" --disabled
+
+        vamscli metadata-schema create -d my-database -e assetMetadata -n "Review" -f fields.json --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        schema_data = {
+            'databaseId': database_id,
+            'metadataSchemaEntityType': entity_type,
+            'schemaName': schema_name,
+            'fields': normalize_fields_input(fields_input),
+            'enabled': enabled,
+        }
+        if file_key_type_restriction:
+            schema_data['fileKeyTypeRestriction'] = file_key_type_restriction
+
+        output_status(f"Creating metadata schema '{schema_name}' in database '{database_id}'...", json_output)
+
+        result = api_client.create_metadata_schema(schema_data)
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Metadata schema created successfully!",
+            cli_formatter=format_operation_output,
+        )
+
+        return result
+
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid JSON Input")
+        raise click.ClickException(str(e))
+    except InvalidMetadataSchemaDataError as e:
+        output_error(e, json_output, error_type="Invalid Metadata Schema Data")
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+    except APIError as e:
+        output_error(e, json_output, error_type="API Error")
+        raise click.ClickException(str(e))
+
+
+@metadata_schema.command()
+@click.option('-s', '--schema-id', required=True, help='[REQUIRED] Metadata schema ID to update')
+@click.option('-n', '--schema-name', default=None, help='New schema name')
+@click.option('-f', '--fields', 'fields_input', default=None,
+              help='Replacement field definitions as a JSON array, or a file path holding one')
+@click.option('--file-key-type-restriction', default=None,
+              help='Comma-delimited file extensions the schema applies to')
+@click.option('--enabled/--disabled', default=None,
+              help='Whether the schema is enforced on metadata writes')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def update(ctx: click.Context, schema_id: str, schema_name: Optional[str],
+           fields_input: Optional[str], file_key_type_restriction: Optional[str],
+           enabled: Optional[bool], json_output: bool):
+    """
+    Update a metadata schema.
+
+    At least one of --schema-name, --fields, --file-key-type-restriction, --enabled or --disabled
+    must be given. Field definitions are replaced wholesale, not merged, so pass the complete set.
+    The database and entity type of an existing schema cannot be changed.
+
+    Examples:
+        vamscli metadata-schema update -s schema-123 -n "Review v2"
+        vamscli metadata-schema update -s schema-123 -f fields.json
+        vamscli metadata-schema update -s schema-123 --disabled
+        vamscli metadata-schema update -s schema-123 -n "Review v2" --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    if (schema_name is None and fields_input is None
+            and file_key_type_restriction is None and enabled is None):
+        raise click.ClickException(
+            "At least one of --schema-name, --fields, --file-key-type-restriction, "
+            "--enabled or --disabled must be provided"
+        )
+
+    try:
+        update_data: Dict[str, Any] = {}
+        if schema_name is not None:
+            update_data['schemaName'] = schema_name
+        if fields_input is not None:
+            update_data['fields'] = normalize_fields_input(fields_input)
+        if file_key_type_restriction is not None:
+            update_data['fileKeyTypeRestriction'] = file_key_type_restriction
+        if enabled is not None:
+            update_data['enabled'] = enabled
+
+        output_status(f"Updating metadata schema '{schema_id}'...", json_output)
+
+        result = api_client.update_metadata_schema(schema_id, update_data)
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Metadata schema updated successfully!",
+            cli_formatter=format_operation_output,
+        )
+
+        return result
+
+    except click.BadParameter as e:
+        output_error(e, json_output, error_type="Invalid JSON Input")
+        raise click.ClickException(str(e))
+    except MetadataSchemaNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Metadata Schema Not Found",
+            helpful_message="Use 'vamscli metadata-schema list' to see available schemas."
+        )
+        raise click.ClickException(str(e))
+    except InvalidMetadataSchemaDataError as e:
+        output_error(e, json_output, error_type="Invalid Metadata Schema Data")
+        raise click.ClickException(str(e))
+    except APIError as e:
+        output_error(e, json_output, error_type="API Error")
+        raise click.ClickException(str(e))
+
+
+@metadata_schema.command()
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID owning the schema')
+@click.option('-s', '--schema-id', required=True, help='[REQUIRED] Metadata schema ID to delete')
+@click.option('--confirm', is_flag=True, help='Confirm metadata schema deletion')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def delete(ctx: click.Context, database_id: str, schema_id: str, confirm: bool, json_output: bool):
+    """
+    Delete a metadata schema.
+
+    ⚠️  Deleting a schema changes what metadata writes the database accepts: the fields it declared
+    are no longer required, validated, or defaulted. Metadata already stored is left as it is.
+
+    The --confirm flag is required.
+
+    Examples:
+        vamscli metadata-schema delete -d my-database -s schema-123 --confirm
+        vamscli metadata-schema delete -d my-database -s schema-123 --confirm --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Require confirmation for deletion
+        if not confirm:
+            if json_output:
+                import sys
+                error_result = {
+                    "error": "Confirmation required",
+                    "message": "Metadata schema deletion requires the --confirm flag",
+                    "metadataSchemaId": schema_id
+                }
+                output_result(error_result, json_output=True)
+                sys.exit(1)
+            else:
+                click.secho("⚠️  Metadata schema deletion requires explicit confirmation!", fg='yellow', bold=True)
+                click.echo("The fields this schema declares will no longer be validated on metadata writes.")
+                click.echo("Use --confirm flag to proceed with metadata schema deletion.")
+                raise click.ClickException("Confirmation required for metadata schema deletion")
+
+        output_status(f"Deleting metadata schema '{schema_id}' from database '{database_id}'...", json_output)
+
+        result = api_client.delete_metadata_schema(database_id, schema_id)
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Metadata schema deleted successfully!",
+            cli_formatter=format_operation_output,
+        )
+
+        return result
+
+    except MetadataSchemaNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Metadata Schema Not Found",
+            helpful_message=f"Use 'vamscli metadata-schema list -d {database_id}' to see available schemas."
+        )
+        raise click.ClickException(str(e))
+    except MetadataSchemaDeletionError as e:
+        output_error(e, json_output, error_type="Metadata Schema Deletion Error")
+        raise click.ClickException(str(e))
+    except APIError as e:
+        output_error(e, json_output, error_type="API Error")
         raise click.ClickException(str(e))

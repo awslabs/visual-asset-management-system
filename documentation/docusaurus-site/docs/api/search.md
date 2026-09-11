@@ -11,8 +11,8 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **Dual-Index Architecture**: VAMS maintains two separate OpenSearch indexes -- one for assets and one for files. Search queries can target either or both indexes.
 -   **Entity Types**: Search results are categorized as either `asset` or `file`. You can filter by entity type.
 -   **AND Query Logic**: The `query`, `metadataQuery`, and `filters` parameters are combined using AND logic. Results must match ALL specified criteria. Within a `metadataQuery`, individual field conditions can use AND or OR (e.g., `"color:red AND size:large"` or `"color:red OR color:blue"`).
--   **Metadata Search**: Metadata fields are indexed alongside core fields, enabling search by metadata keys, values, or both.
--   **Field Prefixes**: OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array).
+-   **Metadata Search**: Metadata is indexed alongside the core fields, enabling search by metadata keys, values, or both. It is stored differently from a core field -- see [Metadata Fields](#metadata-fields).
+-   **Field Prefixes**: The core OpenSearch fields use type prefixes for proper mapping: `str_` (string/keyword), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array). Metadata keys do not carry one.
 -   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database).
 
 ---
@@ -55,6 +55,10 @@ Executes a search query across the asset and file indexes with full control over
     "includeMetadataInSearch": true,
     "explainResults": false,
     "includeHighlights": true,
+    "geoSearch": {
+        "relation": "intersects",
+        "point": { "lat": 47.6062, "lon": -122.3321, "radiusMeters": 5000 }
+    },
     "from": 0,
     "size": 100
 }
@@ -63,10 +67,10 @@ Executes a search query across the asset and file indexes with full control over
 | Field                     | Type    | Default      | Description                                                                                                                  |
 | ------------------------- | ------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `query`                   | string  | --           | General text search across all fields (AND with filters and metadata query). Max 5,000 characters.                           |
-| `tokens`                  | array   | `[]`         | Structured search tokens for field-specific queries. See [Search Tokens](#search-tokens).                                    |
+| `tokens`                  | array   | `[]`         | Accepted for request compatibility but does not affect results. Use `filters` or `metadataQuery` for field-specific queries. |
 | `filters`                 | array   | `[]`         | Additional OpenSearch query_string filters. See [Search Filters](#search-filters).                                           |
 | `sort`                    | array   | `["_score"]` | Sort configuration. See [Sorting](#sorting).                                                                                 |
-| `operation`               | string  | `"AND"`      | Default logical operation for combining tokens (`"AND"` or `"OR"`).                                                          |
+| `operation`               | string  | `"AND"`      | Accepted for request compatibility but does not affect results.                                                              |
 | `entityTypes`             | array   | `null`       | Filter by entity type: `["asset"]`, `["file"]`, or `["asset", "file"]`. When `null`, searches both.                          |
 | `includeArchived`         | boolean | `false`      | Include archived items in results.                                                                                           |
 | `aggregations`            | boolean | `true`       | Include aggregation facets in the response.                                                                                  |
@@ -75,6 +79,7 @@ Executes a search query across the asset and file indexes with full control over
 | `includeMetadataInSearch` | boolean | `true`       | Include metadata fields in the general `query` search.                                                                       |
 | `explainResults`          | boolean | `false`      | Include match explanations in results.                                                                                       |
 | `includeHighlights`       | boolean | `true`       | Include highlighted matching text in results.                                                                                |
+| `geoSearch`               | object  | --           | Geospatial filter against the `geo_MD_location` field. See [Geospatial Search](#geospatial-search).                          |
 | `from`                    | integer | `0`          | Starting offset for pagination (0-10,000).                                                                                   |
 | `size`                    | integer | `100`        | Number of results to return (1-2,000).                                                                                       |
 
@@ -106,7 +111,7 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                 "_id": "my-database:asset-001",
                 "_score": 8.5,
                 "_source": {
-                    "_rectype": "asset",
+                    "str_rectype": "asset",
                     "str_databaseid": "my-database",
                     "str_assetid": "asset-001",
                     "str_assetname": "Building Model",
@@ -115,7 +120,8 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                     "list_tags": ["architecture", "building"],
                     "bool_isdistributable": true,
                     "date_lastmodified": "2024-06-15T10:30:00Z",
-                    "str_asset_version_id": "v1"
+                    "str_asset_version_id": "v1",
+                    "MD_": { "material": "concrete" }
                 },
                 "highlight": {
                     "str_assetname": ["<em>Building</em> <em>Model</em>"]
@@ -126,12 +132,12 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                 "_id": "my-database:asset-001:/models/building.ifc",
                 "_score": 7.2,
                 "_source": {
-                    "_rectype": "file",
+                    "str_rectype": "file",
                     "str_databaseid": "my-database",
                     "str_assetid": "asset-001",
                     "str_key": "/models/building.ifc",
                     "str_fileext": "ifc",
-                    "num_size": 15728640,
+                    "num_filesize": 15728640,
                     "str_etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
                     "str_s3_version_id": "abc123",
                     "date_lastmodified": "2024-06-15T10:30:00Z"
@@ -143,24 +149,30 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
         ]
     },
     "aggregations": {
-        "asset_types": {
+        "str_assettype": {
             "buckets": [
                 { "key": "ifc", "doc_count": 45 },
                 { "key": "obj", "doc_count": 30 },
                 { "key": "glb", "doc_count": 25 }
             ]
         },
-        "file_extensions": {
+        "str_fileext": {
             "buckets": [
                 { "key": "ifc", "doc_count": 50 },
                 { "key": "jpg", "doc_count": 120 },
                 { "key": "png", "doc_count": 80 }
             ]
         },
-        "databases": {
+        "str_databaseid": {
             "buckets": [
                 { "key": "my-database", "doc_count": 100 },
                 { "key": "other-db", "doc_count": 50 }
+            ]
+        },
+        "list_tags": {
+            "buckets": [
+                { "key": "architecture", "doc_count": 60 },
+                { "key": "building", "doc_count": 40 }
             ]
         }
     },
@@ -170,11 +182,12 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
 
 **Error Responses:**
 
-| Status | Description                                      |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid search parameters.                       |
-| `403`  | Not authorized to access search.                 |
-| `500`  | Internal server error or OpenSearch unavailable. |
+| Status | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                          |
+| `403`  | Not authorized to access search.                                    |
+| `404`  | Search is not available when the OpenSearch feature is not enabled. |
+| `500`  | Internal server error.                                              |
 
 ---
 
@@ -229,11 +242,12 @@ Same format as [Advanced Search](#advanced-search).
 
 **Error Responses:**
 
-| Status | Description                      |
-| ------ | -------------------------------- |
-| `400`  | Invalid search parameters.       |
-| `403`  | Not authorized to access search. |
-| `500`  | Internal server error.           |
+| Status | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                          |
+| `403`  | Not authorized to access search.                                    |
+| `404`  | Search is not available when the OpenSearch feature is not enabled. |
+| `500`  | Internal server error.                                              |
 
 ---
 
@@ -249,38 +263,39 @@ None.
 
 **Response:**
 
+The response returns the mappings for both indexes, keyed by `asset_index` and `file_index`.
+
 ```json
 {
     "mappings": {
-        "dynamic_templates": [
-            {
-                "strings_as_keywords": {
-                    "match_mapping_type": "string",
-                    "match": "str_*",
-                    "mapping": {
-                        "type": "keyword",
-                        "fields": {
-                            "search": {
-                                "type": "text"
-                            }
-                        }
-                    }
+        "asset_index": {
+            "mappings": {
+                "properties": {
+                    "str_rectype": { "type": "keyword" },
+                    "str_databaseid": { "type": "keyword" },
+                    "str_assetid": { "type": "keyword" },
+                    "str_assetname": { "type": "keyword" },
+                    "str_assettype": { "type": "keyword" },
+                    "str_description": { "type": "keyword" },
+                    "date_lastmodified": { "type": "date" },
+                    "bool_isdistributable": { "type": "boolean" },
+                    "list_tags": { "type": "keyword" }
                 }
             }
-        ],
-        "properties": {
-            "_rectype": { "type": "keyword" },
-            "str_databaseid": { "type": "keyword" },
-            "str_assetid": { "type": "keyword" },
-            "str_assetname": { "type": "keyword" },
-            "str_assettype": { "type": "keyword" },
-            "str_description": { "type": "keyword" },
-            "str_key": { "type": "keyword" },
-            "str_fileext": { "type": "keyword" },
-            "num_size": { "type": "long" },
-            "date_lastmodified": { "type": "date" },
-            "bool_isdistributable": { "type": "boolean" },
-            "list_tags": { "type": "keyword" }
+        },
+        "file_index": {
+            "mappings": {
+                "properties": {
+                    "str_rectype": { "type": "keyword" },
+                    "str_databaseid": { "type": "keyword" },
+                    "str_assetid": { "type": "keyword" },
+                    "str_key": { "type": "keyword" },
+                    "str_fileext": { "type": "keyword" },
+                    "num_filesize": { "type": "long" },
+                    "date_lastmodified": { "type": "date" },
+                    "list_tags": { "type": "keyword" }
+                }
+            }
         }
     }
 }
@@ -288,16 +303,21 @@ None.
 
 **Error Responses:**
 
-| Status | Description                      |
-| ------ | -------------------------------- |
-| `403`  | Not authorized to access search. |
-| `500`  | Internal server error.           |
+| Status | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| `403`  | Not authorized to access search.                                    |
+| `404`  | Search is not available when the OpenSearch feature is not enabled. |
+| `500`  | Internal server error.                                              |
 
 ---
 
 ## Search Tokens
 
-Search tokens provide structured, field-specific search within the advanced search endpoint.
+:::warning[Not applied to results]
+The `tokens` array and the top-level `operation` field are accepted by the request model for compatibility but are not applied by the query builder — they do not affect which results are returned. For field-specific queries, use `filters` (see [Search Filters](#search-filters)) or `metadataQuery`.
+:::
+
+The token structure is described below for reference.
 
 ```json
 {
@@ -360,7 +380,7 @@ The `query` value follows [OpenSearch query_string syntax](https://opensearch.or
 -   Field-specific queries: `str_assettype:ifc`
 -   Boolean operators: `AND`, `OR`, `NOT`
 -   Wildcards: `str_assetname:build*`
--   Range queries: `num_size:[1000 TO 5000]`
+-   Range queries: `num_filesize:[1000 TO 5000]`
 -   Grouping: `(str_assettype:ifc OR str_assettype:obj)`
 
 ---
@@ -385,7 +405,82 @@ The `sort` field accepts an array of sort specifications. Each item can be a str
 ```
 
 :::note[Sort Field Prefixes]
-When sorting by indexed fields, use the prefixed field names (e.g., `str_assetname`, `date_lastmodified`, `num_size`). Sorting on non-prefixed or text-analyzed fields may produce unexpected results.
+When sorting by indexed fields, use the prefixed field names (e.g., `str_assetname`, `date_lastmodified`, `num_filesize`). Sorting on non-prefixed or text-analyzed fields may produce unexpected results.
+:::
+
+---
+
+## Geospatial Search
+
+VAMS indexes a derived `geo_MD_location` field of OpenSearch type `geo_shape` on every asset and file document. The indexer populates it from each entity's metadata using the following priority:
+
+1. A metadata key named `location` (case-insensitive) containing either:
+    - A GeoJSON Geometry, Feature, or FeatureCollection (Point, Polygon, MultiPolygon, etc.).
+    - A JSON object with `latitude` / `longitude` and optional `altitude` keys.
+    - A `"lat,lon"` or `"lat,lon,altitude"` string.
+2. Individual `latitude`, `longitude`, and optional `altitude` metadata fields.
+
+If neither is present, the document has no `geo_MD_location` and is excluded from geospatial filters.
+
+To filter search results by location, supply a `geoSearch` object on the request body. Provide **exactly one** of `point`, `bbox`, or `geoJson`:
+
+```json
+{
+    "geoSearch": {
+        "relation": "intersects",
+        "point": { "lat": 47.6062, "lon": -122.3321, "radiusMeters": 5000 }
+    }
+}
+```
+
+```json
+{
+    "geoSearch": {
+        "relation": "within",
+        "bbox": {
+            "topLeft": { "lat": 47.7, "lon": -122.5 },
+            "bottomRight": { "lat": 47.5, "lon": -122.2 }
+        }
+    }
+}
+```
+
+```json
+{
+    "geoSearch": {
+        "relation": "intersects",
+        "geoJson": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [-122.5, 47.7],
+                    [-122.2, 47.7],
+                    [-122.2, 47.5],
+                    [-122.5, 47.5],
+                    [-122.5, 47.7]
+                ]
+            ]
+        }
+    }
+}
+```
+
+| Field                | Type   | Description                                                                                                                                            |
+| -------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `relation`           | string | `"intersects"` (default), `"within"`, `"contains"`, or `"disjoint"`. Spatial relation between the input shape and the indexed `geo_MD_location` shape. |
+| `point.lat`          | number | Latitude in decimal degrees (-90 to 90).                                                                                                               |
+| `point.lon`          | number | Longitude in decimal degrees (-180 to 180).                                                                                                            |
+| `point.radiusMeters` | number | Optional radius around the point. When provided, the input is treated as a circle.                                                                     |
+| `bbox.topLeft`       | object | Northwest corner of the bounding box (`{lat, lon}`).                                                                                                   |
+| `bbox.bottomRight`   | object | Southeast corner of the bounding box.                                                                                                                  |
+| `geoJson`            | object | GeoJSON Geometry, Feature, or FeatureCollection. See the limits below.                                                                                 |
+
+:::note[GeoJSON Filter Limits]
+A submitted `geoJson` shape carries at most 100,000 coordinate positions and nests `GeometryCollection` members at most 32 levels deep. A shape exceeding either limit is rejected with a `400` naming it, so the whole search request fails rather than returning partial results. The nesting limit is the same one the `geojson` metadata value type enforces (see [Metadata](metadata.md)), which keeps the shapes a filter accepts and the shapes indexed in `geo_MD_location` aligned.
+:::
+
+:::note[Backward Compatibility]
+Documents indexed before the introduction of `geo_MD_location` will not match geospatial filters until reindexed. Map views in the web UI continue to render points and shapes from legacy `MD_.location` and `MD_.latitude` / `MD_.longitude` metadata as a fallback.
 :::
 
 ---
@@ -394,42 +489,69 @@ When sorting by indexed fields, use the prefixed field names (e.g., `str_assetna
 
 ### Asset Index Fields
 
-| Field                  | Type    | Description                      |
-| ---------------------- | ------- | -------------------------------- |
-| `_rectype`             | keyword | Always `"asset"`.                |
-| `str_databaseid`       | keyword | Database identifier.             |
-| `str_assetid`          | keyword | Asset identifier.                |
-| `str_assetname`        | keyword | Asset display name.              |
-| `str_assettype`        | keyword | File type classification.        |
-| `str_description`      | keyword | Asset description.               |
-| `list_tags`            | keyword | Asset tags (array).              |
-| `bool_isdistributable` | boolean | Whether asset can be downloaded. |
-| `date_lastmodified`    | date    | Last modification date.          |
-| `str_asset_version_id` | keyword | Current asset version ID.        |
+| Field                  | Type      | Description                                                                       |
+| ---------------------- | --------- | --------------------------------------------------------------------------------- |
+| `str_rectype`          | keyword   | Always `"asset"`.                                                                 |
+| `str_databaseid`       | keyword   | Database identifier.                                                              |
+| `str_assetid`          | keyword   | Asset identifier.                                                                 |
+| `str_assetname`        | keyword   | Asset display name.                                                               |
+| `str_assettype`        | keyword   | File type classification.                                                         |
+| `str_description`      | keyword   | Asset description.                                                                |
+| `list_tags`            | keyword   | Asset tags (array).                                                               |
+| `bool_isdistributable` | boolean   | Whether asset can be downloaded.                                                  |
+| `date_lastmodified`    | date      | Last modification date.                                                           |
+| `str_asset_version_id` | keyword   | Current asset version ID.                                                         |
+| `geo_MD_location`      | geo_shape | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
 
 ### File Index Fields
 
-| Field               | Type    | Description                         |
-| ------------------- | ------- | ----------------------------------- |
-| `_rectype`          | keyword | Always `"file"`.                    |
-| `str_databaseid`    | keyword | Database identifier.                |
-| `str_assetid`       | keyword | Parent asset identifier.            |
-| `str_assetname`     | keyword | Parent asset name.                  |
-| `str_key`           | keyword | S3 object key (relative file path). |
-| `str_fileext`       | keyword | File extension.                     |
-| `num_size`          | long    | File size in bytes.                 |
-| `str_etag`          | keyword | S3 ETag.                            |
-| `str_s3_version_id` | keyword | S3 version ID.                      |
-| `date_lastmodified` | date    | Last modification date.             |
+| Field               | Type      | Description                                                                       |
+| ------------------- | --------- | --------------------------------------------------------------------------------- |
+| `str_rectype`       | keyword   | Always `"file"`.                                                                  |
+| `str_databaseid`    | keyword   | Database identifier.                                                              |
+| `str_assetid`       | keyword   | Parent asset identifier.                                                          |
+| `str_assetname`     | keyword   | Parent asset name.                                                                |
+| `str_key`           | keyword   | S3 object key (relative file path).                                               |
+| `str_fileext`       | keyword   | File extension.                                                                   |
+| `num_filesize`      | long      | File size in bytes.                                                               |
+| `str_etag`          | keyword   | S3 ETag.                                                                          |
+| `str_s3_version_id` | keyword   | S3 version ID.                                                                    |
+| `date_lastmodified` | date      | Last modification date.                                                           |
+| `geo_MD_location`   | geo_shape | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
 
 ### Metadata Fields
 
-Metadata fields are dynamically indexed using the same prefix convention:
+Metadata does not follow the prefix convention above. Both indexes store all of a record's metadata in one field, `MD_`, mapped as an OpenSearch `flat_object`, and the file index stores file attributes the same way in `AB_`. Keys appear inside those objects verbatim, with no type prefix, so metadata `{"product": "Training"}` reads back in a hit's `_source` as:
 
--   `str_meta_{key}` -- String metadata values
--   `num_meta_{key}` -- Numeric metadata values
--   `date_meta_{key}` -- Date metadata values
--   `bool_meta_{key}` -- Boolean metadata values
+```json
+"MD_": { "product": "Training" }
+```
+
+One field per index rather than one field per key is what keeps a deployment's metadata vocabulary from growing the index mapping without bound.
+
+| Field             | Type        | Description                                                               |
+| ----------------- | ----------- | ------------------------------------------------------------------------- |
+| `MD_`             | flat_object | All of the record's metadata, keys verbatim. Both indexes.                |
+| `AB_`             | flat_object | All of the file's attributes, keys verbatim. File index only.             |
+| `geo_MD_location` | geo_shape   | Shape derived from metadata. See [Geospatial Search](#geospatial-search). |
+
+Three separate things are worth keeping apart when reading the rest of this page:
+
+-   **What the index stores** — the `MD_` and `AB_` objects above.
+-   **What a query addresses internally** — one key as `MD_.{key}` or `AB_.{key}`, and a value-only search as `MD_._value` (plus `AB_._value` on the file index), the `flat_object` subfield holding every value in the object.
+-   **What a request may submit** — see below. The submitted spelling is normalized before the query is built, so it need not match either of the above.
+
+#### Metadata Key Spellings a Request May Use
+
+`metadataKey` and `metadataQuery` accept the metadata key in three spellings, all of which resolve to the same field:
+
+| Submitted        | Resolves to   | Notes                                                                  |
+| ---------------- | ------------- | ---------------------------------------------------------------------- |
+| `product`        | `MD_.product` | Canonical. A key with no prefix is read as metadata.                   |
+| `MD_product`     | `MD_.product` | Entity prefix. Use `AB_{key}` to address a file attribute instead.     |
+| `MD_str_product` | `MD_.product` | Type prefix (`str_`, `num_`, `bool_`, `date_`, `list_`, `gp_`, `gs_`). |
+
+Do not carry the dot of the internal query path into a request. `MD_.product` is not one of the accepted spellings — it resolves to `MD_..product`, which no document holds, so the search succeeds and returns nothing.
 
 ---
 

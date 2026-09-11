@@ -5,6 +5,7 @@
 
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
+import { supportsAllExtensions } from "./extensionMatching";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
@@ -339,14 +340,8 @@ export class PluginRegistry {
             return false;
         }
 
-        // Check if viewer supports any of the file extensions
-        const extensionMatch = fileExtensions.some(
-            (ext) =>
-                config.supportedExtensions.includes(ext.toLowerCase()) ||
-                config.supportedExtensions.includes("*") // Support wildcard for preview viewer
-        );
-
-        return extensionMatch;
+        // Every selected file must be renderable by this viewer — see supportsAllExtensions.
+        return supportsAllExtensions(config.supportedExtensions, fileExtensions);
     }
 
     getViewer(id: string): ViewerPlugin | undefined {

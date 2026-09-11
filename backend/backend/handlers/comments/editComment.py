@@ -1,36 +1,39 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
+import copy
 import boto3
+from botocore.config import Config
 import json
 import datetime
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.comments.commentService import get_single_comment
+from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
+from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 
-# Create a logger object to log the events
 logger = safeLogger(service="EditComment")
 
-dynamodb = boto3.resource("dynamodb")
-s3c = boto3.client("s3")
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource("dynamodb", config=retry_config)
+s3c = boto3.client("s3", config=retry_config)
 
-main_rest_response = STANDARD_JSON_RESPONSE
-
-comment_database = None
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
-    comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed Loading Environment Variables")
+    comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving comment table name")
+    comment_database = None
     main_rest_response["statusCode"] = 500
-    main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
+    main_rest_response["body"] = json.dumps({"message": "Failed resolving comment table name"})
 
 
 def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
@@ -75,7 +78,7 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, eve
         except Exception as e:
             logger.exception(e)
             response["statusCode"] = 500
-            response["body"] = {"message": "Internal Server Error"}
+            response["message"] = "Internal Server Error"
             return response
 
         response["statusCode"] = 200
@@ -90,7 +93,11 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: Lambda context disctionary
     :returns: Http response object (statusCode, headers, body)
     """
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
+
+    # This handler reads pathParameters before request_to_claims, so normalize the REST
+    # event first (coerces null pathParameters to {} for the reads below).
+    normalize_event(event)
 
     logger.info(event)
 
@@ -126,7 +133,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         logger.info("Validating parameters")
         (valid, message) = validate(
             {
-                "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
+                "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
                 "commentId": {"value": split_arr[1], "validator": "ID"},
             }
         )
@@ -141,6 +148,11 @@ def lambda_handler(event: dict, context: dict) -> dict:
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
         asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+        if asset_object is None:
+            response["statusCode"] = 404
+            response["body"] = json.dumps({"message": "Asset not found"})
+            return response
+
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
@@ -176,7 +188,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
             logger.info("Validating body")
             (valid, message) = validate(
                 {
-                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING"},
+                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING_16384"},
                 }
             )
             if not valid:
@@ -186,7 +198,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
                 return response
             
             #Get user ID of person making request
-            userId = claims_and_roles.get("tokens", ["system"])[0]
+            userId = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
             # call the edit_comment function if everything is valid
             returned = edit_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
@@ -198,6 +210,14 @@ def lambda_handler(event: dict, context: dict) -> dict:
             response["statusCode"] = 403
             response["body"] = json.dumps({"message": "Action not allowed"})
             return response
+    except VAMSGeneralErrorResponse as v:
+        # Raised by the asset lookup when the assetId cannot be resolved to a single live
+        # asset (e.g. the same assetId exists in more than one database). The message names
+        # no caller-supplied value, so it is returned as the client-facing reason.
+        logger.exception(v)
+        response["statusCode"] = 400
+        response["body"] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         response["statusCode"] = 500
         logger.exception(e)

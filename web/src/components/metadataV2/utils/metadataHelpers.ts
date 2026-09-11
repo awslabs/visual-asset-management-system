@@ -21,9 +21,15 @@ export const convertToRowState = (records: MetadataRecord[]): MetadataRowState[]
         isNew: false,
         isDeleted: false,
         editKey: record.metadataKey,
-        editValue: record.metadataValue,
+        // This is the one seam where a stored record becomes editable, so it is where the two
+        // absences are resolved differently on purpose. An absent VALUE becomes "" — a text input's
+        // empty state already means "no value", and the save path accepts empty. An absent TYPE
+        // stays null, because no member of MetadataValueType means "none chosen": defaulting it here
+        // would save a classification the operator never made, which is exactly what the backend
+        // stopped doing when it began reporting the absent attribute as null.
+        editValue: record.metadataValue ?? "",
         editType: record.metadataValueType,
-        originalValue: record.metadataValue,
+        originalValue: record.metadataValue ?? undefined,
         originalType: record.metadataValueType,
     }));
 };
@@ -189,9 +195,16 @@ export const formatValueForDisplay = (value: string, type: MetadataValueType): s
 };
 
 /**
- * Get display label for metadata value type
+ * Get display label for metadata value type.
+ *
+ * A null type is a row stored before its type was recorded. It is labelled rather than blanked, so
+ * the operator can see that the field is the one needing a choice instead of reading an empty cell
+ * as a rendering fault.
  */
-export const getValueTypeLabel = (type: MetadataValueType): string => {
+export const getValueTypeLabel = (type: MetadataValueType | null | undefined): string => {
+    if (!type) {
+        return "Not set";
+    }
     const labels: Record<MetadataValueType, string> = {
         string: "String",
         multiline_string: "Multiline String",

@@ -16,28 +16,29 @@ export interface UserPermission {
     permissionType: string;
 }
 
+export interface PermissionOption {
+    label: string;
+    value: string;
+}
+
 export interface UserPermissionsTableProps {
     permissions: UserPermission[];
     setPermissions: (permissions: UserPermission[]) => void;
     fetchUsers?: () => Promise<string[]>;
+    permissionOptions?: PermissionOption[];
+    permissionTypeOptions?: PermissionOption[];
 }
 
 export default function UserPermissionsTable({
     permissions,
     setPermissions,
     fetchUsers,
+    permissionOptions = [],
+    permissionTypeOptions = [],
 }: UserPermissionsTableProps) {
     const [selected, setSelected] = useState<UserPermission[]>([]);
-    const allPermissions = [
-        { label: "View/GET", value: "GET" },
-        { label: "Add/PUT", value: "PUT" },
-        { label: "Update/POST", value: "POST" },
-        { label: "DELETE", value: "DELETE" },
-    ];
-    const permissionTypes = [
-        { label: "Allow", value: "allow" },
-        { label: "Deny", value: "deny" },
-    ];
+    const allPermissions = permissionOptions;
+    const permissionTypes = permissionTypeOptions;
 
     const addPermissions = () => {
         const permission = {

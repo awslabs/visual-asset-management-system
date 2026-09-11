@@ -15,6 +15,7 @@ import {
     Spinner,
     Container,
     ColumnLayout,
+    Toggle,
 } from "@cloudscape-design/components";
 import { fetchAsset, unarchiveAsset } from "../../services/APIService";
 import Synonyms from "../../synonyms";
@@ -29,6 +30,7 @@ interface AssetUnarchiveModalProps {
 
 interface AssetUnarchiveState {
     reason: string;
+    unarchiveFiles: boolean;
     loading: boolean;
     error: string | null;
     assetDetails: any | null;
@@ -44,6 +46,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
 }) => {
     const [state, setState] = useState<AssetUnarchiveState>({
         reason: "",
+        unarchiveFiles: false,
         loading: false,
         error: null,
         assetDetails: null,
@@ -63,6 +66,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
         if (!visible) {
             setState({
                 reason: "",
+                unarchiveFiles: false,
                 loading: false,
                 error: null,
                 assetDetails: null,
@@ -151,6 +155,7 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 body: {
                     confirmUnarchive: true,
                     reason: state.reason,
+                    unarchiveFiles: state.unarchiveFiles,
                 },
             });
 
@@ -235,7 +240,9 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                 <Box variant="p">
                     Are you sure you want to unarchive <b>{assetName}</b>?
                     <br />
-                    {`This will restore the ${Synonyms.asset} and make it visible in normal search results.`}
+                    {`This will restore the ${Synonyms.asset} and make it visible in normal search results. ` +
+                        `Files previously archived remain archived unless the option below is enabled; ` +
+                        `individual files can also be unarchived from the file manager.`}
                 </Box>
 
                 {/* Archive Information */}
@@ -264,6 +271,24 @@ const AssetUnarchiveModal: React.FC<AssetUnarchiveModalProps> = ({
                         </ColumnLayout>
                     </Container>
                 ) : null}
+
+                {/* Restore files archived by the asset archive */}
+                <FormField
+                    label="Restore archived files"
+                    description={`Also restore the files that were archived when this ${Synonyms.asset} was archived. Files archived individually beforehand always stay archived.`}
+                >
+                    <Toggle
+                        checked={state.unarchiveFiles}
+                        onChange={({ detail }) =>
+                            setState((prev) => ({ ...prev, unarchiveFiles: detail.checked }))
+                        }
+                        disabled={state.loading}
+                    >
+                        {state.unarchiveFiles
+                            ? "Files archived by the asset archive will be restored"
+                            : `Restore the ${Synonyms.asset} record only`}
+                    </Toggle>
+                </FormField>
 
                 {/* Reason for Unarchiving */}
                 <FormField

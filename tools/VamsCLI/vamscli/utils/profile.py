@@ -16,9 +16,38 @@ from ..constants import (
     CONFIG_FILE, AUTH_PROFILE_FILE, CREDENTIALS_FILE
 )
 from .exceptions import (
-    ConfigurationError, ProfileNotFoundError, ProfileError, 
+    ConfigurationError, ProfileNotFoundError, ProfileError,
     InvalidProfileNameError, ProfileAlreadyExistsError
 )
+from .logging import OWNER_ONLY_DIR_MODE, OWNER_ONLY_FILE_MODE, restrict_path
+
+
+def _owner_only_opener(path, flags):
+    """`open()` opener that creates a file with owner-only access from the outset."""
+    return os.open(path, flags, OWNER_ONLY_FILE_MODE)
+
+
+def read_active_profile_name() -> str:
+    """The profile name `profile switch` last selected, or the default when none is set.
+
+    Module-level so a caller can resolve the profile BEFORE constructing a ProfileManager: the
+    instance method of the same purpose needs a ProfileManager to read the file, so a caller that
+    has not chosen a profile yet cannot use it, and every such caller fell back to the literal
+    default — making `profile switch` a no-op for commands invoked without `--profile`.
+    """
+    active_file = get_config_dir() / ACTIVE_PROFILE_FILE
+    if not active_file.exists():
+        return DEFAULT_PROFILE_NAME
+    try:
+        with open(active_file, 'r') as f:
+            name = json.load(f).get('active_profile', DEFAULT_PROFILE_NAME)
+        return name if isinstance(name, str) and name else DEFAULT_PROFILE_NAME
+    except Exception:
+        # Best-effort by design: this runs on EVERY command invocation, so a marker file that is
+        # missing, truncated, mid-write, or unreadable must degrade to the default profile rather
+        # than abort the command. (It also keeps a test that patches builtins.open for its own
+        # purposes from failing on an unrelated read.)
+        return DEFAULT_PROFILE_NAME
 
 
 class ProfileManager:
@@ -47,8 +76,11 @@ class ProfileManager:
         self.base_config_dir.mkdir(parents=True, exist_ok=True)
         
     def ensure_profile_dir(self):
-        """Ensure the profile-specific directory exists."""
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        """Ensure the profile-specific directory exists and is readable only by its owner."""
+        self.profile_dir.mkdir(parents=True, exist_ok=True, mode=OWNER_ONLY_DIR_MODE)
+        # `mode` applies only to a directory this call creates, so a profile directory written by an
+        # earlier run is narrowed here.
+        restrict_path(self.profile_dir, OWNER_ONLY_DIR_MODE)
     
     def migrate_legacy_profile(self):
         """Migrate legacy single-profile configuration to default profile."""
@@ -178,11 +210,15 @@ class ProfileManager:
             raise ConfigurationError(f"Failed to load configuration for profile '{self.profile_name}': {e}")
             
     def save_auth_profile(self, auth_data: Dict[str, Any]):
-        """Save authentication profile for this profile."""
+        """Save authentication profile for this profile.
+
+        Holds the live Cognito access and refresh tokens, so the file is owner-only.
+        """
         self.ensure_profile_dir()
-        with open(self.auth_profile_file, 'w') as f:
+        with open(self.auth_profile_file, 'w', opener=_owner_only_opener) as f:
             json.dump(auth_data, f, indent=2)
-            
+        restrict_path(self.auth_profile_file, OWNER_ONLY_FILE_MODE)
+
     def load_auth_profile(self) -> Optional[Dict[str, Any]]:
         """Load authentication profile for this profile."""
         if not self.auth_profile_file.exists():
@@ -202,11 +238,15 @@ class ProfileManager:
             self.credentials_file.unlink()
             
     def save_credentials(self, credentials: Dict[str, str]):
-        """Save user credentials for this profile (if explicitly requested)."""
+        """Save user credentials for this profile (if explicitly requested).
+
+        Holds the plaintext password, so the file is owner-only.
+        """
         self.ensure_profile_dir()
-        with open(self.credentials_file, 'w') as f:
+        with open(self.credentials_file, 'w', opener=_owner_only_opener) as f:
             json.dump(credentials, f, indent=2)
-            
+        restrict_path(self.credentials_file, OWNER_ONLY_FILE_MODE)
+
     def load_credentials(self) -> Optional[Dict[str, str]]:
         """Load saved credentials for this profile."""
         if not self.credentials_file.exists():

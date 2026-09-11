@@ -20,7 +20,7 @@ When a tag type is marked as **Required**, it appears with an `[R]` indicator in
 
 ### Creating a tag type
 
-1. Navigate to **Admin - Tags** in the left sidebar.
+1. Navigate to **Admin - Data** > **Tags Management** in the left sidebar.
 2. In the **Tag Types** section at the bottom of the page, choose **Create Tag Type**.
 3. Complete the form fields:
     - **Name** -- Enter a unique name for the tag type (3--64 characters, alphanumeric with `-` and `_`).
@@ -67,7 +67,7 @@ Tag names must be unique across all tag types. You cannot create two tags with t
 
 ### Creating a tag
 
-1. Navigate to **Admin - Tags** in the left sidebar.
+1. Navigate to **Admin - Data** > **Tags Management** in the left sidebar.
 2. In the **Manage Tags** section at the top of the page, choose **Create Tag**.
 3. Complete the form fields:
     - **Name** -- Enter a unique tag name (3--64 characters).

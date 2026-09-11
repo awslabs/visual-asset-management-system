@@ -68,20 +68,44 @@ export AWS_REGION=us-gov-west-1
 cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 ```
 
-:::warning[GovCloud endpoint resolution]
-You must set the `AWS_REGION` environment variable when bootstrapping AWS GovCloud accounts. The AWS SDK requires this to resolve GovCloud service endpoints correctly.
+**AWS European Sovereign Cloud:**
+
+```bash
+export AWS_REGION=eusc-de-east-1
+cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
+```
+
+:::warning[GovCloud and EU Sovereign Cloud endpoint resolution]
+You must set the `AWS_REGION` environment variable when bootstrapping AWS GovCloud or AWS European Sovereign Cloud accounts. The AWS SDK requires this to resolve the partition's service endpoints correctly.
 :::
 
 Replace `ACCOUNT_ID` with your 12-digit AWS account ID and `REGION` with your target deployment Region.
 
+:::warning[Importing an external VPC]
+If you are importing an existing VPC by setting `app.useGlobalVpc.optionalExternalVpcId` in `config.json`, bootstrap also synthesizes the app and will fail with VPC or subnet lookup errors unless the `loadContextIgnoreVPCStacks` flag is set. Set it either as a context flag on the bootstrap command or as `env.loadContextIgnoreVPCStacks: true` in `config.json`:
+
+```bash
+cdk bootstrap aws://ACCOUNT_ID/REGION --context loadContextIgnoreVPCStacks=true
+```
+
+See [Step 7](#step-7-import-an-external-vpc-conditional) for the two-phase deployment that follows.
+:::
+
 ## Step 5: Configure the deployment
 
-Edit the configuration file at `infra/config/config.json` to set your deployment parameters. Template files are provided as starting points:
+Edit the configuration file at `infra/config/config.json` to set your deployment parameters.
 
-| Template       | File                                           |
-| -------------- | ---------------------------------------------- |
-| Commercial AWS | `infra/config/config.template.commercial.json` |
-| AWS GovCloud   | `infra/config/config.template.govcloud.json`   |
+:::tip[Use the interactive configuration builder]
+The easiest way to assemble a valid `config.json` is the interactive [Configuration builder](config-builder.mdx). Choose a Commercial, GovCloud, or EU Sovereign Cloud starting template, fill in the fields you need, and download a ready-to-use `config.json` — it validates cross-field rules (such as the GovCloud and authentication constraints) as you go, before you ever run `cdk synth`. Place the downloaded file at `infra/config/config.json`.
+:::
+
+If you prefer to edit by hand, template files are provided as starting points:
+
+| Template                     | File                                            |
+| ---------------------------- | ----------------------------------------------- |
+| Commercial AWS               | `infra/config/config.template.commercial.json`  |
+| AWS GovCloud                 | `infra/config/config.template.govcloud.json`    |
+| AWS European Sovereign Cloud | `infra/config/config.template.eusovereign.json` |
 
 Copy the appropriate template to `config.json` and customize it:
 
@@ -98,7 +122,7 @@ cp config/config.template.commercial.json config/config.json
 | `app.adminUserId`       | Username for the initial admin account                            | `administrator`     |
 | `app.baseStackName`     | Stack environment name (appended to resource names)               | `prod`              |
 
-For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md).
+For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md). To build the file interactively, use the [Configuration builder](config-builder.mdx).
 
 :::note[Configuration templates]
 The GovCloud template pre-configures settings required for AWS GovCloud: VPC enabled, CloudFront disabled, ALB enabled, Location Service disabled, FIPS enabled, and KMS CMK encryption enabled.
@@ -162,6 +186,10 @@ This command synthesizes all AWS CloudFormation templates and deploys every nest
 3. An Amazon Cognito user account is created using the `adminEmailAddress` from your configuration.
 4. A temporary password is sent to the admin email address from `no-reply@verificationemail.com`.
 5. If WAF is enabled, a separate WAF stack is deployed first (in `us-east-1` for CloudFront deployments, or in-Region for ALB deployments).
+
+:::warning[Wait for every stack to complete before using the deployment]
+The solution is usable only after `cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish. Upload files and call the API after the deployment completes.
+:::
 
 ## Step 9: Verify the deployment
 
@@ -236,19 +264,40 @@ For major version changes, significant configuration changes (such as switching 
 
 ## Common deployment errors
 
-| Error                                                                                          | Cause                                                          | Resolution                                                                                                                                                                                                                                           |
-| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Docker daemon not running`                                                                    | Docker (or your configured container engine) is not started.   | Start Docker Desktop (or your alternative container engine such as Finch or Podman) and retry. If using an alternative, ensure `CDK_DOCKER` is set correctly.                                                                                        |
-| `Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId`                                | Missing required configuration field.                          | Set `app.assetBuckets.defaultNewBucketSyncDatabaseId` in `config.json` (default: `"default"`).                                                                                                                                                       |
-| `Cannot use ALB deployment without specifying a valid domain hostname and ACM Certificate ARN` | ALB enabled without domain or certificate.                     | Provide `app.useAlb.domainHost` and `app.useAlb.certificateArn`.                                                                                                                                                                                     |
-| `Must specify an initial admin email address`                                                  | Admin email not configured.                                    | Set `app.adminEmailAddress` to a valid email.                                                                                                                                                                                                        |
-| `Must specify either none or one openSearch method`                                            | Both OpenSearch Serverless and Provisioned enabled.            | Enable only one OpenSearch option or disable both.                                                                                                                                                                                                   |
-| `Must specify only one authentication method`                                                  | Both Cognito and External OAuth IdP enabled.                   | Enable only one authentication provider.                                                                                                                                                                                                             |
-| `GovCloud must have useGlobalVpc.enabled set to true`                                          | GovCloud enabled without VPC.                                  | Set `app.useGlobalVpc.enabled: true` for GovCloud deployments.                                                                                                                                                                                       |
-| `Must define either a global VPC Cidr Range or an External VPC ID`                             | VPC enabled without network configuration.                     | Provide either `vpcCidrRange` or `optionalExternalVpcId`.                                                                                                                                                                                            |
-| `route table already has a route with destination-prefix-list-id`                              | Imported VPC already has VPC endpoints.                        | Set `app.useGlobalVpc.addVpcEndpoints: false` and manually add missing endpoints.                                                                                                                                                                    |
-| `Invalid request provided: Before you can proceed, you must enable a service-linked role`      | OpenSearch Provisioned service-linked role not yet propagated. | Wait 5 minutes and redeploy. If the issue persists, manually create the roles: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com` and `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`. |
-| `Properties validation failed ... array items are not unique` (ALB target group)               | Rare CloudFormation issue with ALB VPC endpoint IP resolution. | No configuration change needed. Redeploy to resolve.                                                                                                                                                                                                 |
+| Error                                                                                          | Cause                                                                                          | Resolution                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Docker daemon not running`                                                                    | Docker (or your configured container engine) is not started.                                   | Start Docker Desktop (or your alternative container engine such as Finch or Podman) and retry. If using an alternative, ensure `CDK_DOCKER` is set correctly.                                                                                                                                                                                                                             |
+| `Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId`                                | Missing required configuration field.                                                          | Set `app.assetBuckets.defaultNewBucketSyncDatabaseId` in `config.json` (default: `"default"`).                                                                                                                                                                                                                                                                                            |
+| `Cannot use ALB deployment without specifying a valid domain hostname and ACM Certificate ARN` | ALB enabled without domain or certificate.                                                     | Provide `app.useAlb.domainHost` and `app.useAlb.certificateArn`.                                                                                                                                                                                                                                                                                                                          |
+| `Must specify an initial admin email address`                                                  | Admin email not configured.                                                                    | Set `app.adminEmailAddress` to a valid email.                                                                                                                                                                                                                                                                                                                                             |
+| `Must specify either none or one openSearch method`                                            | Both OpenSearch Serverless and Provisioned enabled.                                            | Enable only one OpenSearch option or disable both.                                                                                                                                                                                                                                                                                                                                        |
+| `Must specify only one authentication method`                                                  | Both Cognito and External OAuth IdP enabled.                                                   | Enable only one authentication provider.                                                                                                                                                                                                                                                                                                                                                  |
+| `GovCloud must have useGlobalVpc.enabled set to true`                                          | GovCloud enabled without VPC.                                                                  | Set `app.useGlobalVpc.enabled: true` for GovCloud deployments.                                                                                                                                                                                                                                                                                                                            |
+| `Must define either a global VPC Cidr Range or an External VPC ID`                             | VPC enabled without network configuration.                                                     | Provide either `vpcCidrRange` or `optionalExternalVpcId`.                                                                                                                                                                                                                                                                                                                                 |
+| `route table already has a route with destination-prefix-list-id`                              | Imported VPC already has VPC endpoints.                                                        | Set `app.useGlobalVpc.addVpcEndpoints: false` and manually add missing endpoints.                                                                                                                                                                                                                                                                                                         |
+| `Invalid request provided: Before you can proceed, you must enable a service-linked role`      | OpenSearch Provisioned service-linked role missing in the account.                             | VAMS now creates this role idempotently during deployment, so this should not occur. If it persists (for example, the deploy principal lacks `iam:CreateServiceLinkedRole`), manually create it: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com` (use the partition-correct principal, e.g. `opensearchservice.amazonaws.com`, where applicable), then redeploy. |
+| `Properties validation failed ... array items are not unique` (ALB target group)               | Rare CloudFormation issue with ALB VPC endpoint IP resolution.                                 | No configuration change needed. Redeploy to resolve.                                                                                                                                                                                                                                                                                                                                      |
+| `<domainHost>-webappaccesslogs already exists (Service: S3, HandlerErrorCode: AlreadyExists)`  | An orphaned web app access logs bucket from an earlier ALB deployment of the same domain host. | Confirm the bucket is empty and belongs to this deployment (check its `vams:stackname` tag), delete it, and redeploy. See [Switching between CloudFront and ALB](#switching-between-cloudfront-and-alb).                                                                                                                                                                                  |
+
+### Switching between CloudFront and ALB
+
+Under an ALB deployment, the web app bucket and its access logs bucket are named for `app.useAlb.domainHost` — `{domainHost}` and `{domainHost}-webappaccesslogs` — rather than auto-named by AWS CloudFormation. Changing `app.useCloudFront.enabled` or `app.useAlb.enabled` on an existing stack therefore renames both buckets, which AWS CloudFormation performs by creating the new bucket and deleting the old one. A delete that does not complete leaves an orphan behind, and Amazon S3 bucket names are unique across an account, so the next deployment into ALB mode fails with `AlreadyExists` on the orphan's name. The rollback also reports failures for unrelated resources it had begun creating (the ALB and VPC endpoint security groups and their functions' roles), which makes the single bucket name easy to miss in the event list.
+
+Before enabling ALB mode on a stack that has run in ALB mode before, check for both names and delete any that remain:
+
+```bash
+DOMAIN_HOST="vams.example.com"   # app.useAlb.domainHost
+
+for BUCKET in "${DOMAIN_HOST}" "${DOMAIN_HOST}-webappaccesslogs"; do
+    # Confirm the bucket belongs to this deployment before deleting anything
+    aws s3api get-bucket-tagging --bucket "${BUCKET}" 2>/dev/null
+
+    aws s3 rm "s3://${BUCKET}" --recursive
+    aws s3 rb "s3://${BUCKET}"
+done
+```
+
+Both buckets hold only the built frontend files and its access logs, so deleting them destroys no asset data. The frontend is rebuilt and re-uploaded by the deployment.
 
 ## Uninstalling
 

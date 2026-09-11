@@ -5,7 +5,7 @@ import time
 import click
 from typing import Optional
 
-from .profile import ProfileManager
+from .profile import ProfileManager, read_active_profile_name
 from .api_client import APIClient
 from .exceptions import (
     APIUnavailableError, SetupRequiredError, AuthenticationError,
@@ -15,14 +15,41 @@ from ..constants import DEFAULT_PROFILE_NAME
 
 
 def get_profile_manager_from_context(ctx: Optional[click.Context] = None) -> ProfileManager:
-    """Get ProfileManager instance from Click context or use default."""
-    if ctx and ctx.obj and 'profile_name' in ctx.obj:
+    """Get ProfileManager for the requested profile, else the ACTIVE one, else the default.
+
+    An explicit --profile wins; otherwise the profile `profile switch` selected is used. Falling
+    straight back to the literal default made `profile switch` a no-op, so a command ran against
+    whichever deployment `default` happened to point at while reporting success.
+    """
+    if ctx and ctx.obj and ctx.obj.get('profile_name'):
         profile_name = ctx.obj['profile_name']
     else:
-        profile_name = DEFAULT_PROFILE_NAME
-    
+        profile_name = read_active_profile_name()
+
     return ProfileManager(profile_name)
 
+
+def invoked_from_another_command(ctx: Optional[click.Context] = None) -> bool:
+    """True when this command is running under another command's `ctx.invoke()`.
+
+    Transfer commands exit non-zero when a transfer did not fully apply, so a CI step can tell a
+    partial copy from a complete one. Several of them are also called programmatically -- the
+    `industry` commands invoke `file upload` and `assets export`, read `overall_success` off the
+    returned result, and decide for themselves how to proceed -- and setting the process exit code
+    is not this command's business on that path (Rule 16).
+
+    Click gives an invoked command a context whose parent is the CALLING command's context, so an
+    ancestor that is a plain Command rather than a Group means another command is driving. From the
+    command line every ancestor is a Group.
+    """
+    if ctx is None:
+        return False
+    parent = ctx.parent
+    while parent is not None:
+        if not isinstance(parent.command, click.Group):
+            return True
+        parent = parent.parent
+    return False
 
 
 def requires_setup_and_auth(func):
@@ -31,23 +58,27 @@ def requires_setup_and_auth(func):
     
     This decorator performs:
     1. Setup validation (raises SetupRequiredError if not configured)
-    2. API availability check (raises APIUnavailableError if API is down)
-    3. Configuration logging in verbose mode
-    4. Command start/stop logging with timing
-    
+    2. Configuration logging in verbose mode
+    3. Command start/stop logging with timing
+
     This replaces the need for individual commands to check setup and handle
     global infrastructure concerns.
-    
+
+    It performs NO per-command API availability pre-flight: that would cost a round trip on every
+    invocation. The misconfiguration such a check used to catch — a stored API base URL missing its
+    API Gateway stage — is caught where it is created, by `validate_api_gateway_reachable()` in
+    `commands/setup.py`. The legacy `requires_api_access` decorator below still performs the check for
+    the commands that use it.
+
     Raises:
         SetupRequiredError: If profile is not configured
-        APIUnavailableError: If API is not available
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # Import logging utilities
         from .logging import (
-            log_config_info, log_command_start, log_command_end, 
-            log_debug, _is_verbose_mode
+            log_config_info, log_command_start, log_command_end,
+            log_debug, redact_to_text, _is_verbose_mode
         )
         
         # Capture start time for duration calculation
@@ -94,15 +125,11 @@ def requires_setup_and_auth(func):
                 # Don't fail if logging fails
                 pass
             
-            #Commented out to save on performance
-            #api_gateway_url = config.get('api_gateway_url')
-            #if api_gateway_url:
-                #api_client = APIClient(api_gateway_url, profile_manager)
-                # This will raise APIUnavailableError if there are issues
-                #api_client.check_api_availability()
-        except APIUnavailableError:
-            # Re-raise API unavailable errors as global infrastructure errors
-            raise
+            # No per-command API availability pre-flight. It costs a round trip on every invocation,
+            # and the misconfiguration it used to catch — a stored API base URL missing its API Gateway
+            # stage — is now caught where it is created, by `validate_api_gateway_reachable()` in
+            # `commands/setup.py`. A bare `Forbidden` from any later call also carries a hint naming the
+            # stage as the likely cause.
         except Exception:
             # If we can't check availability or load config, continue with the command
             # This prevents the availability check from blocking legitimate operations
@@ -124,8 +151,11 @@ def requires_setup_and_auth(func):
             duration = time.time() - start_time
             try:
                 log_command_end(command_name, True, duration)
-                # Log result (truncate if too large)
-                result_str = str(result)
+                # Log result (truncate if too large). Every decorated command's return value passes
+                # through here, and ~45 of them return the API response body verbatim — including
+                # download responses whose presigned Amazon S3 URLs are bearer credentials — so the
+                # result is redacted before it reaches the rotating log file (Rule 10).
+                result_str = redact_to_text(result)
                 if len(result_str) > 1000:
                     log_debug(f"Command '{command_name}' returned result (truncated): {result_str[:1000]}...")
                 else:

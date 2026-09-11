@@ -2,7 +2,7 @@
 Cosmos Reason 2 Inference Wrapper
 
 Runs the cosmos-reason2-inference CLI tool in offline mode to analyze
-video/image files and produce text output (captions, descriptions, reasoning).
+video files and produce text output (captions, descriptions, reasoning).
 
 The CLI command:
   cosmos-reason2-inference offline --model nvidia/Cosmos-Reason2-{size} \
@@ -93,7 +93,7 @@ def run_inference(
         model_name: Full model name (e.g., "nvidia/Cosmos-Reason2-2B")
         model_size: Model size ("2B" or "8B")
         prompt: Text prompt/question for analysis
-        input_file_path: Path to input video or image file
+        input_file_path: Path to input video file
         output_dir: Output directory for results
         hf_home: HuggingFace cache directory (HF_HOME)
         hf_token: HuggingFace API token (optional)
@@ -108,7 +108,7 @@ def run_inference(
     """
     # Validate inputs
     if not input_file_path:
-        raise ValueError("Cosmos Reason requires an input file (video or image)")
+        raise ValueError("Cosmos Reason requires an input video file")
 
     if not prompt or prompt.strip() == "":
         prompt = "Caption the video in detail."
@@ -135,7 +135,7 @@ def run_inference(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Determine if input is video or image
+    # Determine if the input is a supported video
     is_video = is_video_file(input_file_path)
     input_flag = "--videos" if is_video else "--images"
     input_type_label = "video" if is_video else "image"
@@ -198,7 +198,9 @@ def run_inference(
             process.wait()
 
         if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, cmd)
+            raise subprocess.CalledProcessError(
+                process.returncode, cmd, output=_output_tail(stdout_file)
+            )
 
         logger.info("Inference completed successfully")
 
@@ -210,7 +212,35 @@ def run_inference(
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Inference failed with exit code {e.returncode}")
-        raise RuntimeError(f"Inference failed with exit code {e.returncode}. Check CloudWatch logs for full error output.")
+        tail = e.output or ""
+        detail = f" Last output: {tail}" if tail else ""
+        raise RuntimeError(
+            f"Inference failed with exit code {e.returncode}.{detail} "
+            f"Check CloudWatch logs for full error output."
+        )
+
+
+def _output_tail(stdout_file: Path, lines: int = 5, max_chars: int = 400) -> str:
+    """
+    Last few meaningful lines of the child process output, for a failure message.
+
+    The combined output is already in CloudWatch, but the exception message is what reaches the
+    workflow execution record, and an exit code alone names neither the failing step nor the cause.
+    The final line is emitted first because the consumers of a failure cause truncate it from the
+    front, and the final line is the one carrying the exception.
+    """
+    import re
+
+    try:
+        text = stdout_file.read_text(errors="replace") if stdout_file.exists() else ""
+    except OSError:
+        return ""
+
+    ansi_pattern = re.compile(r"\x1b\[[0-9;]*m")
+    meaningful = [ansi_pattern.sub("", ln).strip() for ln in text.splitlines()]
+    meaningful = [ln for ln in meaningful if ln]
+    tail = " | ".join(reversed(meaningful[-lines:]))
+    return tail[:max_chars] if len(tail) > max_chars else tail
 
 
 def _extract_output(output_dir: str, stdout: str) -> dict:

@@ -12,8 +12,7 @@ const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 const viewerId = "cesium-viewer";
 const npmPackageDir = "./customInstalls/cesium";
 const npmRepoSourceDestDir = "./customInstalls/cesium/node_modules";
-const cesiumBuildDir = "./customInstalls/cesium/node_modules/cesium/Build/Cesium";
-const cesiumSourceDir = "./customInstalls/cesium/node_modules/cesium/Source";
+const enginePackageDir = "./customInstalls/cesium/node_modules/@cesium/engine";
 const destinationDir = "./public/viewers/cesium";
 
 // Function to cleanup previous builds
@@ -39,61 +38,80 @@ const npmInstall = async () => {
     }
 };
 
-// Function to copy files to destination directory
-const copyFiles = async () => {
+// Function to bundle @cesium/engine into a browser global (window.Cesium)
+const bundleEngine = async () => {
     try {
-        console.log("Cesium: Copying files to destination...");
+        console.log("Cesium: Bundling @cesium/engine...");
 
-        // Create destination directory
         await fs.mkdir(destinationDir, { recursive: true });
 
-        // Copy all Source files (for assets, workers, etc.)
-        // Exclude Cesium.js to avoid overwriting our bundle
-        if (await fs.pathExists(cesiumSourceDir)) {
-            await fs.copy(cesiumSourceDir, destinationDir, {
-                filter: (src) => {
-                    // Exclude the Cesium.js file from Source directory
-                    const basename = path.basename(src);
-                    return basename !== "Cesium.js";
-                },
-            });
-            console.log(
-                "Cesium: Copied Source directory (assets, workers, etc., excluding Cesium.js)"
+        // Bundle the engine's ESM entry point into a classic-script IIFE that assigns the module
+        // exports to the global `Cesium`. `--global-name=Cesium` emits a top-level `var Cesium=...`,
+        // which only becomes a window property when the classic script executes in the true global
+        // scope — under some load paths (the plugin's dynamically-appended <script>) it does not, so
+        // the viewer's dependency loader then fails with "Cesium not found on window object". A
+        // `--footer` explicitly attaches the bundle's export to globalThis/window so window.Cesium is
+        // guaranteed regardless of how the script is scoped when loaded.
+        const entryPoint = path.resolve(enginePackageDir, "index.js");
+        const outFile = path.resolve(destinationDir, "Cesium.js");
+        const footer =
+            "try{(typeof globalThis!=='undefined'?globalThis:window).Cesium=Cesium;}catch(e){}";
+        await execSync(
+            `npx esbuild "${entryPoint}" --bundle --format=iife --global-name=Cesium ` +
+                `--target=es2020 --charset=utf8 --minify --footer:js="${footer}" --outfile="${outFile}"`,
+            { cwd: npmPackageDir, stdio: "inherit" }
+        );
+
+        console.log("Cesium: Created browser-compatible Cesium.js bundle from @cesium/engine");
+    } catch (err) {
+        console.error("Cesium: Bundle error:", err);
+        throw err;
+    }
+};
+
+// Function to copy static runtime files (workers, wasm, assets, widget CSS)
+const copyFiles = async () => {
+    try {
+        console.log("Cesium: Copying static files to destination...");
+
+        // Web workers (draco decoding, KTX2 transcoding, geometry, etc.)
+        await fs.copy(
+            path.join(enginePackageDir, "Build/Workers"),
+            path.join(destinationDir, "Workers")
+        );
+
+        // Third-party workers (zip)
+        await fs.copy(
+            path.join(enginePackageDir, "Build/ThirdParty"),
+            path.join(destinationDir, "ThirdParty")
+        );
+
+        // WASM binaries resolved at runtime relative to CESIUM_BASE_URL
+        const thirdPartySourceDir = path.join(enginePackageDir, "Source/ThirdParty");
+        const wasmFiles = (await fs.readdir(thirdPartySourceDir)).filter((f) =>
+            f.endsWith(".wasm")
+        );
+        for (const wasmFile of wasmFiles) {
+            await fs.copy(
+                path.join(thirdPartySourceDir, wasmFile),
+                path.join(destinationDir, "ThirdParty", wasmFile)
             );
-        } else {
-            console.warn("Cesium: Source directory not found");
         }
 
-        // Wrap the CommonJS bundle to work in browser
-        if (await fs.pathExists(cesiumBuildDir)) {
-            const cesiumJsSource = path.join(cesiumBuildDir, "index.cjs");
-            const cesiumJsDest = path.join(destinationDir, "Cesium.js");
+        // Static assets (IAU data, approximate terrain heights, textures)
+        await fs.copy(
+            path.join(enginePackageDir, "Source/Assets"),
+            path.join(destinationDir, "Assets")
+        );
 
-            if (await fs.pathExists(cesiumJsSource)) {
-                // Read the CommonJS bundle
-                const cesiumCode = await fs.readFile(cesiumJsSource, "utf8");
+        // CesiumWidget stylesheet
+        await fs.copy(
+            path.join(enginePackageDir, "Source/Widget"),
+            path.join(destinationDir, "Widget"),
+            { filter: (src) => !src.endsWith(".js") }
+        );
 
-                // Wrap it to work in browser
-                const wrappedCode = `(function() {
-    var module = { exports: {} };
-    var exports = module.exports;
-    
-${cesiumCode}
-    
-    window.Cesium = module.exports;
-})();`;
-
-                // Write the wrapped bundle
-                await fs.writeFile(cesiumJsDest, wrappedCode, "utf8");
-                console.log("Cesium: Created browser-compatible Cesium.js bundle from index.cjs");
-            } else {
-                console.warn("Cesium: index.cjs not found in Build directory");
-            }
-        } else {
-            console.warn("Cesium: Build directory not found");
-        }
-
-        console.log("Cesium: Files copied to destination directory");
+        console.log("Cesium: Static files copied to destination directory");
         console.log("Cesium: Bundle location: " + destinationDir);
     } catch (err) {
         console.error("Cesium: File copy error:", err);
@@ -120,13 +138,14 @@ const main = async () => {
         }
 
         await npmInstall();
+        await bundleEngine();
         await copyFiles();
 
         console.log("=".repeat(60));
         console.log("Cesium: Installation complete!");
         console.log("Files:");
         console.log("  - " + path.join(destinationDir, "Cesium.js"));
-        console.log("  - " + path.join(destinationDir, "Source assets"));
+        console.log("  - " + path.join(destinationDir, "Workers, ThirdParty, Assets, Widget"));
         console.log("=".repeat(60));
     } catch (err) {
         console.error("=".repeat(60));

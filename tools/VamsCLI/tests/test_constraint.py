@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import tempfile
 import pytest
 import click
@@ -1101,6 +1102,126 @@ class TestConstraintTemplateImportCommand:
         assert result.exit_code == 0
         assert 'import' in result.output
         assert 'Constraint template management' in result.output
+
+
+_PERMISSION_OBJECTS_RESPONSE = {
+    'objectTypes': [
+        {'label': 'Asset', 'value': 'asset', 'fields': [
+            {'label': 'Database ID', 'value': 'databaseId'},
+            {'label': 'Asset Name', 'value': 'assetName'},
+        ]},
+        {'label': 'Web', 'value': 'web', 'fields': [
+            {'label': 'Route Path', 'value': 'route__path'},
+        ]},
+    ],
+    'operators': [
+        {'label': 'Equals', 'value': 'equals'},
+        {'label': 'Contains', 'value': 'contains'},
+    ],
+    'permissions': [
+        {'label': 'View/GET', 'value': 'GET'},
+        {'label': 'Add/PUT', 'value': 'PUT'},
+    ],
+    'permissionTypes': [
+        {'label': 'Allow', 'value': 'allow'},
+        {'label': 'Deny', 'value': 'deny'},
+    ],
+}
+
+
+class TestConstraintPermissionObjectsCommand:
+    """Test role constraint permission-objects command."""
+
+    def test_permission_objects_success(self, cli_runner, constraint_command_mocks):
+        with constraint_command_mocks as mocks:
+            mocks['api_client'].list_constraint_permission_objects.return_value = _PERMISSION_OBJECTS_RESPONSE
+            result = cli_runner.invoke(cli, ['role', 'constraint', 'permission-objects'])
+            assert result.exit_code == 0
+            assert 'asset' in result.output
+            assert 'Asset Name' in result.output
+            assert 'GET' in result.output
+
+    def test_permission_objects_json_output(self, cli_runner, constraint_command_mocks):
+        with constraint_command_mocks as mocks:
+            mocks['api_client'].list_constraint_permission_objects.return_value = _PERMISSION_OBJECTS_RESPONSE
+            result = cli_runner.invoke(cli, ['role', 'constraint', 'permission-objects', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['objectTypes'][0]['value'] == 'asset'
+            assert data['operators'][0]['value'] == 'equals'
+            assert data['permissions'][0]['value'] == 'GET'
+            assert data['permissionTypes'][0]['value'] == 'allow'
+
+    def test_permission_objects_error(self, cli_runner, constraint_command_mocks):
+        with constraint_command_mocks as mocks:
+            mocks['api_client'].list_constraint_permission_objects.side_effect = InvalidConstraintDataError("boom")
+            result = cli_runner.invoke(cli, ['role', 'constraint', 'permission-objects'])
+            assert result.exit_code != 0
+
+    def test_permission_objects_no_setup(self, cli_runner, constraint_no_setup_mocks):
+        with constraint_no_setup_mocks as mocks:
+            result = cli_runner.invoke(cli, ['role', 'constraint', 'permission-objects'])
+            assert result.exit_code != 0
+
+
+class TestConstraintHelpExamplesUseAcceptedPermissionValues:
+    """`--help` is the only reference many operators read, so its JSON example must be runnable.
+
+    S30-DOCSWAVE-001. The `role constraint create` / `update` docstrings showed
+    `"permission": "read"` and `"permission": "write"`. The API accepts HTTP methods only
+    (`ALLOWED_CONSTRAINT_PERMISSIONS = ['GET', 'PUT', 'POST', 'DELETE']` in
+    `backend/backend/common/constants.py`, enforced in `backend/backend/models/roleConstraints.py`),
+    so pasting the example returned a 400 with nothing pointing back at the example.
+
+    Asserted against the help text Click renders rather than the source, because that is what the
+    user sees.
+    """
+
+    # Mirrors ALLOWED_CONSTRAINT_PERMISSIONS. Restated rather than imported: the backend package is
+    # not a dependency of this one, and it pins Pydantic v1 while some CLI test environments do not.
+    ACCEPTED = ('GET', 'PUT', 'POST', 'DELETE')
+
+    @staticmethod
+    def _permission_values(help_text):
+        """Every value assigned to a "permission" key anywhere in the help text."""
+        return re.findall(r'"permission"\s*:\s*"([^"]*)"', help_text)
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    def test_help_shows_only_http_methods_for_permission(self, cli_runner, command):
+        result = cli_runner.invoke(cli, ['role', 'constraint', command, '--help'])
+        assert result.exit_code == 0, result.output
+
+        values = self._permission_values(result.output)
+        # Control: a help text that stopped showing the field at all would satisfy the loop below
+        # while leaving the reader with no example. `create` documents the whole structure plus an
+        # inline example; `update` documents the inline example.
+        assert values, (
+            f"'role constraint {command} --help' shows no \"permission\" value, so this check is "
+            f"vacuous:\n{result.output}")
+        for value in values:
+            assert value in self.ACCEPTED, (
+                f"'role constraint {command} --help' documents permission={value!r}, which the API "
+                f"rejects. Accepted values: {', '.join(self.ACCEPTED)}")
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    def test_help_names_the_accepted_values_explicitly(self, cli_runner, command):
+        """A correct example is not enough — say what the field takes, so a reader can vary it."""
+        result = cli_runner.invoke(cli, ['role', 'constraint', command, '--help'])
+        assert result.exit_code == 0
+        # Click rewraps the paragraph, so match on the tokens rather than the sentence.
+        for method in self.ACCEPTED:
+            assert method in result.output
+
+    def test_the_checker_fires_on_the_value_that_was_documented(self):
+        """Positive control for `_permission_values`.
+
+        The regex has to survive Click's rewrapping of a long JSON line. Fed the exact text that was
+        in the docstring, it must report the bad value.
+        """
+        bad = '{"groupId": "admin", "permission": "read", "permissionType": "allow"}'
+        assert self._permission_values(bad) == ["read"]
+        good = '{"groupId": "admin", "permission": "GET", "permissionType": "allow"}'
+        assert self._permission_values(good) == ["GET"]
 
 
 if __name__ == '__main__':
