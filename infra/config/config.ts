@@ -103,6 +103,53 @@ export const COGNITO_USERNAME_MAX_LENGTH = 128;
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
 export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
+// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
+// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
+// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
+// and getConfig() rejects a pair the volume cannot hold. The per-run count and duration caps are
+// deployment configuration (app.pipelines.useGenAiVideoSopBom.limits). The key-frame ceiling bounds
+// the MAX_KEY_FRAMES template tag, and the bundle timeout is the taskTimeout the pipeline's
+// vamsSchema declares (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json).
+export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
+export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
+export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
+export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
+export const VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS = 30600;
+
+/**
+ * Ephemeral storage, in GiB, that a total input size requires: the inputs, a 1.5x working factor for
+ * the audio and frames extracted from them, and 2 GiB for the image and scratch space.
+ */
+export function videoSopBomWorkingSetGib(totalInputSizeMb: number): number {
+    return Math.ceil((totalInputSizeMb * 1.5) / 1024) + 2;
+}
+
+/**
+ * Refuses a byte-cap pair the Fargate job's ephemeral volume cannot hold. The caps are constants sized
+ * together with the volume, so a failing pair is a code error; getConfig() calls this on every load,
+ * so a constant edit cannot ship without the matching volume.
+ */
+export function assertVideoSopBomCapsFitVolume(
+    fileMb: number,
+    totalMb: number,
+    volumeGib: number
+): void {
+    if (fileMb > totalMb) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB (${fileMb}) exceeds ` +
+                `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb}) in infra/config/config.ts.`
+        );
+    }
+    const requiredGib = videoSopBomWorkingSetGib(totalMb);
+    if (requiredGib > volumeGib) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb} MB) needs ` +
+                `${requiredGib} GiB of ephemeral storage but VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB is ` +
+                `${volumeGib}. Raise the volume or lower the cap in infra/config/config.ts.`
+        );
+    }
+}
+
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
 // smaller g6e.12xlarge carries four, so the mapping is explicit. An instance type absent from this
