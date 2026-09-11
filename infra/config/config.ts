@@ -288,6 +288,35 @@ function validateOutboundHttpsEndpoint(endpoint: string, configPath: string) {
 }
 
 /**
+ * Requires an enabled GenAI pipeline's Amazon Bedrock model id to be set and to exist in the
+ * deployment's partition.
+ *
+ * The id carries a cross-Region inference-profile prefix, and the prefixes are partition-specific:
+ * `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is passed through to the
+ * Lambda unvalidated, and the IAM grant is derived by stripping the prefix — so a commercial profile
+ * id in a restricted partition produces both a model that does not exist and a grant that does not
+ * match it. `flagPath` is the `pipelines.<flag>` path the message names.
+ */
+export function validateBedrockModelId(flagPath: string, modelId: string, partition: string): void {
+    if (modelId.trim() === "") {
+        throw new Error(
+            `Configuration Error: ${flagPath} is enabled but bedrockModelId is empty. Set a model id ` +
+                "available in this partition and Region (the restricted-partition templates ship it " +
+                "empty because the commercial cross-Region inference profiles do not exist there)."
+        );
+    }
+    const commercialOnlyPrefix = ["global.", "us."].find((prefix) => modelId.startsWith(prefix));
+    if (commercialOnlyPrefix && partition !== "aws") {
+        throw new Error(
+            `Configuration Error: ${flagPath}.bedrockModelId is "${modelId}", whose ` +
+                `"${commercialOnlyPrefix}" cross-Region inference-profile prefix exists only in the ` +
+                `commercial partition. This deployment targets ${partition}. Use a model id or ` +
+                `inference profile offered there (GovCloud uses the "us-gov." prefix).`
+        );
+    }
+}
+
+/**
  * Rejects instance types that are known to carry fewer GPUs than a job reserves.
  *
  * Throws for a type present in `GPU_COUNT_BY_INSTANCE_TYPE` with too few GPUs — the case worth
@@ -1795,33 +1824,14 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    // The Bedrock model id carries a cross-Region inference-profile prefix, and the prefixes are
-    // partition-specific: `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is
-    // passed through to the Lambda unvalidated, and the IAM grant is derived by stripping the prefix —
-    // so a commercial profile id in a restricted partition produces both a model that does not exist
-    // and a grant that does not match it.
+    // Both GenAI pipelines pass their Bedrock model id through to a Lambda unvalidated, so the id is
+    // checked here against the partition it is deployed into (see validateBedrockModelId).
     if (config.app.pipelines.useGenAiMetadata3dLabeling?.enabled) {
-        const bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "";
-        if (bedrockModelId.trim() === "") {
-            throw new Error(
-                "Configuration Error: pipelines.useGenAiMetadata3dLabeling is enabled but " +
-                    "bedrockModelId is empty. Set a model id available in this partition and Region " +
-                    "(the restricted-partition templates ship it empty because the commercial " +
-                    "cross-Region inference profiles do not exist there)."
-            );
-        }
-        const commercialOnlyPrefix = ["global.", "us."].find((prefix) =>
-            bedrockModelId.startsWith(prefix)
+        validateBedrockModelId(
+            "pipelines.useGenAiMetadata3dLabeling",
+            config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "",
+            config.env.partition
         );
-        if (commercialOnlyPrefix && config.env.partition !== "aws") {
-            throw new Error(
-                `Configuration Error: pipelines.useGenAiMetadata3dLabeling.bedrockModelId is ` +
-                    `"${bedrockModelId}", whose "${commercialOnlyPrefix}" cross-Region inference-profile ` +
-                    `prefix exists only in the commercial partition. This deployment targets ` +
-                    `${config.env.partition}. Use a model id or inference profile offered there ` +
-                    `(GovCloud uses the "us-gov." prefix).`
-            );
-        }
     }
 
     //Any configuration warnings/errors checks

@@ -87,3 +87,77 @@ describe("Video SOP/BOM compute-tied constants", () => {
         ).not.toThrow();
     });
 });
+
+describe("validateBedrockModelId is one helper for both GenAI pipelines", () => {
+    const FLAG_PATHS = ["pipelines.useGenAiMetadata3dLabeling", "pipelines.useGenAiVideoSopBom"];
+    const GLOBAL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    const US_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0";
+    const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
+
+    test("[control] the labeling pipeline's two messages are the sentences its tests pin", () => {
+        // configValidationHardening.test.ts asserts /bedrockModelId is empty/ and /exists only in the
+        // commercial partition/; the full sentences are pinned here so a reworded helper is a visible
+        // change rather than a silently weaker match. An Error argument makes toThrow compare the
+        // whole message for equality — a string argument would be a substring match, which a helper
+        // that appended a clause would still satisfy.
+        expect(() => Config.validateBedrockModelId(FLAG_PATHS[0], "", "aws")).toThrow(
+            new Error(
+                "Configuration Error: pipelines.useGenAiMetadata3dLabeling is enabled but " +
+                    "bedrockModelId is empty. Set a model id available in this partition and Region " +
+                    "(the restricted-partition templates ship it empty because the commercial " +
+                    "cross-Region inference profiles do not exist there)."
+            )
+        );
+        expect(() => Config.validateBedrockModelId(FLAG_PATHS[0], GLOBAL_ID, "aws-us-gov")).toThrow(
+            new Error(
+                `Configuration Error: pipelines.useGenAiMetadata3dLabeling.bedrockModelId is ` +
+                    `"${GLOBAL_ID}", whose "global." cross-Region inference-profile prefix exists ` +
+                    "only in the commercial partition. This deployment targets aws-us-gov. Use a " +
+                    'model id or inference profile offered there (GovCloud uses the "us-gov." prefix).'
+            )
+        );
+    });
+
+    test.each(FLAG_PATHS)("an empty id is rejected under %s, naming that flag", (flagPath) => {
+        expect(() => Config.validateBedrockModelId(flagPath, "", "aws")).toThrow(
+            `Configuration Error: ${flagPath} is enabled but bedrockModelId is empty`
+        );
+    });
+
+    test.each(FLAG_PATHS)("a whitespace-only id counts as empty under %s", (flagPath) => {
+        expect(() => Config.validateBedrockModelId(flagPath, "   ", "aws-us-gov")).toThrow(
+            /bedrockModelId is empty/
+        );
+    });
+
+    test.each(FLAG_PATHS)('a "global." id is rejected in GovCloud under %s', (flagPath) => {
+        expect(() => Config.validateBedrockModelId(flagPath, GLOBAL_ID, "aws-us-gov")).toThrow(
+            `${flagPath}.bedrockModelId is "${GLOBAL_ID}", whose "global." cross-Region ` +
+                "inference-profile prefix exists only in the commercial partition. This deployment " +
+                "targets aws-us-gov."
+        );
+    });
+
+    test.each(FLAG_PATHS)(
+        'a "us." id is rejected in the EU Sovereign Cloud under %s',
+        (flagPath) => {
+            expect(() => Config.validateBedrockModelId(flagPath, US_ID, "aws-eusc")).toThrow(
+                `${flagPath}.bedrockModelId is "${US_ID}", whose "us." cross-Region inference-profile ` +
+                    "prefix exists only in the commercial partition. This deployment targets aws-eusc."
+            );
+        }
+    );
+
+    test.each(FLAG_PATHS)(
+        'a "global." id is accepted in the commercial partition under %s',
+        (flagPath) => {
+            expect(() => Config.validateBedrockModelId(flagPath, GLOBAL_ID, "aws")).not.toThrow();
+        }
+    );
+
+    test.each(FLAG_PATHS)('a "us-gov." id is accepted in GovCloud under %s', (flagPath) => {
+        expect(() =>
+            Config.validateBedrockModelId(flagPath, US_GOV_ID, "aws-us-gov")
+        ).not.toThrow();
+    });
+});
