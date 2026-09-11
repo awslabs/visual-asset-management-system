@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
     Input,
     Select,
@@ -30,11 +30,16 @@ import {
     WXYZInput,
     Matrix4x4Input,
     LLAInput,
+    GeoPointInput,
+    GeoJSONInput,
+    MapMetadataPicker,
     JSONTextInput,
     DateInput,
     BooleanInput,
     InlineControlledListInput,
 } from "./valueTypes";
+import { appCache } from "../../services/appCache";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
 interface MetadataRowProps {
     row: MetadataRowState;
@@ -81,8 +86,33 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
     const canEditType = !isSchema; // Type can be edited for non-schema fields
 
     // Complex types that should show "Edit Value" button instead of inline controls
-    const complexTypes: MetadataValueType[] = ["xyz", "wxyz", "matrix4x4", "lla"];
-    const isComplexType = complexTypes.includes(row.editType);
+    const complexTypes: MetadataValueType[] = [
+        "xyz",
+        "wxyz",
+        "matrix4x4",
+        "lla",
+        "geopoint",
+        "geojson",
+    ];
+    // A row whose type was never recorded is not a complex type: it gets the plain text input
+    // until the operator classifies it.
+    const isComplexType = row.editType !== null && complexTypes.includes(row.editType);
+
+    // Geo types render a side-by-side text editor + map picker inside the modal
+    const isGeoType =
+        row.editType === "lla" || row.editType === "geopoint" || row.editType === "geojson";
+    // `appCache.getItem` is a synchronous localStorage read plus a full JSON.parse of the runtime
+    // config envelope. Every keystroke in a value input replaces the rows array and re-renders every
+    // row on the page, so reading it in the render body cost one read per row per keystroke. Only the
+    // geo branch below consumes it, so a non-geo row does not read it at all.
+    const locationServicesEnabled = useMemo(
+        () =>
+            isGeoType &&
+            !!appCache
+                .getItem("config")
+                ?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES),
+        [isGeoType]
+    );
 
     // Check if required field is empty
     const isRequiredAndEmpty =
@@ -363,7 +393,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                             <Select
                                 selectedOption={{
                                     label: getValueTypeLabel(row.editType),
-                                    value: row.editType,
+                                    value: row.editType ?? undefined,
                                 }}
                                 onChange={({ detail }) =>
                                     onTypeChange(detail.selectedOption.value as MetadataValueType)
@@ -383,7 +413,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                         {!row.isNew && row.hasChanges && (
                             <ValueHistoryTooltip
                                 oldValue={row.originalValue}
-                                oldType={row.originalType}
+                                oldType={row.originalType ?? undefined}
                                 schemaDefaultValue={row.metadataSchemaDefaultValue}
                                 hasChanges={row.hasChanges}
                             />
@@ -506,7 +536,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                     setModalValidationErrors([]);
                     setIsModalValueValid(true);
                 }}
-                header={`Edit ${row.editType.toUpperCase()} Value`}
+                header={`Edit ${(row.editType ?? "").toUpperCase()} Value`}
                 size="large"
                 footer={
                     <Box float="right">
@@ -589,17 +619,64 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                                 }}
                             />
                         )}
-                        {row.editType === "lla" && (
-                            <LLAInput
-                                value={row.editValue}
-                                onChange={onValueChange}
-                                disabled={readOnly}
-                                ariaLabel={`${row.editKey} value`}
-                                onValidationChange={(isValid, errors) => {
-                                    setIsModalValueValid(isValid);
-                                    setModalValidationErrors(errors);
+                        {isGeoType && (
+                            <div
+                                style={{
+                                    display: "grid",
+                                    gridTemplateColumns: locationServicesEnabled
+                                        ? "minmax(0, 1fr) minmax(0, 1.4fr)"
+                                        : "minmax(0, 1fr)",
+                                    gap: "16px",
+                                    alignItems: "start",
                                 }}
-                            />
+                            >
+                                <div>
+                                    {row.editType === "lla" && (
+                                        <LLAInput
+                                            value={row.editValue}
+                                            onChange={onValueChange}
+                                            disabled={readOnly}
+                                            ariaLabel={`${row.editKey} value`}
+                                            onValidationChange={(isValid, errors) => {
+                                                setIsModalValueValid(isValid);
+                                                setModalValidationErrors(errors);
+                                            }}
+                                        />
+                                    )}
+                                    {row.editType === "geopoint" && (
+                                        <GeoPointInput
+                                            value={row.editValue}
+                                            onChange={onValueChange}
+                                            disabled={readOnly}
+                                            ariaLabel={`${row.editKey} value`}
+                                            onValidationChange={(isValid, errors) => {
+                                                setIsModalValueValid(isValid);
+                                                setModalValidationErrors(errors);
+                                            }}
+                                        />
+                                    )}
+                                    {row.editType === "geojson" && (
+                                        <GeoJSONInput
+                                            value={row.editValue}
+                                            onChange={onValueChange}
+                                            disabled={readOnly}
+                                            ariaLabel={`${row.editKey} value`}
+                                            onValidationChange={(isValid, errors) => {
+                                                setIsModalValueValid(isValid);
+                                                setModalValidationErrors(errors);
+                                            }}
+                                        />
+                                    )}
+                                </div>
+                                {locationServicesEnabled && (
+                                    <MapMetadataPicker
+                                        type={row.editType as "lla" | "geopoint" | "geojson"}
+                                        value={row.editValue}
+                                        onChange={onValueChange}
+                                        disabled={readOnly}
+                                    />
+                                )}
+                            </div>
                         )}
                     </Box>
                 </SpaceBetween>

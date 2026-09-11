@@ -15,12 +15,16 @@ import Textarea from "@cloudscape-design/components/textarea";
 import Alert from "@cloudscape-design/components/alert";
 import DatePicker from "@cloudscape-design/components/date-picker";
 import TimeInput from "@cloudscape-design/components/time-input";
-import { createApiKey } from "../../services/APIService";
+import { createApiKey, createUserApiKey } from "../../services/APIService";
+import { USER_API_KEY_MAX_EXPIRATION_DAYS } from "../../common/constants/apiKeys";
 
 interface CreateApiKeyProps {
     open: boolean;
     setOpen: (open: boolean) => void;
     setReload: (reload: boolean) => void;
+    /** User self-service mode: key is tied to the current user and an
+     * expiration date (max USER_API_KEY_MAX_EXPIRATION_DAYS out) is required. */
+    userMode?: boolean;
 }
 
 interface FormState {
@@ -39,7 +43,7 @@ const initialFormState: FormState = {
     expiresTime: "23:59:59",
 };
 
-export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyProps) {
+export default function CreateApiKey({ open, setOpen, setReload, userMode }: CreateApiKeyProps) {
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
     const [nameError, setNameError] = useState("");
@@ -68,8 +72,10 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
         try {
             const body: any = {
                 apiKeyName: formState.name,
-                userId: formState.userId,
             };
+            if (!userMode) {
+                body.userId = formState.userId;
+            }
             if (formState.description) {
                 body.description = formState.description;
             }
@@ -78,7 +84,7 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                 body.expiresAt = `${formState.expiresDate}T${time}Z`;
             }
 
-            const response = await createApiKey(body);
+            const response = userMode ? await createUserApiKey(body) : await createApiKey(body);
 
             if (response && response[0] === true) {
                 const data = response[1];
@@ -119,12 +125,22 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
     };
 
     const isFormValid = () => {
-        return (
+        const baseValid =
             formState.name.trim().length >= 1 &&
-            formState.userId.trim().length >= 1 &&
             formState.description.trim().length >= 1 &&
-            formState.description.length <= 256
-        );
+            formState.description.length <= 256;
+        if (userMode) {
+            // User mode: no userId field; expiration date is required
+            return baseValid && formState.expiresDate.trim().length >= 1;
+        }
+        return baseValid && formState.userId.trim().length >= 1;
+    };
+
+    // Latest selectable expiration for user-mode keys (today + max window)
+    const maxUserExpirationDate = () => {
+        const max = new Date();
+        max.setUTCDate(max.getUTCDate() + USER_API_KEY_MAX_EXPIRATION_DAYS);
+        return max.toISOString().split("T")[0];
     };
 
     // If the key was created, show the key display view
@@ -220,25 +236,27 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                             data-testid="api-key-name"
                         />
                     </FormField>
-                    <FormField
-                        label="User ID"
-                        constraintText="Required. Enter the user ID this key will be associated with."
-                        errorText={userIdError}
-                    >
-                        <Input
-                            value={formState.userId}
-                            onChange={({ detail }) => {
-                                setFormState({ ...formState, userId: detail.value });
-                                if (!detail.value.trim()) {
-                                    setUserIdError("User ID is required");
-                                } else {
-                                    setUserIdError("");
-                                }
-                            }}
-                            placeholder="Enter User ID"
-                            data-testid="api-key-userId"
-                        />
-                    </FormField>
+                    {!userMode && (
+                        <FormField
+                            label="User ID"
+                            constraintText="Required. Enter the user ID this key will be associated with."
+                            errorText={userIdError}
+                        >
+                            <Input
+                                value={formState.userId}
+                                onChange={({ detail }) => {
+                                    setFormState({ ...formState, userId: detail.value });
+                                    if (!detail.value.trim()) {
+                                        setUserIdError("User ID is required");
+                                    } else {
+                                        setUserIdError("");
+                                    }
+                                }}
+                                placeholder="Enter User ID"
+                                data-testid="api-key-userId"
+                            />
+                        </FormField>
+                    )}
                     <FormField
                         label="Description"
                         constraintText="Required. Max 256 characters."
@@ -264,7 +282,11 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                     </FormField>
                     <FormField
                         label="Expiration Date"
-                        constraintText="Optional. Select an expiration date for the API key."
+                        constraintText={
+                            userMode
+                                ? `Required. Maximum ${USER_API_KEY_MAX_EXPIRATION_DAYS} days from today.`
+                                : "Optional. Select an expiration date for the API key."
+                        }
                     >
                         <DatePicker
                             value={formState.expiresDate}
@@ -277,6 +299,16 @@ export default function CreateApiKey({ open, setOpen, setReload }: CreateApiKeyP
                                         : "23:59:59",
                                 });
                             }}
+                            isDateEnabled={
+                                userMode
+                                    ? (date) => {
+                                          const today = new Date();
+                                          today.setHours(0, 0, 0, 0);
+                                          const max = new Date(maxUserExpirationDate());
+                                          return date > today && date <= max;
+                                      }
+                                    : undefined
+                            }
                             placeholder="YYYY/MM/DD"
                             data-testid="api-key-expiresDate"
                         />

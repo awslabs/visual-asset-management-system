@@ -59,30 +59,49 @@ export const fetchMetadata = async (
             queryParams.assetVersionId = assetVersionId;
         }
 
-        const response = await apiClient.get(endpoint, {
-            queryStringParameters: Object.keys(queryParams).length > 0 ? queryParams : undefined,
-        });
+        // Follow NextToken to aggregate every page of metadata so the full set
+        // is returned regardless of how many pages the backend splits it into.
+        let allMetadata: MetadataRecord[] = [];
+        let nextToken: string | null = null;
+        let lastPayload: any = null;
 
-        console.log(`[apiHelpers] fetchMetadata response for ${entityType}:`, response);
+        do {
+            const pageParams: any = {
+                ...queryParams,
+                ...(nextToken ? { startingToken: nextToken } : {}),
+            };
+            const response = await apiClient.get(endpoint, {
+                queryStringParameters: Object.keys(pageParams).length > 0 ? pageParams : undefined,
+            });
 
-        // Handle different response formats
-        if (response && typeof response === "object") {
-            if (Array.isArray(response.metadata)) {
-                return response;
-            } else if (
-                response.message &&
-                typeof response.message === "object" &&
-                Array.isArray(response.message.metadata)
-            ) {
-                return response.message;
-            } else if (response.message && typeof response.message === "string") {
-                return { metadata: [], message: response.message };
+            // Normalize the various response shapes into a payload holding `metadata`.
+            let payload: any = null;
+            if (response && typeof response === "object") {
+                if (Array.isArray(response.metadata)) {
+                    payload = response;
+                } else if (
+                    response.message &&
+                    typeof response.message === "object" &&
+                    Array.isArray(response.message.metadata)
+                ) {
+                    payload = response.message;
+                } else if (response.message && typeof response.message === "string") {
+                    return { metadata: [], message: response.message };
+                }
+            } else if (typeof response === "string") {
+                return { metadata: [], message: response };
             }
-        } else if (typeof response === "string") {
-            return { metadata: [], message: response };
-        }
 
-        return { metadata: [], message: "Unknown response format" };
+            if (!payload) {
+                return { metadata: [], message: "Unknown response format" };
+            }
+
+            allMetadata = allMetadata.concat(payload.metadata || []);
+            lastPayload = payload;
+            nextToken = payload.NextToken || null;
+        } while (nextToken);
+
+        return { ...lastPayload, metadata: allMetadata, NextToken: undefined };
     } catch (error: any) {
         console.error("[apiHelpers] Error fetching metadata:", error);
         // Extract error message from API response with status code

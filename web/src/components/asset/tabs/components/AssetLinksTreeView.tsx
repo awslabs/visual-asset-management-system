@@ -421,6 +421,12 @@ export function AssetLinksTreeView() {
                 </div>
             </div>
 
+            {isViewMode && state.assetLinksData?.treeTruncated && (
+                <Alert type="warning">
+                    {`This children tree reached its depth or node ceiling and is incomplete. Open an ${Synonyms.asset} further down the tree to see the rest of it.`}
+                </Alert>
+            )}
+
             {state.isSearching ? (
                 <SearchResults />
             ) : (

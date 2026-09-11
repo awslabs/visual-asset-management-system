@@ -1,199 +1,145 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 import json
-import boto3
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+from backend.backend.handlers.config import configService
+
 
 @pytest.fixture(scope="function")
 def config_event():
-    """
-    Generates an event for the configService lambda function
-    
-    Returns:
-        dict: Lambda event dictionary for getting configuration
-    """
+    """API Gateway event for GET /secure-config"""
     return {
         "requestContext": {
             "http": {
-                "method": "GET"
+                "method": "GET",
+                "path": "/secure-config"
             }
+        },
+        "queryStringParameters": {},
+        "headers": {
+            "authorization": "Bearer test-token"
         }
     }
 
-@pytest.fixture(scope="function")
-def mock_dynamodb_paginator():
-    """
-    Mock for DynamoDB paginator
-    
-    Returns:
-        MagicMock: Mock for DynamoDB paginator
-    """
+
+def _make_paginator(items):
+    """Build a mock DynamoDB scan paginator returning the given low-level items"""
     mock_paginator = MagicMock()
-    
-    # Mock the paginate method to return a result with items
     mock_paginate = MagicMock()
-    mock_paginate.build_full_result.return_value = {
-        "Items": [
-            {
-                "featureName": {"S": "feature1"},
-                "enabled": {"BOOL": True}
-            },
-            {
-                "featureName": {"S": "feature2"},
-                "enabled": {"BOOL": False}
-            }
-        ]
-    }
-    
+    mock_paginate.build_full_result.return_value = {"Items": items}
     mock_paginator.paginate.return_value = mock_paginate
     return mock_paginator
 
-def test_config_service_success(config_event, mock_dynamodb_paginator, monkeypatch):
-    """
-    Test the configService lambda handler with a successful configuration retrieval
-    
-    Args:
-        config_event: Lambda event dictionary for getting configuration
-        mock_dynamodb_paginator: Mock for DynamoDB paginator
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    pytest.skip("Test failing with 'ModuleNotFoundError: No module named 'backend.handlers.config'; 'backend.handlers' is not a package'. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    # Set up environment variables
-    monkeypatch.setenv("ASSET_STORAGE_BUCKET", "test-asset-bucket")
-    monkeypatch.setenv("APPFEATUREENABLED_STORAGE_TABLE_NAME", "test-feature-table")
-    
-    # Mock boto3 client
-    mock_dynamodb_client = MagicMock()
-    mock_dynamodb_client.get_paginator.return_value = mock_dynamodb_paginator
-    
-    # Patch boto3.client to return our mock
-    with patch("boto3.client", return_value=mock_dynamodb_client):
-        # Import the module here to ensure our mocks are in place
-        from backend.handlers.config import configService
-        
-        # Call the lambda handler
-        response = configService.lambda_handler(config_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == "200"
-        body = json.loads(response["body"])
-        assert body["bucket"] == "test-asset-bucket"
-        assert body["featuresEnabled"] == "feature1,feature2"
-        
-        # Verify DynamoDB paginator was called with correct parameters
-        mock_dynamodb_client.get_paginator.assert_called_once_with('scan')
-        mock_paginator_paginate = mock_dynamodb_paginator.paginate
-        mock_paginator_paginate.assert_called_once_with(
-            TableName="test-feature-table",
-            PaginationConfig={
-                'MaxItems': 500,
-                'PageSize': 500,
-                'StartingToken': None
-            }
-        )
 
-def test_config_service_pagination(config_event, monkeypatch):
-    """
-    Test the configService lambda handler with pagination
-    
-    Args:
-        config_event: Lambda event dictionary for getting configuration
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    pytest.skip("Test failing with 'ModuleNotFoundError: No module named 'backend.handlers.config'; 'backend.handlers' is not a package'. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    # Set up environment variables
-    monkeypatch.setenv("ASSET_STORAGE_BUCKET", "test-asset-bucket")
-    monkeypatch.setenv("APPFEATUREENABLED_STORAGE_TABLE_NAME", "test-feature-table")
-    
-    # Create a mock paginator that returns results with a NextToken first, then without
-    mock_paginator = MagicMock()
-    
-    # First paginate call returns a result with NextToken
-    first_result = {
-        "Items": [
-            {
-                "featureName": {"S": "feature1"},
-                "enabled": {"BOOL": True}
-            }
-        ],
-        "NextToken": "next-token"
-    }
-    
-    # Second paginate call returns a result without NextToken
-    second_result = {
-        "Items": [
-            {
-                "featureName": {"S": "feature2"},
-                "enabled": {"BOOL": False}
-            }
+@pytest.mark.unit
+class TestConfigService:
+    """Unit tests for the configService lambda handler"""
+
+    def test_get_secure_config_success(self, config_event):
+        """Successful retrieval returns feature flags and empty optional URLs"""
+        mock_dynamodb_client = MagicMock()
+        mock_dynamodb_client.get_paginator.return_value = _make_paginator([
+            {"featureName": {"S": "feature1"}, "enabled": {"BOOL": True}},
+            {"featureName": {"S": "feature2"}, "enabled": {"BOOL": False}},
+        ])
+
+        mock_enforcer = MagicMock()
+        mock_enforcer.enforceAPI.return_value = True
+
+        with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
+             patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
+             patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
+             patch.object(configService, "location_service_api_key_arn_ssm_param", None), \
+             patch.object(configService, "web_deployed_url_ssm_param", None):
+            response = configService.lambda_handler(config_event, MagicMock())
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["featuresEnabled"] == "feature1,feature2"
+        assert body["locationServiceApiUrl"] == ""
+        assert body["webDeployedUrl"] == ""
+
+        mock_dynamodb_client.get_paginator.assert_called_once_with("scan")
+
+    def test_get_secure_config_with_ssm_values(self, config_event):
+        """Location Service URL and web deployed URL resolve from SSM when configured"""
+        mock_dynamodb_client = MagicMock()
+        mock_dynamodb_client.get_paginator.return_value = _make_paginator([])
+
+        mock_ssm_client = MagicMock()
+        mock_ssm_client.get_parameter.side_effect = [
+            {"Parameter": {"Value": "arn:aws:geo:us-east-1:123456789012:api-key/test-key"}},
+            {"Parameter": {"Value": "https://example.com "}},
         ]
-    }
-    
-    # Set up the mock to return different results on consecutive calls
-    mock_paginate = MagicMock()
-    mock_paginate.build_full_result.side_effect = [first_result, second_result]
-    mock_paginator.paginate.return_value = mock_paginate
-    
-    # Mock boto3 client
-    mock_dynamodb_client = MagicMock()
-    mock_dynamodb_client.get_paginator.return_value = mock_paginator
-    
-    # Patch boto3.client to return our mock
-    with patch("boto3.client", return_value=mock_dynamodb_client):
-        # Import the module here to ensure our mocks are in place
-        from backend.handlers.config import configService
-        
-        # Call the lambda handler
-        response = configService.lambda_handler(config_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == "200"
-        body = json.loads(response["body"])
-        assert body["bucket"] == "test-asset-bucket"
-        assert body["featuresEnabled"] == "feature1,feature2"
-        
-        # Verify DynamoDB paginator was called with correct parameters for both pages
-        mock_dynamodb_client.get_paginator.assert_called_once_with('scan')
-        assert mock_paginator.paginate.call_count == 2
-        
-        # First call should use default pagination config
-        first_call_args = mock_paginator.paginate.call_args_list[0][1]
-        assert first_call_args["TableName"] == "test-feature-table"
-        assert first_call_args["PaginationConfig"]["MaxItems"] == 500
-        assert first_call_args["PaginationConfig"]["PageSize"] == 500
-        assert first_call_args["PaginationConfig"]["StartingToken"] is None
-        
-        # Second call should use the NextToken from the first result
-        second_call_args = mock_paginator.paginate.call_args_list[1][1]
-        assert second_call_args["TableName"] == "test-feature-table"
-        assert second_call_args["PaginationConfig"]["MaxItems"] == 500
-        assert second_call_args["PaginationConfig"]["PageSize"] == 500
-        assert second_call_args["PaginationConfig"]["StartingToken"] == "next-token"
+        mock_geo_client = MagicMock()
+        mock_geo_client.describe_key.return_value = {"Key": "test-api-key-value"}
 
-def test_config_service_error(config_event, monkeypatch):
-    """
-    Test the configService lambda handler when an error occurs
-    
-    Args:
-        config_event: Lambda event dictionary for getting configuration
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    pytest.skip("Test failing with 'ModuleNotFoundError: No module named 'backend.handlers.config'; 'backend.handlers' is not a package'. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    # Set up environment variables
-    monkeypatch.setenv("ASSET_STORAGE_BUCKET", "test-asset-bucket")
-    monkeypatch.setenv("APPFEATUREENABLED_STORAGE_TABLE_NAME", "test-feature-table")
-    
-    # Mock boto3 client to raise an exception
-    mock_dynamodb_client = MagicMock()
-    mock_dynamodb_client.get_paginator.side_effect = Exception("DynamoDB error")
-    
-    # Patch boto3.client to return our mock
-    with patch("boto3.client", return_value=mock_dynamodb_client):
-        # Import the module here to ensure our mocks are in place
-        from backend.handlers.config import configService
-        
-        # Call the lambda handler
-        response = configService.lambda_handler(config_event, None)
-        
-        # Verify the response
+        mock_enforcer = MagicMock()
+        mock_enforcer.enforceAPI.return_value = True
+
+        with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
+             patch.object(configService, "ssm_client", mock_ssm_client), \
+             patch.object(configService, "geo_client", mock_geo_client), \
+             patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
+             patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
+             patch.object(configService, "location_service_api_key_arn_ssm_param", "/test/location-key-arn"), \
+             patch.object(configService, "location_service_url_format", "https://maps.test/<apiKey>"), \
+             patch.object(configService, "web_deployed_url_ssm_param", "/test/web-url"):
+            response = configService.lambda_handler(config_event, MagicMock())
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["featuresEnabled"] == ""
+        assert body["locationServiceApiUrl"] == "https://maps.test/test-api-key-value"
+        assert body["webDeployedUrl"] == "https://example.com"
+        mock_geo_client.describe_key.assert_called_once_with(KeyName="test-key")
+
+    def test_get_secure_config_unauthorized(self, config_event):
+        """API-level authorization denial returns 403"""
+        mock_enforcer = MagicMock()
+        mock_enforcer.enforceAPI.return_value = False
+
+        with patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
+             patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}):
+            response = configService.lambda_handler(config_event, MagicMock())
+
+        assert response["statusCode"] == 403
+
+    def test_get_secure_config_no_tokens_denied(self, config_event):
+        """Empty token list fails closed with 403"""
+        with patch.object(configService, "request_to_claims", return_value={"tokens": [], "roles": []}):
+            response = configService.lambda_handler(config_event, MagicMock())
+
+        assert response["statusCode"] == 403
+
+    def test_get_secure_config_dynamodb_error(self, config_event):
+        """A DynamoDB failure surfaces as a 500 internal error"""
+        mock_dynamodb_client = MagicMock()
+        mock_dynamodb_client.get_paginator.side_effect = Exception("DynamoDB error")
+
+        mock_enforcer = MagicMock()
+        mock_enforcer.enforceAPI.return_value = True
+
+        with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
+             patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
+             patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}):
+            response = configService.lambda_handler(config_event, MagicMock())
+
         assert response["statusCode"] == 500
         assert json.loads(response["body"])["message"] == "Internal Server Error"
+
+    def test_method_not_allowed(self, config_event):
+        """Non-GET methods return a validation error"""
+        config_event["requestContext"]["http"]["method"] = "POST"
+
+        mock_enforcer = MagicMock()
+        mock_enforcer.enforceAPI.return_value = True
+
+        with patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
+             patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}):
+            response = configService.lambda_handler(config_event, MagicMock())
+
+        assert response["statusCode"] == 400

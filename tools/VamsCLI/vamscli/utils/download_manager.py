@@ -5,10 +5,14 @@ import aiohttp
 import aiofiles
 import time
 import os
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, NamedTuple
 from pathlib import Path
 
-from ..constants import DEFAULT_PARALLEL_DOWNLOADS, DEFAULT_DOWNLOAD_RETRY_ATTEMPTS, DEFAULT_DOWNLOAD_TIMEOUT
+from ..constants import (
+    DEFAULT_PARALLEL_DOWNLOADS, DEFAULT_DOWNLOAD_RETRY_ATTEMPTS, DEFAULT_DOWNLOAD_TIMEOUT,
+    MAX_DOWNLOAD_KEYS_PER_REQUEST
+)
 from .exceptions import FileDownloadError, DownloadError
 from .api_client import APIClient
 
@@ -20,6 +24,81 @@ class DownloadFileInfo(NamedTuple):
     download_url: str
     file_size: Optional[int] = None
     version_id: Optional[str] = None
+    last_modified: Optional[float] = None  # Epoch seconds; applied to the local file mtime
+
+
+def parse_remote_timestamp(timestamp: Optional[str]) -> Optional[float]:
+    """Parse an ISO-8601 timestamp from the API into epoch seconds."""
+    if not timestamp:
+        return None
+    try:
+        # Handle 'Z' suffix which fromisoformat rejects before Python 3.11
+        return datetime.fromisoformat(timestamp.replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def generate_presigned_urls(api_client: APIClient, database_id: str, asset_id: str,
+                            file_keys: List[Any],
+                            asset_version_id: Optional[str] = None,
+                            asset_version_alias: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Generate presigned download URLs for a set of file keys.
+
+    Uses the bulk download API, paging locally in chunks of
+    MAX_DOWNLOAD_KEYS_PER_REQUEST keys per request.
+
+    Args:
+        file_keys: Each entry is a relative-path string (latest version) or a
+            {'key': str, 'versionId': str} dict pinning that file to a specific
+            S3 version. Per-file versionIds are mutually exclusive with an
+            asset_version_id/asset_version_alias pin.
+
+    Returns:
+        Dict keyed by file key (the relative path): {'downloadUrl': str,
+        'versionId': Optional[str]} on success, or {'error': str} for keys that
+        could not be signed.
+    """
+    results: Dict[str, Dict[str, Any]] = {}
+    if not file_keys:
+        return results
+
+    def _key_of(entry):
+        return entry['key'] if isinstance(entry, dict) else entry
+
+    for start in range(0, len(file_keys), MAX_DOWNLOAD_KEYS_PER_REQUEST):
+        chunk = file_keys[start:start + MAX_DOWNLOAD_KEYS_PER_REQUEST]
+        try:
+            response = api_client.download_asset_files_bulk(
+                database_id, asset_id, chunk,
+                asset_version_id=asset_version_id,
+                asset_version_alias=asset_version_alias
+            )
+        except Exception as e:
+            # Request-level failure marks every key in the chunk failed;
+            # callers aggregate and report per-file errors
+            for entry in chunk:
+                results[_key_of(entry)] = {'error': str(e)}
+            continue
+
+        for entry in response.get('files') or []:
+            key = entry.get('key')
+            if not key:
+                continue
+            if entry.get('success') and entry.get('downloadUrl'):
+                results[key] = {
+                    'downloadUrl': entry['downloadUrl'],
+                    'versionId': entry.get('versionId')
+                }
+            else:
+                results[key] = {'error': entry.get('error') or 'URL generation failed'}
+
+        # Any chunk key missing from the response is a failure
+        for entry in chunk:
+            key = _key_of(entry)
+            if key not in results:
+                results[key] = {'error': 'URL generation failed'}
+
+    return results
 
 
 class DownloadProgress:
@@ -286,35 +365,61 @@ class DownloadManager:
             finally:
                 progress.active_downloads -= 1
     
-    async def _download_single_file(self, file_info: DownloadFileInfo, progress: DownloadProgress) -> Dict[str, Any]:
+    async def _download_single_file(self, file_info: DownloadFileInfo, progress) -> Dict[str, Any]:
         """Download a single file from S3."""
         # Ensure local directory exists
         file_info.local_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Download file
-        async with self.session.get(file_info.download_url) as response:
-            if response.status != 200:
+
+        # Download to a temporary file so failed transfers never leave a
+        # partial file at the final path, then atomically replace
+        temp_path = file_info.local_path.with_name(file_info.local_path.name + '.vamsdownload')
+
+        try:
+            async with self.session.get(file_info.download_url) as response:
+                if response.status != 200:
+                    raise DownloadError(
+                        f"Download failed with status {response.status}: {await response.text()}"
+                    )
+
+                # Expected size from headers, falling back to caller-provided size
+                content_length = response.headers.get('Content-Length')
+                expected_size = int(content_length) if content_length else file_info.file_size
+
+                # Write file with progress updates
+                downloaded_size = 0
+                async with aiofiles.open(temp_path, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(8192):  # 8KB chunks
+                        await f.write(chunk)
+                        downloaded_size += len(chunk)
+
+                        # Update progress periodically
+                        progress.update_file_progress(file_info.relative_key, downloaded_size, "downloading")
+
+                        if self.progress_callback:
+                            self.progress_callback(progress)
+
+            if expected_size is not None and downloaded_size != expected_size:
                 raise DownloadError(
-                    f"Download failed with status {response.status}: {await response.text()}"
+                    f"Size mismatch for {file_info.relative_key}: "
+                    f"expected {expected_size} bytes, received {downloaded_size} bytes"
                 )
-            
-            # Get file size from headers if not provided
-            content_length = response.headers.get('Content-Length')
-            file_size = int(content_length) if content_length else file_info.file_size or 0
-            
-            # Write file with progress updates
-            downloaded_size = 0
-            async with aiofiles.open(file_info.local_path, 'wb') as f:
-                async for chunk in response.content.iter_chunked(8192):  # 8KB chunks
-                    await f.write(chunk)
-                    downloaded_size += len(chunk)
-                    
-                    # Update progress periodically
-                    progress.update_file_progress(file_info.relative_key, downloaded_size, "downloading")
-                    
-                    if self.progress_callback:
-                        self.progress_callback(progress)
-        
+
+            os.replace(temp_path, file_info.local_path)
+        except BaseException:
+            # Clean up the temporary file on any failure or cancellation
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+        # Preserve the remote timestamp so change detection can compare mtimes
+        if file_info.last_modified is not None:
+            try:
+                os.utime(file_info.local_path, (file_info.last_modified, file_info.last_modified))
+            except OSError:
+                pass
+
         return {"size": downloaded_size}
 
 
@@ -387,18 +492,8 @@ class DownloadManager:
                         if self.progress_callback:
                             self.progress_callback(progress)
 
-                        file_info.local_path.parent.mkdir(parents=True, exist_ok=True)
-                        async with self.session.get(file_info.download_url) as response:
-                            if response.status != 200:
-                                raise DownloadError(f"Download failed with status {response.status}")
-                            downloaded_size = 0
-                            async with aiofiles.open(file_info.local_path, 'wb') as f:
-                                async for chunk in response.content.iter_chunked(8192):
-                                    await f.write(chunk)
-                                    downloaded_size += len(chunk)
-                                    progress.update_file_progress(file_info.relative_key, downloaded_size, "downloading")
-                                    if self.progress_callback:
-                                        self.progress_callback(progress)
+                        result = await self._download_single_file(file_info, progress)
+                        downloaded_size = result.get("size", 0)
 
                         progress.update_file_progress(file_info.relative_key, downloaded_size, "completed")
                         if self.progress_callback:

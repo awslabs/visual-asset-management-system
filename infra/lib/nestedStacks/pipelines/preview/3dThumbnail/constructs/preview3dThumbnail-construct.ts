@@ -9,7 +9,6 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -27,9 +26,13 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -38,7 +41,7 @@ export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -77,8 +80,11 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 // Add permissions for all asset buckets from the global array
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
-                    // Ensure the prefix ends with a slash for proper path construction
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
@@ -91,7 +97,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -172,6 +178,11 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             ],
         });
 
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
+
         /**
          * AWS Batch Job Definition & Compute Env for Preview 3D Thumbnail Container
          */
@@ -179,6 +190,8 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_Preview3dThumbnail",
             {
+                // Matches the 1-hour state machine timeout that encloses this job.
+                attemptDuration: cdk.Duration.hours(1),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -267,6 +280,22 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full taskTimeout. The handler reports the
+        // token for the errors it raises itself; this covers the failures where it never runs at all:
+        // the function timeout, an out-of-memory kill, an import failure, or an invoke fault that
+        // exhausts the task's service-exception retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         // batch job Preview 3D Thumbnail
         const preview3dThumbnailBatchJob = new tasks.BatchSubmitJob(
             this,
@@ -303,6 +332,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             this,
             "Preview3dThumbnailProcessing-StateMachineLogGroup",
             {
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 logGroupName:
                     "/aws/vendedlogs/VAMSstateMachine-Preview3dThumbnailPipeline" +
                     generateUniqueNameHash(
@@ -311,7 +341,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                         "Preview3dThumbnailProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );
@@ -350,6 +380,8 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -366,60 +398,36 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
         if (props.config.app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register Preview 3D Thumbnail pipeline and workflow
-            new cdk.CustomResource(this, "Preview3dThumbnailPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "preview-3d-thumbnail",
-                    pipelineDescription:
-                        "Generate preview thumbnails (GIF/JPG/PNG) for 3D files - .ply, .stl, .obj, .glb, .gltf, .fbx, .las, .laz, .e57, .ptx, .fls, .fws, .pcd, .drc, .stp, .step, .usd, .usda, .usdc, .usdz",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".gif,.jpg,.png",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "Preview3dThumbnailRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "preview",
+                    "3dThumbnail",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: preview3dThumbnailPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "3600", // 1 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: '{"overwriteExistingPreviewFiles": true}',
-                    workflowId: "preview-3d-thumbnail",
-                    workflowDescription:
-                        "Automated workflow for 3D file preview thumbnail generation (GIF/JPG/PNG)",
-                    autoTriggerOnFileExtensionsUpload:
-                        props.config.app.pipelines.usePreview3dThumbnail
-                            .autoRegisterAutoTriggerOnFileUpload === true
-                            ? ".ply,.stl,.obj,.glb,.gltf,.fbx,.las,.laz,.e57,.ptx,.fls,.fws,.pcd,.drc,.stp,.step,.usd,.usda,.usdc,.usdz"
-                            : "",
                 },
+                idOverrides: {
+                    pipelineId: "preview-3d-thumbnail",
+                    workflowId: "preview-3d-thumbnail",
+                },
+                triggerEnabled:
+                    props.config.app.pipelines.usePreview3dThumbnail
+                        .autoRegisterAutoTriggerOnFileUpload === true,
             });
-
-            //Nag suppression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
         }
 
         //Output VAMS Pipeline Execution Function name
@@ -444,7 +452,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -461,7 +469,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*Preview3dThumbnailProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*Preview3dThumbnailProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -478,7 +486,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -495,7 +503,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecutePreview3dThumbnailPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecutePreview3dThumbnailPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -508,7 +516,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy and AWSXrayWriteOnlyAccess) required for Fargate container operations",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -523,7 +531,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container job uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy and AWSXrayWriteOnlyAccess) required for Fargate container operations",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",

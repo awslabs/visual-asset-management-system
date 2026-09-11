@@ -13,14 +13,13 @@ Key Features:
 - Uses "touch and delete" pattern: creates then immediately deletes REINDEX_METADATA_RECORD
 - DynamoDB Streams automatically trigger OpenSearch indexing on both INSERT and REMOVE events
 - Supports both direct Lambda invocation and CloudFormation custom resource events
-- All configuration read from environment variables
+- Table names resolved via common.resourceNames (SSM with environment variable override for testing)
 - Comprehensive error handling and logging
 - Batch operations for optimal performance
 
-Environment Variables Required:
-- ASSET_STORAGE_TABLE_NAME: DynamoDB table for assets (source)
-- S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: DynamoDB table for S3 bucket configs (source)
-- ASSET_FILE_METADATA_STORAGE_TABLE_NAME: DynamoDB table for asset/file metadata (target for touch operations)
+Configuration Required:
+- DynamoDB table names: ASSET_STORAGE_TABLE_NAME, S3_ASSET_BUCKETS_STORAGE_TABLE_NAME,
+  ASSET_FILE_METADATA_STORAGE_TABLE_NAME (resolved via SSM with env var override)
 - OPENSEARCH_ASSET_INDEX_SSM_PARAM: SSM parameter for asset index name
 - OPENSEARCH_FILE_INDEX_SSM_PARAM: SSM parameter for file index name
 - OPENSEARCH_ENDPOINT_SSM_PARAM: SSM parameter for OpenSearch endpoint
@@ -30,6 +29,16 @@ Reindexing Strategy:
 - Assets: Creates metadata record with composite key "databaseId:assetId:/" (root path)
 - Files: Creates metadata record with composite key "databaseId:assetId:filePath"
 - Both operations immediately delete the created records to trigger stream events
+
+File assetId/databaseId Resolution:
+- Files are normally tagged with assetid/databaseid S3 object metadata by sqsBucketSync.
+- For files not yet processed by sqsBucketSync (no such metadata), the reindexer falls
+  back to resolving the asset context the same way sqsBucketSync does: the assetId is the
+  first path segment beneath the bucket's base prefix, and the databaseId is looked up from
+  the asset storage table by (bucketId, assetId) via the BucketIdGSI.
+- Files whose key does not yield a valid asset ID, or whose asset cannot be found as an
+  active (non-archived) asset for the bucket, are ignored (skipped), mirroring how
+  sqsBucketSync declines to process objects that are not valid asset locations.
 
 Usage:
     Direct Invocation:
@@ -44,34 +53,58 @@ Usage:
 """
 
 import json
-import logging
 import os
+import random
 import time
 import urllib3
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Callable, Dict, List, Optional, Tuple, Any
 from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
+from boto3.dynamodb.conditions import Key
 
-# Configure logging
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+)
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.dynamoDbMetadataKeys import REINDEX_METADATA_RECORD_KEY
+from common.validators import validate
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="CrReindexer")
 
 # Initialize AWS clients
-dynamodb_client = boto3.client('dynamodb')
-dynamodb_resource = boto3.resource('dynamodb')
-s3_client = boto3.client('s3')
-ssm_client = boto3.client('ssm')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
+dynamodb_resource = boto3.resource('dynamodb', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+ssm_client = boto3.client('ssm', config=retry_config)
 
 # HTTP client for CloudFormation responses
 http = urllib3.PoolManager()
 
 # Environment Variables - Loaded at module initialization
-ASSET_STORAGE_TABLE_NAME = os.environ.get('ASSET_STORAGE_TABLE_NAME', '')
-S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = os.environ.get('S3_ASSET_BUCKETS_STORAGE_TABLE_NAME', '')
-ASSET_FILE_METADATA_STORAGE_TABLE_NAME = os.environ.get('ASSET_FILE_METADATA_STORAGE_TABLE_NAME', '')
+from common.resourceNames import get_table_name, ResourceKeys
+
+try:
+    ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception:
+    ASSET_STORAGE_TABLE_NAME = ''
+
+try:
+    S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+except Exception:
+    S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = ''
+
+try:
+    ASSET_FILE_METADATA_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+except Exception:
+    ASSET_FILE_METADATA_STORAGE_TABLE_NAME = ''
+
 OPENSEARCH_ASSET_INDEX_SSM_PARAM = os.environ.get('OPENSEARCH_ASSET_INDEX_SSM_PARAM', '')
 OPENSEARCH_FILE_INDEX_SSM_PARAM = os.environ.get('OPENSEARCH_FILE_INDEX_SSM_PARAM', '')
 OPENSEARCH_ENDPOINT_SSM_PARAM = os.environ.get('OPENSEARCH_ENDPOINT_SSM_PARAM', '')
@@ -87,6 +120,70 @@ class DecimalEncoder(json.JSONEncoder):
         if isinstance(obj, Decimal):
             return int(obj) if obj % 1 == 0 else float(obj)
         return super(DecimalEncoder, self).default(obj)
+
+
+# Bounded retry for the writes DynamoDB rejects. batch_write_item does not raise on a
+# throttle: it returns the rejected writes under UnprocessedItems, and dropping that
+# response loses them silently. The bound matters as much as the retry -- this Lambda
+# already runs at the 15-minute maximum and walks every asset and every S3 object, so an
+# unbounded retry converts silent data loss into a stack-hanging timeout. Four retries
+# with exponential backoff plus jitter add at most ~1.5s per 25-item batch, which covers
+# the sub-second partition throttles this path provokes; anything left after that is
+# reported as a failure rather than retried further.
+BATCH_WRITE_MAX_ATTEMPTS = 5
+BATCH_WRITE_BACKOFF_BASE_SECONDS = 0.1
+
+
+def batch_write_with_retry(table_name: str, requests: List[Dict]) -> Tuple[int, List[Dict]]:
+    """Write one batch, retrying only the items DynamoDB reports as unprocessed.
+
+    Args:
+        table_name: Target table name.
+        requests: Up to 25 PutRequest/DeleteRequest entries.
+
+    Returns:
+        Tuple of (written_count, still_unprocessed_requests). The caller must treat
+        the returned requests as failures -- they were never written.
+    """
+    pending = list(requests)
+    written = 0
+
+    for attempt in range(BATCH_WRITE_MAX_ATTEMPTS):
+        if not pending:
+            break
+
+        response = dynamodb_client.batch_write_item(RequestItems={table_name: pending})
+        unprocessed = (response.get('UnprocessedItems') or {}).get(table_name, [])
+        written += len(pending) - len(unprocessed)
+        pending = unprocessed
+
+        if not pending:
+            break
+
+        if attempt < BATCH_WRITE_MAX_ATTEMPTS - 1:
+            wait_time = (BATCH_WRITE_BACKOFF_BASE_SECONDS * (2 ** attempt)) + random.uniform(0, 0.05)
+            logger.warning(
+                f"DynamoDB returned {len(pending)} unprocessed write(s) for {table_name}; "
+                f"retrying in {wait_time:.2f}s (attempt {attempt + 1}/{BATCH_WRITE_MAX_ATTEMPTS})"
+            )
+            time.sleep(wait_time)
+
+    if pending:
+        logger.error(
+            f"{len(pending)} write(s) to {table_name} remained unprocessed after "
+            f"{BATCH_WRITE_MAX_ATTEMPTS} attempts; reporting them as failures"
+        )
+
+    return written, pending
+
+
+def reindex_composite_key(request: Dict) -> Optional[str]:
+    """Return the databaseId:assetId:filePath key a batch-write request addresses."""
+    for verb, holder in (('PutRequest', 'Item'), ('DeleteRequest', 'Key')):
+        body = request.get(verb)
+        if body:
+            return (body.get(holder, {}).get('databaseId:assetId:filePath', {}) or {}).get('S')
+    return None
 
 
 class ReindexUtility:
@@ -105,11 +202,13 @@ class ReindexUtility:
         assets_metadata_table_name: str,
         asset_batch_size: int = 25,
         file_batch_size: int = 100,
-        memory_batch_size: int = 1000
+        memory_batch_size: int = 1000,
+        time_remaining_ms: Optional[Callable[[], int]] = None,
+        min_remaining_ms: int = 60000
     ):
         """
         Initialize the reindex utility.
-        
+
         Args:
             asset_table_name: Name of the DynamoDB asset storage table (source)
             s3_buckets_table_name: Name of the DynamoDB S3 buckets table (source)
@@ -117,6 +216,11 @@ class ReindexUtility:
             asset_batch_size: Number of assets to process in each DynamoDB batch (max 25)
             file_batch_size: Number of files to process in each batch
             memory_batch_size: Number of items to load into memory before batch writing
+            time_remaining_ms: Callable returning the Lambda's remaining time in
+                milliseconds (context.get_remaining_time_in_millis). When omitted no
+                time guard is applied.
+            min_remaining_ms: Reserve below which the run stops early and reports a
+                failure rather than being killed mid-write with no response sent
         """
         self.asset_table_name = asset_table_name
         self.s3_buckets_table_name = s3_buckets_table_name
@@ -124,12 +228,34 @@ class ReindexUtility:
         self.asset_batch_size = min(asset_batch_size, 25)  # DynamoDB batch limit
         self.file_batch_size = file_batch_size
         self.memory_batch_size = memory_batch_size
-        
+        self.time_remaining_ms = time_remaining_ms
+        self.min_remaining_ms = min_remaining_ms
+
+        # Cache of resolved databaseId per (bucketId, assetId) for files missing S3 metadata
+        self._asset_db_cache: Dict[str, Optional[str]] = {}
+
         logger.info(f"ReindexUtility initialized:")
         logger.info(f"  Asset table (source): {asset_table_name}")
         logger.info(f"  S3 buckets table (source): {s3_buckets_table_name}")
         logger.info(f"  AssetsMetadata table (target): {assets_metadata_table_name}")
     
+    def out_of_time(self) -> bool:
+        """True when too little Lambda time remains to keep going.
+
+        The reindex walks every asset and every S3 object inside a function already
+        set to the 15-minute maximum. Being killed mid-run means no CloudFormation
+        response is ever sent, so the stack waits on its own timeout with the
+        indexes possibly cleared; stopping early lets the caller report an explicit
+        failure instead.
+        """
+        if self.time_remaining_ms is None:
+            return False
+        try:
+            return self.time_remaining_ms() < self.min_remaining_ms
+        except Exception as e:
+            logger.warning(f"Could not read remaining Lambda time: {e}")
+            return False
+
     def clear_opensearch_indexes(
         self,
         asset_index: str,
@@ -508,6 +634,19 @@ class ReindexUtility:
             current_timestamp = datetime.now(timezone.utc).isoformat()
             
             for i in range(0, len(assets), self.memory_batch_size):
+                if self.out_of_time():
+                    remaining = len(assets) - i
+                    logger.error(
+                        f"Stopping asset reindex with {remaining} asset(s) unprocessed: "
+                        "insufficient Lambda time remaining"
+                    )
+                    results['failed_count'] += remaining
+                    results['errors'].append({
+                        'error': f"Aborted with {remaining} asset(s) unprocessed",
+                        'type': 'timeout_guard'
+                    })
+                    break
+
                 memory_batch = assets[i:i + self.memory_batch_size]
                 batch_num = (i // self.memory_batch_size) + 1
                 total_batches = (len(assets) + self.memory_batch_size - 1) // self.memory_batch_size
@@ -575,6 +714,7 @@ class ReindexUtility:
             'total_count': 0,
             'buckets_processed': 0,
             'objects_scanned': 0,
+            'skipped_no_asset': 0,
             'errors': [],
             'start_time': datetime.now(timezone.utc).isoformat(),
             'end_time': None
@@ -596,29 +736,38 @@ class ReindexUtility:
             for bucket_config in bucket_configs:
                 bucket_name = bucket_config.get('bucketName')
                 base_prefix = bucket_config.get('baseAssetsPrefix', '')
-                
+                bucket_id = bucket_config.get('bucketId')
+
                 if not bucket_name:
                     logger.warning(f"Skipping invalid bucket config: {bucket_config}")
                     continue
-                
-                logger.info(f"Processing bucket: {bucket_name} (prefix: {base_prefix})")
-                
+
+                logger.info(f"Processing bucket: {bucket_name} (prefix: {base_prefix}, bucketId: {bucket_id})")
+
                 bucket_results = self._process_bucket(
                     bucket_name,
                     base_prefix,
                     dry_run,
-                    limit - results['total_count'] if limit else None
+                    limit - results['total_count'] if limit else None,
+                    bucket_id
                 )
                 
                 results['success_count'] += bucket_results['success']
                 results['failed_count'] += bucket_results['failed']
                 results['total_count'] += bucket_results['total']
                 results['objects_scanned'] += bucket_results['objects_scanned']
+                results['skipped_no_asset'] += bucket_results.get('skipped_no_asset', 0)
                 results['errors'].extend(bucket_results['errors'])
                 results['buckets_processed'] += 1
-                
+
                 logger.info(f"Bucket {bucket_name} complete: {bucket_results['success']}/{bucket_results['total']} files processed")
-                
+
+                # A bucket aborted by the time guard leaves the remaining buckets
+                # unprocessed too; stop rather than starting one that cannot finish.
+                if bucket_results.get('aborted'):
+                    results['aborted'] = True
+                    break
+
                 # Stop if we've reached the limit
                 if limit and results['total_count'] >= limit:
                     logger.info(f"Reached limit of {limit} files")
@@ -631,6 +780,7 @@ class ReindexUtility:
             logger.info(f"  Buckets processed: {results['buckets_processed']}")
             logger.info(f"  Objects scanned: {results['objects_scanned']}")
             logger.info(f"  Valid files processed: {results['total_count']}")
+            logger.info(f"  Skipped (no resolvable asset): {results['skipped_no_asset']}")
             logger.info(f"  Success: {results['success_count']}")
             logger.info(f"  Failed: {results['failed_count']}")
             logger.info("=" * 80)
@@ -722,7 +872,7 @@ class ReindexUtility:
                     composite_key = f"{database_id}:{asset_id}:/"
                     
                     item = {
-                        'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                        'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                         'databaseId:assetId:filePath': {'S': composite_key},
                         'metadataValue': {'S': timestamp},
                         'metadataValueType': {'S': 'string'}
@@ -738,53 +888,71 @@ class ReindexUtility:
                     })
             
             # Write in batches of 25
+            uncreated_keys = set()
             for i in range(0, len(items_to_create), 25):
                 batch = items_to_create[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            self.assets_metadata_table_name: batch
-                        }
+                    _, unprocessed = batch_write_with_retry(
+                        self.assets_metadata_table_name, batch
                     )
+                    for request in unprocessed:
+                        uncreated_keys.add(reindex_composite_key(request))
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch create left unprocessed items',
+                            'details': reindex_composite_key(request)
+                        })
                 except Exception as e:
                     logger.exception(f"Error in batch create: {e}")
                     for item in batch:
+                        uncreated_keys.add(reindex_composite_key(item))
                         results['failed'] += 1
                         results['errors'].append({
                             'error': 'Batch create failed',
                             'details': str(e)
                         })
-            
-            # Step 2: Batch DELETE the same records (only for successfully prepared assets)
+
+            # Step 2: Batch DELETE the same records (only for successfully prepared assets).
+            # An asset whose touch record was never created is skipped: deleting a
+            # non-existent item emits no stream event, so the reindex never happens
+            # and must not be counted as a success.
             items_to_delete = []
             for asset in successfully_prepared_assets:
                 try:
                     database_id = asset['databaseId']
                     asset_id = asset['assetId']
                     composite_key = f"{database_id}:{asset_id}:/"
-                    
+
+                    if composite_key in uncreated_keys:
+                        continue
+
                     items_to_delete.append({
                         'DeleteRequest': {
                             'Key': {
-                                'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                                'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                                 'databaseId:assetId:filePath': {'S': composite_key}
                             }
                         }
                     })
                 except Exception as e:
                     logger.warning(f"Error preparing delete for asset {asset.get('assetId')}: {e}")
-            
+
             # Delete in batches of 25
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            self.assets_metadata_table_name: batch
-                        }
+                    written, unprocessed = batch_write_with_retry(
+                        self.assets_metadata_table_name, batch
                     )
-                    # Count successes for this batch
-                    results['success'] += len(batch)
+                    # Only genuinely written deletes are successes -- the delete is
+                    # what emits the REMOVE stream event the indexer consumes.
+                    results['success'] += written
+                    for request in unprocessed:
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch delete left unprocessed items',
+                            'details': reindex_composite_key(request)
+                        })
                 except Exception as e:
                     logger.exception(f"Error in batch delete: {e}")
                     for item in batch:
@@ -793,7 +961,7 @@ class ReindexUtility:
                             'error': 'Batch delete failed',
                             'details': str(e)
                         })
-            
+
             return results
             
         except Exception as e:
@@ -802,17 +970,75 @@ class ReindexUtility:
             results['errors'].append({'error': str(e), 'type': 'batch_error'})
             return results
     
+    @staticmethod
+    def _extract_asset_id_from_key(object_key: str, base_prefix: str) -> Optional[str]:
+        """Return the asset ID (first path segment beneath base_prefix), mirroring sqsBucketSync."""
+        if not base_prefix or base_prefix == '/':
+            parts = object_key.split('/')
+            return parts[0] if parts and parts[0] else None
+
+        prefix = base_prefix if base_prefix.endswith('/') else base_prefix + '/'
+        if object_key.startswith(prefix):
+            parts = object_key[len(prefix):].split('/')
+            return parts[0] if parts and parts[0] else None
+
+        return None
+
+    @staticmethod
+    def _is_valid_asset_id(asset_id: str) -> bool:
+        """Validate an asset ID with the common ASSET_ID validator (as sqsBucketSync does)."""
+        try:
+            (valid, _) = validate({'assetId': {'value': asset_id, 'validator': 'ASSET_ID'}})
+            return valid
+        except Exception as e:
+            logger.warning(f"Error validating asset ID {asset_id}: {e}")
+            return False
+
+    def _resolve_database_id(self, bucket_id: Optional[str], asset_id: str) -> Optional[str]:
+        """Resolve the active databaseId for (bucketId, assetId) via BucketIdGSI; cached, ignores archived."""
+        if not bucket_id or not asset_id:
+            return None
+
+        cache_key = f"{bucket_id}:{asset_id}"
+        if cache_key in self._asset_db_cache:
+            return self._asset_db_cache[cache_key]
+
+        database_id = None
+        try:
+            table = dynamodb_resource.Table(self.asset_table_name)
+            response = table.query(
+                IndexName="BucketIdGSI",
+                KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
+            )
+            for item in response.get('Items', []):
+                candidate = item.get('databaseId', '')
+                if candidate and not candidate.endswith('#deleted'):  # skip archived assets
+                    database_id = candidate
+                    break
+        except Exception as e:
+            logger.warning(f"Error resolving databaseId for asset {asset_id} in bucket {bucket_id}: {e}")
+
+        # Cache hits and misses alike to avoid repeated lookups for the same asset
+        self._asset_db_cache[cache_key] = database_id
+        return database_id
+
     def _process_bucket(
         self,
         bucket_name: str,
         base_prefix: str,
         dry_run: bool,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        bucket_id: Optional[str] = None
     ) -> Dict:
         """Process all objects in a bucket and update AssetsMetadata table."""
         # Excluded patterns and prefixes from fileIndexer
-        excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-        excluded_patterns = [] # '.previewFile.' not included here as the fileIndexer processes these in a special way
+        excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
+        # '.previewFile.' files must be excluded here. The reindexer "touches" the
+        # metadata table to trigger indexing, which fires the DynamoDB metadata-stream
+        # path in fileIndexer (handle_metadata_stream). That path does NOT perform the
+        # base-file rewrite that the S3-event path does, so touching a '.previewFile.'
+        # record would index the preview file as its own standalone document. Skip them.
+        excluded_patterns = [PREVIEW_FILE_PATTERN]
         
         results = {
             'success': 0,
@@ -820,14 +1046,15 @@ class ReindexUtility:
             'total': 0,
             'objects_scanned': 0,
             'skipped_excluded': 0,
+            'skipped_no_asset': 0,
             'errors': []
         }
-        
+
         try:
             # Collect files in memory batches
             files_batch = []
             current_timestamp = datetime.now(timezone.utc).isoformat()
-            
+
             # Normalize base prefix - remove leading slash if present
             if base_prefix.startswith('/'):
                 base_prefix = base_prefix[1:]
@@ -841,9 +1068,22 @@ class ReindexUtility:
                 pagination_config['Prefix'] = base_prefix
             
             for page in paginator.paginate(**pagination_config):
+                if self.out_of_time():
+                    logger.error(
+                        f"Stopping file reindex of {bucket_name} mid-scan: "
+                        "insufficient Lambda time remaining"
+                    )
+                    results['aborted'] = True
+                    results['errors'].append({
+                        'bucket': bucket_name,
+                        'error': 'Aborted mid-scan with objects unprocessed',
+                        'type': 'timeout_guard'
+                    })
+                    break
+
                 objects = page.get('Contents', [])
                 results['objects_scanned'] += len(objects)
-                
+
                 for obj in objects:
                     # Skip folder markers
                     if obj['Key'].endswith('/'):
@@ -857,11 +1097,11 @@ class ReindexUtility:
                         results['skipped_excluded'] += 1
                         continue
                     
-                    # Check if any path component starts with excluded prefixes
+                    # Check if any path component is a reserved excluded folder.
                     path_parts = s3_key.split('/')
                     skip_file = False
                     for part in path_parts:
-                        if any(part.startswith(prefix) for prefix in excluded_prefixes):
+                        if part in excluded_prefixes:
                             results['skipped_excluded'] += 1
                             skip_file = True
                             break
@@ -874,22 +1114,42 @@ class ReindexUtility:
                         break
                     
                     try:
-                        # Get object metadata
-                        head_response = s3_client.head_object(
-                            Bucket=bucket_name,
-                            Key=obj['Key']
-                        )
-                        
-                        metadata = head_response.get('Metadata', {})
-                        
-                        # Try both lowercase and original case for metadata keys
-                        asset_id = metadata.get('assetid') or metadata.get('assetId')
-                        database_id = metadata.get('databaseid') or metadata.get('databaseId')
-                        
-                        # Only process files with asset metadata
+                        # Resolve the asset context from the key first: the assetId is
+                        # the first path segment beneath the base prefix and the
+                        # databaseId is looked up (and cached) from the asset table, as
+                        # sqsBucketSync does. list_objects_v2 does not return user
+                        # metadata, so reading the assetid/databaseid object metadata
+                        # costs one HeadObject per object; at realistic object counts
+                        # that alone exhausts the Lambda's 15-minute ceiling. HeadObject
+                        # is issued only when the key does not resolve to an active
+                        # asset (for example an archived asset, whose record has moved
+                        # to the {databaseId}#deleted partition).
+                        asset_id = self._extract_asset_id_from_key(obj['Key'], base_prefix)
+                        if asset_id and not self._is_valid_asset_id(asset_id):
+                            asset_id = None
+                        database_id = self._resolve_database_id(bucket_id, asset_id) if asset_id else None
+
                         if not asset_id or not database_id:
+                            metadata = s3_client.head_object(
+                                Bucket=bucket_name,
+                                Key=obj['Key']
+                            ).get('Metadata', {})
+
+                            # Try both lowercase and original case for metadata keys
+                            asset_id = asset_id or metadata.get(ASSET_ID_METADATA_KEY) or metadata.get('assetId')
+                            database_id = database_id or metadata.get(DATABASE_ID_METADATA_KEY) or metadata.get('databaseId')
+
+                        # Files that don't resolve to a valid asset location are skipped.
+                        if not asset_id:
+                            logger.info(f"Skipping {obj['Key']}: no valid asset ID derivable from key or object metadata")
+                            results['skipped_no_asset'] += 1
                             continue
-                        
+
+                        if not database_id:
+                            logger.info(f"Skipping {obj['Key']}: asset {asset_id} not found for bucket {bucket_id}")
+                            results['skipped_no_asset'] += 1
+                            continue
+
                         # Calculate relative path from base prefix and asset ID
                         # Start with the full S3 key
                         relative_path = obj['Key']
@@ -996,7 +1256,7 @@ class ReindexUtility:
                     composite_key = f"{database_id}:{original_asset_id}:{relative_path}"
                     
                     item = {
-                        'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                        'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                         'databaseId:assetId:filePath': {'S': composite_key},
                         'metadataValue': {'S': timestamp},
                         'metadataValueType': {'S': 'string'}
@@ -1012,56 +1272,74 @@ class ReindexUtility:
                     })
             
             # Write in batches of 25
+            uncreated_keys = set()
             for i in range(0, len(items_to_create), 25):
                 batch = items_to_create[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            self.assets_metadata_table_name: batch
-                        }
+                    _, unprocessed = batch_write_with_retry(
+                        self.assets_metadata_table_name, batch
                     )
+                    for request in unprocessed:
+                        uncreated_keys.add(reindex_composite_key(request))
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch create left unprocessed items',
+                            'details': reindex_composite_key(request)
+                        })
                 except Exception as e:
                     logger.exception(f"Error in batch create: {e}")
                     for item in batch:
+                        uncreated_keys.add(reindex_composite_key(item))
                         results['failed'] += 1
                         results['errors'].append({
                             'error': 'Batch create failed',
                             'details': str(e)
                         })
-            
-            # Step 2: Batch DELETE the same records (only for successfully prepared files)
+
+            # Step 2: Batch DELETE the same records (only for successfully prepared files).
+            # A file whose touch record was never created is skipped: deleting a
+            # non-existent item emits no stream event, so the reindex never happens
+            # and must not be counted as a success.
             items_to_delete = []
             for file_record in successfully_prepared_files:
                 try:
                     database_id = file_record['databaseId']
                     original_asset_id = file_record['original_asset_id']
                     relative_path = file_record['relative_path']
-                    
+
                     # Construct composite key using the file path
                     composite_key = f"{database_id}:{original_asset_id}:{relative_path}"
-                    
+
+                    if composite_key in uncreated_keys:
+                        continue
+
                     items_to_delete.append({
                         'DeleteRequest': {
                             'Key': {
-                                'metadataKey': {'S': 'REINDEX_METADATA_RECORD'},
+                                'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
                                 'databaseId:assetId:filePath': {'S': composite_key}
                             }
                         }
                     })
                 except Exception as e:
                     logger.warning(f"Error preparing delete for file {file_record.get('relative_path')}: {e}")
-            
+
             # Delete in batches of 25
             for i in range(0, len(items_to_delete), 25):
                 batch = items_to_delete[i:i+25]
                 try:
-                    dynamodb_client.batch_write_item(
-                        RequestItems={
-                            self.assets_metadata_table_name: batch
-                        }
+                    written, unprocessed = batch_write_with_retry(
+                        self.assets_metadata_table_name, batch
                     )
-                    # Count successes for this batch
-                    results['success'] += len(batch)
+                    # Only genuinely written deletes are successes -- the delete is
+                    # what emits the REMOVE stream event the indexer consumes.
+                    results['success'] += written
+                    for request in unprocessed:
+                        results['failed'] += 1
+                        results['errors'].append({
+                            'error': 'Batch delete left unprocessed items',
+                            'details': reindex_composite_key(request)
+                        })
                 except Exception as e:
                     logger.exception(f"Error in batch delete: {e}")
                     for item in batch:
@@ -1070,7 +1348,7 @@ class ReindexUtility:
                             'error': 'Batch delete failed',
                             'details': str(e)
                         })
-            
+
             return results
             
         except Exception as e:
@@ -1078,6 +1356,47 @@ class ReindexUtility:
             results['failed'] = len(files) - results['success']
             results['errors'].append({'error': str(e), 'type': 'batch_error'})
             return results
+
+
+class ReindexIncompleteError(Exception):
+    """A CloudFormation-driven reindex that did not complete.
+
+    The custom resource runs behind the CDK provider framework, whose onEvent
+    wrapper submits SUCCESS to CloudFormation for any invocation that RETURNS,
+    and FAILED only when the handler raises. The FAILED response this handler
+    PUTs itself would therefore race the framework's SUCCESS, so the raise is
+    what makes the failure reach CloudFormation.
+    """
+
+
+def reindex_failure_reasons(results: Dict) -> List[str]:
+    """Return one reason per part of a reindex run that did not fully succeed.
+
+    An empty list means every requested step completed. This drives the
+    CloudFormation response: reporting SUCCESS after a partial reindex leaves the
+    search indexes silently incomplete, and when ClearIndexes ran they were emptied
+    first, so the operator has no signal that search no longer matches DynamoDB.
+    """
+    reasons: List[str] = []
+
+    if 'clear_indexes_error' in results:
+        reasons.append(f"index clearing raised: {results['clear_indexes_error']}")
+
+    clear_results = results.get('clear_indexes') or {}
+    for index_key in ('asset_index', 'file_index'):
+        index_result = clear_results.get(index_key)
+        if index_result is not None and not index_result.get('success'):
+            reasons.append(f"index clearing did not complete for {index_key}")
+
+    for part in ('assets', 'files'):
+        part_results = results.get(part) or {}
+        failed_count = part_results.get('failed_count', 0)
+        if failed_count:
+            reasons.append(f"{failed_count} {part} failed to reindex")
+        elif part_results.get('errors'):
+            reasons.append(f"{len(part_results['errors'])} error(s) during {part} reindex")
+
+    return reasons
 
 
 def send_cfn_response(event: Dict, context: Any, status: str, data: Dict = None, physical_resource_id: str = None, reason: str = None):
@@ -1118,7 +1437,10 @@ def send_cfn_response(event: Dict, context: Any, status: str, data: Dict = None,
         )
         logger.info(f"CloudFormation response status: {response.status}")
     except Exception as e:
-        logger.error(f"Failed to send CloudFormation response: {e}")
+        # An HTTP failure names the request URI in its own message (urllib3 renders
+        # "Max retries exceeded with url: ..."), and for the ResponseURL that URI carries
+        # the presigned signature. Log the failure type, not the exception text.
+        logger.error(f"Failed to send CloudFormation response: {type(e).__name__}")
 
 
 def lambda_handler(event: Dict, context: Any) -> Dict:
@@ -1136,22 +1458,43 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
     Returns:
         dict: Results of the reindexing operation
     """
-    logger.info(f"Received event: {json.dumps(event, cls=DecimalEncoder)}")
-    
     # Check if this is a CloudFormation custom resource event
     is_cfn_event = 'RequestType' in event and 'ResponseURL' in event
+
+    # The custom-resource event carries ResponseURL, a presigned S3 PUT that lets
+    # its holder send an arbitrary SUCCESS/FAILED for the in-flight stack
+    # operation. Log only the identifying fields, never the event itself: redaction
+    # is key-driven and would not mask an interpolated URL.
+    if is_cfn_event:
+        logger.info(
+            "Received CloudFormation custom-resource event",
+            extra={
+                'requestType': event.get('RequestType'),
+                'stackId': event.get('StackId'),
+                'logicalResourceId': event.get('LogicalResourceId'),
+                'requestId': event.get('RequestId'),
+            })
+    else:
+        logger.info(
+            "Received direct invocation",
+            extra={
+                'operation': event.get('operation', 'both'),
+                'dryRun': event.get('dry_run', False),
+                'limit': event.get('limit'),
+                'clearIndexes': event.get('clear_indexes', False),
+            })
     
     try:
-        # Validate required environment variables
+        # Validate required table name configuration
         if not all([ASSET_STORAGE_TABLE_NAME, S3_ASSET_BUCKETS_STORAGE_TABLE_NAME, ASSET_FILE_METADATA_STORAGE_TABLE_NAME]):
-            error_msg = "Missing required environment variables"
+            error_msg = "Missing required table name configuration"
             logger.error(error_msg)
             logger.error(f"  ASSET_STORAGE_TABLE_NAME: {ASSET_STORAGE_TABLE_NAME}")
             logger.error(f"  S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: {S3_ASSET_BUCKETS_STORAGE_TABLE_NAME}")
             logger.error(f"  ASSET_FILE_METADATA_STORAGE_TABLE_NAME: {ASSET_FILE_METADATA_STORAGE_TABLE_NAME}")
             if is_cfn_event:
                 send_cfn_response(event, context, 'FAILED', reason=error_msg)
-                return {'statusCode': 500, 'body': json.dumps({'error': error_msg})}
+                raise ReindexIncompleteError(error_msg)
             else:
                 return {'statusCode': 500, 'body': json.dumps({'error': error_msg})}
         
@@ -1169,7 +1512,8 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
         utility = ReindexUtility(
             asset_table_name=ASSET_STORAGE_TABLE_NAME,
             s3_buckets_table_name=S3_ASSET_BUCKETS_STORAGE_TABLE_NAME,
-            assets_metadata_table_name=ASSET_FILE_METADATA_STORAGE_TABLE_NAME
+            assets_metadata_table_name=ASSET_FILE_METADATA_STORAGE_TABLE_NAME,
+            time_remaining_ms=getattr(context, 'get_remaining_time_in_millis', None)
         )
         
         # Handle CloudFormation custom resource events
@@ -1229,17 +1573,27 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
                         if file_results.get('failed_count', 0) > 0:
                             logger.warning(f"File reindexing had {file_results['failed_count']} failures")
                     
+                    # A partial reindex must not report SUCCESS: with ClearIndexes the
+                    # indexes were emptied first, so a SUCCESS after partial restore
+                    # leaves search silently incomplete with no signal.
+                    failure_reasons = reindex_failure_reasons(results)
+                    if failure_reasons:
+                        reason = ("Reindexing did not complete: " + "; ".join(failure_reasons))[:1000]
+                        logger.error(reason)
+                        send_cfn_response(event, context, 'FAILED', reason=reason)
+                        raise ReindexIncompleteError(reason)
+
                     # Send success response
                     send_cfn_response(
-                        event, 
-                        context, 
+                        event,
+                        context,
                         'SUCCESS',
                         data={
                             'Message': 'Reindexing completed',
                             'Results': json.dumps(results, cls=DecimalEncoder)
                         }
                     )
-                    
+
                     return {
                         'statusCode': 200,
                         'body': json.dumps({
@@ -1247,12 +1601,15 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
                             'results': results
                         }, cls=DecimalEncoder)
                     }
-                    
+
+
+                except ReindexIncompleteError:
+                    raise
                 except Exception as e:
                     error_msg = f"Reindexing failed: {str(e)}"
                     logger.exception(error_msg)
                     send_cfn_response(event, context, 'FAILED', reason=error_msg)
-                    return {'statusCode': 500, 'body': json.dumps({'error': error_msg})}
+                    raise ReindexIncompleteError(error_msg) from e
             
             else:  # Delete
                 logger.info("Delete request - no action needed")
@@ -1303,22 +1660,32 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
                 logger.info("Reindexing files...")
                 file_results = utility.reindex_files(dry_run=dry_run, limit=limit)
                 results['files'] = file_results
-            
+
+            failure_reasons = reindex_failure_reasons(results)
+            if failure_reasons:
+                logger.error("Reindexing did not complete: " + "; ".join(failure_reasons))
+
             return {
                 'statusCode': 200,
                 'body': json.dumps({
                     'message': 'Reindexing completed',
+                    'failures': failure_reasons,
                     'results': results
                 }, cls=DecimalEncoder)
             }
     
+    except ReindexIncompleteError:
+        # Already reported to CloudFormation; re-raised so the provider framework
+        # reports FAILED too rather than SUCCESS for a returning invocation.
+        raise
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
         logger.exception(error_msg)
-        
+
         if is_cfn_event:
             send_cfn_response(event, context, 'FAILED', reason=error_msg)
-        
+            raise ReindexIncompleteError(error_msg) from e
+
         return {
             'statusCode': 500,
             'body': json.dumps({'error': error_msg})

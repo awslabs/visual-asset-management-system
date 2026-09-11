@@ -4,18 +4,20 @@ This guide covers development patterns for the VAMS Python Lambda backend, inclu
 
 ## Technology Stack
 
-| Component     | Details                                               |
-| ------------- | ----------------------------------------------------- |
-| Runtime       | Python 3.12 (AWS Lambda)                              |
-| Validation    | Pydantic 1.10.7 (v1 only) via `aws-lambda-powertools` |
-| Authorization | Casbin ABAC/RBAC with Amazon DynamoDB policy storage  |
-| AWS SDK       | boto3 1.34.84                                         |
-| Search        | OpenSearch (opensearch-py 2.5.0)                      |
-| Logging       | AWS Lambda Powertools Logger with custom redaction    |
-| Testing       | pytest 8.3.4, moto 5.1.0                              |
+| Component     | Details                                              |
+| ------------- | ---------------------------------------------------- |
+| Runtime       | Python 3.12 (AWS Lambda)                             |
+| Validation    | Pydantic v1 only, via `aws-lambda-powertools`        |
+| Authorization | Casbin ABAC/RBAC with Amazon DynamoDB policy storage |
+| AWS SDK       | boto3                                                |
+| Search        | OpenSearch (`opensearch-py`)                         |
+| Logging       | AWS Lambda Powertools Logger with custom redaction   |
+| Testing       | pytest, moto                                         |
+
+Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are generated from `poetry.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
 
 :::warning[Pydantic v1 Only]
-VAMS uses Pydantic **1.10.7**. Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.
+VAMS uses Pydantic **v1** (1.10.x). Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.
 :::
 
 ## Project Structure
@@ -28,6 +30,9 @@ backend/
       dynamodb.py                    # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
       validators.py                  # Input validation regex patterns and validate() dispatcher
       s3.py                          # S3 file validation (extension + MIME type checks)
+      s3MetadataKeys.py              # Canonical S3 object user-metadata keys (assetid, vams-*)
+      s3PathPatterns.py              # Reserved S3 prefixes, preview file pattern, preview extensions
+      dynamoDbMetadataKeys.py        # Special DynamoDB metadata keys and internal field prefixes
     customLogging/
       auditLogging.py                # CloudWatch audit logging (9 event types)
       logger.py                      # safeLogger wrapper with sensitive data redaction
@@ -52,7 +57,7 @@ backend/
 
 ## Gold Standard Handler Pattern
 
-Every new Lambda handler must follow the structure demonstrated in `backend/handlers/assets/assetService.py`. The pattern consists of five layers.
+Every new Lambda handler must follow the structure demonstrated in `backend/backend/handlers/assets/assetService.py`. The pattern consists of five layers.
 
 ### 1. Module-Level Setup
 
@@ -76,6 +81,7 @@ from models.common import (
     VAMSGeneralErrorResponse
 )
 from models.yourDomain import YourRequestModel
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Configure AWS clients with retry configuration
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -86,7 +92,7 @@ logger = safeLogger(service_name="YourServiceName")
 claims_and_roles = {}
 
 try:
-    your_table_name = os.environ["YOUR_STORAGE_TABLE_NAME"]
+    your_table_name = get_table_name(ResourceKeys.YOUR_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -94,8 +100,8 @@ except Exception as e:
 your_table = dynamodb.Table(your_table_name)
 ```
 
-:::note[Environment Variable Loading]
-All environment variables must be loaded at module level inside a `try/except` block. Use `os.environ["KEY"]` for required variables and `os.environ.get("KEY")` for optional ones. Never load environment variables inside handler functions.
+:::note[Resource Name Resolution]
+DynamoDB table, S3 bucket, and audit log group names are resolved at module level inside a `try/except` block through `common.resourceNames` (`get_table_name`, `get_bucket_name`, `get_log_group_name` with a `ResourceKeys` constant). The resolver checks a legacy environment-variable override first, then a cached batched AWS Systems Manager Parameter Store lookup under the deployment's `VAMS_RESOURCE_PARAM_PREFIX`. Non-resource configuration (function names, queue URLs, feature flags) still comes from `os.environ` at module level. Never resolve names inside handler functions.
 :::
 
 ### 2. Lambda Handler Entry Point
@@ -177,7 +183,7 @@ def get_single_item(event, item_id):
     # Step 3: Object-level authorization
     item['object__type'] = 'yourObjectType'
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    if not casbin_enforcer.enforce(event, item):
+    if not casbin_enforcer.enforce(item, "GET"):
         return authorization_error()
 
     # Step 4: Return response
@@ -211,15 +217,17 @@ if not casbin_enforcer.enforceAPI(event):
 
 ### Tier 2: Object-Level Authorization
 
-Controls which specific data entities a role can access. Performed in business logic functions using `enforce()`.
+Controls which specific data entities a role can access. Performed in business logic functions using `enforce(obj, act)`, where `obj` is the entity dictionary and `act` is the HTTP method the caller must be allowed to perform on it (`GET`, `POST`, `PUT`, `DELETE`).
 
 ```python
 # MUST annotate the object type before calling enforce()
 item['object__type'] = 'asset'
 casbin_enforcer = CasbinEnforcer(claims_and_roles)
-if not casbin_enforcer.enforce(event, item):
+if not casbin_enforcer.enforce(item, "GET"):
     return authorization_error()
 ```
+
+Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
 You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
@@ -234,7 +242,7 @@ You must add `object__type` to the item dictionary before calling `enforce()`. V
 
 ## Pydantic v1 Model Patterns
 
-Reference file: `backend/models/assetsV3.py`
+Reference file: `backend/backend/models/assetsV3.py`
 
 ### Correct Model Definition
 
@@ -250,11 +258,11 @@ class CreateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new item"""
     databaseId: str = Field(
         min_length=4, max_length=256,
-        strip_whitespace=True, pattern=id_pattern
+        strip_whitespace=True, regex=id_pattern
     )
     itemName: str = Field(
         min_length=1, max_length=256,
-        strip_whitespace=True, pattern=object_name_pattern
+        strip_whitespace=True, regex=object_name_pattern
     )
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     tags: Optional[list[str]] = []
@@ -312,8 +320,10 @@ request = parse(body, model=CreateItemRequestModel)
 
 ```python
 # Module-level: resource API for high-level operations
+from common.resourceNames import ResourceKeys, get_table_name
+
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-your_table = dynamodb.Table(os.environ["YOUR_STORAGE_TABLE_NAME"])
+your_table = dynamodb.Table(get_table_name(ResourceKeys.YOUR_STORAGE_TABLE))
 
 # Module-level: client API for low-level operations
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
@@ -405,18 +415,27 @@ if not valid:
 
 ### Available Validators
 
-| Validator          | Pattern                      | Use For                |
-| ------------------ | ---------------------------- | ---------------------- |
-| `ID`               | `^[-_a-zA-Z0-9]{3,63}$`      | databaseId, pipelineId |
-| `ASSET_ID`         | filename pattern, max 256    | assetId                |
-| `UUID`             | Standard UUID format         | Unique identifiers     |
-| `OBJECT_NAME`      | `^[a-zA-Z0-9\-._\s]{1,256}$` | assetName, dbName      |
-| `EMAIL`            | Email regex                  | Email addresses        |
-| `USERID`           | `^[\w\-\.\+\@]{3,256}$`      | User identifiers       |
-| `FILE_NAME`        | No special characters        | File names             |
-| `STRING_256`       | Max 256 chars                | Medium strings         |
-| `ID_ARRAY`         | Array of IDs                 | Multiple IDs           |
-| `STRING_256_ARRAY` | Array of max-256 strings     | Tags, lists            |
+| Validator                   | Pattern                       | Use For                                         |
+| --------------------------- | ----------------------------- | ----------------------------------------------- |
+| `ID`                        | `^[-_a-zA-Z0-9]{3,63}$`       | databaseId, pipelineId                          |
+| `ASSET_ID`                  | filename pattern, max 256     | assetId                                         |
+| `UUID`                      | Standard UUID format          | Unique identifiers                              |
+| `OBJECT_NAME`               | `^[a-zA-Z0-9\-._\s]{1,256}$`  | assetName, dbName                               |
+| `EMAIL`                     | Email regex                   | Email addresses                                 |
+| `USERID`                    | `^[\w\-\.\+\@]{3,256}$`       | User identifiers                                |
+| `FILE_NAME`                 | No special characters         | File names                                      |
+| `STRING_256`                | Max 256 chars                 | Medium strings                                  |
+| `STRING_16384`              | Max 16384 chars               | Free-form caller text (comment bodies)          |
+| `ID_ARRAY`                  | Array of IDs                  | Multiple IDs                                    |
+| `STRING_256_ARRAY`          | Array of max-256 strings      | Tags, lists                                     |
+| `ARN`                       | Partition-aware AWS ARN       | Any AWS resource ARN (sub-process registration) |
+| `CLOUDWATCH_LOG_GROUP_ARN`  | Partition-aware log-group ARN | Registered CloudWatch log-group locations       |
+| `CLOUDWATCH_LOG_GROUP_NAME` | 1-512 chars (`-_./#` + alnum) | Registered CloudWatch log-group names           |
+| `LOG_STREAM_NAME`           | 1-512 chars, no `:` or `*`    | Registered log-stream names / prefixes          |
+
+All AWS-resource validators are partition-aware (commercial, GovCloud, China, ISO).
+
+The dispatcher recognizes only the names it implements, and the `_VALIDATOR_DISPATCH` mapping in `common/validators.py` is that list — a new validation type is one entry in it, with no second list to update. A name with no entry has no rule to apply, so it is rejected rather than reported valid unchecked. The name is resolved after the empty/optional short-circuits, so an optional field left empty is skipped before its validator is consulted.
 
 ### Regex Patterns for Pydantic Fields
 
@@ -428,6 +447,67 @@ from common.validators import (
     relative_file_path_pattern,  # r'^\/.*$'
 )
 ```
+
+## Shared Constants
+
+System-owned key names, path prefixes, and file-name patterns are defined once in dedicated modules under `backend/backend/common/`. Always import these constants instead of redefining the literal values at call sites, so all usages can be found and changed in one place.
+
+| Module                    | Defines                                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `s3MetadataKeys.py`       | S3 object user-metadata keys (`assetid`, `databaseid`, `vams-*` status and change-provenance keys)    |
+| `s3PathPatterns.py`       | Reserved S3 prefix folders, the `.previewFile.` marker, allowed preview extensions, write prefixes    |
+| `dynamoDbMetadataKeys.py` | Special DynamoDB metadata keys (`REINDEX_METADATA_RECORD`) and internal field prefixes (`VAMS_`, `_`) |
+
+### S3 Path Patterns
+
+`common/s3PathPatterns.py` is the single source of truth for the reserved S3 folder names and the file-level preview file pattern. The indexers, bucket sync, workflow auto-trigger, and add-on syncs (Garnet, Physna) all consume these values when deciding which S3 keys to skip.
+
+```python
+from common.s3PathPatterns import (
+    RESERVED_S3_PREFIX_FOLDERS,       # frozenset: pipeline(s), preview(s), temp-upload(s), workspace(s)
+    EXCLUDED_FILE_PATH_PATTERNS,      # patterns excluded from generic file processing
+    PREVIEW_FILE_PATTERN,             # '.previewFile.' marker substring
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif')
+    TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
+    PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
+    PIPELINES_PREFIX,                 # 'pipelines/' (workflow run I/O in the default bucket)
+    AUXILIARY_PREVIEW_PREFIX,         # 'preview/' (auxiliary bucket, singular)
+)
+```
+
+Pipeline staging paths follow the structure `pipelines/{pipelineName}/{jobName}/output/{executionId}/{outputType}/`, relative to the area VAMS owns in the default asset bucket. `executionRecords.run_bucket_key()` joins that bucket's `baseAssetsPrefix` onto a relative key to produce the key an Amazon S3 call uses, and returns the key unchanged for a bucket registered at the root. The workflow state machine carries the relative form and the bucket's prefix as separate values, so a definition never embeds the prefix. The path segments within this structure are also defined as constants:
+
+```python
+from common.s3PathPatterns import (
+    PIPELINE_OUTPUT_PREFIX,           # '/output/' (required by the ASSET_PATH_PIPELINE validator)
+    PIPELINE_INPUT_PREFIX,            # '/input/' (reserved for a future feature)
+    PIPELINE_OUTPUT_FILES_PREFIX,     # '/files/' (file-level outputs, outputS3AssetFilesPath)
+    PIPELINE_OUTPUT_PREVIEWS_PREFIX,  # '/previews/' (asset-level previews, outputS3AssetPreviewPath)
+    PIPELINE_OUTPUT_METADATA_PREFIX,  # '/metadata/' (metadata files, outputS3AssetMetadataPath)
+    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (structured pipeline result files, recorded by the end-state lambda)
+)
+```
+
+:::note[Frontend Mirror]
+The preview file pattern and allowed preview extensions are mirrored in the frontend at `web/src/common/constants/fileFormats.ts` (`PREVIEW_FILE_PATTERN`, `previewFileFormats`). Keep the two in sync when changing them.
+:::
+
+### DynamoDB Metadata Keys
+
+`common/dynamoDbMetadataKeys.py` defines the special key names VAMS reserves inside its metadata storage tables. The reindexer writes a `REINDEX_METADATA_RECORD` marker item to trigger stream processing, and every consumer that reads metadata items must skip the system record keys.
+
+```python
+from common.dynamoDbMetadataKeys import (
+    REINDEX_METADATA_RECORD_KEY,    # reindexer touch marker (writer side)
+    EXCLUDED_METADATA_RECORD_KEYS,  # frozenset of all system record keys to skip
+    VAMS_INTERNAL_FIELD_PREFIX,     # 'VAMS_' prefix on internal asset-metadata fields
+    HIDDEN_FIELD_PREFIX,            # '_' prefix; excluded from search and export output
+    is_excluded_metadata_record,    # helper: is this key a system record to skip?
+    is_internal_metadata_field,     # helper: is this field VAMS-internal?
+)
+```
+
+When reading metadata items, check `is_excluded_metadata_record(key)` rather than comparing against individual key constants. Future system keys added to `EXCLUDED_METADATA_RECORD_KEYS` are then picked up by every call site automatically. Writers of a specific marker record (such as the reindexer) still reference the individual key constant.
 
 ## Logging
 
@@ -446,11 +526,14 @@ logger.exception(f"Unexpected error: {e}")   # Includes stack trace
 logger.warning(f"Potential issue: {details}")
 ```
 
-The logger automatically redacts sensitive fields at all nesting levels:
+The logger automatically redacts sensitive fields at all nesting levels, in both objects and arrays:
 
 -   `authorization`
 -   `idJwtToken`
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
+-   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
+
+Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
 
 ### Audit Logging
 
@@ -514,6 +597,7 @@ from models.common import (
     validation_error, general_error, authorization_error,
     VAMSGeneralErrorResponse
 )
+from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -522,7 +606,7 @@ logger = safeLogger(service_name="CHANGE_ME")
 claims_and_roles = {}
 
 try:
-    table_name = os.environ["CHANGE_ME_STORAGE_TABLE_NAME"]
+    table_name = get_table_name(ResourceKeys.CHANGE_ME_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -574,7 +658,7 @@ VAMS provides two customization points for organizations to extend authenticatio
 
 The file `customAuthLoginProfile.py` controls how user profile information is updated when a user authenticates. Override the `customAuthProfileLoginWriteOverride()` function to customize profile data.
 
-**Default behavior:** Extracts the `email` claim from the JWT token and writes it to the user's VAMS profile. The login profile is updated via an authenticated POST call to `/api/auth/loginProfile/\{userId\}` from the web UI on each login.
+**Default behavior:** Extracts the `email` claim from the JWT token and writes it to the user's VAMS profile. The login profile is updated via an authenticated POST call to `/api/auth/loginProfile/{userId}` from the web UI on each login.
 
 **Common customizations:**
 
@@ -602,26 +686,51 @@ The email field is used by systems that send notifications to the user. If the e
 
 The file `customAuthClaimsCheck.py` controls how authentication claims are verified, including Multi-Factor Authentication (MFA) status.
 
-**Default behavior for Amazon Cognito:** Calls the Cognito `get_user` API with the access token to check if MFA is enabled for the authenticated user. Results are cached per user based on `auth_time` to reduce external API calls.
+The MFA check runs **once at authorization time**: the API Gateway custom authorizer calls `customMFATokenScopeCheckOverride` after verifying the caller's JWT and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. Handler Lambda functions read that context value in `request_to_claims` — they make no identity provider calls of their own.
 
-**Default behavior for external OAuth IDP:** Sets `mfaEnabled` to `false`. Organizations must implement their own MFA verification logic for external identity providers.
+**Default behavior for Amazon Cognito:** Resolves the user's MFA preference with the Cognito `AdminGetUser` API, cached per user per sign-in session (`auth_time`).
+
+**Default behavior for external OAuth IDP:** Sets `mfaEnabled` to `false`. Organizations implement their own MFA verification logic (for example, a call to the IDP userinfo endpoint using the bearer token from the authorizer event headers) in the marked section of the hook.
 
 ```python
 # backend/backend/customConfigCommon/customAuthClaimsCheck.py
-def customMFATokenScopeCheckOverride(user, lambdaRequest):
-    # For Cognito: checks UserMFASettingList via get_user API
+def customMFATokenScopeCheckOverride(user, authorizerJwtClaims, lambdaRequest):
+    # Called by the API Gateway authorizer after JWT verification
+    # For Cognito: checks UserMFASettingList via the AdminGetUser API
     # For external IDP: returns False by default
     # Override with your organization's MFA verification logic
     return mfaLoginEnabled
 
 def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
-    # Calls customMFATokenScopeCheckOverride and sets mfaEnabled flag
-    # Add additional claims validation logic here
+    # Called by handler lambdas; mfaEnabled is already resolved from the
+    # vams:mfaEnabled authorizer context value before this hook runs
+    # Add additional handler-time claims validation logic here
     return claims_and_roles
 ```
 
 :::warning[Performance Consideration]
-The `customAuthClaimsCheck` functions are called frequently during VAMS API authorization checks. Use caching (the default implementation caches by `auth_time`) and minimize external API calls to avoid performance impacts.
+`customMFATokenScopeCheckOverride` runs inside the API Gateway authorizer on every non-cached authorization. Cache external lookups (the default implementation caches by `auth_time`) and minimize external API calls to avoid adding latency to every request.
+:::
+
+## Notification Subscriptions
+
+`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic (`AssetTopic{databaseId}-{assetId}`). Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
+
+How a subscriber value becomes an email address:
+
+1. `subscribers` is validated with the `USERID_ARRAY` validator, so each entry matches `^[\w\-\.\+\@]{3,256}$`. The list has no maximum length.
+2. `get_userProfile_Email()` reads the entry as a `userId` in the user table. When a record exists with a non-empty `email`, that address is used.
+3. When no record exists, or the record's email is blank, the submitted value itself is checked with the `EMAIL` validator and used verbatim when it is email-shaped. A value that is neither a user with an email nor email-shaped is rejected with `400`.
+
+:::warning[A subscriber does not have to be a VAMS user]
+Step 3 is deliberate — it allows a shared mailbox or resource account that has no VAMS identity to receive asset notifications — and it means the recipient list is not bounded by the user directory. Authorization covers the **asset**, not the recipients: the caller must pass the API-route tier for `/subscriptions` and the object tier for a `POST` on the target asset, and nothing further constrains whose address is added.
+
+Two properties follow, and both are worth knowing before extending this handler:
+
+-   Amazon SNS sends a confirmation request to each new address and delivers nothing until it is confirmed, so an unrecognized address receives one confirmation email and no asset data.
+-   Subscriber values are stored as submitted (user identifiers or addresses), while the topic holds the resolved addresses — and the removal paths do not agree on which form they match. `PUT /subscriptions` unsubscribes by resolved address, and `DELETE /subscriptions` deletes the asset's topic outright, but `DELETE /unsubscribe` matches the submitted value against the topic's endpoints. A user whose profile email differs from their user identifier is therefore dropped from the subscription record while their topic subscription remains.
+
+Subscription management is an administrative form. The Subscription Management page (`/auth/subscriptions`) is the only place an arbitrary recipient list is authored, and it is reachable only by a role granted that `web` route — the seeded `admin` role, whose default constraint allows all web paths. No shipped role template in `documentation/permissionsTemplates/` grants it. The asset details pane offers an ordinary user a self-subscribe toggle, which submits only that user's own identifier; the `/subscriptions` API routes themselves carry no such restriction, so a role granted `POST /subscriptions` (the `database-user` template grants it) can submit any recipient through the API or the CLI.
 :::
 
 ## Anti-Patterns

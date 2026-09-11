@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useState } from "react";
+import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Grid from "@cloudscape-design/components/grid";
@@ -30,18 +31,33 @@ export default function ListPageNoDatabase(props: any) {
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState<Array<any>>([]);
+    const [error, setError] = useState<string | null>(null);
 
     const [openNewElement, setOpenNewElement] = useState(false);
 
     useEffect(() => {
         const getData = async () => {
             setLoading(true);
-            const items = await fetchAllElements();
+            setError(null);
+            try {
+                const items = await fetchAllElements();
 
-            if (items !== false && Array.isArray(items)) {
+                if (items !== false && Array.isArray(items)) {
+                    setAllItems(items);
+                } else if (typeof items === "string" && items.trim() !== "") {
+                    // The service layer returns the API error message string on failure.
+                    setError(items);
+                } else {
+                    setError("Failed to load data. Please try refreshing.");
+                }
+            } catch (err: any) {
+                console.error("Error loading data:", err);
+                setError(
+                    err?.message || "An error occurred while loading data. Please try refreshing."
+                );
+            } finally {
                 setLoading(false);
                 setReload(false);
-                setAllItems(items);
             }
         };
         if (reload) {
@@ -54,6 +70,10 @@ export default function ListPageNoDatabase(props: any) {
         else if (CreateNewElement) setOpenNewElement(true);
     };
 
+    const handleRefresh = () => {
+        setReload(true);
+    };
+
     return (
         <>
             <Box padding={{ top: "m", horizontal: "l" }}>
@@ -64,6 +84,22 @@ export default function ListPageNoDatabase(props: any) {
                         </TextContent>
                     </div>
                 </Grid>
+                {error && (
+                    <Grid gridDefinition={[{ colspan: 12 }]}>
+                        <Alert
+                            type="error"
+                            dismissible
+                            onDismiss={() => setError(null)}
+                            action={
+                                <Button onClick={handleRefresh} iconName="refresh">
+                                    Retry
+                                </Button>
+                            }
+                        >
+                            {error}
+                        </Alert>
+                    </Grid>
+                )}
                 <Grid gridDefinition={[{ colspan: 12 }]}>
                     <TableList
                         allItems={allItems}

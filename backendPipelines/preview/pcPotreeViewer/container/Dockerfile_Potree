@@ -1,10 +1,11 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.11-alpine
-
-#Create appuser for container runtime processes
-#RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Pinned by digest, not by tag -- see the same note on 3dThumbnail/Dockerfile. The digest is the
+# multi-arch INDEX, which is what keeps `--platform=linux/amd64` resolving; a per-platform digest would
+# break a build on any other architecture. Resolve and confirm the new digest is an index before moving
+# it, because a wrong digest fails the build rather than falling back to the tag.
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.11-alpine@sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146
 
 #Build PotreeConverter
 WORKDIR /
@@ -15,7 +16,16 @@ ARG GITHUB_REPOSITORY="potree/PotreeConverter"
 ARG GITHUB_SERVER_URL="https://github.com"
 
 # install build deps, download Potree Source, and build for Potree Conveter
-RUN apk add --no-cache git cmake make gcc g++ libtbb-dev 
+#
+# Deliberately NOT version-pinned, unlike the base image above. Alpine's release-branch repositories
+# carry ONE version per package and update it in place, so `apk add cmake=<version>` stops resolving
+# the moment that branch bumps cmake -- the pin converts a reproducibility gap into a build that fails
+# on a schedule nobody controls. The base image is pinned by digest, which fixes the Alpine release and
+# therefore which branch these come from; what remains unpinned is the patch level within that branch.
+#
+# The exposure is small and bounded: this layer is the build toolchain for compiling PotreeConverter
+# (whose own source IS pinned to a commit below), not part of the runtime image's behaviour.
+RUN apk add --no-cache git cmake make gcc g++ libtbb-dev
 
 #git clone  "https://github.com/potree/PotreeConverter" PotreeConverter
 
@@ -46,8 +56,21 @@ COPY ./ ./pc_pipeline
 # install python app and deps
 RUN pip3 install -r ./pc_pipeline/requirements.txt
 
-#Switch suer to app user for runtime operations
-#USER appuser
+# Create the runtime user and the two paths it has to write.
+#
+# pipelines/potree/pipeline.py calls create_dir(["tmp", "input"]), a RELATIVE path, so it resolves
+# against this stage's last WORKDIR — /PotreeConverterBuild, which is root-owned. The directory is
+# pre-created and handed to the user rather than left for the pipeline to mkdir under a root-owned
+# parent. HOME is set as well: boto3 and PotreeConverter both read it, and the Alpine default for a
+# system account is a path that does not exist.
+RUN addgroup -S appgroup && \
+    adduser -S -G appgroup -h /home/appuser appuser && \
+    mkdir -p /home/appuser /PotreeConverterBuild/tmp && \
+    chown -R appuser:appgroup /home/appuser /PotreeConverterBuild/tmp
+ENV HOME=/home/appuser
+
+#Switch user to app user for runtime operations
+USER appuser
 
 # set entry point to app
 ENTRYPOINT ["python3", "-m", "pc_pipeline"]

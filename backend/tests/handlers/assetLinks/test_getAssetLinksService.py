@@ -232,9 +232,12 @@ def test_invalid_asset_id(mock_casbin_enforcer, mock_request_to_claims,
     
     # Assert
     assert response['statusCode'] == 400
-    # The backend returns "Asset not found in database" for empty asset ID
+    # An empty assetId is rejected by input validation before the lookup runs, so the message is
+    # the validator's; a handler that reached the lookup instead would report "not found".
     response_message = json.loads(response['body'])['message']
-    assert "not found" in response_message or "not valid" in response_message
+    assert ("required field" in response_message
+            or "not found" in response_message
+            or "not valid" in response_message)
 
 
 @patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')

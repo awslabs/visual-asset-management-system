@@ -31,9 +31,6 @@ Train a new policy from scratch:
         "numEnvs": 4096,
         "maxIterations": 1500,
         "rlLibrary": "rsl_rl"
-    },
-    "computeConfig": {
-        "numNodes": 1
     }
 }
 ```
@@ -62,14 +59,15 @@ Reference a checkpoint within the same asset using a relative path:
 
 **Option 2: Full S3 URI**
 
-Specify the complete S3 path to any checkpoint:
+Specify the complete S3 path to a checkpoint inside the asset the execution runs against. A URI
+naming any other bucket is rejected before the job starts:
 
 ```json
 {
     "trainingConfig": {
         "mode": "evaluate",
         "task": "Isaac-Ant-v0",
-        "policyS3Uri": "s3://vams-assets/policies/ant_trained.pt",
+        "policyS3Uri": "s3://vams-assets-bucket/asset-123/policies/ant_trained.pt",
         "numEnvs": 100,
         "numEpisodes": 50,
         "rlLibrary": "rsl_rl"
@@ -261,9 +259,6 @@ After upload, note the S3 URI (e.g., `s3://vams-assets-bucket/asset-123/`)
         "rlLibrary": "rsl_rl",
         "seed": 42
     },
-    "computeConfig": {
-        "numNodes": 1
-    },
     "inputS3AssetFilePath": "s3://vams-assets-bucket/asset-123/"
 }
 ```
@@ -271,7 +266,7 @@ After upload, note the S3 URI (e.g., `s3://vams-assets-bucket/asset-123/`)
 **What happens:**
 
 1. Pipeline downloads your custom environment package from S3
-2. Installs it in the container: `pip install -e my_custom_env.tar.gz`
+2. Installs it in the container: `pip install --no-build-isolation my_custom_env.tar.gz`
 3. Your environment registers with Gymnasium
 4. Training executes with your custom task
 5. Trained policy uploads to S3 output path
@@ -285,9 +280,6 @@ For larger environments, use multiple GPUs:
     "trainingConfig": {
         "task": "MyCustom-Robot-v0",
         "numEnvs": 16384
-    },
-    "computeConfig": {
-        "numNodes": 2
     }
 }
 ```
@@ -318,20 +310,7 @@ vamscli files upload \
     --relative-path checkpoints/my_policy.pt
 ```
 
-### Resume Training from Checkpoint
-
-```json
-{
-    "trainingConfig": {
-        "task": "Isaac-Ant-v0",
-        "numEnvs": 4096,
-        "maxIterations": 5000,
-        "resumeCheckpoint": "s3://vams-assets-bucket/policies/my_policy.pt"
-    }
-}
-```
-
-### Evaluate Policy (Play Mode)
+### Evaluate Policy
 
 To evaluate a trained policy without training:
 
@@ -339,8 +318,8 @@ To evaluate a trained policy without training:
 {
     "trainingConfig": {
         "task": "Isaac-Ant-v0",
-        "mode": "play",
-        "policyPath": "s3://vams-assets-bucket/policies/my_policy.pt",
+        "mode": "evaluate",
+        "policyPath": "s3://vams-assets-bucket/asset-123/policies/my_policy.pt",
         "numEnvs": 100
     }
 }
@@ -352,64 +331,65 @@ To evaluate a trained policy without training:
 
 ### Training Configuration
 
-| Parameter   | Type    | Default             | Description                                |
-| ----------- | ------- | ------------------- | ------------------------------------------ |
-| `mode`      | string  | `train`             | Execution mode: `train` or `evaluate`      |
-| `task`      | string  | `Isaac-Cartpole-v0` | Environment task name                      |
-| `rlLibrary` | string  | `rsl_rl`            | RL framework: `rsl_rl`, `skrl`, `rl_games` |
-| `seed`      | integer | null                | Random seed for reproducibility            |
+Most per-run parameters are declared as template tags on the two shipped templates, so the execute form
+renders a field for each and substitutes the value into the configuration body at launch. The
+**Template tag** column names that field; a `-` means the parameter is set only by editing the body.
+
+| Parameter                | Template tag | Type    | Default                    | Description                                                                                                                                            |
+| ------------------------ | ------------ | ------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mode`                   | -            | string  | `train`                    | Execution mode: `train` or `evaluate`. Fixed by the template, because it is what selects the training or the evaluation pipeline                       |
+| `task`                   | `TASK`       | string  | `Isaac-Cartpole-Direct-v0` | Environment task name                                                                                                                                  |
+| `rlLibrary`              | `RL_LIBRARY` | string  | `rsl_rl`                   | RL framework: `rsl_rl`, `skrl`, `rl_games`. Any other value fails the execution before a GPU node is provisioned, rather than falling back to `rsl_rl` |
+| `seed`                   | `SEED`       | integer | null                       | Random seed for reproducibility; a blank field leaves it unset                                                                                         |
+| `customEnvironmentPath`  | -            | string  | -                          | Path to a custom environment package relative to the asset root                                                                                        |
+| `customEnvironmentS3Uri` | -            | string  | -                          | Full S3 URI to the package; must name the executing asset's own bucket                                                                                 |
 
 **Training Mode Parameters:**
 
-| Parameter       | Type    | Default | Description                     |
-| --------------- | ------- | ------- | ------------------------------- |
-| `numEnvs`       | integer | 4096    | Number of parallel environments |
-| `maxIterations` | integer | 1500    | Training iterations             |
+| Parameter       | Template tag     | Type    | Default | Description                     |
+| --------------- | ---------------- | ------- | ------- | ------------------------------- |
+| `numEnvs`       | `NUM_ENVS`       | integer | 4096    | Number of parallel environments |
+| `maxIterations` | `MAX_ITERATIONS` | integer | 1500    | Training iterations             |
 
 **Evaluation Mode Parameters:**
 
-| Parameter        | Type    | Default | Description                                                                 |
-| ---------------- | ------- | ------- | --------------------------------------------------------------------------- |
-| `checkpointPath` | string  | -       | Relative path to checkpoint within asset (e.g., `checkpoints/model_300.pt`) |
-| `policyS3Uri`    | string  | -       | Full S3 URI to trained policy (`.pt` file)                                  |
-| `numEnvs`        | integer | 100     | Number of parallel environments                                             |
-| `numEpisodes`    | integer | 50      | Number of episodes to evaluate                                              |
-| `recordVideo`    | boolean | false   | Record evaluation videos                                                    |
+| Parameter         | Template tag        | Type    | Default | Description                                                                            |
+| ----------------- | ------------------- | ------- | ------- | -------------------------------------------------------------------------------------- |
+| `checkpointPath`  | `CHECKPOINT_PATH`   | string  | -       | Relative path to checkpoint within asset (e.g., `checkpoints/model_300.pt`)            |
+| `policyS3Uri`     | -                   | string  | -       | Full S3 URI to trained policy (`.pt` file); must name the executing asset's own bucket |
+| `numEnvs`         | `NUM_ENVS`          | integer | 100     | Number of parallel environments                                                        |
+| `numEpisodes`     | `NUM_EPISODES`      | integer | 50      | Number of episodes to evaluate                                                         |
+| `stepsPerEpisode` | `STEPS_PER_EPISODE` | integer | 1000    | Maximum simulation steps in one episode                                                |
+| `recordVideo`     | `RECORD_VIDEO`      | boolean | false   | Upload the evaluation video to the asset                                               |
 
 > **Note:** Specify either `checkpointPath` (recommended) or `policyS3Uri`. If neither is provided, the pipeline auto-discovers `.pt` files in the config directory.
 
-### Compute Configuration
-
-| Parameter  | Type    | Default | Description                                   |
-| ---------- | ------- | ------- | --------------------------------------------- |
-| `numNodes` | integer | 1       | Number of compute nodes (multi-node training) |
-
 ### Input/Output Paths
 
-| Parameter              | Type   | Description                                          |
-| ---------------------- | ------ | ---------------------------------------------------- |
-| `inputS3AssetFilePath` | string | S3 path to custom environment package                |
-| `outputS3Path`         | string | S3 path for trained policy and logs (auto-generated) |
+| Parameter              | Type   | Description                                                          |
+| ---------------------- | ------ | -------------------------------------------------------------------- |
+| `inputS3AssetFilePath` | string | S3 path to the selected input file, read as a JSON run configuration |
+| `outputS3Path`         | string | S3 path for trained policy and logs (auto-generated)                 |
 
 ### Output Files
 
 After training completes, the following files are uploaded to the output S3 path, organized under the job UUID for easy identification:
 
-| Path                            | Description                                     |
-| ------------------------------- | ----------------------------------------------- |
-| `{uuid}/checkpoints/model_*.pt` | Training checkpoints saved at regular intervals |
-| `{uuid}/metrics.csv`            | Training metrics exported from TensorBoard      |
-| `{uuid}/training-config.json`   | Copy of input configuration                     |
-| `{uuid}/*.txt`                  | Converted log files (e.g., git diff files)      |
+| Path                            | Description                                    |
+| ------------------------------- | ---------------------------------------------- |
+| `{uuid}/checkpoints/model_*.pt` | Training checkpoints written by the RL library |
+| `{uuid}/metrics.csv`            | Training metrics exported from TensorBoard     |
+| `{uuid}/train-config.json`      | Copy of input configuration                    |
+| `{uuid}/*.txt`                  | Converted log files (e.g., git diff files)     |
 
 For evaluation jobs:
 
-| Path                            | Description                                  |
-| ------------------------------- | -------------------------------------------- |
-| `{uuid}/metrics.csv`            | Evaluation metrics exported from TensorBoard |
-| `{uuid}/evaluation-config.json` | Copy of input configuration                  |
-| `{uuid}/videos/*.mp4`           | Recorded evaluation videos                   |
-| `{uuid}/*.txt`                  | Converted log files                          |
+| Path                          | Description                                  |
+| ----------------------------- | -------------------------------------------- |
+| `{uuid}/metrics.csv`          | Evaluation metrics exported from TensorBoard |
+| `{uuid}/evaluate-config.json` | Copy of input configuration                  |
+| `{uuid}/videos/*.mp4`         | Recorded evaluation videos                   |
+| `{uuid}/*.txt`                | Converted log files                          |
 
 The `{uuid}` prefix matches the job execution UUID, making it easy to identify and organize outputs from multiple jobs within the same asset.
 
@@ -429,7 +409,6 @@ The `{uuid}` prefix matches the job execution UUID, making it easy to identify a
 1. **Start small** - Begin with fewer environments and iterations to validate
 2. **Monitor GPU usage** - Check CloudWatch metrics to optimize `numEnvs`
 3. **Use seeds** - Set random seeds for reproducible experiments
-4. **Save checkpoints** - Enable checkpoint saving for long training runs
 
 ### Package Structure
 
@@ -488,7 +467,6 @@ setup(
 
 -   Reduce `numEnvs` (try 2048 or 1024)
 -   Simplify environment (fewer objects, lower resolution)
--   Use multi-node training to distribute load
 
 ### Package Installation Failed
 
@@ -497,7 +475,8 @@ setup(
 **Solution:**
 
 -   Verify package structure is correct
--   Test installation locally: `pip install -e my_custom_env.tar.gz`
+-   Test installation locally: `pip install --no-build-isolation my_custom_env.tar.gz` (the editable
+    flag `-e` accepts only a project directory or a version-control URL, never an archive)
 -   Check container logs for detailed error messages
 
 ---
@@ -551,9 +530,6 @@ def _get_rewards(self):
             "maxIterations": 3000,
             "rlLibrary": "rsl_rl",
             "seed": 123
-        },
-        "computeConfig": {
-            "numNodes": 1
         },
         "inputS3AssetFilePath": "s3://vams-assets-bucket/my-cartpole-env/"
     }

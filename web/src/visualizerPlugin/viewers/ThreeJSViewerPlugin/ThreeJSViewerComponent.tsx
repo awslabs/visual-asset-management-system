@@ -14,12 +14,69 @@ import LoadingSpinner from "../../components/LoadingSpinner";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import { loadFile } from "./utils/fileLoaders";
 import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
+import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
+
+/**
+ * Lays the loaded files out in a row, or returns them to their authored placement.
+ *
+ * Only the viewer-owned wrapper Group of each file is moved; the geometry inside keeps the exact
+ * coordinates it was authored with, which is why this is safe to toggle. Files that share a
+ * coordinate space are meant to overlap, so this is off by default — it exists for the case where
+ * several models were each authored about the origin and would otherwise sit inside one another.
+ */
+function layOutFileGroups(THREE: any, groups: any[], spread: boolean): void {
+    // Authored placement is the wrapper's identity transform, so clearing the offset restores it.
+    groups.forEach((group) => group.position.set(0, 0, 0));
+    if (!spread || groups.length < 2) {
+        return;
+    }
+
+    let cursor = 0;
+    groups.forEach((group) => {
+        const box = new THREE.Box3().setFromObject(group);
+        if (box.isEmpty()) {
+            return;
+        }
+        const size = box.getSize(new THREE.Vector3());
+        // Shift so this file's left edge starts at the cursor, then leave a gap proportional to the
+        // model so the row reads correctly at any scale.
+        group.position.x = cursor - box.min.x;
+        cursor += size.x + Math.max(size.x, size.y, size.z) * 0.15;
+    });
+}
+
+/** Frames the camera on the combined bounds of the given groups. */
+function frameCameraToGroups(THREE: any, camera: any, controls: any, groups: any[]): void {
+    const box = new THREE.Box3();
+    groups.forEach((group: any) => box.union(new THREE.Box3().setFromObject(group)));
+    if (box.isEmpty()) {
+        return;
+    }
+
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxSize = Math.max(size.x, size.y, size.z);
+    const fitHeightDistance = maxSize / (2 * Math.tan((Math.PI * camera.fov) / 360));
+    const distance = 1.5 * Math.max(fitHeightDistance, fitHeightDistance / camera.aspect);
+
+    camera.position.set(
+        center.x + distance * 0.5,
+        center.y + distance * 0.5,
+        center.z + distance * 0.5
+    );
+    camera.lookAt(center);
+    camera.near = distance / 100;
+    camera.far = distance * 100;
+    camera.updateProjectionMatrix();
+    controls?.setTarget(center.x, center.y, center.z);
+}
 
 const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
     databaseId,
     assetKey,
     multiFileKeys,
+    multiFiles,
     versionId,
     assetVersionId,
 }) => {
@@ -35,13 +92,28 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     const [sceneReady, setSceneReady] = useState(false);
     const [selectedObjects, setSelectedObjects] = useState<any[]>([]);
     const [loadedFileGroups, setLoadedFileGroups] = useState<any[]>([]);
+    const [spreadModels, setSpreadModels] = useState(false);
+    const [filesOverlap, setFilesOverlap] = useState(false);
     const raycasterRef = useRef<any>(null);
     const mouseRef = useRef<any>(null);
-    const initializationRef = useRef(false);
     const originalTransformsRef = useRef<Map<string, any>>(new Map());
 
-    // Loading cancellation flag
-    const loadingCancelledRef = useRef(false);
+    // Identifies what this viewer is asked to display. multiFileKeys/multiFiles arrive as fresh array
+    // identities on every parent render, so depending on them directly re-ran the load effect for
+    // unchanged input; the effect keys off this string instead.
+    const loadTargetKey = JSON.stringify({
+        assetKey,
+        multiFileKeys,
+        multiFiles,
+        assetId,
+        databaseId,
+        versionId,
+        assetVersionId,
+    });
+    // Render loop handle and the in-flight download, both torn down on unmount.
+    const animationFrameRef = useRef<number | null>(null);
+    const downloadAbortRef = useRef<AbortController | null>(null);
+    const sceneEnvironmentRef = useRef<SceneEnvironment | null>(null);
 
     // 3D selection toggle
     const [enable3DSelection, setEnable3DSelection] = useState(true);
@@ -174,6 +246,45 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         });
     }, [selectedObjects, materialLibrary]);
 
+    // Re-lays out the loaded files whenever the toggle changes, and re-frames the camera so the row
+    // is in view. Runs on load too, which is a no-op in the default (authored) placement.
+    useEffect(() => {
+        const instance = viewerInstanceRef.current;
+        const THREE = (window as any).THREE;
+        if (!instance || !THREE || loadedFileGroups.length === 0) {
+            return;
+        }
+
+        layOutFileGroups(THREE, loadedFileGroups, spreadModels);
+        frameCameraToGroups(THREE, instance.camera, instance.controls, loadedFileGroups);
+
+        // Where each file ended up, which is the first thing worth knowing when a file is listed in
+        // the panel but cannot be picked out in the 3D view.
+        const boxes = loadedFileGroups.map((group: any) => new THREE.Box3().setFromObject(group));
+        console.log(
+            "ThreeJS: loaded file placement",
+            loadedFileGroups.map((group: any, index: number) => {
+                const box = boxes[index];
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                return {
+                    file: group.name,
+                    objects: group.children.length,
+                    center: [center.x, center.y, center.z].map((n) => Number(n.toFixed(2))),
+                    size: [size.x, size.y, size.z].map((n) => Number(n.toFixed(2))),
+                };
+            })
+        );
+
+        // Files authored about the same origin land on top of one another, which reads as though only
+        // one of them loaded. Detected so the UI can say so, because the alternative — laying them out
+        // by default — would break files whose shared coordinates are meaningful.
+        const overlapping = boxes.some((box: any, i: number) =>
+            boxes.some((other: any, j: number) => j > i && box.intersectsBox(other))
+        );
+        setFilesOverlap(overlapping);
+    }, [spreadModels, loadedFileGroups]);
+
     useEffect(() => {
         const initializeThreeJS = async () => {
             try {
@@ -194,19 +305,33 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
     useEffect(() => {
         const hasFiles = assetKey || (multiFileKeys && multiFileKeys.length > 0);
-        if (
-            !hasFiles ||
-            initializationRef.current ||
-            !threeReady ||
-            !config ||
-            !containerRef.current
-        ) {
+        if (!hasFiles || !threeReady || !config || !containerRef.current) {
             return;
         }
-        initializationRef.current = true;
+
+        // Every run builds the scene. A one-shot ref used to guard this, which could never be
+        // satisfied again once cleanup had disposed the renderer: in development StrictMode remounts
+        // immediately, so the second mount skipped initialization and left an empty canvas even though
+        // the file list had been populated by the first. Re-running is safe because loadTargetKey
+        // keeps the effect from firing for unchanged input.
+
+        // Cancellation is per run rather than a shared ref. Cleanup tears the scene down, and in
+        // development React StrictMode mounts, unmounts and remounts immediately — a shared flag left
+        // set by the first mount would cancel the second mount's load, while clearing it would let
+        // the abandoned first load carry on writing into the live scene. The closure gives each run
+        // its own flag, so the abandoned one stops and the live one proceeds.
+        let cancelled = false;
 
         const loadAssets = async () => {
             try {
+                // Re-checked here rather than relying on threeReady, which stays true for the life of
+                // the component. Cleanup deletes window.THREE and window.THREEBundle, so a rebuild —
+                // a StrictMode remount, or switching files — would otherwise read a global that had
+                // just been removed. The loader returns immediately when the bundle is still present
+                // and re-injects it when it is not.
+                await ThreeJSDependencyManager.loadThreeJS();
+                if (cancelled) return;
+
                 setLoadingMessage("Initializing 3D scene...");
                 const THREE = (window as any).THREE;
 
@@ -231,10 +356,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 renderer.setPixelRatio(window.devicePixelRatio);
                 containerRef.current!.appendChild(renderer.domElement);
 
-                scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-                const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                dirLight.position.set(5, 10, 7.5);
-                scene.add(dirLight);
+                applySceneLighting(THREE, scene);
+                // Assigned before anything loads: a material samples `scene.environment` at render
+                // time, so a model added later still picks it up.
+                sceneEnvironmentRef.current = applySceneEnvironment(THREE, scene, renderer);
 
                 const filesToLoad =
                     multiFileKeys && multiFileKeys.length > 0
@@ -253,8 +378,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 // Get authorization header for streaming endpoint
                 const authHeader = await getDualAuthorizationHeader();
 
+                // Aborted by cleanup so closing the viewer mid-download stops the transfer instead
+                // of letting it run to completion for a scene nobody is looking at.
+                downloadAbortRef.current = new AbortController();
+
                 for (let i = 0; i < filesToLoad.length; i++) {
-                    if (loadingCancelledRef.current) {
+                    if (cancelled) {
                         console.log("Loading cancelled by component unmount");
                         return;
                     }
@@ -262,6 +391,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     const fileKey = filesToLoad[i];
                     const fileName = fileKey.split("/").pop() || `model_${i}`;
                     const fileExtension = fileName.split(".").pop()?.toLowerCase() || "";
+
+                    // Per-file asset context (Decision #3): when a multi-file selection spans
+                    // assets, each file streams from its OWN assetId/databaseId. Falls back to
+                    // the shared top-level pair for single-asset / legacy callers.
+                    const fileAssetId = multiFiles?.[i]?.assetId || assetId;
+                    const fileDatabaseId = multiFiles?.[i]?.databaseId || databaseId;
 
                     console.log(
                         `\n=== Loading file ${i + 1}/${filesToLoad.length}: ${fileKey} ===`
@@ -271,7 +406,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     );
 
                     try {
-                        if (loadingCancelledRef.current) {
+                        if (cancelled) {
                             console.log("Loading cancelled");
                             return;
                         }
@@ -282,7 +417,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             encodeURIComponent(segment)
                         );
                         const encodedFileKey = encodedSegments.join("/");
-                        let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                        let assetUrl = `${config.api}database/${fileDatabaseId}/assets/${fileAssetId}/download/stream/${encodedFileKey}`;
 
                         // assetVersionId takes precedence (used for all files including deps)
                         // versionId is S3 file version, only for the primary file (isMainFile)
@@ -294,6 +429,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         const response = await fetch(assetUrl, {
                             headers: { Authorization: authHeader },
+                            signal: downloadAbortRef.current?.signal,
                         });
 
                         if (!response.ok) {
@@ -310,8 +446,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             const depResult = await preloadGLTFDependencies(
                                 arrayBuffer,
                                 {
-                                    assetId,
-                                    databaseId,
+                                    assetId: fileAssetId,
+                                    databaseId: fileDatabaseId,
                                     baseFileKey: fileKey,
                                     apiEndpoint: config.api,
                                     assetVersionId: assetVersionId,
@@ -395,6 +531,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 console.log(`\n=== Total files loaded: ${loadedGroups.length} ===`);
 
+                if (cancelled) return;
                 if (errors.length > 0) setFileErrors(errors);
 
                 // If no files loaded, show the actual error message
@@ -419,6 +556,13 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
                 }
 
+                // Multi-file viewing loads every model at its OWN native coordinates — we do
+                // NOT scale, recenter, or offset any geometry. Model coordinates are meaningful
+                // (scene construction now; diff mode later), so the viewer must preserve them
+                // exactly as authored. Files that share a coordinate space will overlap/align as
+                // intended; the camera is framed to the combined bounds below, and the object-tree
+                // panel lets the user isolate individual files. (An earlier build normalized and
+                // spread models into a row for visibility — removed because it mutated geometry.)
                 setLoadedFileGroups(loadedGroups);
                 setLoadingMessage("Positioning camera...");
 
@@ -562,7 +706,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 };
 
                 const animate = () => {
-                    requestAnimationFrame(animate);
+                    // The handle is kept so the loop can be stopped on unmount. Re-requesting
+                    // unconditionally left it running for the lifetime of the page, rendering a
+                    // scene whose renderer had already been disposed.
+                    animationFrameRef.current = requestAnimationFrame(animate);
 
                     // Update animation mixer if animations are playing
                     if (
@@ -579,7 +726,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 animate();
 
                 setSceneReady(true);
-                window.addEventListener("resize", () => {
+
+                // Held on the instance so cleanup can detach it; an inline listener could never be
+                // removed and kept the camera, renderer and container alive after unmount.
+                const handleResize = () => {
                     if (containerRef.current) {
                         camera.aspect =
                             containerRef.current.clientWidth / containerRef.current.clientHeight;
@@ -589,7 +739,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             containerRef.current.clientHeight
                         );
                     }
-                });
+                };
+                viewerInstanceRef.current.resizeHandler = handleResize;
+                window.addEventListener("resize", handleResize);
 
                 setIsLoading(false);
             } catch (error) {
@@ -603,7 +755,15 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
         return () => {
             console.log("ThreeJS Viewer: Cleanup initiated");
-            loadingCancelledRef.current = true;
+            cancelled = true;
+
+            // Stop the render loop and any download still in flight before disposing what they use.
+            if (animationFrameRef.current !== null) {
+                cancelAnimationFrame(animationFrameRef.current);
+                animationFrameRef.current = null;
+            }
+            downloadAbortRef.current?.abort();
+            downloadAbortRef.current = null;
 
             if (viewerInstanceRef.current) {
                 const { renderer, controls, clickHandler, blobUrls } = viewerInstanceRef.current;
@@ -612,11 +772,20 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     renderer.domElement.removeEventListener("click", clickHandler);
                 }
 
+                if (viewerInstanceRef.current.resizeHandler) {
+                    window.removeEventListener("resize", viewerInstanceRef.current.resizeHandler);
+                }
+
                 controls?.dispose();
 
                 if (renderer?.domElement?.parentNode) {
                     renderer.domElement.parentNode.removeChild(renderer.domElement);
                 }
+
+                // Before the renderer: the environment is a render target that belongs to this
+                // renderer's context, so releasing it afterwards releases nothing.
+                sceneEnvironmentRef.current?.dispose();
+                sceneEnvironmentRef.current = null;
 
                 renderer?.dispose();
 
@@ -635,16 +804,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             ThreeJSDependencyManager.cleanup();
             console.log("ThreeJS Viewer: Cleanup complete");
         };
-    }, [
-        threeReady,
-        assetKey,
-        multiFileKeys,
-        assetId,
-        databaseId,
-        versionId,
-        assetVersionId,
-        config,
-    ]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [threeReady, loadTargetKey, config]);
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
@@ -664,30 +825,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (camera && controls && fileGroups && THREE) {
                     const fileGroupsArray = Array.isArray(fileGroups) ? fileGroups : [fileGroups];
-                    const box = new THREE.Box3();
-                    fileGroupsArray.forEach((g: any) =>
-                        box.union(new THREE.Box3().setFromObject(g))
-                    );
-
-                    const size = box.getSize(new THREE.Vector3());
-                    const center = box.getCenter(new THREE.Vector3());
-                    const maxSize = Math.max(size.x, size.y, size.z);
-                    const fitHeightDistance =
-                        maxSize / (2 * Math.tan((Math.PI * camera.fov) / 360));
-                    const fitWidthDistance = fitHeightDistance / camera.aspect;
-                    const distance = 1.5 * Math.max(fitHeightDistance, fitWidthDistance);
-
-                    camera.position.set(
-                        center.x + distance * 0.5,
-                        center.y + distance * 0.5,
-                        center.z + distance * 0.5
-                    );
-                    camera.lookAt(center);
-                    controls.setTarget(center.x, center.y, center.z);
-                    camera.near = distance / 100;
-                    camera.far = distance * 100;
-                    camera.updateProjectionMatrix();
-
+                    frameCameraToGroups(THREE, camera, controls, fileGroupsArray);
                     console.log("Fit to scene (F key)");
                 }
             }
@@ -1285,6 +1423,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     onResetAllTransforms={handleResetAllTransforms}
                     onResetAllMaterials={handleResetAllMaterials}
                     onClearSelection={() => setSelectedObjects([])}
+                    canSpreadModels={loadedFileGroups.length > 1}
+                    spreadModels={spreadModels}
+                    onToggleSpreadModels={setSpreadModels}
                     enable3DSelection={enable3DSelection}
                     onToggle3DSelection={setEnable3DSelection}
                     animations={animations}
@@ -1363,6 +1504,21 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                                     >
                                         📁 {loadedFileGroups.length} file
                                         {loadedFileGroups.length !== 1 ? "s" : ""}
+                                    </div>
+                                )}
+                                {loadedFileGroups.length > 1 && filesOverlap && !spreadModels && (
+                                    <div
+                                        style={{
+                                            fontSize: "0.8em",
+                                            marginTop: "6px",
+                                            color: "#FFC107",
+                                            maxWidth: "220px",
+                                            lineHeight: 1.35,
+                                        }}
+                                    >
+                                        ⚠️ These files occupy the same space, so they overlap in the
+                                        view. Turn on <strong>Spread Models</strong> in the Controls
+                                        tab to separate them.
                                     </div>
                                 )}
                                 {totalObjects > 0 && (

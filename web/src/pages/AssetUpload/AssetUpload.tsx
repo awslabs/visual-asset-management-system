@@ -41,10 +41,16 @@ import {
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
-import { previewFileFormats } from "../../common/constants/fileFormats";
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import { Metadata } from "../../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { validateNonZeroLengthTextAsYouType, validateRequiredTagTypeSelected } from "./validations";
+import {
+    validateNonZeroLengthTextAsYouType,
+    validateRequiredTagTypeSelected,
+    enforceableRequiredTagTypes,
+    firstIncompleteRequiredStep,
+} from "./validations";
 import { DisplayKV, FileUpload } from "./components";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { MetadataContainer } from "../../components/metadataV2";
@@ -53,22 +59,24 @@ import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import localforage from "localforage";
-import { fetchTags, fetchtagTypes } from "../../services/APIService";
+import { fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
+import { buildTagOptionGroups } from "../../common/utils/tagOptions";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 import Alert from "@cloudscape-design/components/alert";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { safeGetFile } from "../../utils/fileHandleCompat";
 import {
     validateFiles,
     formatValidationErrors,
+    getPreviewFileExtension,
+    isPreviewExtensionAllowed,
     ValidationResult,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
-let tags: any[] = [];
-let tagTypes: TagType[] = [];
 const assetOptions: { label: string; value: string }[] = [];
 let assetTags: string[] = [];
 
@@ -337,12 +345,17 @@ const assetDetailReducer = (
     }
 };
 
-type AssetDetailContextType = {
+export type AssetDetailContextType = {
     assetDetailState: AssetDetail;
     assetDetailDispatch: Dispatch<AssetDetailAction>;
 };
 
-const AssetDetailContext = createContext<AssetDetailContextType | undefined>(undefined);
+/**
+ * The wizard's own asset-detail context, distinct from the one in `src/context/AssetDetailContext.ts`
+ * that the asset detail page uses. Exported so a step can be mounted against a controlled state
+ * rather than only through the whole wizard.
+ */
+export const AssetDetailContext = createContext<AssetDetailContextType | undefined>(undefined);
 
 const isDistributableOptions: OptionDefinition[] = [
     { label: "Yes", value: "true" },
@@ -389,7 +402,7 @@ interface AssetLinkingProps {
     showErrors: boolean;
 }
 
-const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
+export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
     const [validationText, setValidationText] = useState<{
@@ -405,6 +418,15 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         tags?: string;
     }>({});
     const [tagsValid, setTagsValid] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    // Component state rather than module-level `let`s: the picker options, the announced constraint
+    // and the validator all derive from the same fetch, so they have to change together.
+    const [tagTypes, setTagTypes] = useState<TagType[]>([]);
+    const [tagOptions, setTagOptions] = useState<any[]>([]);
+    // An empty `tagTypes` reads as "this database has no required tag types", which is also what it
+    // holds before the fetch settles. `tagsLoaded` separates the two so the step is not reported
+    // valid on a requirement that is merely unknown.
+    const [tagsLoaded, setTagsLoaded] = useState(false);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -431,12 +453,14 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
             setTagsValid(false);
         }
 
-        const isValid = !(
-            validation.assetId ||
-            validation.databaseId ||
-            validation.description ||
-            validation.tags
-        );
+        const isValid =
+            tagsLoaded &&
+            !(
+                validation.assetId ||
+                validation.databaseId ||
+                validation.description ||
+                validation.tags
+            );
         setValid(isValid);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
@@ -444,39 +468,105 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         assetDetailState.databaseId,
         assetDetailState.description,
         assetDetailState.tags,
+        tagTypes,
+        tagsLoaded,
     ]);
 
+    // Tag types and tags are both scoped to GLOBAL + the selected database, matching the backend's
+    // required-tag validation. An unscoped list announces required types from other databases that
+    // the correctly-scoped picker can never offer, which leaves the step permanently invalid.
+    //
+    // The database is chosen inside THIS component, so the fetch is keyed on it; a `[]` dependency
+    // list would only ever see the initial `undefined`. `requestSeq` drops a late reply from an
+    // earlier database — the unscoped/wider query is the slower one, so without it the picker can end
+    // up holding tags the create call will reject.
+    const selectedDatabaseId = assetDetailState?.databaseId;
+    const requestSeq = useRef(0);
     useEffect(() => {
-        // Get Tag Types to enforce when they are required
-        tagTypes = [];
+        const databaseId = selectedDatabaseId;
+        const seq = ++requestSeq.current;
 
-        fetchtagTypes().then((res) => {
-            tagTypes = res;
+        if (!databaseId) {
+            setTagTypes([]);
+            setTagOptions([]);
+            setConstraintText({});
+            setTagsLoaded(false);
+            return;
+        }
 
-            if (tagTypes.length) {
-                const requiredTagTypes = tagTypes.filter((tagType) => tagType.required === "True");
+        // Reset before the request so a switch to another database re-opens the gate rather than
+        // validating against the previous database's requirements.
+        setTagsLoaded(false);
 
+        Promise.all([fetchTagTypesForAsset({ databaseId }), fetchTagsForAsset({ databaseId })])
+            .then(([typesRes, tagsRes]) => {
+                if (seq !== requestSeq.current) return;
+
+                // Each service returns an array on success, or an error message string / false on
+                // failure. Surface failures instead of silently leaving the form blank.
+                if (!Array.isArray(typesRes) || !Array.isArray(tagsRes)) {
+                    const failed = !Array.isArray(typesRes) ? typesRes : tagsRes;
+                    setTagTypes([]);
+                    setTagOptions([]);
+                    setConstraintText({});
+                    setLoadError(
+                        typeof failed === "string" && failed.trim() !== ""
+                            ? failed
+                            : "Failed to load tags. Please try refreshing the page."
+                    );
+                    // Settled, so the step is releasable: the requirements cannot be computed here
+                    // and the create call remains the authority on them.
+                    setTagsLoaded(true);
+                    return;
+                }
+
+                setTagTypes(typesRes);
+                // Grouped, scope-labelled and ordered by the shared helper so this picker and the
+                // asset edit form present tags identically. The grouping metadata comes from the
+                // types just fetched: the `tagTypes` localStorage entry another page happens to
+                // write is absent on a fresh browser, which left every group ungrouped.
+                setTagOptions(buildTagOptionGroups(tagsRes, typesRes));
+
+                // A required tag type with no tags cannot be satisfied, so it is not announced as a
+                // constraint either — the same set the validator enforces.
+                const requiredTagTypes = enforceableRequiredTagTypes(typesRes);
                 if (requiredTagTypes.length) {
-                    // Set constraint text if there are required tag types
                     setConstraintText({
                         tags:
                             "The following tag types, listed in parentheses, require at least one selection: " +
                             requiredTagTypes.map((tagType) => tagType.tagTypeName).join(", "),
                     });
-
-                    // Set initial validation text
-                    setValidationText({
-                        ...validationText,
-                        tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes),
-                    });
+                } else {
+                    setConstraintText({});
                 }
-            }
-        });
-    }, []);
+
+                setTagsLoaded(true);
+            })
+            .catch((error: any) => {
+                if (seq !== requestSeq.current) return;
+                setTagTypes([]);
+                setTagOptions([]);
+                setConstraintText({});
+                setLoadError(
+                    error?.message || "Failed to load tags. Please try refreshing the page."
+                );
+                setTagsLoaded(true);
+            });
+    }, [selectedDatabaseId]);
 
     return (
         <Container header={<Header variant="h2">{Synonyms.Asset} Details</Header>}>
             <SpaceBetween direction="vertical" size="l">
+                {loadError && (
+                    <Alert
+                        type="error"
+                        dismissible
+                        onDismiss={() => setLoadError(null)}
+                        header="Error loading form data"
+                    >
+                        {loadError}
+                    </Alert>
+                )}
                 <FormField
                     label={`${Synonyms.Asset} Name`}
                     errorText={showErrors && validationText.assetId}
@@ -591,10 +681,20 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
 
                 <FormField
                     label="Tags"
-                    constraintText={constraintText.tags}
+                    constraintText={
+                        selectedDatabaseId && !tagsLoaded ? (
+                            <StatusIndicator type="loading">
+                                Loading tag requirements
+                            </StatusIndicator>
+                        ) : (
+                            constraintText.tags
+                        )
+                    }
                     errorText={showErrors || !tagsValid ? validationText.tags : null}
                 >
                     <Multiselect
+                        statusType={selectedDatabaseId && !tagsLoaded ? "loading" : "finished"}
+                        loadingText="Loading tags"
                         selectedOptions={selectedTags}
                         onChange={({ detail }) => {
                             assetTags = [];
@@ -615,7 +715,8 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                             });
                         }}
                         placeholder="Tags"
-                        options={tags}
+                        options={tagOptions}
+                        data-testid="tags-multiselect"
                     />
                 </FormField>
             </SpaceBetween>
@@ -746,7 +847,9 @@ const AssetMetadataInfo = ({
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState } = assetDetailContext;
     const [hasPendingChanges, setHasPendingChanges] = useState(false);
-    const [hasRequiredFieldsFilled, setHasRequiredFieldsFilled] = useState(true);
+    // Starts unfilled: MetadataContainer reports its required-field state only once the schema
+    // fetch has settled, so anything before that is unknown rather than satisfied.
+    const [hasRequiredFieldsFilled, setHasRequiredFieldsFilled] = useState(false);
 
     // Memoize the metadata array to prevent creating new array on every render
     const metadataArray = useMemo(() => {
@@ -870,9 +973,6 @@ const getFilesFromFileHandles = async (fileHandles: any[]) => {
     return fileUploadTableItems;
 };
 
-// Maximum preview file size (5MB)
-const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
-
 const AssetFileInfo = ({
     setFileUploadTableItems,
     setValid,
@@ -893,7 +993,7 @@ const AssetFileInfo = ({
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
         if (!assetDetailState.Asset) return false;
-        return assetDetailState.Asset.some((item) => item.name.includes(".previewFile."));
+        return assetDetailState.Asset.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [assetDetailState.Asset]);
 
     // Validate files whenever Asset files or restrictions change
@@ -942,11 +1042,21 @@ const AssetFileInfo = ({
         });
     };
 
-    // Function to handle preview file selection with size validation
+    // Function to handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
         if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
             setPreviewFileError("Preview file exceeds maximum allowed size of 5MB");
             // Don't update the state with the oversized file
+            return;
+        }
+
+        if (file && !isPreviewExtensionAllowed(file.name)) {
+            setPreviewFileError(
+                `Extension ${getPreviewFileExtension(
+                    file.name
+                )} is not allowed. Preview files must be one of: ${previewFileFormatsStr}`
+            );
+            // Don't update the state with the unsupported file
             return;
         }
 
@@ -980,8 +1090,9 @@ const AssetFileInfo = ({
                                 </div>
                                 <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
                                     <em>
-                                        Note: Preview files (containing .previewFile. in the
-                                        filename) are exempt from these restrictions.
+                                        Note: Preview files (containing {PREVIEW_FILE_PATTERN} in
+                                        the filename) are exempt from these restrictions, but must
+                                        still be one of {previewFileFormatsStr}.
                                     </em>
                                 </div>
                             </SpaceBetween>
@@ -992,32 +1103,32 @@ const AssetFileInfo = ({
                 {fileValidationResult && !fileValidationResult.isValid && (
                     <Alert header="Invalid Files Selected" type="error">
                         <SpaceBetween direction="vertical" size="xs">
-                            <div>
-                                The following files cannot be uploaded because their extensions are
-                                not allowed for this database:
-                            </div>
+                            <div>The following files cannot be uploaded:</div>
                             <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
                                 {fileValidationResult.invalidFiles.map((file, index) => (
                                     <li key={index}>
-                                        <strong>{file.fileName}</strong> - Extension{" "}
-                                        {file.extension} not allowed
+                                        <strong>{file.fileName}</strong> -{" "}
+                                        {file.errorMessage ||
+                                            `Extension ${file.extension} not allowed`}
                                     </li>
                                 ))}
                             </ul>
-                            <div>
-                                <strong>Allowed extensions:</strong>{" "}
-                                {fileValidationResult.allowedExtensions?.join(", ")}
-                            </div>
+                            {fileValidationResult.allowedExtensions !== null && (
+                                <div>
+                                    <strong>Allowed extensions:</strong>{" "}
+                                    {fileValidationResult.allowedExtensions.join(", ")}
+                                </div>
+                            )}
                         </SpaceBetween>
                     </Alert>
                 )}
 
                 <Alert header="Preview File Information" type="info">
                     <p>
-                        Files with <strong>.previewFile.</strong> in the filename will be ingested
-                        as preview files for their associated files. For example,{" "}
-                        <code>model.gltf.previewFile.png</code> will be used as a preview for{" "}
-                        <code>model.gltf</code>.
+                        Files with <strong>{PREVIEW_FILE_PATTERN}</strong> in the filename will be
+                        ingested as preview files for their associated files. For example,{" "}
+                        <code>model.gltf{PREVIEW_FILE_PATTERN}png</code> will be used as a preview
+                        for <code>model.gltf</code>.
                     </p>
                     <p>
                         <strong>Important notes:</strong>
@@ -1310,14 +1421,15 @@ const AssetUploadReview = ({
                             header: "Type",
                             cell: (item: FileUploadTableItem) => {
                                 if (item.index === 99999) return "Preview File";
-                                if (item.name.includes(".previewFile.")) return "Preview File";
+                                if (item.name.includes(PREVIEW_FILE_PATTERN)) return "Preview File";
                                 return `${Synonyms.Asset} File`;
                             },
                             sortingField: "type",
                             sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => {
                                 const getType = (item: FileUploadTableItem) => {
                                     if (item.index === 99999) return "Preview File";
-                                    if (item.name.includes(".previewFile.")) return "Preview File";
+                                    if (item.name.includes(PREVIEW_FILE_PATTERN))
+                                        return "Preview File";
                                     return `${Synonyms.Asset} File`;
                                 };
                                 return getType(a).localeCompare(getType(b));
@@ -1365,51 +1477,11 @@ const UploadForm = () => {
     });
     const [isCancelVisible, setCancelVisible] = useState(false);
     const [showErrorsForPage, setShowErrorsForPage] = useState(-1);
-    const [validSteps, setValidSteps] = useState([false, false, false]);
+    // One entry per wizard step. Sized to the step count: the setters below write indices 0-3, so a
+    // 3-element initial value left index 3 `undefined` until that step first reported.
+    const [validSteps, setValidSteps] = useState([false, false, false, false, false]);
 
     useEffect(() => {
-        tags = [];
-
-        fetchTags().then((res) => {
-            tags.length = 0; // Clear existing array without losing reference
-            if (res && Array.isArray(res)) {
-                // Group tags by tag type, sorted alphabetically
-                const grouped: Record<
-                    string,
-                    { tagTypeName: string; required: string; tagItems: any[] }
-                > = {};
-                const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
-                for (const x of res) {
-                    const typeName = x.tagTypeName || "Uncategorized";
-                    if (!grouped[typeName]) {
-                        const typeInfo = storedTypes.find((t: any) => t.tagTypeName === typeName);
-                        grouped[typeName] = {
-                            tagTypeName: typeName,
-                            required: typeInfo?.required || "False",
-                            tagItems: [],
-                        };
-                    }
-                    grouped[typeName].tagItems.push(x);
-                }
-                // Sort groups alphabetically, filter out empty groups, build grouped options
-                Object.values(grouped)
-                    .filter((group) => group.tagItems.length > 0)
-                    .sort((a, b) => a.tagTypeName.localeCompare(b.tagTypeName))
-                    .forEach((group) => {
-                        tags.push({
-                            label:
-                                group.required === "True"
-                                    ? `${group.tagTypeName} [required]`
-                                    : group.tagTypeName,
-                            options: group.tagItems
-                                .sort((a: any, b: any) =>
-                                    (a.tagName || "").localeCompare(b.tagName || "")
-                                )
-                                .map((t: any) => ({ label: t.tagName, value: t.tagName })),
-                        });
-                    });
-            }
-        });
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
             assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: fileUploadTableItems });
             localforage
@@ -1546,20 +1618,41 @@ const UploadForm = () => {
                         }
                     }}
                     activeStepIndex={activeStepIndex}
-                    onSubmit={onSubmit({
-                        assetDetail: assetDetailState,
-                        setFreezeWizardButtons,
-                        metadata,
-                        execStatus,
-                        setExecStatus,
-                        setShowUploadAndExecProgress,
-                        moveToQueued,
-                        updateProgressForFileUploadItem,
-                        fileUploadComplete,
-                        fileUploadError,
-                        setPreviewUploadProgress,
-                        setUploadExecutionProps,
-                    })}
+                    onSubmit={(submitEvent) => {
+                        // A non-optional step that was SKIPPED PAST must still block the upload.
+                        //
+                        // `allowSkipTo` is deliberately kept (a Playwright spec and other flows rely on
+                        // it), and `onNavigate` above can only validate the step being left -- so from a
+                        // valid step 0, "Skip to Select Files to upload" jumps over the metadata step
+                        // even though it is declared `isOptional: false`. Gating navigation cannot close
+                        // that; gating SUBMIT can, which is the shape chosen for it.
+                        //
+                        // Indices are the `isOptional: false` steps in the `steps` array below —
+                        // 0 (Asset Details) and 1 (Asset Metadata). Kept as an explicit list rather than
+                        // derived, because `steps` is defined inline further down and is not in scope here.
+                        const firstInvalid = firstIncompleteRequiredStep(validSteps);
+                        if (firstInvalid !== undefined) {
+                            // Send the user to the offending step with its errors shown, rather than
+                            // failing the upload at the API and reporting it as a server rejection.
+                            setShowErrorsForPage(firstInvalid);
+                            setActiveStepIndex(firstInvalid);
+                            return;
+                        }
+                        return onSubmit({
+                            assetDetail: assetDetailState,
+                            setFreezeWizardButtons,
+                            metadata,
+                            execStatus,
+                            setExecStatus,
+                            setShowUploadAndExecProgress,
+                            moveToQueued,
+                            updateProgressForFileUploadItem,
+                            fileUploadComplete,
+                            fileUploadError,
+                            setPreviewUploadProgress,
+                            setUploadExecutionProps,
+                        })(submitEvent);
+                    }}
                     allowSkipTo
                     steps={[
                         {

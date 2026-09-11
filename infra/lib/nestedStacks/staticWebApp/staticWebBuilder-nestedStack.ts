@@ -9,6 +9,7 @@ import { NestedStack } from "aws-cdk-lib";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../config/config";
 import { samlSettings } from "../../../config/saml-config";
+import { oidcSettings } from "../../../config/oidc-config";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { CloudFrontS3WebSiteConstruct } from "./constructs/cloudfront-s3-website-construct";
@@ -30,7 +31,10 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     webAppBuildPath: string;
     apiUrl: string;
     storageResources: storageResources;
-    ssmWafArn: string;
+    // CloudFront-scoped WAF ACL ARN (us-east-1) for the CloudFront distribution.
+    ssmWafArnCloudfront: string;
+    // Regional-scoped WAF ACL ARN (core region) for the ALB.
+    ssmWafArnRegional: string;
     authResources: authResources;
     vpc: ec2.IVpc;
     subnetsIsolated: ec2.ISubnet[];
@@ -44,6 +48,26 @@ const defaultProps: Partial<StaticWebBuilderNestedStackProps> = {
     //stackName: "",
     //env: {},
 };
+
+/** The port `web/vite.config.ts` serves the development front on. */
+const LOCAL_DEV_WEB_ORIGIN = "http://localhost:3001";
+
+/**
+ * The localhost callback and logout URLs, when the deployment allows them.
+ *
+ * These let a developer running the web front locally finish a federated sign-in against a deployed
+ * user pool. They are registered on the same user pool that serves real users, so the redirect target
+ * is a destination on an end user's own machine that the deployment does not control — which is why
+ * `app.webUi.allowLocalhostAuthCallbacks` defaults to false and this returns nothing.
+ *
+ * Both spellings are needed when enabled: `VAMSAuth.tsx` derives the redirect from
+ * `window.location.origin`, and Cognito matches a registered URL exactly, trailing slash included.
+ */
+function localhostAuthCallbackUrls(config: Config.Config): string[] {
+    return config.app.webUi.allowLocalhostAuthCallbacks
+        ? [LOCAL_DEV_WEB_ORIGIN, `${LOCAL_DEV_WEB_ORIGIN}/`]
+        : [];
+}
 
 export class StaticWebBuilderNestedStack extends NestedStack {
     public endpointURL: string;
@@ -96,6 +120,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                     noncurrentVersionExpiration: cdk.Duration.days(30),
                 },
             ],
+            autoDeleteObjects: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
         requireTLSAndAdditionalPolicyAddToResourcePolicy(webAppAccessLogsBucket, props.config);
 
@@ -146,10 +172,19 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         //Generate CSP
         //Generate Auth Domain and Global CSP policy
+        //Cognito hosted UI domain suffix is partition-aware (commercial-only; config
+        //validation rejects SAML in partitions without hosted UI support)
+        const cognitoHostedUiUrl = props.config.app.authProvider.useCognito.useSaml
+            ? `https://${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : props.config.app.authProvider.useCognito.useOidc
+            ? `https://${oidcSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : "";
         let authDomain = "";
 
         if (props.config.app.authProvider.useCognito.useSaml) {
-            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+            authDomain = cognitoHostedUiUrl;
+        } else if (props.config.app.authProvider.useCognito.useOidc) {
+            authDomain = cognitoHostedUiUrl;
         } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
             authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
         }
@@ -172,67 +207,66 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webAppBucket,
                 webAppAccessLogsBucket,
                 webSiteBuildPath: props.webAppBuildPath,
-                webAcl: props.ssmWafArn,
+                webAcl: props.ssmWafArnCloudfront,
                 apiUrl: props.apiUrl,
                 csp: cspPolicy,
-                cognitoDomain: props.config.app.authProvider.useCognito.useSaml
-                    ? `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
-                    : "",
+                cognitoDomain: cognitoHostedUiUrl,
             });
 
             // Bind API Gateway to /api route of cloudfront
-            addBehaviorToCloudFrontDistribution(this, website.cloudFrontDistribution, props.apiUrl);
-
-            //Cloudfront Bucket Access
-            webAppBucket.addToResourcePolicy(
-                new cdk.aws_iam.PolicyStatement({
-                    effect: iam.Effect.ALLOW,
-                    actions: ["s3:GetObject"],
-                    principals: [Service("CLOUDFRONT").Principal],
-                    resources: [webAppBucket.arnForObjects("*")],
-                    // conditions: {
-                    //     StringEquals: {
-                    //         "AWS:SourceArn": this.formatArn({
-                    //             service: "cloudfront",
-                    //             account: props.config.env.account,
-                    //             region: props.config.env.region,
-                    //             partition: props.config.env.partition,
-                    //             resource: "distribution",
-                    //             resourceName: website.cloudFrontDistribution.distributionId,
-                    //             arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
-                    //         }),
-                    //     },
-                    // },
-                })
+            addBehaviorToCloudFrontDistribution(
+                this,
+                website.cloudFrontDistribution,
+                props.apiUrl,
+                Config.API_GATEWAY_STAGE_NAME
             );
+
+            // CloudFront's read access to the web bucket is granted by the origin itself. The
+            // distribution is built with `S3BucketOrigin.withOriginAccessControl`, which adds the
+            // bucket-policy statement for `cloudfront.amazonaws.com` scoped by
+            // `AWS:SourceArn` to this deployment's own distribution.
 
             /**
              * When using federated identities, this list of callback urls must include
              * the set of names that VAMSAuth.tsx will resolve when it calls
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
+             * With a custom domain enabled, users browse at the custom domain host, so it
+             * must be registered alongside the raw distribution name.
              */
             const callbackUrls = [
-                "http://localhost:3000",
-                "http://localhost:3000/",
+                ...localhostAuthCallbackUrls(props.config),
                 `https://${website.cloudFrontDistribution.domainName}/`,
                 `https://${website.cloudFrontDistribution.domainName}`,
             ];
+            if (props.config.app.useCloudFront.customDomain.enabled) {
+                const customDomainHost = props.config.app.useCloudFront.customDomain.domainHost;
+                callbackUrls.push(`https://${customDomainHost}`, `https://${customDomainHost}/`);
+            }
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
-             * if SAML is enabled.
+             * when Cognito federation (SAML or OIDC) is enabled.
              */
-            if (props.config.app.authProvider.useCognito.useSaml) {
+            if (
+                props.config.app.authProvider.useCognito.useSaml ||
+                props.config.app.authProvider.useCognito.useOidc
+            ) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
                     this,
                     "CustomCognitoWebClientConfig",
                     {
                         name: "Web",
+                        config: props.config,
                         clientId: props.authResources.cognito.webClientId,
                         userPoolId: props.authResources.cognito.userPoolId,
                         callbackUrls: callbackUrls,
                         logoutUrls: callbackUrls,
-                        identityProviders: ["COGNITO", samlSettings.name],
+                        identityProviders: [
+                            "COGNITO",
+                            props.config.app.authProvider.useCognito.useOidc
+                                ? oidcSettings.name
+                                : samlSettings.name,
+                        ],
                     }
                 );
                 customCognitoWebClientConfig.node.addDependency(website);
@@ -274,8 +308,9 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webAppBucket,
                 webAppAccessLogsBucket,
                 webSiteBuildPath: props.webAppBuildPath,
-                webAcl: props.ssmWafArn,
+                webAcl: props.ssmWafArnRegional,
                 apiUrl: props.apiUrl,
+                apiStageName: Config.API_GATEWAY_STAGE_NAME,
                 csp: cspPolicy,
                 vpc: webAppDistroNetwork.vpc,
                 albSubnets: webAppDistroNetwork.subnets.webApp,
@@ -308,27 +343,35 @@ export class StaticWebBuilderNestedStack extends NestedStack {
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
              */
             const callbackUrls = [
-                "http://localhost:3000",
-                "http://localhost:3000/",
+                ...localhostAuthCallbackUrls(props.config),
                 `${website.endPointURL}`,
                 `${website.endPointURL}/`,
             ];
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
-             * if SAML is enabled.
+             * when Cognito federation (SAML or OIDC) is enabled.
              */
-            if (props.config.app.authProvider.useCognito.useSaml) {
+            if (
+                props.config.app.authProvider.useCognito.useSaml ||
+                props.config.app.authProvider.useCognito.useOidc
+            ) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
                     this,
                     "CustomCognitoWebClientConfig",
                     {
                         name: "Web",
+                        config: props.config,
                         clientId: props.authResources.cognito.webClientId,
                         userPoolId: props.authResources.cognito.userPoolId,
                         callbackUrls: callbackUrls,
                         logoutUrls: callbackUrls,
-                        identityProviders: ["COGNITO", samlSettings.name],
+                        identityProviders: [
+                            "COGNITO",
+                            props.config.app.authProvider.useCognito.useOidc
+                                ? oidcSettings.name
+                                : samlSettings.name,
+                        ],
                     }
                 );
                 customCognitoWebClientConfig.node.addDependency(website);

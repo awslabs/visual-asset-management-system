@@ -1,0 +1,29 @@
+{
+    "pipelineName": "Isaac Lab RL Training",
+    "category": "VLA Training",
+    "description": "Isaac Lab RL Training Pipeline - Train reinforcement learning policies using NVIDIA Isaac Lab on AWS Batch with GPU acceleration.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "28800",
+        "taskHeartbeatTimeout": "3600",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": true
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": false,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        }
+    }
+}

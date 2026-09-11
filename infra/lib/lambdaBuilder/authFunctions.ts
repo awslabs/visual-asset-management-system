@@ -18,15 +18,15 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     kmsKeyPolicyStatementGenerator,
     setupSecurityAndLoggingEnvironmentAndPermissions,
+    isCognitoMfaCheckEnabled,
 } from "../helper/security";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
 
 interface AuthFunctions {
-    authConstraintsService: lambda.Function;
-    authConstraintsTemplateService: lambda.Function;
     authLoginProfile: lambda.Function;
     routes: lambda.Function;
     cognitoUserService: lambda.Function;
@@ -43,24 +43,6 @@ export function buildAuthFunctions(
     subnets: ec2.ISubnet[]
 ): AuthFunctions {
     return {
-        authConstraintsService: buildAuthConstraintsFunction(
-            scope,
-            lambdaCommonBaseLayer,
-            storageResources,
-            authResources,
-            config,
-            vpc,
-            subnets
-        ),
-        authConstraintsTemplateService: buildAuthConstraintsTemplateFunction(
-            scope,
-            lambdaCommonBaseLayer,
-            storageResources,
-            authResources,
-            config,
-            vpc,
-            subnets
-        ),
         authLoginProfile: buildAuthLoginProfile(
             scope,
             lambdaCommonBaseLayer,
@@ -101,7 +83,6 @@ export function buildAuthConstraintsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -129,6 +110,7 @@ export function buildAuthConstraintsFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -136,7 +118,6 @@ export function buildAuthConstraintsTemplateFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -164,6 +145,7 @@ export function buildAuthConstraintsTemplateFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -193,7 +175,6 @@ export function buildAuthLoginProfile(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
             EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled
                 ? config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl
                 : "", //Optional environment field they may get used for customConfigCommon method
@@ -206,6 +187,7 @@ export function buildAuthLoginProfile(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -243,6 +225,7 @@ export function buildRoutesService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -308,6 +291,7 @@ export function buildCognitoUserService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -336,20 +320,18 @@ export function buildApiKeyServiceFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            API_KEY_STORAGE_TABLE_NAME: storageResources.dynamo.apiKeyStorageTable.tableName,
-            USER_ROLES_STORAGE_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.apiKeyStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
-export function buildApiGatewayAuthorizerHttpFunction(
+export function buildApiGatewayAuthorizerRestFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
     storageResources: storageResources,
@@ -357,7 +339,7 @@ export function buildApiGatewayAuthorizerHttpFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "apiGatewayAuthorizerHttp";
+    const name = "apiGatewayAuthorizerRest";
 
     // Determine auth mode based on configuration
     const authMode = config.app.authProvider.useCognito.enabled
@@ -366,9 +348,18 @@ export function buildApiGatewayAuthorizerHttpFunction(
         ? "external"
         : "cognito";
 
+    // Front type lets the authorizer resolve the true client IP (not the proxy IP)
+    // when behind CloudFront/ALB. See backend clientIp.resolve_client_ip.
+    const fronted = config.app.useCloudFront.enabled
+        ? "cloudfront"
+        : config.app.useAlb.enabled
+        ? "alb"
+        : "none";
+
     // Build environment variables
     const environment: { [key: string]: string } = {
         AUTH_MODE: authMode,
+        API_FRONTED: fronted,
         ALLOWED_IP_RANGES: JSON.stringify(
             config.app.authProvider.authorizerOptions.allowedIpRanges || []
         ),
@@ -379,8 +370,12 @@ export function buildApiGatewayAuthorizerHttpFunction(
     if (config.app.authProvider.useCognito.enabled) {
         environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Will be replaced in nested stack
         environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
-        environment.COGNITO_BASE_URL = `https://${Service("COGNITO_IDP").Endpoint}`;
+        environment.COGNITO_BASE_URL = `https://${Service("COGNITO_IDP", false).Endpoint}`;
     }
+
+    // MFA-preference check reachability (partition/VPC-aware; the authorizer resolves the
+    // user's MFA status once and passes it to handlers via the authorizer context)
+    environment.COGNITO_AUTH_ENABLED = isCognitoMfaCheckEnabled(config) ? "TRUE" : "FALSE";
 
     // Add External IDP-specific environment variables
     if (config.app.authProvider.useExternalOAuthIdp.enabled) {
@@ -390,10 +385,7 @@ export function buildApiGatewayAuthorizerHttpFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
-    // Add API Key authentication environment variables
-    environment.API_KEY_STORAGE_TABLE_NAME = storageResources.dynamo.apiKeyStorageTable.tableName;
-    environment.USER_ROLES_STORAGE_TABLE_NAME =
-        storageResources.dynamo.userRolesStorageTable.tableName;
+    // API Key authentication table names resolved via SSM (no env vars needed)
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -413,8 +405,9 @@ export function buildApiGatewayAuthorizerHttpFunction(
         environment: environment,
     });
 
-    // Grant API Gateway invoke permissions
-    fun.grantInvoke(Service("APIGATEWAY").Principal);
+    // API Gateway invokes this authorizer through the credentials role named as
+    // authorizerCredentials on both OpenAPI security schemes (see rest-api-gateway-construct),
+    // which holds the invoke grant, so the function carries no resource-based invoke policy.
 
     // Grant API key table read access for authorizer lookups
     storageResources.dynamo.apiKeyStorageTable.grantReadData(fun);
@@ -425,74 +418,7 @@ export function buildApiGatewayAuthorizerHttpFunction(
 
     // Add global permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-
-    return fun;
-}
-
-export function buildApiGatewayAuthorizerWebsocketFunction(
-    scope: Construct,
-    lambdaAuthorizerLayer: LayerVersion,
-    storageResources: storageResources,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const name = "apiGatewayAuthorizerWebsocket";
-
-    // Determine auth mode based on configuration
-    const authMode = config.app.authProvider.useCognito.enabled
-        ? "cognito"
-        : config.app.authProvider.useExternalOAuthIdp.enabled
-        ? "external"
-        : "cognito";
-
-    // Build environment variables
-    const environment: { [key: string]: string } = {
-        AUTH_MODE: authMode,
-        ALLOWED_IP_RANGES: JSON.stringify(
-            config.app.authProvider.authorizerOptions.allowedIpRanges || []
-        ),
-        IGNORED_PATHS: JSON.stringify(CUSTOM_AUTHORIZER_IGNORED_PATHS),
-    };
-
-    // Add Cognito-specific environment variables
-    if (config.app.authProvider.useCognito.enabled) {
-        environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Will be replaced in nested stack
-        environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
-    }
-
-    // Add External IDP-specific environment variables
-    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
-        environment.JWT_ISSUER_URL =
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
-        environment.JWT_AUDIENCE =
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
-    }
-
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.auth.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaAuthorizerLayer],
-        timeout: Duration.minutes(1),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined,
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: environment,
-    });
-
-    // Grant API Gateway invoke permissions
-    fun.grantInvoke(Service("APIGATEWAY").Principal);
-
-    // Add global permissions
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;

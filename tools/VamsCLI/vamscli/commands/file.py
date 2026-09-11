@@ -9,7 +9,9 @@ from typing import List, Optional
 
 import click
 
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.decorators import (
+    requires_setup_and_auth, get_profile_manager_from_context, invoked_from_another_command
+)
 from ..utils.json_output import output_status, output_result, output_error
 from ..utils.logging import log_debug
 from ..utils.exceptions import (
@@ -226,7 +228,11 @@ def file():
 def upload(ctx: click.Context, files_or_directory, database_id, asset_id, directory, asset_preview,
            asset_location, recursive, parallel_uploads, retry_attempts, force_skip,
            json_input, json_output, hide_progress):
-    """Upload files to an asset."""
+    """Upload files to an asset.
+
+    Exits non-zero when any file failed to upload, so a partial transfer is distinguishable from a
+    complete one. The response still reports `overall_success`, `successful_files` and `failed_files`.
+    """
     try:
         # Parse JSON input if provided
         json_data = parse_json_input(json_input) if json_input else {}
@@ -512,7 +518,18 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             success_message=success_msg,
             cli_formatter=format_upload_result
         )
-        
+
+        # A partial or wholly failed transfer must not exit 0. At the shell level an exit code is the
+        # only signal a `set -e` script or a connector (which checks the code, not the payload) can
+        # act on, and treating an incomplete upload as success leaves downstream steps running
+        # against an asset missing files. The payload is emitted first, so `failed_files` and the
+        # per-file errors are still on stdout for a JSON consumer. Under another command's
+        # `ctx.invoke()` the result is returned instead (Rule 16), because that caller owns the
+        # decision.
+        if not result["overall_success"] and not invoked_from_another_command(ctx):
+            log_debug(f"Upload command completed with failures: {result['failed_files']} file(s)")
+            sys.exit(1)
+
         # Return result for programmatic use (Rule 16)
         log_debug("Upload command completed successfully")
         return result
@@ -776,8 +793,32 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 archived = " (archived)" if item.get('isArchived') else ""
                 size_info = f" ({item.get('size', 0)} bytes)" if not item.get('isFolder') else ""
                 primary_type = f" [{item.get('primaryType')}]" if item.get('primaryType') else ""
-                
-                lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
+
+                change_info = ""
+                if item.get('changeSource'):
+                    change_info = f" [{item.get('changeSource')}"
+                    if item.get('changeUserId'):
+                        change_info += f" by {item.get('changeUserId')}"
+                    change_info += "]"
+
+                lines.append(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{change_info}{archived}")
+
+                # Indented detail sub-lines for fields returned by the API
+                if item.get('dateCreatedCurrentVersion'):
+                    lines.append(f"      Created (current version): {item.get('dateCreatedCurrentVersion')}")
+                if not item.get('isFolder'):
+                    if item.get('versionId'):
+                        lines.append(f"      Version ID: {item.get('versionId')}")
+                    if item.get('etag'):
+                        lines.append(f"      ETag: {item.get('etag')}")
+                    if item.get('storageClass'):
+                        lines.append(f"      Storage Class: {item.get('storageClass')}")
+                    if item.get('previewFile'):
+                        lines.append(f"      Preview File: {item.get('previewFile')}")
+                    if item.get('currentAssetVersionFileVersionMismatch'):
+                        lines.append("      Version Mismatch: file version does not match the current asset version")
+                    if item.get('isPermanentlyDeleted'):
+                        lines.append("      Permanently Deleted: file no longer exists in storage")
             
             # Show nextToken for manual pagination
             if not data.get('autoPaginated') and data.get('NextToken'):
@@ -1176,6 +1217,8 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     lines.append(f"Primary Type: {data.get('primaryType')}")
             
             lines.append(f"Last Modified: {data.get('lastModified', 'N/A')}")
+            if not data.get('isFolder'):
+                lines.append(f"ETag: {data.get('etag', 'N/A')}")
             lines.append(f"Storage Class: {data.get('storageClass', 'N/A')}")
             lines.append(f"Archived: {'Yes' if data.get('isArchived') else 'No'}")
             
@@ -1194,6 +1237,20 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     if version.get('assetVersionIds'):
                         labels = [av.get('label', av.get('id', '')) if isinstance(av, dict) else f"v{av}" for av in version['assetVersionIds']]
                         lines.append(f"    Asset Versions: {', '.join(labels)}")
+                    if version.get('changeSource'):
+                        lines.append(f"    Change Source: {version.get('changeSource')}")
+                    if version.get('changeUserId'):
+                        lines.append(f"    Changed By: {version.get('changeUserId')}")
+                    if version.get('changeWorkflowId'):
+                        lines.append(f"    Change Workflow: {version.get('changeWorkflowId')}")
+                    if version.get('changeWorkflowExecutionId'):
+                        lines.append(f"    Change Execution: {version.get('changeWorkflowExecutionId')}")
+                    if version.get('changeAssetFilePathFrom'):
+                        src_db = version.get('changeDatabaseIdFrom', '')
+                        src_asset = version.get('changeAssetIdFrom', '')
+                        lines.append(f"    Changed From: {src_db}/{src_asset}/{version.get('changeAssetFilePathFrom')}")
+                    if version.get('changeAssetFileVersionFrom'):
+                        lines.append(f"    Changed From Version: {version.get('changeAssetFileVersionFrom')}")
 
             return '\n'.join(lines)
         

@@ -1,0 +1,29 @@
+{
+    "pipelineName": "NVIDIA Cosmos Transfer 2B",
+    "category": "WFM",
+    "description": "NVIDIA Cosmos Transfer 2B - Style/content transfer with control signals (edge, depth, segmentation, blur)",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "28800",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": false
+        },
+        "requireTemplate": false,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.mp4", "*.mov", "*.avi"],
+            "exclude": []
+        }
+    }
+}

@@ -11,12 +11,14 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
-from common.validators import validate
+from common.apiRoutes import API_COGNITO_USER_RESET_PASSWORD
+from common.validators import validate, normalize_userid, find_confusable_userid
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_changes
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
     validation_error, general_error, authorization_error,
     VAMSGeneralErrorResponse
@@ -37,6 +39,9 @@ retry_config = Config(
 
 cognito_client = boto3.client('cognito-idp', config=retry_config)
 logger = safeLogger(service_name="CognitoUserService")
+
+# Largest page Cognito's ListUsers accepts.
+COGNITO_LIST_USERS_PAGE_SIZE = 60
 
 # Global variables for claims and roles
 claims_and_roles = {}
@@ -66,6 +71,28 @@ def check_cognito_enabled():
     if not user_pool_id:
         logger.error("User pool ID not configured")
         raise VAMSGeneralErrorResponse("Cognito configuration error")
+
+
+def find_confusable_pool_userid(user_id):
+    """Return an existing pool username that reads the same as user_id, or None.
+
+    Cognito serves at most 60 usernames per page and offers no comparison the check could push down,
+    so the pool is walked to exhaustion. Only user creation runs this, once per created user; a
+    failure to enumerate propagates, since an unverified id must not be created.
+    """
+    params = {
+        'UserPoolId': user_pool_id,
+        'Limit': COGNITO_LIST_USERS_PAGE_SIZE
+    }
+    while True:
+        response = cognito_client.list_users(**params)
+        existing = [user.get('Username', '') for user in response.get('Users', [])]
+        collision = find_confusable_userid(user_id, existing)
+        if collision is not None:
+            return collision
+        if 'PaginationToken' not in response:
+            return None
+        params['PaginationToken'] = response['PaginationToken']
 
 
 def extract_user_attributes(user):
@@ -173,13 +200,23 @@ def create_cognito_user(user_data, claims_and_roles):
     try:
         check_cognito_enabled()
         
-        user_id = user_data['userId']
+        user_id = normalize_userid(user_data['userId'])
         email = user_data['email']
         # Handle both 'phone' and 'phoneNumber' keys for compatibility
         phone = user_data.get('phone') or user_data.get('phoneNumber')
-        
+
         logger.info(f"Creating Cognito user {user_id} with email {email} and phone {phone}")
-        
+
+        # Uniqueness of appearance, checked at creation only: an id already in the pool keeps
+        # working, and this is the last point where the author can still pick another one. Casbin
+        # compares exact strings, so the cost of a lookalike is that an operator reading the
+        # user-roles list, the constraint editor or an audit record cannot tell the two apart.
+        confusable_user_id = find_confusable_pool_userid(user_id)
+        if confusable_user_id is not None:
+            logger.error(f"userId {user_id} reads the same as the existing user {confusable_user_id}")
+            raise VAMSGeneralErrorResponse(
+                "User ID is too similar to an existing user. Choose a different user ID.")
+
         # Build user attributes
         user_attributes = [
             {'Name': 'email', 'Value': email},
@@ -212,7 +249,10 @@ def create_cognito_user(user_data, claims_and_roles):
             operation="create",
             timestamp=now
         )
-        
+
+    except VAMSGeneralErrorResponse:
+        # Re-raise VAMS errors, so the reason creation was refused reaches the caller
+        raise
     except ClientError as e:
         error_code = e.response['Error']['Code']
         logger.exception(f"Cognito error creating user: {error_code}")
@@ -230,11 +270,14 @@ def create_cognito_user(user_data, claims_and_roles):
 def update_cognito_user(user_id, update_data, claims_and_roles):
     """Update an existing Cognito user's email and/or phone
     
+    The update is partial: an attribute the request does not mention keeps the value it has.
+    Removing the stored phone number therefore takes the explicit clearPhone instruction.
+    
     Args:
         user_id: The user ID to update
-        update_data: Dictionary with update data (email and/or phone)
+        update_data: Dictionary with update data (email and/or phone, and clearPhone)
         claims_and_roles: User claims and roles for authorization
-        
+    
     Returns:
         CognitoUserOperationResponseModel with operation result
     """
@@ -243,6 +286,7 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
         
         # Handle both 'phone' and 'phoneNumber' keys for compatibility
         phone = update_data.get('phone') or update_data.get('phoneNumber')
+        clear_phone = bool(update_data.get('clearPhone'))
         
         logger.info(f"Updating Cognito user {user_id} with email {update_data.get('email')} and phone {phone}")
         
@@ -255,7 +299,8 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
                 {'Name': 'email_verified', 'Value': 'true'}
             ])
         
-        # Handle phone number - if phone has a value, set it; otherwise clear it
+        # Handle phone number - a value replaces it, clearPhone removes it, and a request
+        # carrying neither leaves the stored number alone
         if phone:
             # Phone number provided - update it and mark as verified
             user_attributes.extend([
@@ -263,8 +308,8 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
                 {'Name': 'phone_number_verified', 'Value': 'true'}
             ])
             logger.info(f"Adding phone number attribute: {phone}")
-        else:
-            # Phone number not provided or empty - set to empty and mark as not verified
+        elif clear_phone:
+            # Removal asked for explicitly - set to empty and mark as not verified
             user_attributes.extend([
                 {'Name': 'phone_number', 'Value': ''},
                 {'Name': 'phone_number_verified', 'Value': 'false'}
@@ -349,94 +394,63 @@ def delete_cognito_user(user_id, claims_and_roles):
 
 
 def reset_user_password(user_id, claims_and_roles):
-    """Reset a Cognito user's password by deleting and recreating the user
-    
-    This approach ensures password reset works regardless of user state (CONFIRMED, FORCE_CHANGE_PASSWORD, etc.)
-    by deleting the user and recreating them with the same email and phone number.
-    Cognito will send a new welcome email with a temporary password.
-    
+    """Reset a Cognito user's password
+
+    Starts the Cognito password reset flow with admin_reset_user_password, which puts the
+    account into RESET_REQUIRED state and emails the user a password reset code. An account
+    that has never completed a first sign-in has no password to reset, so for those Cognito
+    resends the invitation message with a new temporary password. The account itself is left
+    in place on both paths, along with its email, phone and other attributes.
+
     Args:
         user_id: The user ID to reset password for
         claims_and_roles: User claims and roles for authorization
-        
+
     Returns:
         CognitoUserOperationResponseModel with operation result
     """
     try:
         check_cognito_enabled()
-        
-        logger.info(f"Resetting password for Cognito user {user_id} via delete/recreate")
-        
-        # Step 1: Get current user attributes to preserve email and phone
+
+        logger.info(f"Resetting password for Cognito user {user_id}")
+
         try:
-            user_response = cognito_client.admin_get_user(
+            cognito_client.admin_reset_user_password(
                 UserPoolId=user_pool_id,
                 Username=user_id
             )
-            
-            # Extract current attributes
-            current_attributes = {}
-            for attr in user_response.get('UserAttributes', []):
-                current_attributes[attr['Name']] = attr['Value']
-            
-            email = current_attributes.get('email')
-            phone = current_attributes.get('phone_number')
-            
-            logger.info(f"Retrieved user attributes - email: {email}, phone: {phone}")
-            
+            logger.info(f"Started the password reset flow for user {user_id}")
+            delivery_detail = "A password reset code has been sent to their email."
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'UserNotFoundException':
                 raise VAMSGeneralErrorResponse("User not found")
-            raise
-        
-        # Step 2: Delete the user
-        try:
-            cognito_client.admin_delete_user(
-                UserPoolId=user_pool_id,
-                Username=user_id
-            )
-            logger.info(f"Deleted user {user_id}")
-        except ClientError as e:
-            logger.exception(f"Error deleting user during reset: {e}")
-            raise VAMSGeneralErrorResponse("Error resetting password - could not delete user")
-        
-        # Step 3: Recreate the user with same email and phone
-        try:
-            user_attributes = [
-                {'Name': 'email', 'Value': email},
-                {'Name': 'email_verified', 'Value': 'true'}
-            ]
-            
-            if phone:
-                user_attributes.extend([
-                    {'Name': 'phone_number', 'Value': phone},
-                    {'Name': 'phone_number_verified', 'Value': 'true'}
-                ])
-            
+            if error_code not in ('NotAuthorizedException', 'InvalidParameterException'):
+                raise
+
+            # The reset code flow needs an account that has completed its first sign-in and
+            # has a verified email or phone; otherwise the invitation message is resent
+            logger.info(f"Password reset flow unavailable for user {user_id} ({error_code}), resending invitation")
             cognito_client.admin_create_user(
                 UserPoolId=user_pool_id,
                 Username=user_id,
-                UserAttributes=user_attributes,
+                MessageAction='RESEND',
                 DesiredDeliveryMediums=['EMAIL']
             )
-            logger.info(f"Recreated user {user_id} with new temporary password")
-            
-        except ClientError as e:
-            logger.exception(f"Error recreating user during reset: {e}")
-            raise VAMSGeneralErrorResponse("Error resetting password - could not recreate user")
-        
+            logger.info(f"Resent the invitation message for user {user_id}")
+            delivery_detail = "A new temporary password has been sent to their email."
+
         logger.info(f"Successfully reset password for Cognito user {user_id}")
-        
+
         now = datetime.utcnow().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
-            message=f"Password reset successfully for user {user_id}. A new temporary password has been sent to their email.",
+            message=f"Password reset successfully for user {user_id}. {delivery_detail}",
             userId=user_id,
             operation="resetPassword",
             timestamp=now
         )
-        
+
     except VAMSGeneralErrorResponse:
         # Re-raise VAMS errors
         raise
@@ -527,12 +541,15 @@ def handle_post_request(event):
     
     try:
         # Check if this is a password reset request
-        if 'resetPassword' in path:
+        if API_COGNITO_USER_RESET_PASSWORD.matches(path):
             # Password reset request
             user_id = path_parameters.get('userId')
             if not user_id:
                 return validation_error(body={'message': "userId is required"}, event=event)
-            
+
+            # The stored id is the normalized one, so the lookup normalizes too
+            user_id = normalize_userid(user_id)
+
             # Validate userId
             (valid, message) = validate({
                 'userId': {
@@ -546,21 +563,33 @@ def handle_post_request(event):
             
             # Parse request body for confirmation
             body = event.get('body')
-            if body:
-                if isinstance(body, str):
-                    try:
-                        body = json.loads(body)
-                    except json.JSONDecodeError as e:
-                        logger.exception(f"Invalid JSON in request body: {e}")
-                        return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
-                
-                # Parse and validate reset request
+            if isinstance(body, str):
                 try:
-                    request_model = parse(body, model=ResetPasswordRequestModel)
-                except ValidationError as v:
-                    logger.exception(f"Validation error: {v}")
-                    return validation_error(body={'message': str(v)}, event=event)
-            
+                    body = json.loads(body) if body.strip() else {}
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+
+            # An absent, null or empty body carries no confirmation
+            if body is None:
+                body = {}
+
+            if not isinstance(body, dict):
+                logger.error("Request body is not a string or dict")
+                return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
+
+            # Parse and validate reset request
+            try:
+                request_model = parse(body, model=ResetPasswordRequestModel)
+            except ValidationError as v:
+                logger.exception(f"Validation error: {v}")
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
+
+            # The model default is not confirmation - the reset only runs when confirmReset is sent as true
+            if not request_model.confirmReset:
+                logger.error(f"Password reset for user {user_id} requested without confirmation")
+                return validation_error(body={'message': "confirmReset must be true to reset password"}, event=event)
+
             # Reset password
             result = reset_user_password(user_id, claims_and_roles)
             
@@ -612,7 +641,7 @@ def handle_post_request(event):
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -637,6 +666,9 @@ def handle_put_request(event):
         user_id = path_parameters.get('userId')
         if not user_id:
             return validation_error(body={'message': "userId is required"}, event=event)
+        
+        # The stored id is the normalized one, so the lookup normalizes too
+        user_id = normalize_userid(user_id)
         
         # Validate userId
         (valid, message) = validate({
@@ -667,13 +699,49 @@ def handle_put_request(event):
             logger.error("Request body is not a string or dict")
             return validation_error(body={'message': "Request body cannot be parsed"}, event=event)
         
-        # Parse and validate the request model
-        request_model = parse(body, model=UpdateCognitoUserRequestModel)
+        # clearPhone is the explicit instruction to remove the stored number - the update model
+        # carries email and phone only, so the instruction is read from the body and checked here
+        clear_phone = False
+        if isinstance(body, dict) and 'clearPhone' in body:
+            # The dispatcher takes string values, so the JSON boolean is rendered before it is
+            # checked - passed raw it is refused as the wrong type rather than read as a boolean
+            instruction = str(body['clearPhone'])
+            (valid, message) = validate({
+                'clearPhone': {
+                    'value': instruction,
+                    'validator': 'BOOL'
+                }
+            })
+            if not valid:
+                logger.error(message)
+                return validation_error(body={'message': message}, event=event)
+            clear_phone = instruction.strip().lower() == 'true'
+
+        if clear_phone and body.get('phone'):
+            logger.error(f"Update for user {user_id} carries both a phone number and clearPhone")
+            return validation_error(
+                body={'message': "phone and clearPhone cannot both be sent"}, event=event)
+
+        if clear_phone and 'email' not in body:
+            # A request whose only instruction is the removal carries neither of the fields the
+            # update model accepts. An email the request does carry is parsed and validated,
+            # so an unusable one is reported rather than dropped
+            update_data = {'clearPhone': True}
+            audit_email = None
+            audit_phone = None
+        else:
+            # Parse and validate the request model
+            request_model = parse(body, model=UpdateCognitoUserRequestModel)
+            update_data = request_model.dict(exclude_unset=True)
+            if clear_phone:
+                update_data['clearPhone'] = True
+            audit_email = request_model.email
+            audit_phone = request_model.phone
         
         # Update the user
         result = update_cognito_user(
             user_id,
-            request_model.dict(exclude_unset=True),
+            update_data,
             claims_and_roles
         )
         
@@ -681,15 +749,16 @@ def handle_put_request(event):
         log_auth_changes(event, "cognitoUserUpdate", {
             "userId": result.userId,
             "operation": "update",
-            "email": request_model.email,
-            "phone": request_model.phone
+            "email": audit_email,
+            "phone": audit_phone,
+            "clearPhone": clear_phone
         })
         
         return success(body=result.dict())
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -714,7 +783,10 @@ def handle_delete_request(event):
         user_id = path_parameters.get('userId')
         if not user_id:
             return validation_error(body={'message': "userId is required"}, event=event)
-        
+
+        # The stored id is the normalized one, so the lookup normalizes too
+        user_id = normalize_userid(user_id)
+
         # Validate userId
         (valid, message) = validate({
             'userId': {
@@ -784,7 +856,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

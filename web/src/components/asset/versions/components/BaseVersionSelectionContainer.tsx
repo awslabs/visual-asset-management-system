@@ -83,7 +83,7 @@ export const BaseVersionSelectionContainer: React.FC<BaseVersionSelectionContain
                         {
                             id: "createdBy",
                             header: "Created By",
-                            cell: (item: AssetVersion) => item.createdBy || "System",
+                            cell: (item: AssetVersion) => item.createdBy || "SYSTEM_USER",
                         },
                         {
                             id: "comment",

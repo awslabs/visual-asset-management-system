@@ -10,21 +10,24 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
-import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
 } from "../../../../../helper/security";
-import { generateUniqueNameHash } from "../../../../../helper/security";
-import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
-import {
-    grantReadWritePermissionsToAllAssetBuckets,
-    grantReadPermissionsToAllAssetBuckets,
-} from "../../../../../helper/security";
+import { grantReadWritePermissionsToAllAssetBuckets } from "../../../../../helper/security";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
+
+// The extraction stages the downloaded input on local disk, so the budget has to cover one copy of the
+// CAD or mesh file plus the small metadata.json it writes — more than the 512 MB Lambda default.
+//
+// Disk is not the binding limit. Each format handler parses the whole file into memory, so peak memory
+// is what caps the supported file size against LAMBDA_MEMORY_SIZE; this budget only stops disk from
+// being the limit reached first. The figure matches the 3dBasic conversion so the two conversion
+// pipelines carry one budget, not because their staging needs are the same.
+const CONVERSION_EPHEMERAL_STORAGE = cdk.Size.gibibytes(4);
 
 export function buildVamsExecuteMeshCadMetadataExtractionPipelineFunction(
     scope: Construct,
@@ -48,6 +51,7 @@ export function buildVamsExecuteMeshCadMetadataExtractionPipelineFunction(
         ),
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
+        ephemeralStorageSize: CONVERSION_EPHEMERAL_STORAGE,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? vpc
@@ -65,5 +69,6 @@ export function buildVamsExecuteMeshCadMetadataExtractionPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

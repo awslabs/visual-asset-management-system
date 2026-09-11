@@ -9,12 +9,26 @@ import traceback
 from .core import run, hello
 from .utils.pipeline.objects import PipelineStatus
 from .utils.logging import set_log_level
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 set_log_level(logging.INFO)
 
 
 def main():
     hello()
+
+    # The uid the work actually runs under. The image declares a non-root USER and the Batch job
+    # definition sets no `user` override, and neither is readable from a run's outcome: a job that
+    # succeeds says nothing about which account it succeeded as.
+    logging.getLogger().info(
+        "container.runtime_uid uid=%s euid=%s", os.getuid(), os.geteuid()
+    )
 
     # run core application
     if sys.argv[1] == "localTest":
@@ -35,7 +49,9 @@ def main():
             '"outputFiles": {"bucketName": "localTest", "objectDir": "/data/output"}, '
             '"outputMetadata": {"bucketName": "localTest", "objectDir": "/data/output"}, '
             '"temporaryFiles": {"bucketName": "localTest", "objectDir": "/tmp/work"}}], '
-            '"inputMetadata":"", "inputParameters":"'
+            # localTest passes the input configuration inline (no S3); the container's
+            # manifest_io parses a non-s3 value as inline JSON. Metadata location is empty.
+            '"inputMetadataS3Location":"", "inputConfigurationS3Location":"'
             + inputParametersEscaped
             + '", '
             '"externalSfnTaskToken":"", "localTest":"True"}'
@@ -68,7 +84,8 @@ def _send_sfn_failure_on_fatal(error_msg: str):
     try:
         import boto3
         client = boto3.client(
-            "stepfunctions", region_name=os.getenv("AWS_REGION", "us-east-1")
+            "stepfunctions", region_name=os.getenv("AWS_REGION", "us-east-1"),
+            config=retry_config
         )
         # SFN cause field has a 256-char limit — truncate with indicator
         if len(error_msg) > 253:

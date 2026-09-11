@@ -6,6 +6,10 @@ The Asset Versions API provides version management for assets, including creatin
 All endpoints require a valid JWT token in the `Authorization` header. Asset version operations are subject to two-tier Casbin authorization on the parent asset.
 :::
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `comment` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## List asset versions
@@ -23,24 +27,38 @@ GET /database/{databaseId}/assets/{assetId}/getVersions
 | `databaseId` | string | Yes      | Database identifier |
 | `assetId`    | string | Yes      | Asset identifier    |
 
+### Query parameters
+
+| Parameter       | Type    | Required | Default | Description                                       |
+| --------------- | ------- | -------- | ------- | ------------------------------------------------- |
+| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000` |
+| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`          |
+| `startingToken` | string  | No       | `null`  | Pagination token from a previous response         |
+| `showArchived`  | boolean | No       | `false` | Include archived versions                         |
+
+A `maxItems` or `pageSize` above `1000` is rejected with `400`. For the token pattern, see
+[Pagination](overview.md#pagination).
+
 ### Response
 
 ```json
 {
-    "message": {
-        "versions": [
-            {
-                "assetVersionId": "v-abc123",
-                "databaseId": "my-database",
-                "assetId": "my-asset",
-                "description": "Initial version",
-                "versionAlias": "v1.0",
-                "isArchived": false,
-                "dateCreated": "2026-03-15T10:30:00Z",
-                "createdBy": "user@example.com"
-            }
-        ]
-    }
+    "versions": [
+        {
+            "Version": "1",
+            "DateModified": "2026-03-15T10:30:00Z",
+            "Comment": "Initial version",
+            "description": "",
+            "createdBy": "user@example.com",
+            "isCurrent": true,
+            "fileCount": 12,
+            "versionAlias": "v1.0",
+            "isArchived": false,
+            "assetId": "my-asset",
+            "databaseId": "my-database"
+        }
+    ],
+    "NextToken": null
 }
 ```
 
@@ -85,17 +103,22 @@ POST /database/{databaseId}/assets/{assetId}/createVersion
 
 ### Request body
 
-| Field         | Type   | Required | Description                     |
-| ------------- | ------ | -------- | ------------------------------- |
-| `description` | string | No       | Description for the new version |
-| `comment`     | string | No       | Comment for the version         |
+| Field            | Type    | Required | Description                                                                                          |
+| ---------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `comment`        | string  | Yes      | Comment for the version (1-256 characters).                                                          |
+| `useLatestFiles` | boolean | No       | When `true`, snapshot the latest files in the asset's S3 bucket. Defaults to `false`.                |
+| `files`          | array   | No       | Explicit list of files and their S3 versions to include. Required unless `useLatestFiles` is `true`. |
+| `versionAlias`   | string  | No       | Human-readable version alias (up to 64 characters).                                                  |
+
+Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the two are mutually exclusive. Each entry in `files` is an object with `relativeKey`, `versionId` (S3 version ID), and an optional `isArchived` flag.
 
 ### Request body example
 
 ```json
 {
-    "description": "Added updated floor plan",
-    "comment": "Updated building model with revised floor 3"
+    "comment": "Updated building model with revised floor 3",
+    "useLatestFiles": true,
+    "versionAlias": "v1.1"
 }
 ```
 
@@ -103,10 +126,12 @@ POST /database/{databaseId}/assets/{assetId}/createVersion
 
 ```json
 {
-    "message": {
-        "assetVersionId": "v-abc123def",
-        "message": "Asset version created successfully"
-    }
+    "success": true,
+    "message": "Asset version created successfully",
+    "assetId": "my-asset",
+    "assetVersionId": "v-abc123def",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
 
@@ -148,7 +173,12 @@ PUT /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}
 
 ```json
 {
-    "message": "Asset version updated successfully"
+    "success": true,
+    "message": "Asset version updated successfully",
+    "assetId": "my-asset",
+    "assetVersionId": "v-abc123",
+    "operation": "update",
+    "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
 
@@ -174,9 +204,22 @@ POST /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}/arch
 
 ```json
 {
-    "message": "Asset version archived successfully"
+    "success": true,
+    "message": "Asset version archived successfully",
+    "assetId": "my-asset",
+    "assetVersionId": "v-abc123",
+    "operation": "archive",
+    "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
+
+### Error responses
+
+| Status | Description                                                                                                 |
+| ------ | ----------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or an attempt to archive the current version. Set a different version as current first. |
+| `403`  | Not authorized                                                                                              |
+| `500`  | Internal server error                                                                                       |
 
 ---
 
@@ -196,7 +239,12 @@ Same as [Archive an asset version](#archive-an-asset-version).
 
 ```json
 {
-    "message": "Asset version unarchived successfully"
+    "success": true,
+    "message": "Asset version unarchived successfully",
+    "assetId": "my-asset",
+    "assetVersionId": "v-abc123",
+    "operation": "unarchive",
+    "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
 
@@ -218,11 +266,32 @@ POST /database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}
 | `assetId`        | string | Yes      | Asset identifier                |
 | `assetVersionId` | string | Yes      | Version identifier to revert to |
 
+### Request body
+
+| Field            | Type    | Required | Description                                                                        |
+| ---------------- | ------- | -------- | ---------------------------------------------------------------------------------- |
+| `comment`        | string  | Yes      | Comment for the new version created by the revert (1-256 characters).              |
+| `revertMetadata` | boolean | No       | When `true`, also revert the asset's metadata and attributes. Defaults to `false`. |
+
+### Request body example
+
+```json
+{
+    "comment": "Reverting to floor plan revision 2",
+    "revertMetadata": false
+}
+```
+
 ### Response
 
 ```json
 {
-    "message": "Asset version reverted successfully"
+    "success": true,
+    "message": "Asset version reverted successfully",
+    "assetId": "my-asset",
+    "assetVersionId": "v-abc123",
+    "operation": "revert",
+    "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
 

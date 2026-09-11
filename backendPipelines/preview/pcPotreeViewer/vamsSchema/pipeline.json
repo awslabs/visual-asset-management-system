@@ -1,0 +1,30 @@
+{
+    "pipelineName": "Point Cloud Potree Viewer",
+    "category": "Preview",
+    "description": "PotreeViewer Point Cloud Preview Pipeline - LAZ, LAS, E57, and PLY files using PDAL and PotreeConverter",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": false,
+        "allowCustomTemplateOverride": false,
+        "auxPreviewPipelineSuffix": "/PotreeViewer",
+        "inputFileFilters": {
+            "allow": ["*.laz", "*.las", "*.e57", "*.ply"],
+            "exclude": []
+        }
+    }
+}

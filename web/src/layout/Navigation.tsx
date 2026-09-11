@@ -6,11 +6,11 @@
 import React, { useEffect } from "react";
 import { useState } from "react";
 import { SideNavigation, Spinner } from "@cloudscape-design/components";
-import { webRoutes } from "../services/APIService";
+import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
 
-const navHeader = {
+const navHeader: { href: string; logo?: { alt: string; src: string } } = {
     href: "/",
 };
 
@@ -18,7 +18,7 @@ if (config.CUSTOMER_LOGO) {
     navHeader.logo = { alt: "logo", src: config.CUSTOMER_LOGO };
 }
 
-const defaultOnFollowHandler = (ev) => {};
+const defaultOnFollowHandler = (ev: any) => {};
 
 function CenterSpinner() {
     return (
@@ -41,8 +41,8 @@ function CenterSpinner() {
  * Recursively collects all link hrefs from navigation items,
  * supporting both flat items arrays and nested expandable-link-group items.
  */
-function collectRoutes(items) {
-    const routes = [];
+function collectRoutes(items: any[]): any[] {
+    const routes: any[] = [];
     for (const item of items) {
         if (item.type === "link" && item.href) {
             routes.push({
@@ -65,15 +65,15 @@ function collectRoutes(items) {
  * For expandable-link-group, filters inner items and removes the group if empty.
  * Top-level links (e.g. Home) are kept if their href is allowed.
  */
-function filterNavItems(items, allowedRoutes) {
-    const result = [];
+function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
+    const result: any[] = [];
     for (const item of items) {
         if (item.type === "divider") {
             result.push(item);
             continue;
         }
         if (item.type === "section" || item.type === "expandable-link-group") {
-            const filteredChildren = (item.items || []).filter((child) =>
+            const filteredChildren = (item.items || []).filter((child: any) =>
                 allowedRoutes.includes(child.href)
             );
             if (filteredChildren.length > 0) {
@@ -105,6 +105,11 @@ export function Navigation({
     header = navHeader,
     onFollowHandler = defaultOnFollowHandler,
     user,
+}: {
+    activeHref: any;
+    header?: any;
+    onFollowHandler?: any;
+    user: any;
 }) {
     const filteredNavItems = [
         {
@@ -127,6 +132,7 @@ export function Navigation({
             items: [
                 { type: "link", text: "Pipelines", href: "#/pipelines/" },
                 { type: "link", text: "Workflows", href: "#/workflows/" },
+                { type: "link", text: "Executions", href: "#/executions/" },
             ],
         },
         { type: "divider" },
@@ -163,25 +169,25 @@ export function Navigation({
                           },
                       ]
                     : []),
-                { type: "link", text: "API Key Management", href: "#/auth/api-keys/" },
             ],
+        },
+        {
+            type: "section",
+            text: "User",
+            items: [{ type: "link", text: "API Key Management", href: "#/auth/api-keys/" }],
         },
     ];
 
-    const [navigationItems, setNavigationItems] = useState([]);
+    const [navigationItems, setNavigationItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         const allRoutes = collectRoutes(filteredNavItems);
 
         try {
-            webRoutes({ routes: allRoutes })
-                .then((value) => {
-                    if (value[0] === false) {
-                        throw new Error("webRoutes - " + value[1]);
-                    }
-
-                    const allowedRoutes = value.allowedRoutes.map((r) => "#" + r.route__path);
+            checkWebRoutesAllowed(allRoutes)
+                .then((allowed) => {
+                    const allowedRoutes = allowed.map((r) => "#" + r.route__path);
 
                     const filtered = filterNavItems(filteredNavItems, allowedRoutes);
                     setNavigationItems(filtered);
@@ -215,7 +221,7 @@ export function Navigation({
         </div>
     ) : (
         <SideNavigation
-            header={config.CUSTOMER_LOGO ? navHeader : null}
+            header={config.CUSTOMER_LOGO ? (navHeader as any) : undefined}
             items={navigationItems}
             activeHref={activeHref}
             onFollow={onFollowHandler}

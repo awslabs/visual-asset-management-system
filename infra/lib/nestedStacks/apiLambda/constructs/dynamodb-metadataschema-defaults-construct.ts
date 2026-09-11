@@ -108,10 +108,10 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                             S: now,
                         },
                         createdBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                         modifiedBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                     },
                 },
@@ -174,10 +174,10 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                             S: now,
                         },
                         createdBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                         modifiedBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                     },
                 },
@@ -240,10 +240,10 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                             S: now,
                         },
                         createdBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                         modifiedBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                     },
                 },
@@ -309,10 +309,10 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
                             S: now,
                         },
                         createdBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                         modifiedBy: {
-                            S: "SYSTEM",
+                            S: "SYSTEM_USER",
                         },
                     },
                 },

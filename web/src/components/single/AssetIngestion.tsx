@@ -186,6 +186,25 @@ export default function AssetIngestion() {
                 throw new Error(responseData || "Failed to complete upload");
             }
 
+            // The tuple's `success` only reflects whether the CALL worked — APIService derives it by
+            // searching the message for "error". The ingest handler reports the per-file verdict
+            // separately, in `overallSuccess` and `fileResults`, and a file it rejects is deleted rather
+            // than stored. Without this check the page said "Asset uploaded successfully" for an upload
+            // that stored nothing.
+            const rejected: Array<{ relativeKey?: string; error?: string }> = Array.isArray(
+                responseData?.fileResults
+            )
+                ? responseData.fileResults.filter((r: any) => r?.success === false)
+                : [];
+            if (responseData?.overallSuccess === false || rejected.length > 0) {
+                const detail = rejected.length
+                    ? rejected
+                          .map((r) => `${r.relativeKey || "file"}: ${r.error || "no reason given"}`)
+                          .join("; ")
+                    : "the server reported the upload as unsuccessful";
+                throw new Error(`Upload was rejected and is not stored — ${detail}`);
+            }
+
             const msg: any = (
                 <div>
                     <strong>Asset uploaded successfully.</strong>
@@ -201,6 +220,7 @@ export default function AssetIngestion() {
             );
             setStatusMessage(msg);
 
+            // @ts-ignore
             console.log("Asset Upload Success", response);
             return true;
         } catch (error) {

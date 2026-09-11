@@ -1,33 +1,37 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
+import copy
 import boto3
+from botocore.config import Config
 import json
 
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
+from common.validators import validate, normalize_userid
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id
 from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 logger = safeLogger(service="CheckSubscriptionService")
-dynamodb = boto3.resource('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 
-main_rest_response = STANDARD_JSON_RESPONSE
-
+# A required table name that cannot be resolved fails the module load, so the deployment reports it
+# at cold start. Degrading to None instead let the module import and turned the failure into a boto3
+# error on a None table name for every request afterwards -- a generic 500 naming nothing.
 try:
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed loading resource names")
+    raise e
 
 
 def check_subscriptions(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     # TODO: Read this from constants.
     event_name = "Asset Version Change"
     entity_name = "Asset"
@@ -58,7 +62,8 @@ def check_subscriptions(body):
 
 
 def lambda_handler(event, context):
-    response = STANDARD_JSON_RESPONSE
+    normalize_event(event)
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
     # Parse request body
     if not event.get('body'):
@@ -68,8 +73,14 @@ def lambda_handler(event, context):
         logger.error(response)
         return response
 
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+    try:
+        if isinstance(event['body'], str):
+            event['body'] = json.loads(event['body'])
+    except json.JSONDecodeError as e:
+        logger.exception(f"Invalid JSON in request body: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+        return response
 
     try:
         httpMethod = event['requestContext']['http']['method']
@@ -79,6 +90,9 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
+
+        # The stored subscriber ids are normalized, so the id being checked is normalized too
+        event['body']['userId'] = normalize_userid(event['body']['userId'])
 
         (valid, message) = validate({
             'userId': {
@@ -98,17 +112,34 @@ def lambda_handler(event, context):
 
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
-        method_allowed_on_api = False
 
-        asset_object = get_asset_object_from_id(None, event['body']["assetId"])
-        asset_object.update({"object__type": "asset"})
+        # Route authorization runs ahead of the asset lookup, so a caller without access
+        # to the route learns nothing about whether the requested asset exists
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if (casbin_enforcer.enforceAPI(event) and
-                    casbin_enforcer.enforce(asset_object, "GET")):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
-        if method_allowed_on_api and httpMethod == 'POST':
+        if not method_allowed_on_api:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
+
+        asset_object = get_asset_object_from_id(None, event['body']["assetId"])
+        if asset_object is None:
+            response['statusCode'] = 404
+            response['body'] = json.dumps({"message": "Asset not found"})
+            return response
+
+        asset_object.update({"object__type": "asset"})
+
+        allowed = False
+        if len(claims_and_roles["tokens"]) > 0:
+            if casbin_enforcer.enforce(asset_object, "GET"):
+                allowed = True
+
+        if allowed and httpMethod == 'POST':
             return check_subscriptions(event['body'])
         else:
             response['statusCode'] = 403

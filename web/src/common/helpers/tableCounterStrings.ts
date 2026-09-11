@@ -9,15 +9,15 @@ export const getHeaderCounterText = (items = [], selectedItems = []) => {
         : `(${items.length})`;
 };
 
-export const getServerHeaderCounterText = (totalCount, selectedItems) => {
+export const getServerHeaderCounterText = (totalCount: any, selectedItems: any) => {
     return selectedItems && selectedItems.length > 0
         ? `(${selectedItems.length}/${totalCount}+)`
         : `(${totalCount}+)`;
 };
 
-export const getServerFilterCounterText = (items = [], pagesCount, pageSize) => {
+export const getServerFilterCounterText = (items: any[] = [], pagesCount: any, pageSize: any) => {
     const count = pagesCount > 1 ? `${pageSize * (pagesCount - 1)}+` : items.length + "";
     return count === "1" ? `1 match` : `${count} matches`;
 };
 
-export const getFilterCounterText = (count) => `${count} ${count === 1 ? "match" : "matches"}`;
+export const getFilterCounterText = (count: any) => `${count} ${count === 1 ? "match" : "matches"}`;

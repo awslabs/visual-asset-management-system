@@ -19,6 +19,37 @@ import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53targets from "aws-cdk-lib/aws-route53-targets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 
+// The /tmp budget of the CDK BucketDeployment Lambda that uploads the built web bundle. That
+// function downloads the bundle archive into /tmp and expands it there, holding the archive and the
+// extracted tree at once — roughly twice the size of web/dist, which is ~255 MB (about half of it
+// viewer plugins) and so already near the 512 MiB Lambda default. 4 GiB carries several times the
+// current bundle and needs raising only once web/dist grows past ~2 GB (10 GiB is the Lambda
+// maximum); ephemeral storage is billed per GB-second of the function's own runtime, so one upload
+// per deployment costs a fraction of a cent. The ALB path deploys the same bundle — keep this equal
+// to the constant in alb-s3-website-albDeploy-construct.ts.
+const WEB_DEPLOYMENT_EPHEMERAL_STORAGE = cdk.Size.gibibytes(4);
+
+// Content-Type for the bundle's `.mjs` files, which the main deployment cannot set.
+//
+// `BucketDeployment` applies `contentType` to EVERY object in that deployment, so the extension can
+// only be handled by a deployment of its own. Left to the default, the uploader derives the type
+// from the extension using Python's `mimetypes`, which has no `.mjs` entry and falls back to
+// `text/plain`. Browsers enforce strict MIME checking on module scripts and the bucket also sends
+// `X-Content-Type-Options: nosniff`, so such a file is refused with "Failed to load module script"
+// however valid its contents. That took out the PDF viewer, whose pdf.js worker is emitted as
+// `pdf.worker.min-<hash>.mjs`: it fell back to a fake worker and then failed the document load.
+//
+// The mis-typed object is only visible when the key is NEW. `aws s3 sync` compares size and time, so
+// the viewer plugins' stable `.mjs` paths kept the correct type from an earlier upload while the
+// content-hashed worker — a fresh key on every build — got the wrong one. A bucket can therefore hold
+// both, which makes this look viewer-specific when it is not.
+//
+// `text/javascript` matches the objects already stored correctly and is the type the HTML spec now
+// prescribes for JavaScript. This applies to the ALB path too: there the ALB forwards to an S3 VPC
+// endpoint, so the object's stored Content-Type is what reaches the browser either way — keep this
+// equal to the constant in alb-s3-website-albDeploy-construct.ts.
+const ES_MODULE_CONTENT_TYPE = "text/javascript";
+
 export interface CloudFrontS3WebSiteConstructProps extends cdk.StackProps {
     /**
      * The path to the build directory of the web site, relative to the project root
@@ -99,8 +130,13 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         protection: true,
                         modeBlock: true,
                     },
+                    // SAMEORIGIN (not DENY) so VAMS can frame its own same-origin
+                    // pages, which iframe-embedded viewers require (e.g. the SuperSplat
+                    // editor served under /viewers/supersplat/). External sites still
+                    // cannot frame VAMS. Keep in sync with the CSP "frame-ancestors 'self'"
+                    // directive generated in security.ts.
                     frameOptions: {
-                        frameOption: cloudfront.HeadersFrameOption.DENY,
+                        frameOption: cloudfront.HeadersFrameOption.SAMEORIGIN,
                         override: true,
                     },
                     contentTypeOptions: {
@@ -108,6 +144,13 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                     },
                     contentSecurityPolicy: {
                         contentSecurityPolicy: props.csp,
+                        override: true,
+                    },
+                    // Send the origin but not the path on a cross-origin request, and nothing at
+                    // all when downgrading to HTTP.
+                    referrerPolicy: {
+                        referrerPolicy:
+                            cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
                         override: true,
                     },
                 },
@@ -121,6 +164,21 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         {
                             header: "Cross-Origin-Opener-Policy",
                             value: "same-origin",
+                            override: true,
+                        },
+                        // Denies the hardware and payment APIs no VAMS page or bundled viewer uses.
+                        //
+                        // Deliberately NOT restricted: fullscreen and xr-spatial-tracking (the
+                        // three.js VRButton/ARButton, Babylon and PlayCanvas viewers enter WebXR),
+                        // geolocation (the Potree map builds on OpenLayers, which reads it), the
+                        // motion sensors (DeviceOrientation drives viewer camera control), and camera
+                        // (immersive-ar sessions need it). Denying any of those breaks a viewer in a
+                        // way that surfaces only when that viewer is opened.
+                        {
+                            header: "Permissions-Policy",
+                            value:
+                                "microphone=(), payment=(), usb=(), serial=(), bluetooth=(), " +
+                                "hid=(), midi=(), idle-detection=()",
                             override: true,
                         },
                     ],
@@ -196,13 +254,33 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             ""
         );
 
-        new s3deployment.BucketDeployment(this, "DeployWithInvalidation", {
+        // ES module workers, uploaded on their own so their Content-Type can be declared. See
+        // ES_MODULE_CONTENT_TYPE for why this cannot be folded into the main deployment.
+        const esModuleDeployment = new s3deployment.BucketDeployment(this, "DeployEsModules", {
+            sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
+            destinationBucket: props.webAppBucket,
+            contentType: ES_MODULE_CONTENT_TYPE,
+            exclude: ["*"],
+            include: ["*.mjs"],
+            prune: false,
+            memoryLimit: Config.LAMBDA_MEMORY_SIZE,
+            ephemeralStorageSize: WEB_DEPLOYMENT_EPHEMERAL_STORAGE,
+        });
+
+        const mainDeployment = new s3deployment.BucketDeployment(this, "DeployWithInvalidation", {
             sources: [s3deployment.Source.asset(props.webSiteBuildPath)],
             destinationBucket: props.webAppBucket,
             distribution: cloudFrontDistribution, // this assignment, on redeploy, will automatically invalidate the cloudfront cache
             distributionPaths: ["/*"],
-            memoryLimit: 1024,
+            memoryLimit: Config.LAMBDA_MEMORY_SIZE,
+            ephemeralStorageSize: WEB_DEPLOYMENT_EPHEMERAL_STORAGE,
+            exclude: ["*.mjs"],
         });
+
+        // Ordered so the ES modules are in place before this deployment invalidates `/*`; otherwise a
+        // stable `.mjs` path (the viewer plugins ship several) could be uploaded after the
+        // invalidation and stay cached at its previous version.
+        mainDeployment.node.addDependency(esModuleDeployment);
 
         // Optional: Add Route53 alias if custom domain is enabled and hosted zone ID is provided
         if (
@@ -286,7 +364,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 export function addBehaviorToCloudFrontDistribution(
     scope: Construct,
     cloudFrontDistribution: cloudfront.Distribution,
-    apiUrl: string
+    apiUrl: string,
+    apiStageName: string
 ) {
     // Add general behavior for all other /api/* routes (excluding /api/amplify-config)
     cloudFrontDistribution.addBehavior(
@@ -294,6 +373,7 @@ export function addBehaviorToCloudFrontDistribution(
         new cloudfrontOrigins.HttpOrigin(apiUrl, {
             originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+            originPath: `/${apiStageName}`,
         }),
         {
             cachePolicy: new cloudfront.CachePolicy(scope, "ApiCachePolicy", {

@@ -5,6 +5,7 @@
 
 import { useState, useCallback } from "react";
 import AssetUploadService, {
+    FileCompletionResult,
     InitializeUploadResponse,
     UploadPartResult,
 } from "../../../services/AssetUploadService";
@@ -46,6 +47,17 @@ export function useMultiSequenceUpload() {
     >(new Map());
     const [sequenceCompleteStatuses, setSequenceCompleteStatuses] = useState<
         Map<number, "pending" | "in-progress" | "completed" | "failed">
+    >(new Map());
+
+    // Files the SERVER rejected at completion, keyed by relativePath.
+    //
+    // A file whose parts uploaded cleanly has a client status of "Completed" even when completion
+    // then refuses it — the server validates at that point and DELETES what it rejects. Building the
+    // failure summary from client statuses alone therefore reported "Upload completed successfully"
+    // for an upload that stored nothing for those files. Measured live on a `.previewFile.` companion
+    // whose completion returned `success: false, error: "Error verifying base file for preview file"`.
+    const [serverRejectedFiles, setServerRejectedFiles] = useState<
+        Map<string, FileCompletionResult>
     >(new Map());
 
     /**
@@ -263,6 +275,29 @@ export function useMultiSequenceUpload() {
                     onRetry
                 );
 
+                // Record anything the server refused. Only an EXPLICIT false counts: a result
+                // omitting `success` is not evidence of failure, and treating a missing field as one
+                // would fail every upload against a deployment predating that field.
+                const refused = (response?.fileResults || []).filter(
+                    (fileResult) => fileResult?.success === false
+                );
+                if (refused.length > 0) {
+                    console.warn(
+                        `Sequence ${sequence.sequenceId}: ${refused.length} file(s) were rejected at ` +
+                            `completion and are NOT stored: ` +
+                            refused
+                                .map((r) => `${r.relativeKey} (${r.error || "no reason given"})`)
+                                .join(", ")
+                    );
+                    setServerRejectedFiles((prev) => {
+                        const next = new Map(prev);
+                        refused.forEach((fileResult) =>
+                            next.set(fileResult.relativeKey, fileResult)
+                        );
+                        return next;
+                    });
+                }
+
                 // Mark sequence as completed
                 setSequenceCompleteStatuses((prev) => {
                     const newMap = new Map(prev);
@@ -377,6 +412,7 @@ export function useMultiSequenceUpload() {
         sequenceUploadIds,
         sequenceInitStatuses,
         sequenceCompleteStatuses,
+        serverRejectedFiles,
         initializeSequence,
         completeSequence,
         createFilePartsFromSequences,

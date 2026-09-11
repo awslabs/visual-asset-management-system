@@ -29,6 +29,7 @@ export class VPCBuilderNestedStack extends NestedStack {
     public privateSubnets: ec2.ISubnet[] = []; // private + egress
     public publicSubnets: ec2.ISubnet[] = [];
     public vpceSecurityGroup: ec2.ISecurityGroup;
+    public apiGatewayVpcEndpointId?: string;
 
     private azCount: number;
 
@@ -38,20 +39,17 @@ export class VPCBuilderNestedStack extends NestedStack {
         props = { ...defaultProps, ...props };
 
         //Set how many AZ's we need. Note: GovCloud only has max 3 AZs as of 11/09/2023
-        //VisualizerPipelineReqs - 1Az - Private Subnet (Each)
-        //ALBReqs or All Lambdas or EKS - 2AZ - Private or PublicSubnet (Each)
-        //OpenSearchProvisioned - 3AZ - Private Subnet (Each)
+        //Baseline - 2AZ - any subnet type is created across at least 2 AZs for resiliency and to
+        //keep the synthesized subnet set stable across feature toggles (avoids subnet add/remove churn).
+        //OpenSearchProvisioned - configurable (2 or 3) - Private Subnet (Each)
+        //OpenSearchServerless (non-public) - 2 AZs - the AOSS VPC endpoint is placed across 2 AZs for high availability.
         if (props.config.app.openSearch.useProvisioned.enabled) {
-            this.azCount = 3;
-        } else if (
-            props.config.app.useAlb.enabled ||
-            props.config.app.useGlobalVpc.useForAllLambdas ||
-            props.config.app.pipelines.useRapidPipeline.useEks.enabled
-        ) {
+            this.azCount = props.config.app.openSearch.useProvisioned.availabilityZoneCount;
+        } else {
+            //2 AZs covers the baseline as well as a non-public Serverless collection, whose VPC endpoint
+            //requires at least 2 Availability Zones.
             this.azCount = 2;
         }
-        //Visualizer pipeline only
-        else this.azCount = 1;
 
         console.log("VPC AZ Count: ", this.azCount);
 
@@ -66,13 +64,16 @@ export class VPCBuilderNestedStack extends NestedStack {
                 vpcId: props.config.app.useGlobalVpc.optionalExternalVpcId.trim(),
             });
 
-            //Get subnet IDs provided
-            const subnetPrivateIds =
-                props.config.app.useGlobalVpc.optionalExternalPrivateSubnetIds.split(",");
-            const subnetIsolatedIds =
-                props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds.split(",");
-            const subnetPublicIds =
-                props.config.app.useGlobalVpc.optionalExternalPublicSubnetIds.split(",");
+            //Get subnet IDs provided (treat null/undefined as an empty string so split() never throws)
+            const subnetPrivateIds = (
+                props.config.app.useGlobalVpc.optionalExternalPrivateSubnetIds || ""
+            ).split(",");
+            const subnetIsolatedIds = (
+                props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds || ""
+            ).split(",");
+            const subnetPublicIds = (
+                props.config.app.useGlobalVpc.optionalExternalPublicSubnetIds || ""
+            ).split(",");
 
             //(Should run after CDK context is loaded) Resolve Subnets, Check if exists , and check for errors
             if (!props.config.env.loadContextIgnoreVPCStacks) {
@@ -280,10 +281,11 @@ export class VPCBuilderNestedStack extends NestedStack {
 
                 if (
                     props.config.app.openSearch.useProvisioned.enabled &&
-                    this.isolatedSubnets.length < 3
+                    this.isolatedSubnets.length <
+                        props.config.app.openSearch.useProvisioned.availabilityZoneCount
                 ) {
                     throw new Error(
-                        "Existing VPC and provided subnets must have at least 3 private subnets in different AZs already setup when using OpenSearch provisioned!"
+                        `Existing VPC and provided subnets must have at least ${props.config.app.openSearch.useProvisioned.availabilityZoneCount} private subnets in different AZs already setup when using OpenSearch provisioned!`
                     );
                 }
 
@@ -332,7 +334,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                         "VAMSCloudWatchVPCLogs",
                         10
                     ),
-                retention: RetentionDays.TEN_YEARS,
+                retention: RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             });
 
@@ -346,8 +348,13 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useSplatToolbox.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
+                // Only pipelines whose compute is placed in PRIVATE subnets belong here. A pipeline
+                // running in isolated subnets reaches AWS through the interface endpoints created
+                // below, so listing it would add public subnets and one NAT gateway per Availability
+                // Zone that nothing routes through.
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
             }
@@ -437,14 +444,28 @@ export class VPCBuilderNestedStack extends NestedStack {
             !props.config.env.loadContextIgnoreVPCStacks
         ) {
             ///Common endpoints needed for VAMS
-            // Create VPC endpoint for API Gateway
-            new ec2.InterfaceVpcEndpoint(this, "APIGatewayEndpoint", {
-                vpc: this.vpc,
-                privateDnsEnabled: true,
-                service: ec2.InterfaceVpcEndpointAwsService.APIGATEWAY,
-                subnets: { subnets: this.isolatedSubnets },
-                securityGroups: [vpceSecurityGroup],
-            });
+            // Create the execute-api VPC endpoint only for a PRIVATE API Gateway REST API —
+            // that is the only configuration that routes through it. A REGIONAL endpoint is
+            // public and ignores any execute-api endpoint, so it is not created there.
+            // Gated additionally on apiType (like the pipeline-specific endpoints below) so
+            // a future non-REST API type does not create an unused execute-api endpoint.
+            if (
+                props.config.app.api.apiType === Config.API_TYPE_APIGATEWAY_REST &&
+                props.config.app.api.apiGatewayRest.endpointType === "PRIVATE"
+            ) {
+                const apiGatewayEndpoint = new ec2.InterfaceVpcEndpoint(
+                    this,
+                    "APIGatewayEndpoint",
+                    {
+                        vpc: this.vpc,
+                        privateDnsEnabled: true,
+                        service: ec2.InterfaceVpcEndpointAwsService.APIGATEWAY,
+                        subnets: { subnets: this.isolatedSubnets },
+                        securityGroups: [vpceSecurityGroup],
+                    }
+                );
+                this.apiGatewayVpcEndpointId = apiGatewayEndpoint.vpcEndpointId;
+            }
 
             // Create VPC endpoint for SSM
             new ec2.InterfaceVpcEndpoint(this, "SSMEndpoint", {
@@ -509,9 +530,101 @@ export class VPCBuilderNestedStack extends NestedStack {
                 securityGroups: [vpceSecurityGroup],
             });
 
-            //Add endpoint for cognito IDP
-            if (props.config.app.authProvider.useCognito.enabled) {
-                //Currently not suppored as a VPC endpoint
+            // Create VPC endpoint for EventBridge.
+            new ec2.InterfaceVpcEndpoint(this, "EventBridgeEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.EVENTBRIDGE,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for Secrets Manager. Part of the core endpoint set rather than
+            // gated on any one feature, since secrets are read by add-on lambdas and by the
+            // pipeline container execution roles that inject tokens into batch jobs. Only the
+            // standard endpoint is created — VAMS lambdas and batch task execution roles resolve
+            // the default regional endpoint, not the secretsmanager-fips variant.
+            new ec2.InterfaceVpcEndpoint(this, "SecretsManagerEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for AWS Deadline Cloud (management API) when the DeadlineCloud
+            // execution type is enabled. The in-VPC callers are the job-callback lambda
+            // (deadline:GetJob) and the abort and error-handler lambdas that cancel a registered
+            // farm job, so the endpoint is created only when lambdas run in the VPC — job
+            // submission itself is a Step Functions service integration and never traverses
+            // the VPC. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so config
+            // validation blocks enabling the type there and this endpoint is never created in
+            // those partitions.
+            if (
+                props.config.app.useGlobalVpc.useForAllLambdas &&
+                props.config.app.pipelines.deadlineCloudExecutionTypeEnabled
+            ) {
+                new ec2.InterfaceVpcEndpoint(this, "DeadlineManagementEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: new ec2.InterfaceVpcEndpointAwsService("deadline.management"),
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            //Add endpoints for Cognito when Cognito auth is enabled. The browser signs in
+            //against cognito-idp (SRP/InitiateAuth) and exchanges tokens against
+            //cognito-identity, so an isolated VPC needs both to authenticate without
+            //internet egress. FIPS variants are added when FIPS is enabled.
+            //Amazon Cognito PrivateLink (interface endpoints) is not available in the AWS
+            //GovCloud (US), AWS European Sovereign Cloud, or ISO partitions, so these
+            //endpoints are skipped there — creating them would fail the deployment. A VPC
+            //deployment in those partitions must reach Amazon Cognito another way (see
+            //networking docs). This is a deny-list rather than an allow-list of "aws" because
+            //Cognito PrivateLink IS available in the AWS China partition (aws-cn).
+            const cognitoVpcEndpointsSupported =
+                props.config.env.partition !== "aws-us-gov" &&
+                props.config.env.partition !== "aws-eusc" &&
+                !props.config.env.partition.startsWith("aws-iso");
+            if (props.config.app.authProvider.useCognito.enabled && cognitoVpcEndpointsSupported) {
+                // // Cognito User Pools (cognito-idp)
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                // // Cognito Identity Pools (cognito-identity) — no CDK enum member, so use the
+                // // generic service constructor. Omit the prefix argument so CDK derives the
+                // // partition-aware default (e.g. "cn.com.amazonaws" + ".cn" suffix in China);
+                // // passing "com.amazonaws" explicitly would override that and break China.
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity"),
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                // // FIPS variants for FIPS or GovCloud deployments
+                // if (props.config.app.useFips) {
+                //     new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint_FIPS", {
+                //         vpc: this.vpc,
+                //         privateDnsEnabled: true,
+                //         service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP_FIPS,
+                //         subnets: { subnets: this.isolatedSubnets },
+                //         securityGroups: [vpceSecurityGroup],
+                //     });
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint_FIPS", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     // Omit the prefix so CDK derives the partition-aware default.
+                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity-fips"),
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                //}
             }
 
             //Add for all endpoints if using KMS
@@ -543,12 +656,14 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
                 props.config.app.pipelines.usePreview3dThumbnail.enabled ||
                 props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+                props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
                 // Create VPC endpoint for Batch
@@ -581,6 +696,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 // Create VPC endpoint for EFS (Cosmos Predict pipeline)
                 if (
                     props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                    props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                     props.config.app.pipelines.useNvidiaGr00t.enabled
                 ) {
                     new ec2.InterfaceVpcEndpoint(this, "EFSEndpoint", {
@@ -621,12 +737,19 @@ export class VPCBuilderNestedStack extends NestedStack {
             // and IsaacLab (isolated subnets). Only one ECS endpoint per VPC is allowed
             // when privateDnsEnabled is true, so we consolidate into a single endpoint
             // and combine the subnets from both pipeline types as needed.
+            // Private only for pipelines whose compute actually runs in the private subnets.
+            // coordinateTransform runs in isolated ones and needs no ECS endpoint at all: this is the
+            // ECS control-plane endpoint, which an EC2-launch-type container instance's agent uses, and
+            // its AWS Batch jobs are Fargate — they reach ECR, Amazon S3 and CloudWatch Logs through the
+            // isolated-subnet endpoints created above. Its five isolated-subnet peers are likewise
+            // absent from this list and run without it.
             const needsEcsPrivate =
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled;
             const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;
 

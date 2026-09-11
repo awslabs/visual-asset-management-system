@@ -1,0 +1,10 @@
+boto3
+botocore
+pyproj>=3.6,<4
+numpy>=1.26,<3
+pye57>=0.4,<0.5
+laspy[lazrs]>=2.5,<3
+open3d>=0.18,<0.20
+pyyaml>=6.0,<7
+structlog>=24.0,<27
+pydantic>=2.0,<3

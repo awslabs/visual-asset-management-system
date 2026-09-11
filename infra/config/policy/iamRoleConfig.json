@@ -1,0 +1,17 @@
+{
+    "bootstrap": {
+        "useCliCredentialsSynthesizer": false,
+        "qualifier": "",
+        "deployRoleArn": "",
+        "cloudFormationExecutionRoleArn": "",
+        "lookupRoleArn": "",
+        "fileAssetPublishingRoleArn": "",
+        "imageAssetPublishingRoleArn": "",
+        "fileAssetsBucketName": "",
+        "imageAssetsRepositoryName": ""
+    },
+    "vamsStacks": {
+        "generateReportOnly": true,
+        "precreatedRoles": {}
+    }
+}

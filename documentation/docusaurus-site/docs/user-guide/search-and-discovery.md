@@ -19,11 +19,11 @@ When you switch between Assets and Files mode, filters that do not apply to the 
 
 ## Text search
 
-The search bar at the top of the page performs a general text query across all indexed fields. Type any term and press **Enter** or click the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously.
+The search bar at the top of the page performs a general text query across all indexed fields. Type any term and press **Enter** or choose the search button. The search runs against asset names, descriptions, tags, metadata values, file paths, and other indexed fields simultaneously.
 
 The text query is combined with all other active filters using **AND** logic — results must match both the text query and any filters you have applied. For example, searching for "pump" with a database filter of "facility-db" returns only items that contain "pump" AND belong to "facility-db".
 
-Results include a relevance score. Click the information icon next to any result to see which fields matched and why the result was returned.
+Results include a relevance score. Choose the information icon next to any result to see which fields matched and why the result was returned.
 
 ![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
 
@@ -55,7 +55,7 @@ The sidebar provides several categories of filters that narrow search results in
 
 Metadata filters allow you to search by specific metadata key-value pairs attached to assets or files.
 
-1. In the **Metadata Search** panel, click **Add Filter**.
+1. In the **Metadata Search** panel, choose **Add Filter**.
 2. Enter the metadata **key** (field name).
 3. Select an **operator** (`=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `exists`).
 4. Enter the **value** to match.
@@ -79,7 +79,7 @@ VAMS provides multiple ways to view search results. Use the segmented control ab
 The default view displays results in a sortable, paginated table. Key features include:
 
 -   **Resizable columns** -- Drag column borders to adjust widths.
--   **Sortable columns** -- Click any column header to sort ascending or descending. Sorting is performed server-side.
+-   **Sortable columns** -- Choose any column header to sort ascending or descending. Sorting is performed server-side.
 -   **Sticky header** -- Column headers remain visible as you scroll.
 -   **Dual scroll bars** -- A synchronized scroll bar appears above the table when content overflows horizontally.
 -   **Clickable links** -- Asset names link to the asset detail page. Database names link to the database asset listing. In Files mode, file paths link to the asset detail page and navigate directly to that file.
@@ -108,31 +108,59 @@ Card sizes can be configured through preferences (small, medium, or large).
 ### Map view
 
 :::note
-Map view requires the **Location Services** feature to be enabled in your VAMS deployment and is only available in Assets mode.
+Map view requires the **Location Services** feature to be enabled in your VAMS deployment. It is available in both Assets and Files modes.
 :::
 
-The map view plots assets on an interactive map based on their location metadata. Assets appear on the map if they have:
+The map view plots search hits on an interactive map. A result appears on the map when VAMS can determine a location for it from its metadata. Three forms of location metadata are recognized, in this order of preference:
 
--   A **location** metadata field containing an LLA-type JSON object with `longitude` and `latitude` properties, or
--   Separate **latitude** and **longitude** metadata fields (string or number type).
+1. A geographic shape indexed for the asset or file. This is derived from the asset's or file's location metadata and is what the [Geospatial filter](#geospatial-filter) matches against.
+2. A **location** metadata field containing GeoJSON or a `{longitude, latitude, altitude}` object.
+3. Separate **latitude** and **longitude** metadata fields.
 
-When you switch to map view, location-related metadata filters are automatically added to ensure only geolocated assets are returned. Clicking a map marker opens a popup with the asset name, database, description, tags, and a **View Asset Details** button.
+:::tip[Adding a location to an asset]
+To place an asset on the map, add a `location` metadata field of type `geopoint` or `geojson`, or add `latitude` and `longitude` number fields. See [Metadata Management](metadata-management.md#metadata-value-types) for the available value types.
+:::
 
-GeoJSON polygon data is rendered as filled shapes on the map with outline borders.
+When you switch to map view, location-related metadata filters are automatically added so only geolocated results are returned. Choosing a map marker opens a popup with the entity's name, database, description, tags, and a **View Asset Details** button (or **View Parent Asset** for file results).
+
+GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
 ![Map view showing assets plotted on a geographic map](/img/asset_search_mapView__dark_20260323_v2.5.png)
+
+### Geospatial filter
+
+The **Geospatial filter** panel in the sidebar (visible when Location Services is enabled) lets you constrain results to a geographic area. Three modes are available:
+
+-   **Point + radius** — Filter to results within a circle around a (latitude, longitude) center.
+-   **Bounding box** — Filter to results inside an axis-aligned rectangle defined by the top-left and bottom-right corners.
+-   **GeoJSON** — Paste a GeoJSON Geometry, Feature, or FeatureCollection (Polygon, MultiPolygon, etc.) for arbitrary shapes.
+
+The **Relation** dropdown controls the spatial relationship between the input shape and the indexed geometry:
+
+| Relation     | Match condition                                            |
+| ------------ | ---------------------------------------------------------- |
+| `intersects` | Indexed shape overlaps the input shape (default).          |
+| `within`     | Indexed shape lies entirely inside the input shape.        |
+| `contains`   | Indexed shape fully contains the input shape.              |
+| `disjoint`   | Indexed shape has no spatial overlap with the input shape. |
+
+The geospatial filter applies in addition to all other filters; results must satisfy every active filter group.
+
+:::note[An asset on the map may still be missing from filtered results]
+The geospatial filter matches only against the indexed geographic shape, so an asset or file whose location has not been indexed as a shape is not returned by the filter. The map view is more forgiving and continues to plot such results using the other location metadata forms listed above. If an asset appears on the map but never satisfies the geospatial filter, ask your administrator to reindex the search data.
+:::
 
 ## Preview thumbnails
 
 The **Show Thumbnails** toggle in the sidebar enables inline preview images in table, card, and map views.
 
--   For **assets**, the thumbnail is loaded from the asset-level preview image. If a `previewFileKey` is available in the search index, it is used directly for faster loading without an additional API call.
+-   For **assets**, the thumbnail is loaded from the asset-level preview image.
 -   For **files**, the thumbnail shows the file-specific preview (for example, a rendered image of a 3D model or the first page of a PDF).
 
-Clicking a thumbnail opens a full-size preview modal with download options.
+Choosing a thumbnail opens a full-size preview modal with download options.
 
 :::tip
-When the **Map Thumbnails** toggle is enabled (available only in Assets mode with Location Services), a static map image column appears in the table showing the geographic location of each asset.
+When the **Map Thumbnails** toggle is enabled (and Location Services is on), a small map column appears in the table showing the geographic location of each asset or file with valid location data.
 :::
 
 ## Column customization
@@ -147,7 +175,7 @@ Column preferences are saved to your browser and persist across sessions.
 
 ## Sorting and pagination
 
--   **Sorting** is performed server-side. Click any sortable column header to sort results. The current sort field and direction are indicated in the column header.
+-   **Sorting** is performed server-side. Choose any sortable column header to sort results. The current sort field and direction are indicated in the column header.
 -   **Pagination** controls appear at the bottom of the results. Page sizes of 10, 25, 50, or 100 are available through preferences. Navigate between pages using the pagination controls.
 -   The total result count is displayed in the table header. When the count is approximate (more results exist than can be precisely counted), a `+` suffix is shown.
 
@@ -159,7 +187,7 @@ You can navigate directly to a specific file within an asset using the URL forma
 /#/databases/{databaseId}/assets/{assetId}/file/{filePath}
 ```
 
-When clicking a file path in search results (Files mode), the application navigates to the asset detail page and automatically selects the corresponding file in the file tree.
+When you choose a file path in search results (Files mode), the application navigates to the asset detail page and automatically selects the corresponding file in the file tree.
 
 ## Bulk actions
 

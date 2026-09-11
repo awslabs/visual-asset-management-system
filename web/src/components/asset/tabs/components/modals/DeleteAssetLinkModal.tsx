@@ -27,7 +27,20 @@ export function DeleteAssetLinkModal({
         try {
             setDeleteDisabled(true);
 
-            await deleteAssetLink({ relationId: assetLinkId });
+            const result: any = await deleteAssetLink({ assetLinkId });
+            if (Array.isArray(result) && result[0] === false) {
+                const status = result[2];
+                showMessage({
+                    type: "error",
+                    message:
+                        status === 403
+                            ? `Not authorized to delete this ${Synonyms.asset} link`
+                            : result[1] ||
+                              `Failed to delete ${Synonyms.asset} link. Please try again.`,
+                    dismissible: true,
+                });
+                return;
+            }
 
             showMessage({
                 type: "success",
@@ -40,22 +53,11 @@ export function DeleteAssetLinkModal({
             onSuccess();
         } catch (error: any) {
             console.error("Error deleting asset link:", error);
-
-            if (error.response?.status === 403) {
-                showMessage({
-                    type: "error",
-                    message:
-                        error.response?.data?.message ||
-                        `Not authorized to delete this ${Synonyms.asset} link`,
-                    dismissible: true,
-                });
-            } else {
-                showMessage({
-                    type: "error",
-                    message: `Failed to delete ${Synonyms.asset} link. Please try again.`,
-                    dismissible: true,
-                });
-            }
+            showMessage({
+                type: "error",
+                message: `Failed to delete ${Synonyms.asset} link. Please try again.`,
+                dismissible: true,
+            });
         } finally {
             setDeleteDisabled(false);
         }

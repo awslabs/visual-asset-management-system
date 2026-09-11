@@ -147,8 +147,11 @@ class TestProfileListCommand:
         mock_get_all_profiles.side_effect = Exception("Profile access error")
         
         result = cli_runner.invoke(cli, ['profile', 'list'])
-        
-        assert result.exit_code == 0  # Command handles error gracefully
+
+        # A reported failure must also be a non-zero exit. This previously asserted 0 as "handled
+        # gracefully", but an exit code of 0 makes the failure undetectable to a script — the message
+        # goes to stderr and `&&` continues as though the listing succeeded.
+        assert result.exit_code != 0
         assert 'Profile List Error' in result.output
         assert 'Profile access error' in result.output
 
@@ -311,10 +314,12 @@ class TestProfileDeleteCommand:
         mock_profile_manager_class.return_value = mock_profile_manager
         
         result = cli_runner.invoke(cli, ['profile', 'delete', 'nonexistent', '--force'])
-        
-        assert result.exit_code == 0
-        assert "Profile 'nonexistent' does not exist." in result.output
-        
+
+        # A no-op must not exit 0 (FIX for S6-TOOLS-019): a cleanup script that checks the exit code
+        # would otherwise read a typo'd profile name as "already gone".
+        assert result.exit_code != 0
+        assert "Profile 'nonexistent' does not exist" in result.output
+
         # Verify delete_profile was not called
         mock_profile_manager.delete_profile.assert_not_called()
     
@@ -376,9 +381,10 @@ class TestProfileInfoCommand:
         mock_profile_manager_class.return_value = mock_profile_manager
         
         result = cli_runner.invoke(cli, ['profile', 'info', 'nonexistent'])
-        
-        assert result.exit_code == 0
-        assert "Profile 'nonexistent' does not exist." in result.output
+
+        # FIX for S6-TOOLS-019: same contract as `profile delete`.
+        assert result.exit_code != 0
+        assert "Profile 'nonexistent' does not exist" in result.output
     
     def test_info_invalid_profile_name(self, cli_runner):
         """Test info for invalid profile name."""
@@ -454,8 +460,9 @@ class TestProfileCurrentCommand:
         mock_profile_manager_class.return_value = mock_profile_manager
         
         result = cli_runner.invoke(cli, ['profile', 'current'])
-        
-        assert result.exit_code == 0  # Command handles error gracefully
+
+        # As in `profile list`: the error is reported, so the exit code must say so too.
+        assert result.exit_code != 0
         assert 'Profile Current Error' in result.output
         assert 'Profile access error' in result.output
 

@@ -1311,10 +1311,125 @@ class TestAssetLinksUtilityFunctions:
         }
         
         result = format_asset_link_output(link_data, json_output=True)
-        
+
         # Should be valid JSON
         parsed = json.loads(result)
         assert parsed == link_data
+
+
+class TestAssetLinksListTreeBounds:
+    """Test the tree-ceiling and unresolved-read signals in the list output."""
+
+    @staticmethod
+    def _links_response(**overrides):
+        """A one-child tree-view response, with the fields under test overridable."""
+        response = {
+            'related': [],
+            'parents': [],
+            'children': [
+                {
+                    'assetId': 'child1',
+                    'assetName': 'Child 1',
+                    'databaseId': 'db1',
+                    'assetLinkId': '11111111-1111-1111-1111-111111111111',
+                    'children': []
+                }
+            ],
+            'unauthorizedCounts': {'related': 0, 'parents': 0, 'children': 0},
+            'unresolvedCounts': {'related': 0, 'parents': 0, 'children': 0},
+            'treeTruncated': False,
+            'message': 'Success'
+        }
+        response.update(overrides)
+        return response
+
+    def test_list_reports_a_truncated_tree(self, cli_runner, asset_links_command_mocks):
+        """A tree that hit a ceiling is called out instead of reading as complete."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.return_value = self._links_response(
+                treeTruncated=True)
+
+            result = cli_runner.invoke(asset_links, [
+                'list',
+                '-d', 'test-database',
+                '--asset-id', 'test-asset',
+                '--tree-view'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Child 1 (db1)' in result.output
+            assert 'ceiling' in result.output
+            assert 'incomplete' in result.output
+
+    def test_list_omits_the_ceiling_note_for_a_whole_tree(self, cli_runner, asset_links_command_mocks):
+        """POSITIVE CONTROL: an untruncated tree carries no ceiling note."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.return_value = self._links_response()
+
+            result = cli_runner.invoke(asset_links, [
+                'list',
+                '-d', 'test-database',
+                '--asset-id', 'test-asset',
+                '--tree-view'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Child 1 (db1)' in result.output
+            assert 'ceiling' not in result.output
+            assert 'incomplete' not in result.output
+
+    def test_list_reports_unresolved_links_apart_from_unauthorized_ones(
+            self, cli_runner, asset_links_command_mocks):
+        """Links whose asset could not be read are listed as unresolved, not unauthorized."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.return_value = self._links_response(
+                unresolvedCounts={'related': 2, 'parents': 0, 'children': 1})
+
+            result = cli_runner.invoke(asset_links, [
+                'list',
+                '-d', 'test-database',
+                '--asset-id', 'test-asset'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Unresolved Assets' in result.output
+            assert 'Related: 2' in result.output
+            assert 'Children: 1' in result.output
+            assert 'Parents:' not in result.output
+            assert 'Unauthorized Assets:' not in result.output
+
+    def test_list_omits_unresolved_section_when_every_link_resolved(
+            self, cli_runner, asset_links_command_mocks):
+        """POSITIVE CONTROL: all-zero unresolved counts add no section."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.return_value = self._links_response()
+
+            result = cli_runner.invoke(asset_links, [
+                'list',
+                '-d', 'test-database',
+                '--asset-id', 'test-asset'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Unresolved Assets' not in result.output
+
+    def test_list_surfaces_a_failed_tree_read(self, cli_runner, asset_links_command_mocks):
+        """A rejected read is reported as a validation error, not an unexpected one."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.side_effect = AssetLinkValidationError(
+                "Invalid parameters: Unable to build the asset link tree")
+
+            result = cli_runner.invoke(asset_links, [
+                'list',
+                '-d', 'test-database',
+                '--asset-id', 'test-asset',
+                '--tree-view'
+            ])
+
+            assert result.exit_code == 1
+            assert 'Validation Error' in result.output
+            assert 'Unexpected error' not in result.output
+            assert 'Unable to build the asset link tree' in result.output
 
 
 if __name__ == '__main__':

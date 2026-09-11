@@ -7,12 +7,19 @@ import boto3
 from botocore.exceptions import ClientError
 from ..logging import log
 from ...utils.pipeline.objects import PipelineExecutionParams
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = log.get_logger()
 
 task_token = os.getenv("TASK_TOKEN")
 client = boto3.client(
-    "stepfunctions", region_name=os.getenv("AWS_REGION", "us-east-1"))
+    "stepfunctions", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
 
 
 def send_task_success(output: PipelineExecutionParams):

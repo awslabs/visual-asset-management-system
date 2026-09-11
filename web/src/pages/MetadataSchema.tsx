@@ -22,6 +22,9 @@ import {
     FlashbarProps,
 } from "@cloudscape-design/components";
 import DatabaseSelectorWithModal from "../components/selectors/DatabaseSelectorWithModal";
+import DatabaseSelectionRequired from "../components/selectors/DatabaseSelectionRequired";
+import Synonyms from "../synonyms";
+import { scopeDisplayLabel } from "../common/utils/databaseScope";
 import { CreateEditSchemaModal } from "../components/metadataSchema/CreateEditSchemaModal";
 import { DeleteSchemaModal } from "../components/metadataSchema/DeleteSchemaModal";
 import {
@@ -212,6 +215,16 @@ export default function MetadataSchemaPage() {
         setDeleteModalVisible(true);
     };
 
+    // File Type Restriction exists only for file metadata and file attributes — CreateEditSchemaModal
+    // offers the field for those two entity types and clears it for the others, so a database, asset or
+    // asset-link schema can never carry one. Derived from the selected tab in the same render that
+    // selects the rows, so the column set and the data always agree. "All" keeps the column, because
+    // file schemas are listed there and their restriction is real data rather than an empty placeholder.
+    const showFileTypeRestrictionColumn =
+        selectedEntityType === "all" ||
+        selectedEntityType === "fileMetadata" ||
+        selectedEntityType === "fileAttribute";
+
     const getEntityTypeTabs = () => {
         const tabs = [
             {
@@ -233,17 +246,17 @@ export default function MetadataSchemaPage() {
         return tabs;
     };
 
-    // Show database selector if no database selected
+    // No database chosen yet: the choice is rendered inline, not as a modal. A modal can always be
+    // dismissed (Cloudscape renders the close control unconditionally), and dismissing this one left
+    // the page completely empty with no way back.
     if (!databaseId) {
         return (
-            <DatabaseSelectorWithModal
-                open={databaseSelectModalOpen}
-                setOpen={setDatabaseSelectModalOpen}
-                showGlobal={true}
-                onSelectorChange={(event: any) => {
+            <DatabaseSelectionRequired
+                title="Metadata Schemas"
+                description={`Schemas are defined per ${Synonyms.database}.`}
+                onSelect={(event: any) => {
                     const id = event?.detail?.selectedOption?.value;
                     if (id) {
-                        setDatabaseSelectModalOpen(false);
                         navigate(`/metadataschema/${id}`);
                     }
                 }}
@@ -272,7 +285,11 @@ export default function MetadataSchemaPage() {
                                 </Button>
                             </SpaceBetween>
                         }
-                        description={databaseId ? `Database: ${databaseId}` : undefined}
+                        description={
+                            databaseId
+                                ? `${Synonyms.Database}: ${scopeDisplayLabel(databaseId)}`
+                                : undefined
+                        }
                     >
                         Metadata Schemas
                     </Header>
@@ -326,22 +343,28 @@ export default function MetadataSchemaPage() {
                                             return 0;
                                         },
                                     },
-                                    {
-                                        id: "fileTypeRestriction",
-                                        header: "File Type Restriction",
-                                        cell: (item) => (
-                                            <span
-                                                style={{
-                                                    whiteSpace: "normal",
-                                                    wordBreak: "break-word",
-                                                }}
-                                            >
-                                                {item.fileKeyTypeRestriction || (
-                                                    <Box color="text-body-secondary">None</Box>
-                                                )}
-                                            </span>
-                                        ),
-                                    },
+                                    ...(showFileTypeRestrictionColumn
+                                        ? [
+                                              {
+                                                  id: "fileTypeRestriction",
+                                                  header: "File Type Restriction",
+                                                  cell: (item: MetadataSchema) => (
+                                                      <span
+                                                          style={{
+                                                              whiteSpace: "normal",
+                                                              wordBreak: "break-word",
+                                                          }}
+                                                      >
+                                                          {item.fileKeyTypeRestriction || (
+                                                              <Box color="text-body-secondary">
+                                                                  None
+                                                              </Box>
+                                                          )}
+                                                      </span>
+                                                  ),
+                                              },
+                                          ]
+                                        : []),
                                     {
                                         id: "enabled",
                                         header: "Status",

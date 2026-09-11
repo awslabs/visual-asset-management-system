@@ -2,6 +2,10 @@
 
 VamsCLI is a command-line interface for the Visual Asset Management System (VAMS), providing programmatic access to your VAMS deployment running on AWS. It supports authentication, multi-profile configuration, and comprehensive asset/file operations through an intuitive CLI.
 
+**[📖 Read the full CLI documentation](https://awslabs.github.io/visual-asset-management-system/cli/getting-started)**
+
+This README covers basic installation and a quick start. The complete CLI reference — every command and option, authentication and profile flows, automation and CI/CD patterns, and troubleshooting — lives in the official documentation site (see [Documentation](#documentation) below).
+
 ## Installation
 
 ```bash
@@ -9,7 +13,7 @@ cd tools/VamsCLI
 pip install .
 ```
 
-> **Note:** On Windows, set `PYTHONIOENCODING=utf-8` or use Windows Terminal for proper Unicode support.
+> **Note:** VamsCLI writes UTF-8 output regardless of the system code page, so no encoding configuration is required. On Windows, Windows Terminal renders its status indicators as intended.
 
 ## Quick Start
 
@@ -45,6 +49,12 @@ vamscli assets download /local/path -d my-database -a my-asset
 # Download an entire asset recursively
 vamscli assets download /local/path -d my-database -a my-asset --recursive
 
+# Archive an asset (soft delete)
+vamscli assets archive my-asset -d my-database --reason "No longer needed"
+
+# Unarchive an asset (restore from soft delete)
+vamscli assets unarchive my-asset -d my-database
+
 # Create a version
 vamscli asset-version create -d my-database -a my-asset --comment "Release v1"
 
@@ -69,12 +79,15 @@ vamscli assets --help
 | `setup`            | Configure CLI with VAMS URL                  |
 | `auth`             | Authentication and session management        |
 | `database`         | Database CRUD operations                     |
-| `assets`           | Asset management and export                  |
+| `assets`           | Asset management, archive/unarchive, export  |
 | `asset-version`    | Version management (create, archive, revert) |
 | `asset-links`      | Asset relationship management                |
 | `file`             | File upload, download, copy, move, delete    |
+| `sync`             | Directory push/pull synchronization          |
 | `metadata`         | Metadata for assets, files, databases, links |
 | `metadata-schema`  | Schema management                            |
+| `comment`          | Asset version comments                       |
+| `subscription`     | Asset event subscriptions                    |
 | `search`           | OpenSearch-powered search                    |
 | `workflow`         | Workflow execution and monitoring            |
 | `tag` / `tag-type` | Tag and tag type management                  |
@@ -96,17 +109,26 @@ vamscli assets --help
 
 ## Documentation
 
-For comprehensive CLI documentation including detailed command reference, automation patterns, and CI/CD integration:
+The official VAMS documentation site is the single source of truth for the CLI. It contains the full command reference, authentication and profile flows, automation and CI/CD patterns, and troubleshooting.
 
-**[VAMS CLI Reference Documentation](../../documentation/docusaurus-site/docs/cli/getting-started.md)**
+| Section                                                                                                    | Description                                          |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| [Getting Started](https://awslabs.github.io/visual-asset-management-system/cli/getting-started)            | Installation, first-time setup, and authentication   |
+| [Installation and Profiles](https://awslabs.github.io/visual-asset-management-system/cli/installation)     | Install methods, profiles, and configuration storage |
+| [Command Reference](https://awslabs.github.io/visual-asset-management-system/cli/command-reference)        | Index of all command groups with per-command pages   |
+| [Automation and Scripting](https://awslabs.github.io/visual-asset-management-system/cli/automation)        | JSON output, pagination, scripting, and CI/CD        |
+| [Development](https://awslabs.github.io/visual-asset-management-system/cli/development)                    | Contributing, code quality, testing, and releasing   |
+| [Troubleshooting](https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth) | Problem-solving by domain                            |
 
-To view the full documentation site locally:
+To view the documentation site locally:
 
 ```bash
 cd documentation/docusaurus-site
 npm install
 npm run start
 ```
+
+Then open `http://localhost:3000/visual-asset-management-system/cli/getting-started` in your browser. The Markdown sources live under [`documentation/docusaurus-site/docs/cli/`](../../documentation/docusaurus-site/docs/cli/).
 
 ## License
 

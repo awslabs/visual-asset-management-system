@@ -12,6 +12,7 @@ import {
     MetadataValueType,
     EditMode,
     MetadataRecord,
+    MetadataRowState,
 } from "./types/metadata.types";
 import {
     useMetadataFetch,
@@ -60,15 +61,17 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Fetch metadata schemas for offline mode
     const entityTypeForSchema =
         entityType === "asset" ? "asset" : entityType === "assetLink" ? "assetLink" : undefined;
+    const schemaFetchEnabled = mode === "offline" && !!databaseId && !!entityTypeForSchema;
     const {
         schemas,
         loading: schemasLoading,
         error: schemasError,
-    } = useMetadataSchemas(
-        databaseId,
-        entityTypeForSchema,
-        mode === "offline" && !!databaseId && !!entityTypeForSchema
-    );
+    } = useMetadataSchemas(databaseId, entityTypeForSchema, schemaFetchEnabled);
+
+    // `schemasLoading` is false on the first render, before the hook's effect runs, so it cannot
+    // distinguish "no schema fields" from "not asked yet". A resolved fetch always leaves a
+    // non-null `schemas` (empty fields included) or an error, which can.
+    const schemasSettled = !schemaFetchEnabled || schemas !== null || !!schemasError;
 
     // Search and filter state
     const [searchTerm, setSearchTerm] = useState("");
@@ -118,7 +121,10 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             filtered = filtered.filter(
                 (row) =>
                     row.metadataKey.toLowerCase().includes(lowerSearch) ||
-                    row.metadataValue.toLowerCase().includes(lowerSearch)
+                    // A row stored before the value was recorded reads back as null, so the search
+                    // treats it as empty text rather than throwing on it: filtering is not the place
+                    // an incomplete row should surface.
+                    (row.metadataValue ?? "").toLowerCase().includes(lowerSearch)
             );
         }
 
@@ -150,7 +156,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             schemas.fields.length > 0 &&
             !hasInitializedSchemas.current
         ) {
-            console.log("[MetadataContainer] Offline mode - initializing from schemas:", schemas);
+            //console.log("[MetadataContainer] Offline mode - initializing from schemas:", schemas);
 
             // Check if we already have initial data
             if (initialData.length === 0) {
@@ -177,10 +183,10 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                     metadataSchemaMultiFieldConflict: field.hasConflict,
                 }));
 
-                console.log(
-                    "[MetadataContainer] Initializing rows from schema records:",
-                    schemaRecords
-                );
+                // console.log(
+                //     "[MetadataContainer] Initializing rows from schema records:",
+                //     schemaRecords
+                // );
                 initializeRows(schemaRecords);
                 hasInitializedSchemas.current = true;
             }
@@ -188,37 +194,37 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     }, [mode, schemas, initialData, initializeRows]);
 
     useEffect(() => {
-        console.log(
-            "[MetadataContainer] useEffect called - mode:",
-            mode,
-            "hasInitializedData:",
-            hasInitializedData.current
-        );
+        // console.log(
+        //     "[MetadataContainer] useEffect called - mode:",
+        //     mode,
+        //     "hasInitializedData:",
+        //     hasInitializedData.current
+        // );
 
         // For offline mode, DON'T use initialData in dependencies
         // The useMetadataState hook handles initialization from initialData
         if (mode === "offline") {
-            console.log(
-                "[MetadataContainer] Offline mode - skipping (useMetadataState handles initialization)"
-            );
+            // console.log(
+            //     "[MetadataContainer] Offline mode - skipping (useMetadataState handles initialization)"
+            // );
             return;
         }
 
         // For online mode, only initialize when data actually changes OR when forced
         const dataStr = JSON.stringify(data);
         const dataChanged = dataStr !== lastDataRef.current;
-        console.log(
-            "[MetadataContainer] Online mode check - dataChanged:",
-            dataChanged,
-            "forceRefresh:",
-            forceRefreshFlag.current
-        );
+        // console.log(
+        //     "[MetadataContainer] Online mode check - dataChanged:",
+        //     dataChanged,
+        //     "forceRefresh:",
+        //     forceRefreshFlag.current
+        // );
 
         if (dataChanged || forceRefreshFlag.current) {
-            console.log(
-                "[MetadataContainer] Data changed or forced refresh, initializing rows:",
-                data
-            );
+            // console.log(
+            //     "[MetadataContainer] Data changed or forced refresh, initializing rows:",
+            //     data
+            // );
             initializeRows(data);
             lastDataRef.current = dataStr;
             forceRefreshFlag.current = false;
@@ -227,7 +233,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             const hasSchemaFields = data.some((record) => record.metadataSchemaField === true);
             setHasSchemas(hasSchemaFields);
         } else {
-            console.log("[MetadataContainer] Online mode - skipping initialization (no changes)");
+            //console.log("[MetadataContainer] Online mode - skipping initialization (no changes)");
         }
     }, [data, mode]);
 
@@ -248,6 +254,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Check if all required fields are filled (memoized)
     // This matches the validation logic in validateMetadataRow
     const hasRequiredFieldsFilled = useMemo(() => {
+        // Which fields are required is a property of the schema, so until it has settled there is
+        // no set of rows that can be judged complete.
+        if (!schemasSettled) {
+            return false;
+        }
+
         // Get all non-deleted rows
         const activeRows = rows.filter((row) => !row.isDeleted);
 
@@ -267,7 +279,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                     : row.metadataValue;
             return value && value.trim() !== "";
         });
-    }, [rows]);
+    }, [rows, schemasSettled]);
 
     // Notify parent when hasChanges state changes (use ref to prevent loops)
     const prevHasChangesRef = useRef<boolean>();
@@ -350,7 +362,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                 // Reset to original values
                 updateRow(index, {
                     editKey: row.metadataKey,
-                    editValue: row.metadataValue,
+                    editValue: row.metadataValue ?? "",
                     editType: row.metadataValueType,
                     hasChanges: false,
                     validationError: undefined,
@@ -368,7 +380,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle key change - only update editKey, metadataKey updates on commit
     const handleKeyChange = useCallback(
         (index: number, key: string) => {
-            console.log("[MetadataContainer] handleKeyChange called - index:", index, "key:", key);
+            //console.log("[MetadataContainer] handleKeyChange called - index:", index, "key:", key);
             updateRow(index, {
                 editKey: key,
                 hasChanges: true,
@@ -380,12 +392,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle type change - only update editType, metadataValueType updates on commit
     const handleTypeChange = useCallback(
         (index: number, type: MetadataValueType) => {
-            console.log(
-                "[MetadataContainer] handleTypeChange called - index:",
-                index,
-                "type:",
-                type
-            );
+            // console.log(
+            //     "[MetadataContainer] handleTypeChange called - index:",
+            //     index,
+            //     "type:",
+            //     type
+            // );
 
             const row = rows[index];
             const currentValue = row.editValue;
@@ -398,14 +410,14 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                 if (validation.isValid) {
                     // Value validates against new type, keep it
                     newValue = currentValue;
-                    console.log(
-                        "[MetadataContainer] Value validates against new type, preserving:",
-                        currentValue
-                    );
+                    // console.log(
+                    //     "[MetadataContainer] Value validates against new type, preserving:",
+                    //     currentValue
+                    // );
                 } else {
-                    console.log(
-                        "[MetadataContainer] Value does not validate against new type, clearing"
-                    );
+                    // console.log(
+                    //     "[MetadataContainer] Value does not validate against new type, clearing"
+                    // );
                 }
             }
 
@@ -421,12 +433,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle value change - only update editValue, metadataValue updates on commit
     const handleValueChange = useCallback(
         (index: number, value: string) => {
-            console.log(
-                "[MetadataContainer] handleValueChange called - index:",
-                index,
-                "value:",
-                value
-            );
+            // console.log(
+            //     "[MetadataContainer] handleValueChange called - index:",
+            //     index,
+            //     "value:",
+            //     value
+            // );
             const row = rows[index];
 
             // Check if value actually changed from original
@@ -445,7 +457,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle validation error change from inline components
     const handleValidationError = useCallback(
         (index: number, error: string | undefined) => {
-            console.log(
+            console.error(
                 "[MetadataContainer] handleValidationError called - index:",
                 index,
                 "error:",
@@ -595,7 +607,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
 
     // Handle bulk edit save
     const handleBulkEditSave = useCallback(
-        async (updatedRows) => {
+        async (updatedRows: MetadataRowState[]) => {
             // In bulk edit, we use REPLACE_ALL
             const metadataRecords = convertToMetadataRecords(updatedRows);
 
@@ -826,7 +838,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                 ) : (
                     <MetadataTable
                         rows={rows}
-                        loading={loading}
+                        loading={loading || !schemasSettled}
                         editMode={editMode}
                         entityType={entityType}
                         mode={mode}

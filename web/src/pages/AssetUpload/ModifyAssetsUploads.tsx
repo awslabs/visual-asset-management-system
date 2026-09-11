@@ -21,17 +21,20 @@ import Synonyms from "../../synonyms";
 import { Link } from "@cloudscape-design/components";
 import { FileUpload } from "./components";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
-import { previewFileFormats } from "../../common/constants/fileFormats";
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
 import { safeGetFile } from "../../utils/fileHandleCompat";
 import { fetchAsset, fetchDatabase } from "../../services/APIService";
-import { validateFiles, ValidationResult } from "../../utils/fileExtensionValidation";
+import {
+    validateFiles,
+    getPreviewFileExtension,
+    isPreviewExtensionAllowed,
+    ValidationResult,
+} from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
-
-// Maximum preview file size (5MB)
-const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
 
 // Constants
 const previewFileFormatsStr = previewFileFormats.join(", ");
@@ -376,14 +379,24 @@ export default function ModifyAssetsUploadsPage() {
 
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
-        return fileItems.some((item) => item.name.includes(".previewFile."));
+        return fileItems.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [fileItems]);
 
-    // Handle preview file selection with size validation
+    // Handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
         if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
             setPreviewFileError("Preview file exceeds maximum allowed size of 5MB");
             // Don't update the state with the oversized file
+            return;
+        }
+
+        if (file && !isPreviewExtensionAllowed(file.name)) {
+            setPreviewFileError(
+                `Extension ${getPreviewFileExtension(
+                    file.name
+                )} is not allowed. Preview files must be one of: ${previewFileFormatsStr}`
+            );
+            // Don't update the state with the unsupported file
             return;
         }
 
@@ -531,9 +544,10 @@ export default function ModifyAssetsUploadsPage() {
                                                     style={{ fontSize: "0.9em", marginTop: "8px" }}
                                                 >
                                                     <em>
-                                                        Note: Preview files (containing
-                                                        .previewFile. in the filename) are exempt
-                                                        from these restrictions.
+                                                        Note: Preview files (containing{" "}
+                                                        {PREVIEW_FILE_PATTERN} in the filename) are
+                                                        exempt from these restrictions, but must
+                                                        still be one of {previewFileFormatsStr}.
                                                     </em>
                                                 </div>
                                             </SpaceBetween>
@@ -546,24 +560,26 @@ export default function ModifyAssetsUploadsPage() {
                                 <Container>
                                     <Alert header="Invalid Files Selected" type="error">
                                         <SpaceBetween direction="vertical" size="xs">
-                                            <div>
-                                                The following files cannot be uploaded because their
-                                                {`extensions are not allowed for this ${Synonyms.database}:`}
-                                            </div>
+                                            <div>The following files cannot be uploaded:</div>
                                             <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
                                                 {fileValidationResult.invalidFiles.map(
                                                     (file, index) => (
                                                         <li key={index}>
-                                                            <strong>{file.fileName}</strong> -
-                                                            Extension {file.extension} not allowed
+                                                            <strong>{file.fileName}</strong> -{" "}
+                                                            {file.errorMessage ||
+                                                                `Extension ${file.extension} not allowed`}
                                                         </li>
                                                     )
                                                 )}
                                             </ul>
-                                            <div>
-                                                <strong>Allowed extensions:</strong>{" "}
-                                                {fileValidationResult.allowedExtensions?.join(", ")}
-                                            </div>
+                                            {fileValidationResult.allowedExtensions !== null && (
+                                                <div>
+                                                    <strong>Allowed extensions:</strong>{" "}
+                                                    {fileValidationResult.allowedExtensions.join(
+                                                        ", "
+                                                    )}
+                                                </div>
+                                            )}
                                         </SpaceBetween>
                                     </Alert>
                                 </Container>
@@ -585,11 +601,12 @@ export default function ModifyAssetsUploadsPage() {
                                     <SpaceBetween direction="vertical" size="l">
                                         <Alert header="Preview File Information" type="info">
                                             <p>
-                                                Files with <strong>.previewFile.</strong> in the
-                                                filename will be ingested as preview files for their
-                                                associated files. For example,{" "}
-                                                <code>model.gltf.previewFile.png</code> will be used
-                                                as a preview for <code>model.gltf</code>.
+                                                Files with <strong>{PREVIEW_FILE_PATTERN}</strong>{" "}
+                                                in the filename will be ingested as preview files
+                                                for their associated files. For example,{" "}
+                                                <code>model.gltf{PREVIEW_FILE_PATTERN}png</code>{" "}
+                                                will be used as a preview for{" "}
+                                                <code>model.gltf</code>.
                                             </p>
                                             <p>
                                                 <strong>Important notes:</strong>

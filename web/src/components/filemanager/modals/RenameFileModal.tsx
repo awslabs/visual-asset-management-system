@@ -51,17 +51,20 @@ export function RenameFileModal({
             return "Filename cannot be blank";
         }
 
-        // Check if filename has an extension (contains a dot with characters after it)
-        const lastDotIndex = filename.lastIndexOf(".");
-        if (lastDotIndex === -1 || lastDotIndex === filename.length - 1) {
-            return "Filename must have an extension (e.g., .txt, .jpg, .pdf)";
+        // A name is not a path. The destination is built by concatenating this value onto the file's
+        // directory, so a separator here relocates the file into another folder instead of renaming it.
+        if (filename.includes("/") || filename.includes("\\")) {
+            return "Filename cannot contain a path separator";
         }
 
-        // Check if there are characters before the extension
-        if (lastDotIndex === 0) {
-            return "Filename must have a name before the extension";
+        // "." and ".." address a directory rather than naming a file
+        if (filename.trim() === "." || filename.trim() === "..") {
+            return "Filename cannot be '.' or '..'";
         }
 
+        // No extension is required. VAMS accepts a file whose name carries none (LICENSE, Dockerfile,
+        // Makefile) and a name that is only an extension (.gitignore), both of which upload and index
+        // normally — so requiring one here would make such a file unrenameable after it was accepted.
         return null;
     };
 
@@ -157,7 +160,7 @@ export function RenameFileModal({
                 {/* New filename input */}
                 <FormField
                     label="New filename"
-                    description="Enter the new filename including the extension"
+                    description="Enter the new filename, including its extension if it has one"
                     errorText={error}
                 >
                     <Input

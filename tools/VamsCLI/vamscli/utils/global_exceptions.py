@@ -80,7 +80,7 @@ def handle_global_exceptions():
             # Import logging utilities
             from .logging import (
                 get_logger, log_command_start, log_command_end,
-                log_error, log_debug, _is_verbose_mode
+                log_error, log_debug, redact_to_text, _is_verbose_mode
             )
             
             logger = get_logger()
@@ -102,8 +102,10 @@ def handle_global_exceptions():
                 duration = time.time() - start_time
                 try:
                     log_command_end(command_name, True, duration)
-                    # Log result (truncate if too large)
-                    result_str = str(result)
+                    # Log result (truncate if too large). The wrapped callable's return value is the
+                    # API response body for most commands, so it is redacted before it reaches the
+                    # rotating log file (Rule 10).
+                    result_str = redact_to_text(result)
                     if len(result_str) > 1000:
                         log_debug(f"Global handler: Command '{command_name}' returned result (truncated): {result_str[:1000]}...")
                     else:
@@ -177,13 +179,10 @@ def handle_global_exceptions():
                 elif isinstance(e, click.ClickException):
                     # Let Click handle its own exceptions
                     raise
-                elif isinstance(e, KeyboardInterrupt):
-                    if _is_json_output():
-                        import json
-                        click.echo(json.dumps({"error": "Operation cancelled by user"}, indent=2))
-                    else:
-                        click.echo("\nOperation cancelled by user.")
-                    sys.exit(1)
+                # An interrupt cannot arrive here: KeyboardInterrupt derives from BaseException, so
+                # `except Exception` above never binds it. Click converts it to `Abort` under
+                # standalone_mode=False, and `main()` is the only wrapper that sees it — the
+                # cancellation payload is emitted there.
                 else:
                     # Unexpected error
                     if _is_json_output():

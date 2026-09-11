@@ -39,7 +39,7 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                     databaseId: databaseId,
                     key: assetKey,
                     versionId: versionId,
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
 
@@ -48,7 +48,8 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                         console.error("Error downloading video file:", response);
                         throw new Error("Failed to download video file");
                     } else {
-                        console.log("Successfully loaded video URL:", response[1]);
+                        // Presigned URL — log the key, not the signed URL.
+                        console.log("Successfully loaded video file:", assetKey);
                         setVideoUrl(response[1]);
                     }
                 } else {

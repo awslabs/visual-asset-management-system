@@ -10,9 +10,9 @@ python = "^3.12"
 aws-lambda-powertools = "^3.19.0"
 pyjwt = {extras = ["crypto"], version = "^2.12.1"}
 requests = "^2.32.5"
-cryptography = "^46.0.6"
+cryptography = "^50.0.1"
 joserfc = "^1.6.3"
-urllib3 = "2.6.3"
+urllib3 = "2.7.0"
 
 
 [build-system]

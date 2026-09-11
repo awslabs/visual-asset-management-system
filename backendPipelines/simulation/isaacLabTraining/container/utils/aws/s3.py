@@ -6,11 +6,18 @@
 import os
 import boto3
 from urllib.parse import urlparse
+from botocore.config import Config
+
+# Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
+# runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
+# a job, so a bare client leaves it on botocore's default mode with no rate limiting and a sustained
+# burst surfaces as a throttling error on the caller instead of being smoothed.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 
 class S3Client:
     def __init__(self):
-        self.client = boto3.client("s3")
+        self.client = boto3.client("s3", config=retry_config)
 
     def download_directory(self, s3_uri: str, local_path: str) -> None:
         """Download all objects from S3 prefix to local directory."""

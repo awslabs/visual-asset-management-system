@@ -5,23 +5,31 @@
 
 import React, { Suspense, useEffect, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import { webRoutes } from "./services/APIService";
+import { checkWebRoutesAllowed } from "./services/webRoutesCheck";
 import AppLayout from "@cloudscape-design/components/app-layout";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import { Navigation } from "./layout/Navigation";
 import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
-const Pipelines = React.lazy(() => import("./pages/Pipelines"));
-const ViewPipeline = React.lazy(() => import("./components/single/ViewPipeline"));
-const Workflows = React.lazy(() => import("./pages/Workflows"));
-const CreateUpdateWorkflow = React.lazy(
-    () => import("./components/createupdate/CreateUpdateWorkflow")
-);
+const PipelinesPage2 = React.lazy(() => import("./pages/PipelinesPage2"));
+const WorkflowsPage2 = React.lazy(() => import("./pages/WorkflowsPage2"));
+const WorkflowBuilderPage = React.lazy(() => import("./pages/WorkflowBuilderPage"));
+const PipelineBuilderPage = React.lazy(() => import("./pages/PipelineBuilderPage"));
+const TemplateListPage = React.lazy(() => import("./pages/TemplateListPage"));
+const TemplateBuilderPage = React.lazy(() => import("./pages/TemplateBuilderPage"));
+const WorkflowTriggersPage = React.lazy(() => import("./pages/WorkflowTriggersPage"));
+const ExecutionsPage = React.lazy(() => import("./pages/ExecutionsPage"));
+const ExecutionDetail = React.lazy(() => import("./pages/ExecutionDetail"));
 const Constraints = React.lazy(() => import("./pages/auth/Constraints"));
 const Tags = React.lazy(() => import("./pages/Tag/Tags"));
 const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
@@ -87,34 +95,63 @@ export const routeTable: RouteOption[] = [
     //{ path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets"},
     {
         path: "/databases/:databaseId/pipelines",
-        Page: Pipelines,
+        Page: PipelinesPage2,
         active: "#/pipelines/",
     },
-    { path: "/pipelines", Page: Pipelines, active: "#/pipelines/" },
+    { path: "/pipelines", Page: PipelinesPage2, active: "#/pipelines/" },
     {
-        path: "/pipelines/:pipelineName",
-        Page: ViewPipeline,
+        path: "/databases/:databaseId/pipelines/create",
+        Page: PipelineBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates/create",
+        Page: TemplateBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates/:templateId",
+        Page: TemplateBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates",
+        Page: TemplateListPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId",
+        Page: PipelineBuilderPage,
         active: "#/pipelines/",
     },
     {
         path: "/databases/:databaseId/workflows",
-        Page: Workflows,
+        Page: WorkflowsPage2,
         active: "#/workflows/",
     },
-    { path: "/workflows", Page: Workflows, active: "#/workflows/" },
+    { path: "/workflows", Page: WorkflowsPage2, active: "#/workflows/" },
+    { path: "/executions", Page: ExecutionsPage, active: "#/executions/" },
+    { path: "/executions/:executionId", Page: ExecutionDetail, active: "#/executions/" },
+    {
+        path: "/databases/:databaseId/workflows/:workflowId/triggers",
+        Page: WorkflowTriggersPage,
+        active: "#/workflows/",
+    },
     {
         path: "/databases/:databaseId/workflows/:workflowId",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowBuilderPage,
         active: "#/workflows/",
     },
     {
+        // Workflows are database-scoped, so the builder needs a :databaseId. The unscoped create
+        // path serves the workflows list, whose create action picks a database first.
         path: "/workflows/create",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowsPage2,
         active: "#/workflows/",
     },
     {
         path: "/databases/:databaseId/workflows/create",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowBuilderPage,
         active: "#/workflows/",
     },
     {
@@ -124,6 +161,13 @@ export const routeTable: RouteOption[] = [
     },
     {
         path: "/auth/tags",
+        Page: Tags,
+        active: "#/auth/tags/",
+    },
+    {
+        // Tag administration is scoped to one database (or GLOBAL), carried in the path the same way
+        // the metadata-schema page carries it.
+        path: "/auth/tags/:databaseId",
         Page: Tags,
         active: "#/auth/tags/",
     },
@@ -197,6 +241,30 @@ function CenterSpinner() {
     );
 }
 
+/**
+ * Rendered in place of a page whose render threw. Sits inside AppLayout's content slot so
+ * the header, side navigation and footer stay on screen and the user keeps a way out.
+ */
+export function PageErrorPanel({ onHome }: { onHome: () => void }) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="error"
+                statusIconAriaLabel="Error"
+                header="Something went wrong on this page"
+                action={
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Button onClick={onHome}>Go to Home</Button>
+                        <Button onClick={() => window.location.reload()}>Reload</Button>
+                    </SpaceBetween>
+                }
+            >
+                This page could not be displayed. The rest of the application is still available.
+            </Alert>
+        </Box>
+    );
+}
+
 export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
     const location = useLocation();
     const navigate = useNavigate();
@@ -206,21 +274,12 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     //Used to detect duplicate/stacked hash route pathing and correct
     //Note: This will null out any state passing for the naviagation and may break a a state passing page if triggered
     useEffect(() => {
-        console.log("Location changed: ", window.location.href);
-        console.log("user", user);
-
         const hashes = window.location.href.match(/#/g) || [];
-        console.log("Hash Count in URL: ", hashes.length);
 
         if (hashes.length > 1) {
-            const { state } = location;
-            console.log("Previous State Recorded: ", state);
-
             const segments = window.location.href.split("#/");
-
-            //console.log('Total URL Segments Found: ', segments);
-
             const fragmentWeWant = segments.pop();
+
             console.log(
                 "HashRoute Duplicate Detected, Re-routing to Last Hash:",
                 `#/${fragmentWeWant}`
@@ -228,8 +287,6 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
 
             const url = new URL(window.location.href);
             url.hash = `#/${fragmentWeWant}`;
-
-            console.log("Full URL Redirect:", url.href);
 
             window.location.href = url.toString();
         }
@@ -254,13 +311,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         }
 
         try {
-            webRoutes({ routes: allRoutes })
-                .then((value) => {
-                    if (value[0] === false) {
-                        throw new Error("webRoutes - " + value[1]);
-                    }
-
-                    for (const allowedRoute of value.allowedRoutes) {
+            checkWebRoutesAllowed(allRoutes)
+                .then((allowed) => {
+                    for (const allowedRoute of allowed) {
                         allAllowedRoutes.push(allowedRoute.route__path);
                     }
 
@@ -273,7 +326,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 })
                 .catch((error) => {
                     console.error(error);
-                    setAllowedRoutes([]);
+                    // Fail open to the landing page only: if the web-routes permission
+                    // API is unavailable, still render the home page (and the catch-all)
+                    // so the app is not a blank screen. Deeper routes stay gated until
+                    // the check succeeds; per-API backend authorization still protects data.
+                    setAllowedRoutes(["/", "*"]);
                     setLoading(false);
                 });
         } catch (e) {}
@@ -294,9 +351,16 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                             loading ? (
                                 <CenterSpinner />
                             ) : (
-                                <Suspense fallback={<CenterSpinner />}>
-                                    <Page />
-                                </Suspense>
+                                // Suspense catches the lazy-load promise, not a render error.
+                                // Without a boundary here an uncaught error in any page
+                                // unmounts the whole root and leaves a blank screen.
+                                <ErrorBoundary
+                                    fallback={<PageErrorPanel onHome={() => navigate("/")} />}
+                                >
+                                    <Suspense fallback={<CenterSpinner />}>
+                                        <Page />
+                                    </Suspense>
+                                </ErrorBoundary>
                             )
                         }
                         navigation={<Navigation activeHref={active} user={user} />}

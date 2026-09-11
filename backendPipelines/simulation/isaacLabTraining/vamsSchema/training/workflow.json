@@ -1,0 +1,30 @@
+{
+    "workflowName": "Isaac Lab RL Training",
+    "category": "VLA Training",
+    "description": "Automated workflow for RL policy training using Isaac Lab simulation on GPU instances.",
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": true,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false,
+        "defaultOutputFileBaseExecutionPathExtension": "/{{executionId}}/"
+    }
+}

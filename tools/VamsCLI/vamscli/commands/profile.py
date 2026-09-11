@@ -4,7 +4,7 @@ import json
 import click
 
 from ..utils.profile import ProfileManager
-from ..utils.exceptions import ProfileError, InvalidProfileNameError
+from ..utils.exceptions import ProfileError, InvalidProfileNameError, ProfileNotFoundError
 from ..utils.json_output import output_status, output_result, output_error, output_info
 from ..constants import DEFAULT_PROFILE_NAME
 
@@ -109,7 +109,10 @@ def list(json_output: bool):
     except Exception as e:
         result = {"profiles": [], "error": str(e)}
         output_error(e, json_output, error_type="Profile List Error")
-        return result
+        # Returning here would leave the exit code at 0, so a caller could not tell the listing failed.
+        # `output_error` already exits 1 in JSON mode; this covers the human-output path, matching
+        # `profile switch`, `delete` and `info` in this file.
+        raise click.ClickException(str(e))
 
 
 @profile.command()
@@ -219,19 +222,14 @@ def delete(profile_name: str, force: bool, json_output: bool):
         # Check if profile exists
         profile_manager = ProfileManager(profile_name)
         if not profile_manager.profile_exists():
-            result = {
-                "success": False,
-                "profile_name": profile_name,
-                "message": f"Profile '{profile_name}' does not exist"
-            }
-            
-            output_info(f"Profile '{profile_name}' does not exist.", json_output)
-            
-            if json_output:
-                click.echo(json.dumps(result, indent=2))
-            
-            return result
-        
+            # Reported as a failure, not as a no-op: exiting 0 makes a typo'd or already-removed
+            # profile indistinguishable from a successful delete, and a shell `if vamscli profile
+            # delete ...` never inspects the `success` field that was the only signal.
+            error = ProfileNotFoundError(f"Profile '{profile_name}' does not exist")
+            output_error(error, json_output, error_type="Profile Not Found",
+                         helpful_message="Use 'vamscli profile list' to see available profiles.")
+            raise click.ClickException(str(error))
+
         # Confirm deletion unless force is used
         if not force and not json_output:
             profile_info = profile_manager.get_profile_info()
@@ -280,6 +278,10 @@ def delete(profile_name: str, force: bool, json_output: bool):
         
         return result
         
+    except click.ClickException:
+        # Already reported through output_error by the raising branch; the catch-all below would
+        # otherwise emit the same error a second time in CLI mode.
+        raise
     except (ProfileError, InvalidProfileNameError) as e:
         output_error(e, json_output, error_type="Profile Delete Error")
         raise click.ClickException(str(e))
@@ -314,19 +316,13 @@ def info(profile_name: str, json_output: bool):
         profile_manager = ProfileManager(profile_name)
         
         if not profile_manager.profile_exists():
-            result = {
-                "profile_name": profile_name,
-                "exists": False,
-                "message": f"Profile '{profile_name}' does not exist"
-            }
-            
-            output_info(f"Profile '{profile_name}' does not exist.", json_output)
-            
-            if json_output:
-                click.echo(json.dumps(result, indent=2))
-            
-            return result
-        
+            # Same contract as `profile delete`: a missing profile is a failure, so a script can tell
+            # "no such profile" from "here is the profile".
+            error = ProfileNotFoundError(f"Profile '{profile_name}' does not exist")
+            output_error(error, json_output, error_type="Profile Not Found",
+                         helpful_message="Use 'vamscli profile list' to see available profiles.")
+            raise click.ClickException(str(error))
+
         profile_info = profile_manager.get_profile_info()
         
         result = {
@@ -419,6 +415,9 @@ def info(profile_name: str, json_output: bool):
         
         return result
         
+    except click.ClickException:
+        # Already reported through output_error by the raising branch.
+        raise
     except (ProfileError, InvalidProfileNameError) as e:
         output_error(e, json_output, error_type="Profile Info Error")
         raise click.ClickException(str(e))
@@ -510,4 +509,5 @@ def current(json_output: bool):
             "auth_profile": {}
         }
         output_error(e, json_output, error_type="Profile Current Error")
-        return result
+        # As in `profile list`: returning would report the failure but exit 0.
+        raise click.ClickException(str(e))

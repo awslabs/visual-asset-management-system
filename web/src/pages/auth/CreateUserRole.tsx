@@ -62,7 +62,7 @@ export default function CreateTagType({
         ...initState,
     });
 
-    const [selectedRoles, setselectedRoles] = useState<OptionDefinition[]>([]);
+    const [selectedRoles, setselectedRoles] = useState<any[]>([]);
 
     useEffect(() => {
         fetchRoles().then((res) => {
@@ -235,14 +235,14 @@ export default function CreateTagType({
                             placeholder="Roles"
                             options={roles}
                             onChange={({ detail }) => {
-                                setselectedRoles(detail.selectedOptions as OptionDefinition[]);
+                                setselectedRoles(detail.selectedOptions as any[]);
                                 setFormState({
                                     ...formState,
-                                    roleName: (detail.selectedOptions as OptionDefinition[]).map(
+                                    roleName: (detail.selectedOptions as any[]).map(
                                         (role) => role.value
                                     ),
                                 });
-                                if ((detail.selectedOptions as OptionDefinition[]).length === 0) {
+                                if ((detail.selectedOptions as any[]).length === 0) {
                                     setRolesError("Please select at least one role");
                                 } else {
                                     setRolesError(null);

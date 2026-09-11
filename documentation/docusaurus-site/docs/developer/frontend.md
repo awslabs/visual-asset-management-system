@@ -6,16 +6,18 @@ This guide covers development patterns for the VAMS React frontend, including pr
 
 | Technology                  | Version | Purpose                          |
 | --------------------------- | ------- | -------------------------------- |
-| React                       | 17.0.2  | UI framework (not React 18)      |
-| TypeScript                  | 4.4.4   | Type system                      |
-| Vite                        | 6.x     | Build tooling                    |
+| React                       | 18.x    | UI framework                     |
+| TypeScript                  | 5.x     | Type system                      |
+| Vite                        | 8.x     | Build tooling                    |
 | Cloudscape Design System    | 3.x     | AWS UI component library         |
 | AWS Amplify                 | v6      | Authentication integration       |
-| React Router                | v6      | Client-side routing (HashRouter) |
-| `@badgateway/oauth2-client` | 2.4.2   | External OAuth2 PKCE flow        |
+| React Router                | v7      | Client-side routing (HashRouter) |
+| `@badgateway/oauth2-client` | 2.x     | External OAuth2 PKCE flow        |
 
-:::info[React 17]
-This project uses React 17, not React 18. Do not use React 18 APIs such as `createRoot`, `useId`, `useSyncExternalStore`, `useTransition`, or `useDeferredValue`. The app uses `ReactDOM.render`.
+Exact dependency ranges are declared in `web/package.json`.
+
+:::info[React 18]
+The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such as `useId`, `useSyncExternalStore`, `useTransition`, and `useDeferredValue` are available.
 :::
 
 ## Project Structure
@@ -26,7 +28,7 @@ web/src/
   routes.tsx              # Centralized route table with React.lazy
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
-  index.tsx               # Entry point (ReactDOM.render)
+  index.tsx               # Entry point (createRoot)
 
   FedAuth/Auth.tsx        # Dual-mode authentication orchestrator
 
@@ -47,10 +49,18 @@ web/src/
 
   pages/                  # Thin page wrappers (lazy-loaded)
   components/             # Domain/feature components
-  visualizerPlugin/       # 3D/media viewer plugin system (17 viewers)
+  visualizerPlugin/       # 3D/media viewer plugin system (viewers)
   layout/Navigation.tsx   # Left sidebar navigation
   styles/theme.css        # CSS custom properties for dark/light theme
   utils/authTokenUtils.ts # Dual-mode token utilities
+
+  common/constants/       # Shared constants
+    fileFormats.ts        # Preview file formats and .previewFile. pattern
+    featuresEnabled.ts    # Feature flag name constants
+    actions.ts            # Action name constants
+    permissionConstraintTypes.ts  # Permission constraint type constants
+  constants/
+    uploadLimits.ts       # Upload limits (part sizes, file counts, preview size)
 ```
 
 ## Critical Rules
@@ -145,6 +155,31 @@ import create from "zustand";
 ```
 
 ## API Integration Pattern
+
+### API Request Routing (base domain vs. direct API Gateway)
+
+VAMS clients (both the web application and the VAMS CLI) reach the backend through **two distinct paths**, and understanding the split matters for deployment fronting and CORS:
+
+-   **Bootstrap only — the base (static-website) domain `/api/*`:** The single request the web app makes to its own origin is `GET /api/amplify-config`, fetched from `window.location.origin` (the Amazon CloudFront distribution or ALB domain). This is the one endpoint that must be reachable through the web front. The response includes the `api` field — the API Gateway invoke URL (stage-inclusive).
+-   **Everything else — directly to Amazon API Gateway:** After bootstrap, `apiClient` sets its base URL to that `api` value (`config.api`, stored in `localStorage.api_path`) and sends **all** subsequent calls straight to the API Gateway endpoint — including `secure-config`, `auth/*`, `database/*`, and every data operation. These never traverse the web front.
+
+The **VAMS CLI works the same way**: `vamscli setup` fetches `/api/amplify-config` from the base URL you provide, extracts the API Gateway URL, and issues all later commands directly against API Gateway.
+
+```mermaid
+graph LR
+    subgraph "Base domain (CloudFront / ALB)"
+        AC["GET /api/amplify-config<br/>(bootstrap only)"]
+    end
+    subgraph "Amazon API Gateway (execute-api)"
+        REST["secure-config, auth/*,<br/>database/*, all data APIs"]
+    end
+    APP["Web app / VAMS CLI"] -->|"1. once, at startup"| AC
+    APP -->|"2. everything else"| REST
+```
+
+:::info[Why this matters for ALB deployments and CORS]
+Under an ALB deployment the front does **not** proxy `/api/*` — it issues an HTTP redirect to the API Gateway host. Because only the bootstrap `amplify-config` request uses the front, only that one endpoint is fetched cross-origin (front origin → API Gateway host) and needs an `Access-Control-Allow-Origin` header on its response. All other calls go directly to API Gateway from the start, where the REST API's CORS (the OPTIONS preflight MOCK method and per-response CORS headers) applies uniformly. This keeps the fronting layer thin and avoids routing bulk API traffic (and CORS preflights) through the ALB redirect.
+:::
 
 ### The Return Tuple Pattern
 
@@ -386,11 +421,11 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 
 Known feature flags:
 
-| Flag               | Purpose                                      |
-| ------------------ | -------------------------------------------- |
-| `LOCATIONSERVICES` | Map and geospatial features                  |
-| `NOOPENSEARCH`     | Disable OpenSearch-dependent features        |
-| `ALLOWUNSAFEEVAL`  | Required for CesiumJS and Needle USD viewers |
+| Flag               | Purpose                                         |
+| ------------------ | ----------------------------------------------- |
+| `LOCATIONSERVICES` | Map and geospatial features                     |
+| `NOOPENSEARCH`     | Disable OpenSearch-dependent features           |
+| `ALLOWUNSAFEEVAL`  | Required for certain 3D file visualizer viewers |
 
 ### Display Name Customization (Synonyms)
 
@@ -445,6 +480,40 @@ description={`Please provide a reason for archiving this ${Synonyms.asset}.`}
 // WRONG -- do not use Synonyms in API body values
 const body = { entityName: "Asset" }; // Keep hardcoded for API
 ```
+
+## Shared Constants
+
+Shared literal values (file format lists, file-name patterns, upload limits) are defined once in dedicated constants files. Always import these constants instead of redefining the literal values in components or pages, so all usages can be found and changed in one place.
+
+| File                                  | Defines                                                                      |
+| ------------------------------------- | ---------------------------------------------------------------------------- |
+| `common/constants/fileFormats.ts`     | `previewFileFormats` (allowed preview extensions), `PREVIEW_FILE_PATTERN`    |
+| `constants/uploadLimits.ts`           | Upload part sizes, file counts, retry attempts, `MAX_PREVIEW_FILE_SIZE`      |
+| `common/constants/featuresEnabled.ts` | Feature flag name constants                                                  |
+| `common/constants/authRoutes.ts`      | Allowed-API-routes cache key/TTL, `isApiRouteAllowed()` helper               |
+| `common/constants/apiKeys.ts`         | `USER_API_KEY_MAX_EXPIRATION_DAYS` (mirrors the backend `models/apiKeys.py`) |
+
+### Preview File Constants
+
+`common/constants/fileFormats.ts` is the single source of truth for the file-level preview file pattern and the allowed preview image extensions:
+
+```typescript
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+
+// Check whether a file is a preview file ({baseFile}.previewFile.{ext})
+const isPreview = fileName.includes(PREVIEW_FILE_PATTERN);
+
+// Validate a preview file extension
+const isAllowed = previewFileFormats.includes(fileExt);
+```
+
+For a file-level preview file the extension is everything **after** the `.previewFile.` marker, not the text after the last dot: `model.gltf.previewFile.p.png` has the extension `.p.png`. `utils/fileExtensionValidation.ts` exposes `getPreviewFileExtension()` and `isPreviewExtensionAllowed()` for this, and `validateFiles()` applies them to every preview file whether or not the database restricts extensions. Use those helpers rather than `getFileExtension()`, which reads the last dot and would accept a name the API rejects.
+
+`constants/uploadLimits.ts` re-exports `previewFileFormats` as `ALLOWED_PREVIEW_EXTENSIONS` alongside the upload limit values, so upload code can import everything from one place.
+
+:::note[Backend Mirror]
+The preview file pattern and allowed preview extensions are mirrored in the backend at `backend/backend/common/s3PathPatterns.py` (`PREVIEW_FILE_PATTERN`, `ALLOWED_PREVIEW_FILE_EXTENSIONS`). Keep the two in sync when changing them.
+:::
 
 ## Adding New Pages and Components
 
@@ -521,6 +590,27 @@ const MyComponent: React.FC = () => {
 
 export default MyComponent;
 ```
+
+## Content Security Policy and Inline Scripts
+
+The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy is permissive enough to accommodate external viewer plugins whose inline `<script>` blocks we cannot pre-hash, while remaining restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'self'` for same-origin framing only, HTTPS upgrades, etc.).
+
+### `script-src` uses `'unsafe-inline'`
+
+`script-src` includes `'unsafe-inline'` to allow add-on viewers (such as Physna's hosted viewer, which embeds inline `<script>` blocks inside its iframe HTML) to run without requiring VAMS to maintain a rolling per-version SHA allowlist. Maintaining hashes or a CSP nonce per external-viewer release is not sustainable because:
+
+-   Viewer vendors rev their bundles frequently, which would break VAMS on every upstream publish until someone updated the allowlist.
+-   Most add-on viewers inject inline scripts from a sandboxed iframe whose origin is not VAMS, and the browser will not forward a nonce across origins.
+
+Browsers ignore `'unsafe-inline'` whenever any hash or nonce source is also present, so the directive only actually takes effect in this deployment because neither is used.
+
+### `app.webUi.allowUnsafeEvalFeatures`
+
+Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, the ThatOpen IFC BIM viewer, and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
+
+### Add-on origins
+
+When add-ons that embed external content are enabled, CSP is extended dynamically. For example, with the Physna add-on enabled the configured `apiBaseEndpoint` origin is added to both `frame-src` (so the Physna hosted viewer can be loaded in an iframe) and `connect-src` (so any auxiliary fetches to Physna succeed). See `generateContentSecurityPolicy()` in `infra/lib/helper/security.ts` for the full set of conditional rules.
 
 ## Anti-Patterns
 

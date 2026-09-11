@@ -8,6 +8,7 @@ import { downloadAsset } from "../../../services/APIService";
 import { BabylonJSGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { BabylonJSGaussianSplatDependencyManager } from "./dependencies";
+import BabylonJSPanel from "./BabylonJSPanel";
 
 // Declare BABYLON as it will be loaded dynamically
 declare const BABYLON: any;
@@ -24,9 +25,39 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
 
+    // Viewer instance refs (populated after BabylonJS finishes loading the
+    // splat). These power the floating control panel and HUD.
+    const viewerInstanceRef = useRef<{
+        engine: any;
+        scene: any;
+        camera: any;
+        splatMesh: any;
+    } | null>(null);
+
+    // Initial camera framing captured right after auto-fit, used by the
+    // panel's "Reset Scene" / "Fit to Scene" actions to restore the view
+    // the user first saw.
+    const initialCameraStateRef = useRef<{
+        target: any;
+        radius: number;
+        alpha: number;
+        beta: number;
+    } | null>(null);
+
+    // Tick state forces the panel to re-render once the splat finishes
+    // loading and the viewer instance becomes available.
+    const [sceneReady, setSceneReady] = useState(false);
+    const [showPanel, setShowPanel] = useState(true);
+
     useEffect(() => {
         if (!assetKey || initializationRef.current) return;
         initializationRef.current = true;
+
+        // A re-run means a different file: go back to the loading state so the
+        // panel and HUD don't stay mounted against the disposed scene.
+        setSceneReady(false);
+        setIsLoading(true);
+        setLoadingMessage("Initializing viewer...");
 
         // Add CSS to hide any unwanted UI elements (Spectrum color pickers)
         const style = document.createElement("style");
@@ -71,6 +102,15 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         // Set up periodic cleanup
         const cleanupInterval = setInterval(removeUnwantedElements, 1000);
 
+        // Owned by this effect run and released in its cleanup. Held here (rather
+        // than only inside initViewer) so the cleanup can reach them even when it
+        // runs while initViewer is still awaiting.
+        let cancelled = false;
+        let engineRef: any = null;
+        let sceneRef: any = null;
+        let canvasRef: HTMLCanvasElement | null = null;
+        let resizeObserverRef: ResizeObserver | null = null;
+
         const initViewer = async () => {
             try {
                 console.log("BabylonJS Gaussian Splat Viewer: Starting initialization");
@@ -78,11 +118,18 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
 
                 // Load BabylonJS dependencies
                 const BABYLON = await BabylonJSGaussianSplatDependencyManager.loadBabylonJS();
+                if (cancelled) return;
 
                 setLoadingMessage("Initializing viewer...");
 
                 // Create canvas directly in DOM
                 const canvas = document.createElement("canvas");
+                canvasRef = canvas;
+                canvas.setAttribute("role", "img");
+                canvas.setAttribute(
+                    "aria-label",
+                    `Gaussian splat 3D view${assetKey ? `: ${assetKey.split("/").pop()}` : ""}`
+                );
                 canvas.style.width = "100%";
                 canvas.style.height = "100%";
                 canvas.style.display = "block";
@@ -111,7 +158,9 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     stencil: true,
                     disableWebGL2Support: false,
                 });
+                engineRef = engine;
                 const scene = new BABYLON.Scene(engine);
+                sceneRef = scene;
                 scene.clearColor = new BABYLON.Color4(0.1, 0.1, 0.1, 1);
 
                 // Create camera with fine controls
@@ -169,6 +218,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
 
                 // Set up resize observer
                 const resizeObserver = new ResizeObserver(handleResize);
+                resizeObserverRef = resizeObserver;
                 if (containerRef.current) {
                     resizeObserver.observe(containerRef.current);
                 }
@@ -180,6 +230,15 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                 engine.runRenderLoop(() => scene.render());
                 console.log("BabylonJS Gaussian Splat Viewer: BabylonJS initialized");
 
+                // Stash refs early so the panel can show partial state if
+                // splat loading is slow (it'll just show empty stats).
+                viewerInstanceRef.current = {
+                    engine,
+                    scene,
+                    camera,
+                    splatMesh: null,
+                };
+
                 // Download and load asset
                 console.log("BabylonJS Gaussian Splat Viewer: Downloading asset");
                 setLoadingMessage("Downloading asset...");
@@ -188,9 +247,10 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     databaseId,
                     key: assetKey,
                     versionId: versionId,
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
+                if (cancelled) return;
 
                 if (response && Array.isArray(response) && response[0] !== false) {
                     console.log(
@@ -212,6 +272,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                             ".spz"
                         )
                             .then((result: any) => {
+                                if (cancelled) return;
                                 console.log(
                                     "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
                                 );
@@ -222,10 +283,10 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                     const mn = boundingInfo.boundingBox.minimumWorld;
                                     const mx = boundingInfo.boundingBox.maximumWorld;
 
-                                    // No mesh transform - use createDefaultCameraOrLight to auto-fit
-                                    // which correctly handles the coordinate system
-                                    // has not yet applied the fractional-bits scale (typically
-                                    // 12 bits = 4096). Detect and divide out that scale factor.
+                                    // SPZ files store coordinates as fractional-fixed-point
+                                    // integers; the scene loader hasn't applied that scale yet.
+                                    // Detect oversized bounds (rawMaxHalf >> 10) and divide by
+                                    // the fractional-bits factor to recover real-world units.
                                     const rawMaxHalf = Math.max(
                                         (mx.x - mn.x) / 2,
                                         (mx.y - mn.y) / 2,
@@ -234,15 +295,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                     const fractionalBits = 12; // SPZ default
                                     const fbScale = rawMaxHalf > 10 ? 1 << fractionalBits : 1;
 
-                                    const cx = (mn.x + mx.x) / 2 / fbScale;
-                                    const cy = (mn.y + mx.y) / 2 / fbScale;
-                                    const cz = (mn.z + mx.z) / 2 / fbScale;
-                                    const hx = (mx.x - mn.x) / 2 / fbScale;
-                                    const hy = (mx.y - mn.y) / 2 / fbScale;
-                                    const hz = (mx.z - mn.z) / 2 / fbScale;
-                                    const maxHalf = Math.max(hx, hy, hz, 0.001);
-
-                                    // Use createDefaultCameraOrLight for all cases - matches reference script
+                                    // Use createDefaultCameraOrLight for all cases
                                     scene.createDefaultCameraOrLight(true, true, true);
                                     const cam = scene.activeCamera;
                                     const scaledRadius = (cam.radius / fbScale) * 3.0;
@@ -259,14 +312,33 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                     console.log("BabylonJS Camera Auto-fit:", {
                                         rawMaxHalf,
                                         fbScale,
-                                        cx,
-                                        cy,
-                                        cz,
-                                        maxHalf,
-                                        fitRadius,
+                                        scaledRadius,
                                     });
+
+                                    // Capture the resolved camera state for the panel's
+                                    // "Reset View" action.
+                                    initialCameraStateRef.current = {
+                                        target: cam.target.clone
+                                            ? cam.target.clone()
+                                            : new BABYLON.Vector3(
+                                                  cam.target.x,
+                                                  cam.target.y,
+                                                  cam.target.z
+                                              ),
+                                        radius: cam.radius,
+                                        alpha: cam.alpha,
+                                        beta: cam.beta,
+                                    };
+
+                                    // Update viewer instance with the active camera and
+                                    // splat mesh so the panel can drive both.
+                                    if (viewerInstanceRef.current) {
+                                        viewerInstanceRef.current.camera = cam;
+                                        viewerInstanceRef.current.splatMesh = mesh;
+                                    }
                                 }
 
+                                setSceneReady(true);
                                 setIsLoading(false);
                             })
                             .catch((error: unknown) => {
@@ -297,7 +369,56 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
 
         // Cleanup function
         return () => {
+            cancelled = true;
             clearInterval(cleanupInterval);
+
+            // Release the WebGL context and stop rendering. Without this the
+            // render loop keeps the Engine (and the whole scene) reachable, so
+            // neither the context nor the GPU buffers are ever reclaimed.
+            //
+            // The context is taken BEFORE disposing, because dispose detaches it from the engine and
+            // there is then no way back to it.
+            const glToRelease: WebGLRenderingContext | WebGL2RenderingContext | null = (() => {
+                try {
+                    const canvas = engineRef?.getRenderingCanvas?.() ?? canvasRef;
+                    return (
+                        (canvas?.getContext("webgl2") as WebGL2RenderingContext | null) ??
+                        (canvas?.getContext("webgl") as WebGLRenderingContext | null)
+                    );
+                } catch {
+                    return null;
+                }
+            })();
+
+            try {
+                resizeObserverRef?.disconnect();
+                engineRef?.stopRenderLoop();
+                sceneRef?.dispose();
+                engineRef?.dispose();
+            } catch (disposeErr) {
+                console.warn("BabylonJS Gaussian Splat Viewer: dispose error:", disposeErr);
+            }
+
+            // Disposing the engine is not sufficient to give the context back. Measured against a real
+            // 18 MB .spz, opening it repeatedly reached the browser's live-context ceiling on the EIGHTH
+            // mount — "Too many active WebGL contexts. Oldest context will be lost." — while the JS heap
+            // stayed flat, so the JavaScript side was being collected and only the GPU context was not.
+            // Losing it explicitly hands it back at unmount instead of waiting for a collection that
+            // does not come. The PlayCanvas splat viewer shows no such growth over the same test.
+            try {
+                glToRelease?.getExtension("WEBGL_lose_context")?.loseContext();
+            } catch (loseErr) {
+                // A context already lost or detached throws here; that is the desired end state anyway.
+                console.warn("BabylonJS Gaussian Splat Viewer: loseContext error:", loseErr);
+            }
+            resizeObserverRef = null;
+            engineRef = null;
+            sceneRef = null;
+            canvasRef?.remove();
+            canvasRef = null;
+            viewerInstanceRef.current = null;
+            initialCameraStateRef.current = null;
+            initializationRef.current = false;
 
             // Remove the CSS style
             const existingStyle = document.getElementById(
@@ -311,6 +432,45 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
             removeUnwantedElements();
         };
     }, [assetKey, assetId, databaseId, versionId, assetVersionId]);
+
+    // Reset camera back to the framing computed at load time. Wired into
+    // the panel's "Reset Scene" action and the F shortcut as a fallback
+    // when no splat bounds can be derived live.
+    const resetView = () => {
+        const cam = viewerInstanceRef.current?.camera;
+        const initial = initialCameraStateRef.current;
+        if (!cam || !initial) return;
+        cam.target = initial.target.clone ? initial.target.clone() : initial.target;
+        cam.radius = initial.radius;
+        cam.alpha = initial.alpha;
+        cam.beta = initial.beta;
+        console.log("BabylonJS Splat: View reset to initial framing");
+    };
+
+    // Keyboard shortcuts: Esc hides the panel, F resets the view. Mirrors
+    // the ThreeJS viewer.
+    useEffect(() => {
+        const handleKeyPress = (event: KeyboardEvent) => {
+            if (
+                event.target instanceof HTMLInputElement ||
+                event.target instanceof HTMLTextAreaElement
+            ) {
+                return;
+            }
+            const key = event.key.toLowerCase();
+            if (key === "escape" && showPanel) {
+                setShowPanel(false);
+            } else if (key === "f") {
+                resetView();
+            }
+        };
+        window.addEventListener("keydown", handleKeyPress);
+        return () => window.removeEventListener("keydown", handleKeyPress);
+    }, [showPanel]);
+
+    // File name shown in the panel header. Strip path segments to display
+    // only the leaf filename.
+    const fileName = assetKey ? assetKey.split("/").pop() || assetKey : undefined;
 
     return (
         <div
@@ -329,23 +489,76 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
             {/* Loading overlay */}
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 
-            <div
-                style={{
-                    position: "absolute",
-                    top: "10px",
-                    right: "10px",
-                    color: "white",
-                    fontSize: "12px",
-                    backgroundColor: "rgba(0,0,0,0.7)",
-                    padding: "8px",
-                    borderRadius: "4px",
-                    zIndex: 1000,
-                }}
-            >
-                BabylonJS Gaussian Splat Viewer
-                <br />
-                Mouse: Rotate | Wheel: Zoom | Right-click: Pan
-            </div>
+            {/* Floating control panel — visible after the splat loads */}
+            {sceneReady && viewerInstanceRef.current && showPanel && (
+                <BabylonJSPanel
+                    scene={viewerInstanceRef.current.scene}
+                    camera={viewerInstanceRef.current.camera}
+                    engine={viewerInstanceRef.current.engine}
+                    splatMesh={viewerInstanceRef.current.splatMesh}
+                    fileName={fileName}
+                    onClose={() => setShowPanel(false)}
+                    onResetView={resetView}
+                />
+            )}
+
+            {/* Show-panel button — only shown when the panel is hidden */}
+            {sceneReady && !showPanel && (
+                <button
+                    onClick={() => setShowPanel(true)}
+                    style={{
+                        position: "absolute",
+                        top: "20px",
+                        left: "10px",
+                        backgroundColor: "rgba(0, 0, 0, 0.7)",
+                        color: "white",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        padding: "8px 12px",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "0.8em",
+                        zIndex: 1000,
+                    }}
+                    title="Show controls panel"
+                >
+                    ⚙️ Panel
+                </button>
+            )}
+
+            {/* Compact HUD — viewer name, mouse hint and live splat count */}
+            {sceneReady && viewerInstanceRef.current && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "10px",
+                        right: "10px",
+                        color: "white",
+                        fontSize: "12px",
+                        backgroundColor: "rgba(0,0,0,0.7)",
+                        padding: "8px",
+                        borderRadius: "4px",
+                        zIndex: 1000,
+                    }}
+                >
+                    <div style={{ fontWeight: "bold", marginBottom: "4px" }}>
+                        BabylonJS Gaussian Splat
+                    </div>
+                    <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
+                        Mouse: Rotate | Wheel: Zoom | Right-click: Pan
+                    </div>
+                    {fileName && (
+                        <div
+                            style={{
+                                fontSize: "0.85em",
+                                marginTop: "6px",
+                                color: "#4CAF50",
+                            }}
+                        >
+                            📁 {fileName}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 };

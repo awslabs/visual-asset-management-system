@@ -21,12 +21,20 @@ import {
 } from "../helper/security";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as sqs from "aws-cdk-lib/aws-sqs";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
+    suppressCdkNagDynamoStreamListWildcard,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
+
+// The single orchestration-bus event sqsBucketSync publishes (publish_to_orchestration_bus in
+// backend/backend/handlers/indexing/sqsBucketSync.py): Source is the deployment's event-source prefix
+// followed by this suffix, and DetailType is fixed. The handler builds the same two literals from its
+// ORCHESTRATION_EVENT_SOURCE_PREFIX env var, and nothing else couples the two languages.
+const FILE_UPLOAD_EVENT_SOURCE_SUFFIX = ".trigger.fileUpload";
+const FILE_UPLOAD_EVENT_DETAIL_TYPE = "asset.file.uploaded";
 
 export function buildSearchFunction(
     scope: Construct,
@@ -46,12 +54,16 @@ export function buildSearchFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
-                : undefined, //Use VPC when provisioned OS or flag to use for all lambdas
+                : undefined, //Use VPC for provisioned OS, a private (non-public) serverless collection, or the use-for-all-lambdas flag
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -67,9 +79,6 @@ export function buildSearchFunction(
                 !config.app.openSearch.useServerless.enabled
                     ? "true"
                     : "false",
-            AUTH_ENTITIES_TABLE: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
         },
     });
 
@@ -86,6 +95,7 @@ export function buildSearchFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -108,23 +118,20 @@ export function buildFileIndexingFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
-                storageResources.dynamo.fileAttributeStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
             OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
@@ -154,6 +161,7 @@ export function buildFileIndexingFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     return fun;
@@ -177,25 +185,20 @@ export function buildAssetIndexingFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetVersionsStorageTable.tableName,
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
             OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
@@ -229,6 +232,8 @@ export function buildAssetIndexingFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     return fun;
@@ -245,10 +250,14 @@ export function buildSqsBucketSyncFunction(
     index: number,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    workflowAutoExecuteQueue: sqs.IQueue
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
+    // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
+    // made this a publish grant against any account's topics of that name.
+    const assetTopicWildcardArn = cdk.Fn.sub(
+        `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
+    );
     const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.indexing.sqsBucketSync.lambda_handler_` + handlerType,
@@ -266,27 +275,18 @@ export function buildSqsBucketSyncFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
-                storageResources.dynamo.fileAttributeStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetVersionsStorageTable.tableName,
-            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName, //Not directly used but needed to execute create_asset functions
-            TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName, //Not directly used but needed to execute create_asset functions
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             FILE_INDEXER_SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
-            WORKFLOW_AUTO_EXECUTE_SQS_URL: workflowAutoExecuteQueue.queueUrl,
             ASSET_BUCKET_NAME: bucketName,
             ASSET_BUCKET_PREFIX: bucketPrefix,
             DEFAULT_DATABASE_ID: defaultDatabaseId,
+            ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
 
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
@@ -298,12 +298,27 @@ export function buildSqsBucketSyncFunction(
     // Grant SNS publish permissions
     storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
 
-    // Grant SQS send message permissions for workflow auto-execute queue
-    workflowAutoExecuteQueue.grantSendMessages(fun);
+    // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery), scoped to the
+    // one event the handler emits. A PutEvents request carries a set of entries, so its source and
+    // detail-type condition keys are multi-valued and take the ForAllValues operator: a batch is
+    // allowed only when every entry carries this source and detail type.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["events:PutEvents"],
+            resources: [storageResources.eventBridge.orchestrationBus.eventBusArn],
+            conditions: {
+                "ForAllValues:StringEquals": {
+                    "events:source": `${storageResources.eventBridge.eventSourcePrefix}${FILE_UPLOAD_EVENT_SOURCE_SUFFIX}`,
+                    "events:detail-type": FILE_UPLOAD_EVENT_DETAIL_TYPE,
+                },
+            },
+        })
+    );
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["sns:CreateTopic", "sns:ListTopics", "sns:DeleteTopic"],
+            actions: ["sns:CreateTopic", "sns:DeleteTopic"],
             resources: [assetTopicWildcardArn],
         })
     );
@@ -311,6 +326,7 @@ export function buildSqsBucketSyncFunction(
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
@@ -334,21 +350,20 @@ export function buildReindexerFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
@@ -377,6 +392,7 @@ export function buildReindexerFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -422,6 +438,8 @@ export function buildFileIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
@@ -468,6 +486,8 @@ export function buildAssetIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
@@ -512,6 +532,8 @@ export function buildDatabaseIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagDynamoStreamListWildcard(fun);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;

@@ -28,7 +28,7 @@ def valid_event():
     """Create a valid API Gateway event for testing"""
     return {
         'pathParameters': {
-            'relationId': '12345678-1234-1234-1234-123456789012'
+            'assetLinkId': '12345678-1234-1234-1234-123456789012'
         },
         'requestContext': {
             'http': {
@@ -61,10 +61,10 @@ def invalid_event_missing_relation_id():
 
 @pytest.fixture
 def invalid_event_invalid_relation_id():
-    """Create an invalid API Gateway event with invalid relation ID format"""
+    """Create an invalid API Gateway event with invalid asset link ID format"""
     return {
         'pathParameters': {
-            'relationId': 'invalid-uuid-format'
+            'assetLinkId': 'invalid-uuid-format'
         },
         'requestContext': {
             'http': {

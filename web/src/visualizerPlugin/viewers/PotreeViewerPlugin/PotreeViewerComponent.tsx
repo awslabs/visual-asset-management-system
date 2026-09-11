@@ -17,6 +17,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     assetVersionId,
 }) => {
     const engineElement = useRef<HTMLDivElement>(null);
+    const viewerRef = useRef<any>(null);
     const [loaded, setLoaded] = useState(false);
     const [showNoAssetMessage, setShowNoAssetMessage] = useState(false);
     const [config] = useState(appCache.getItem("config"));
@@ -46,7 +47,15 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!potreeInstance || !assetKey || loaded || !config) return;
 
             try {
-                const fileKey = assetKey + "/preview/PotreeViewer/metadata.json";
+                // Pass only the asset-relative path (not the databaseId or the leading assetId).
+                // The stream endpoint prepends {databaseId}/{assetLocationKey} to resolve the
+                // database-scoped per-file aux preview location. If assetKey is the full,
+                // assetId-prefixed key, strip that leading assetId segment first.
+                let relativeAssetKey = assetKey || "";
+                if (relativeAssetKey.startsWith(assetId + "/")) {
+                    relativeAssetKey = relativeAssetKey.slice(assetId.length + 1);
+                }
+                const fileKey = relativeAssetKey + "/preview/PotreeViewer/metadata.json";
                 const url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
@@ -65,6 +74,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         try {
                             const viewer = new potreeInstance.Viewer(parentDiv);
+                            viewerRef.current = viewer;
                             viewer.setEDLEnabled(true);
                             viewer.setFOV(60);
                             viewer.setPointBudget(1000000);
@@ -135,6 +145,18 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     // Cleanup on unmount
     useEffect(() => {
         return () => {
+            // Stop the viewer's render loop and release its WebGL context —
+            // the loop otherwise keeps running against a detached canvas.
+            const viewer = viewerRef.current;
+            if (viewer) {
+                try {
+                    viewer.renderer?.setAnimationLoop(null);
+                    viewer.renderer?.dispose();
+                } catch (cleanupError) {
+                    console.warn("Error stopping Potree render loop:", cleanupError);
+                }
+                viewerRef.current = null;
+            }
             if (potreeInstance) {
                 PotreeDependencyManager.cleanup();
             }

@@ -10,6 +10,7 @@ import BasicFiltersPanel from "./BasicFiltersPanel";
 import AdvancedFiltersPanel from "./AdvancedFiltersPanel";
 import MetadataSearchPanel from "./MetadataSearchPanel";
 import PreferencesPanel from "./PreferencesPanel";
+import GeoFilterPanel from "./GeoFilterPanel";
 import { SearchFilters, MetadataFilter, SearchPreferences } from "../types";
 
 interface SearchSidebarProps {
@@ -75,7 +76,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
     isMapView = false,
 }) => {
     return (
-        <Box padding={{ vertical: "s", horizontal: "s" }}>
+        <Box padding={{ top: "n", bottom: "s", horizontal: "s" }}>
             <SpaceBetween direction="vertical" size="m">
                 {/* Mode Selector - Prominent at top */}
                 <ModeSelector
@@ -119,6 +120,13 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     onOperatorChange={onMetadataOperatorChange}
                     disabled={loading}
                     isMapView={isMapView}
+                />
+
+                {/* Geospatial Filter (after Metadata Search) */}
+                <GeoFilterPanel
+                    filters={filters}
+                    onFilterChange={onFilterChange}
+                    disabled={loading}
                 />
 
                 {/* Display & Preferences (combined) */}

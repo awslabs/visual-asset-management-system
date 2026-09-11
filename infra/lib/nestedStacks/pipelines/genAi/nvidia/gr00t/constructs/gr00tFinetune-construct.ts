@@ -9,7 +9,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as batch from "aws-cdk-lib/aws-batch";
@@ -32,10 +32,13 @@ import { Service } from "../../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../../config/config";
 import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
+    grantExternalAssetBucketKmsKeys,
     kmsKeyPolicyStatementGenerator,
 } from "../../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
 export interface Gr00tFinetuneConstructProps extends cdk.StackProps {
@@ -45,7 +48,7 @@ export interface Gr00tFinetuneConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
     // From common construct:
     modelCacheBucket: s3.Bucket;
     efsFileSystem: efs.FileSystem;
@@ -73,13 +76,32 @@ export class Gr00tFinetuneConstruct extends Construct {
 
         /**
          * HuggingFace Token stored in Secrets Manager
-         * The token value comes from the CDK config and is stored as a secret
-         * so Batch can inject it securely without exposing it in environment variables.
+         * Batch injects the secret into the container so the token is never an env var value.
+         * The secret is created EMPTY and populated at deploy time from config by a custom
+         * resource that carries the token in its code asset, so the token never lands in the
+         * synthesized CloudFormation template.
          */
         const hfTokenSecret = new secretsmanager.Secret(this, "Gr00tHfTokenSecret", {
             description: "HuggingFace API token for downloading NVIDIA Gr00t models",
-            secretStringValue: cdk.SecretValue.unsafePlainText(gr00tConfig.huggingFaceToken),
+            // Imported by ARN, not passed as the key object: the grants CDK derives from
+            // grantRead/grantWrite then land only on each grantee's own policy. Passing the object
+            // writes those grantees into the key's resource policy, which makes the storage stack
+            // that owns the key reference this pipeline stack and forms a circular dependency.
+            encryptionKey: props.storageResources.encryption.kmsKey
+                ? kms.Key.fromKeyArn(
+                      this,
+                      "HfTokenSecretKmsKeyRef",
+                      props.storageResources.encryption.kmsKey.keyArn
+                  )
+                : undefined,
         });
+
+        populateHuggingFaceTokenSecret(
+            this,
+            "Gr00tHfTokenSecretPopulate",
+            hfTokenSecret,
+            gr00tConfig.huggingFaceToken
+        );
 
         NagSuppressions.addResourceSuppressions(
             hfTokenSecret,
@@ -122,7 +144,11 @@ export class Gr00tFinetuneConstruct extends Construct {
             statements: [
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
                         actions: [
@@ -134,7 +160,7 @@ export class Gr00tFinetuneConstruct extends Construct {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -218,19 +244,17 @@ export class Gr00tFinetuneConstruct extends Construct {
             ],
         });
 
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
+
         /**
          * Batch Compute Environment
          * GPU-accelerated compute for Gr00t fine-tuning
          */
-        const batchServiceRole = new iam.Role(this, "BatchServiceRole", {
-            assumedBy: new iam.ServicePrincipal("batch.amazonaws.com"),
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBatchServiceRole"),
-            ],
-        });
-
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
-            assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+            assumedBy: Service("EC2").Principal,
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonEC2ContainerServiceforEC2Role"
@@ -298,7 +322,15 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                         },
                     },
                 ],
-                userData: Buffer.from(userData).toString("base64"),
+                // Encoded by CloudFormation, not here: this string carries CDK tokens -- the EFS file
+                // system id among them -- and Buffer.from() freezes a token as its DEBUG TEXT, because a
+                // base64 blob is opaque to the resolver that runs afterwards. The deployed template read
+                // "mount -t efs -o tls ${Token[TOKEN.NNNN]}:/ /mnt/efs/cosmos-models", which bash parses as
+                // an array subscript ("invalid arithmetic operator") and which aborts the whole
+                // scripts-user module, skipping every later line too. So the model cache was never mounted
+                // and every run restored its weights from S3 on billed GPU time. Fn.base64 emits
+                // Fn::Base64, so the encoding happens after token resolution.
+                userData: cdk.Fn.base64(userData),
                 tagSpecifications: [
                     {
                         resourceType: "instance",
@@ -313,22 +345,39 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             },
         });
 
-        const batchEnvironment = new batch.CfnComputeEnvironment(this, "Gr00tOnDemandComputeEnv", {
+        const batchEnvironment = new batch.CfnComputeEnvironment(this, "Gr00tGpuComputeEnv", {
             // No explicit name - let CDK auto-generate to allow CloudFormation replacements
             // when instance types change (custom-named resources can't be replaced in-place)
             type: "MANAGED",
             state: "ENABLED",
-            serviceRole: batchServiceRole.roleArn,
+            // No serviceRole, so this environment uses the Batch service-linked role
+            // (AWSServiceRoleForBatch). Naming a role instead is what forbids an in-place update of the
+            // launch template, instance types, subnets or security groups -- Batch allows those fields to
+            // be updated "only for ... Compute Environment having a Batch Service Linked Role" -- which
+            // left this environment unable to take a change to its instance start-up script at all.
+            //
+            // Safe to ship to an existing deployment only because the construct id changed in the same
+            // release: that makes the upgrade a CREATE of this resource and a DELETE of the old one rather
+            // than an update, so replaceComputeEnvironment does not have to permit the one replacement the
+            // upgrade needs. An environment still naming a service role can be neither updated in place nor
+            // migrated to the service-linked role, so this property without the rename fails the upgrade.
+            replaceComputeEnvironment: false,
             computeResources: {
                 type: "EC2",
                 allocationStrategy: "BEST_FIT_PROGRESSIVE",
+                // Each infrastructure update takes the current ECS-optimised AMI rather than staying on
+                // the one that was current when this environment was created, which matters on a GPU image
+                // carrying drivers. It is also the fourth condition CloudFormation names for updating a
+                // compute environment in place, alongside no serviceRole, a progressive allocation strategy
+                // and replaceComputeEnvironment.
+                updateToLatestImageVersion: true,
                 minvCpus: minVCpus,
                 maxvCpus: maxVCpus * 2, // Allow headroom for concurrent jobs
                 desiredvCpus: minVCpus,
                 instanceTypes: instanceTypes,
                 ec2Configuration: [
                     {
-                        imageType: "ECS_AL2_NVIDIA",
+                        imageType: "ECS_AL2023_NVIDIA",
                     },
                 ],
                 subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),
@@ -336,7 +385,13 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                 instanceRole: instanceProfile.attrArn,
                 launchTemplate: {
                     launchTemplateId: launchTemplate.ref,
-                    version: "$Latest",
+                    // Pinned to this template's own latest version, not "$Latest". Batch does not read
+                    // the launch template when an instance launches: it MERGES it with its own bootstrap
+                    // into a Batch-managed copy when the compute environment is created or updated.
+                    // "$Latest" is a constant, so a new template version is not a change to the
+                    // environment -- CloudFormation updates nothing and Batch goes on handing instances a
+                    // stale merge, which is how the encoding fix above reached no instance at all.
+                    version: launchTemplate.attrLatestVersionNumber,
                 },
             },
         });
@@ -524,10 +579,6 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
         /**
          * Step Functions State Machine
          */
-        const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
-            lambdaFunction: constructPipelineFunction,
-            outputPath: "$.Payload",
-        });
 
         const successState = new sfn.Succeed(this, "SuccessState", {
             comment: "Gr00t Finetune pipeline returned SUCCESS",
@@ -552,6 +603,23 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // error handler passthrough - Construct Pipeline Lambda.
+        //
+        // Without it a failure in the FIRST state ends the execution before PipelineEndTask runs, and
+        // PipelineEndTask is the only state that resolves the parent workflow's task token. The parent's
+        // waitForCallback task then stays RUNNING for its whole taskTimeout — eight hours on these
+        // pipelines — for a job that failed in under a second.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
+            lambdaFunction: constructPipelineFunction,
+            outputPath: "$.Payload",
+        }).addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         const batchJob = new tasks.BatchSubmitJob(this, "Gr00tBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
             jobDefinitionArn: batchJobDefinition.attrJobDefinitionArn,
@@ -560,8 +628,6 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                 command: [...sfn.JsonPath.listAt("$.definition")],
                 environment: {
                     AWS_REGION: region,
-                    INPUT_PARAMETERS: sfn.JsonPath.stringAt("$.inputParameters"),
-                    INPUT_METADATA: sfn.JsonPath.stringAt("$.inputMetadata"),
                     S3_MODEL_BUCKET: modelCacheBucket.bucketName,
                 },
             },
@@ -576,6 +642,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
         const sfnDefinition = sfn.Chain.start(constructPipelineTask.next(batchJob));
 
         const stateMachineLogGroup = new logs.LogGroup(this, "Gr00tFinetune-LogGroup", {
+            encryptionKey: props.storageResources.encryption.kmsKey,
             logGroupName:
                 `/aws/vendedlogs/VAMSstateMachine-Gr00tFinetune` +
                 generateUniqueNameHash(
@@ -584,13 +651,16 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     "Gr00tFinetune-StateMachineLogGroup",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: RemovalPolicy.DESTROY,
         });
 
         const pipelineStateMachine = new sfn.StateMachine(this, "Gr00tFinetune-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(sfnDefinition),
-            timeout: Duration.hours(5),
+            // Envelopes the Batch attempt (attemptDurationSeconds 28800) so a long-running
+            // job reaches its own failure path — and the task-token callback — rather than
+            // being cut short by the state machine.
+            timeout: Duration.hours(9),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,
@@ -598,6 +668,17 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             },
             tracingEnabled: true,
         });
+
+        // The Batch `.sync` integration polls the submitted job and cancels it when the
+        // execution stops. Batch job ids are runtime-generated with no name pattern to
+        // scope on, so both actions take a wildcard resource.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs", "batch:TerminateJob"],
+                resources: ["*"],
+            })
+        );
 
         /**
          * Lambda: openPipeline (bound to state machine)
@@ -609,6 +690,8 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             props.storageResources.s3.assetAuxiliaryBucket,
             pipelineStateMachine,
             allowedInputFileExtensions,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.config,
             props.vpc,
             props.pipelineSubnets,
@@ -631,76 +714,35 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
         this.vamsExecuteFunctionName = vamsExecuteFunction.functionName;
 
         /**
-         * Auto-Registration with VAMS
+         * Auto-Registration with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables)
          */
         const modelConfig = gr00tConfig.modelsFinetune.gr00tN1_5_3B;
         if (modelConfig.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction-gr00tN1_5_3B",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider-gr00tN1_5_3B", {
-                onEventHandler: importFunction,
-            });
-
-            NagSuppressions.addResourceSuppressionsByPath(
-                Stack.of(this),
-                `/${this.toString()}/ImportProvider-gr00tN1_5_3B/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "Custom resource provider requires wildcard permissions to invoke the import global pipeline workflow function with version qualifiers. Scope is limited to the single import function.",
-                        appliesTo: [
-                            `Resource::arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
-                        ],
-                    },
-                ],
-                true
-            );
-
-            new cdk.CustomResource(this, "Gr00tFinetune-PipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "nvidia-gr00t-finetune-n1-5-3b",
-                    pipelineDescription:
-                        "NVIDIA Gr00t N1.5 3B Fine-Tuning - Fine-tune the Gr00t foundation model on custom robot manipulation datasets for embodied AI",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".checkpoint",
-                    waitForCallback: "Enabled",
+            new VamsSchemaRegistration(this, "Gr00tFinetuneRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "genAi",
+                    "nvidia",
+                    "gr00t",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: vamsExecuteFunction.functionName,
-                    taskTimeout: "28800",
-                    taskHeartbeatTimeout: "",
-                    inputParameters: JSON.stringify({
-                        datasetPath: "dataset",
-                        dataConfig: "so100_dualcam",
-                        baseModelPath: "nvidia/GR00T-N1.5-3B",
-                        maxSteps: "6000",
-                        batchSize: "32",
-                        learningRate: "1e-4",
-                        weightDecay: "1e-5",
-                        warmupRatio: "0.05",
-                        saveSteps: "2000",
-                        numGpus: "1",
-                        loraRank: "0",
-                        loraAlpha: "16",
-                        loraDropout: "0.1",
-                        tuneLlm: "false",
-                        tuneVisual: "false",
-                        tuneProjector: "true",
-                        tuneDiffusionModel: "true",
-                        embodimentTag: "new_embodiment",
-                        videoBackend: "torchvision_av",
-                    }),
+                },
+                idOverrides: {
+                    pipelineId: "nvidia-gr00t-finetune-n1-5-3b",
                     workflowId: "nvidia-gr00t-finetune-n1-5-3b",
-                    workflowDescription:
-                        "NVIDIA Gr00t N1.5 3B Fine-Tuning - Fine-tune the Gr00t foundation model on custom robot manipulation datasets for embodied AI",
-                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
         }
@@ -736,7 +778,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -752,7 +794,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*Gr00tFinetune.*StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*Gr00tFinetune.*StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -768,7 +810,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -784,7 +826,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     reason: reason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*vamsExecuteGr00t.*Pipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecuteGr00t.*Pipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -797,7 +839,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -812,22 +854,11 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies for ECS task execution and X-Ray tracing",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
                     reason: "ECS Containers require access to objects in asset buckets, model cache, and EFS for Gr00t model weights",
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            batchServiceRole,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Service uses AWSBatchServiceRole managed policy which is required for batch operations",
                 },
             ],
             true

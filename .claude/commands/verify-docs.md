@@ -14,21 +14,23 @@ Verify VAMS documentation accuracy against source code.
 -   Verify default values match
 -   Check for new config fields not yet documented
 
-**API Reference** (`docs/api/` pages):
+**API Reference** (`docs/api/` pages and `documentation/VAMS_API.yaml`):
 
--   Compare endpoints against `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` route registrations
+-   Compare endpoints against the master route list in `backend/backend/common/apiRoutes.py` (`ALL_API_ROUTES`) and the route registrations in `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` **and** `apiBuilder2-nestedStack.ts`
 -   Verify request/response models against `backend/backend/models/` Pydantic classes
--   Check for new endpoints not yet documented
+-   Check for new endpoints not yet documented — remember the API is documented in **two** places (`VAMS_API.yaml` and the `docs/api/<domain>.md` pages) and both must agree
 
-**AWS Resources** (`docs/architecture/aws-resources.md`):
+**AWS Resources** (`docs/architecture/aws-resources.md` and `docs/deployment/uninstall.md`):
 
 -   Compare DynamoDB tables against `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`
 -   Verify Lambda function list against `infra/lib/lambdaBuilder/` files
+-   Verify each storage resource/log group documents its removal policy (RETAIN vs DESTROY) and whether it has a custom/explicit name (redeploy-collision flag)
 
-**CLI Command Reference** (`docs/cli/command-reference.md`):
+**CLI Command Reference** (`docs/cli/command-reference.md` and `docs/cli/commands/` pages):
 
 -   Compare command groups against `tools/VamsCLI/vamscli/main.py` registered commands
 -   Verify subcommands against each command file in `tools/VamsCLI/vamscli/commands/`
+-   Verify documented endpoint paths against `tools/VamsCLI/vamscli/constants.py`
 
 **Viewer Plugins** (`docs/additional/viewer-plugins.md`):
 

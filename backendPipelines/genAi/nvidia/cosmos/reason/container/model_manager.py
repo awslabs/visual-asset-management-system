@@ -20,6 +20,54 @@ import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# The file kinds that mean a repository's weights are really present. A snapshot directory exists as
+# soon as a download starts, so its presence proves nothing.
+WEIGHT_EXTENSIONS = (".safetensors", ".bin", ".pth", ".ckpt")
+
+# Filesystem types that mean the cache is genuinely shared between instances.
+NETWORK_FILESYSTEMS = ("nfs", "nfs4", "efs")
+
+
+def warn_if_cache_is_not_shared(path: str) -> bool:
+    """Whether the cache path is backed by a NETWORK filesystem. Logs loudly when it is not.
+
+    The cache is a host path bind-mounted into the container, and the difference between a shared
+    network filesystem and an empty directory on the instance's own disk is the whole value of the
+    cache. While the EFS mount silently failed, every run restored its weights from Amazon S3 onto
+    local disk and uploaded them again afterwards, and nothing in the logs said so.
+
+    Discriminated by filesystem TYPE, not by the presence of a mount point: a Docker bind mount
+    appears in /proc/mounts whatever backs it, so looking for the path there reports every run as
+    correctly mounted -- a check that cannot fail is worse than no check.
+    """
+    try:
+        with open("/proc/mounts", encoding="utf-8") as handle:
+            entries = [line.split() for line in handle]
+    except OSError:
+        return True  # Not a Linux container; nothing useful to say.
+
+    # The entry governing the path is the longest mount point that is a prefix of it.
+    covering = None
+    for fields in entries:
+        if len(fields) < 3:
+            continue
+        point, fstype = fields[1], fields[2]
+        if path == point or path.startswith(point.rstrip("/") + "/"):
+            if covering is None or len(point) > len(covering[0]):
+                covering = (point, fstype)
+
+    if covering and covering[1] in NETWORK_FILESYSTEMS:
+        logger.info(f"The model cache at {path} is on {covering[1]} ({covering[0]}), so it is shared")
+        return True
+
+    seen = "nothing" if covering is None else f"{covering[1]} at {covering[0]}"
+    logger.warning(
+        f"The model cache at {path} is NOT on a shared filesystem -- {seen}, which is this "
+        f"instance's own disk. Every run here restores its weights from S3 and uploads them again, "
+        f"and no other instance can reuse them. Check /var/log/*-efs-mount.log on the instance")
+    return False
+
 logging.basicConfig(level=logging.INFO)
 
 # S3 prefix for HF cache backups (separate from predict)
@@ -49,10 +97,14 @@ def _has_cached_models(hf_home: str) -> bool:
     if not hub_dir.exists():
         return False
 
-    for ext in (".safetensors", ".bin"):
-        matches = list(hub_dir.rglob(f"*{ext}"))
-        if matches:
-            logger.info(f"Found {len(matches)} {ext} files in HF cache")
+    # Stopped at the FIRST weight file rather than counting them. The previous form,
+    # list(hub_dir.rglob(f"*{ext}")), walked the whole cache tree once per extension and built a list
+    # of every match only to test it for emptiness -- over a network filesystem, on every run before
+    # any GPU work.
+    for ext in WEIGHT_EXTENSIONS:
+        found = next(hub_dir.rglob(f"*{ext}"), None)
+        if found is not None:
+            logger.info(f"Found cached weights in the HF cache ({found.name})")
             return True
 
     return False
@@ -141,6 +193,8 @@ def ensure_models_cached(hf_home: str, s3_bucket: str, invalidate: bool = False)
         s3_bucket: S3 bucket for cache backups
         invalidate: If True, clear EFS cache before checking
     """
+    warn_if_cache_is_not_shared(hf_home)
+
     hf_path = Path(hf_home)
 
     # Invalidation: clear EFS cache

@@ -1,0 +1,9 @@
+{
+    "templateId": "model-ops-to-gltf",
+    "templateName": "Optimize to GLTF",
+    "description": "Optimize and convert a 3D model to GLTF using the VNTANA Intelligent 3D Optimization Engine.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".gltf\"}",
+    "allowCustomEdit": false,
+    "inputInstructions": "Optimizes a 3D model with VNTANA ModelOps and outputs glTF (.gltf). Requires a licensed ModelOps deployment. Select the source model as the input file.\n\nThis pipeline reads no asset or file metadata — optimization settings come from this template."
+}

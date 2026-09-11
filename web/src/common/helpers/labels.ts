@@ -16,7 +16,7 @@ export const appLayoutLabels = {
 export const paginationLabels = {
     nextPageLabel: "Next page",
     previousPageLabel: "Previous page",
-    pageLabel: (pageNumber) => `Page ${pageNumber} of all pages`,
+    pageLabel: (pageNumber: any) => `Page ${pageNumber} of all pages`,
 };
 
 export const externalLinkProps = {
@@ -25,39 +25,40 @@ export const externalLinkProps = {
 };
 
 export const distributionSelectionLabels = {
-    itemSelectionLabel: (data, row) => `select ${row.id}`,
+    itemSelectionLabel: (data: any, row: any) => `select ${row.id}`,
     allItemsSelectionLabel: () => "select all",
     selectionGroupLabel: "Distribution selection",
 };
 
 export const originsSelectionLabels = {
-    itemSelectionLabel: (data, row) => `select ${row.name}`,
+    itemSelectionLabel: (data: any, row: any) => `select ${row.name}`,
     allItemsSelectionLabel: () => "select all",
     selectionGroupLabel: "Origins selection",
 };
 
 export const behaviorsSelectionLabels = {
-    itemSelectionLabel: (data, row) => `select path ${row.pathPattern} from origin ${row.origin}`,
+    itemSelectionLabel: (data: any, row: any) =>
+        `select path ${row.pathPattern} from origin ${row.origin}`,
     allItemsSelectionLabel: () => "select all",
     selectionGroupLabel: "Behaviors selection",
 };
 
 export const logsSelectionLabels = {
-    itemSelectionLabel: (data, row) => `select ${row.name}`,
+    itemSelectionLabel: (data: any, row: any) => `select ${row.name}`,
     allItemsSelectionLabel: () => "select all",
     selectionGroupLabel: "Logs selection",
 };
 
-const headerLabel = (title, sorted, descending) => {
+const headerLabel = (title: any, sorted: any, descending: any) => {
     return `${title}, ${
         sorted ? `sorted ${descending ? "descending" : "ascending"}` : "not sorted"
     }.`;
 };
 
-export const addColumnSortLabels = (columns) =>
-    columns.map((col) => ({
+export const addColumnSortLabels = (columns: any) =>
+    columns.map((col: any) => ({
         ariaLabel: col.sortingField
-            ? (sortState) => headerLabel(col.header, sortState.sorted, sortState.descending)
+            ? (sortState: any) => headerLabel(col.header, sortState.sorted, sortState.descending)
             : undefined,
         ...col,
     }));

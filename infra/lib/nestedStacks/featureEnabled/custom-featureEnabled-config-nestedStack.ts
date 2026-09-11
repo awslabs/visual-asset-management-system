@@ -42,7 +42,8 @@ const defaultProps: Partial<CustomFeatureEnabledConfigNestedStackProps> = {};
  * This nested stack manages the appFeaturesEnabled DynamoDB table by:
  * 1. Deduplicating the input features to prevent duplicate key errors
  * 2. Using PutItem (not BatchWriteItem) to overwrite existing entries
- * This ensures the table always reflects the current deployment state without duplicate key errors.
+ * 3. Using DeleteItem on resource removal so flags removed between deployments are cleaned up
+ *
  */
 export class CustomFeatureEnabledConfigNestedStack extends NestedStack {
     constructor(
@@ -98,7 +99,7 @@ export class CustomFeatureEnabledConfigNestedStack extends NestedStack {
             new PolicyStatement({
                 sid: "DynamoWriteAccess",
                 effect: Effect.ALLOW,
-                actions: ["dynamodb:PutItem"],
+                actions: ["dynamodb:PutItem", "dynamodb:DeleteItem"],
                 resources: [appFeatureEnabledTable.tableArn],
             }),
         ]);
@@ -126,12 +127,27 @@ export class CustomFeatureEnabledConfigNestedStack extends NestedStack {
                 },
             };
 
+            // Cleans up the row when this AwsCustomResource is removed from
+            // the template (i.e., the feature flag was dropped between deploys)
+            // or when the stack is destroyed.
+            const deleteItemCall: AwsSdkCall = {
+                service: "DynamoDB",
+                action: "deleteItem",
+                parameters: {
+                    TableName: appFeatureEnabledTable.tableName,
+                    Key: {
+                        featureName: { S: featureName },
+                    },
+                },
+            };
+
             const customResource = new AwsCustomResource(
                 this,
                 `appFeatureEnabled_${featureName}_custom_resource`,
                 {
                     onCreate: putItemCall,
                     onUpdate: putItemCall,
+                    onDelete: deleteItemCall,
                     installLatestAwsSdk: false,
                     policy: customResourcePolicy,
                     timeout: Duration.minutes(5),

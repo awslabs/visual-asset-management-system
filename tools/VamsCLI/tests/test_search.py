@@ -51,6 +51,11 @@ class TestSearchAssetsCommand:
         assert '--metadata-mode' in result.output
         assert '--explain-results' in result.output
         assert '--output-format' in result.output
+        # Geospatial filter options (new in v2.6)
+        assert '--geo-point' in result.output
+        assert '--geo-bbox' in result.output
+        assert '--geo-geojson' in result.output
+        assert '--geo-relation' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_success(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -107,7 +112,10 @@ class TestSearchAssetsCommand:
                             "_source": {
                                 "str_assetname": "metadata-asset",
                                 "str_databaseid": "test-db",
-                                "MD_str_product": "Training"
+                                # Metadata reaches a hit inside one MD_ object with the key
+                                # verbatim -- the submitted MD_str_product spelling below is an
+                                # accepted alias for the query, never a stored field name.
+                                "MD_": {"product": "Training"}
                             },
                             "_score": 0.95
                         }
@@ -312,6 +320,11 @@ class TestSearchFilesCommand:
         assert '--filters' in result.output
         assert '--query' in result.output
         assert '--metadata-query' in result.output
+        # Geospatial filter options (new in v2.6)
+        assert '--geo-point' in result.output
+        assert '--geo-bbox' in result.output
+        assert '--geo-geojson' in result.output
+        assert '--geo-relation' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_files_success(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -419,6 +432,11 @@ class TestSearchSimpleCommand:
         assert '--metadata-key' in result.output
         assert '--metadata-value' in result.output
         assert '--entity-types' in result.output
+        # Geospatial filter options (new in v2.6)
+        assert '--geo-point' in result.output
+        assert '--geo-bbox' in result.output
+        assert '--geo-geojson' in result.output
+        assert '--geo-relation' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_simple_success(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -553,7 +571,7 @@ class TestSearchSimpleCommand:
                             "_index_type": "asset",
                             "_source": {
                                 "str_assetname": "metadata-asset",
-                                "MD_str_product": "Training"
+                                "MD_": {"product": "Training"}
                             },
                             "_score": 0.95
                         }
@@ -971,6 +989,316 @@ class TestSearchCommandsIntegration:
             
             assert result.exit_code == 1
             assert 'Search Mapping Error' in result.output
+
+
+class TestParseGeoOptions:
+    """Unit tests for the _parse_geo_options helper."""
+
+    def test_returns_none_when_no_options_provided(self):
+        from vamscli.commands.search import _parse_geo_options
+        # No geo flags supplied -- helper returns None even if relation is set
+        assert _parse_geo_options(None, None, None, 'intersects') is None
+
+    def test_point_without_radius(self):
+        from vamscli.commands.search import _parse_geo_options
+        result = _parse_geo_options('47.6062,-122.3321', None, None, 'intersects')
+        assert result == {
+            'relation': 'intersects',
+            'point': {'lat': 47.6062, 'lon': -122.3321},
+        }
+
+    def test_point_with_radius(self):
+        from vamscli.commands.search import _parse_geo_options
+        result = _parse_geo_options('47.6062,-122.3321,5000', None, None, 'within')
+        assert result == {
+            'relation': 'within',
+            'point': {'lat': 47.6062, 'lon': -122.3321, 'radiusMeters': 5000.0},
+        }
+
+    def test_point_invalid_format_raises(self):
+        from vamscli.commands.search import _parse_geo_options
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        with pytest.raises(InvalidSearchParametersError, match="--geo-point"):
+            _parse_geo_options('47.6062', None, None, 'intersects')
+
+    def test_point_non_numeric_raises(self):
+        from vamscli.commands.search import _parse_geo_options
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        with pytest.raises(InvalidSearchParametersError, match="numeric"):
+            _parse_geo_options('north,west', None, None, 'intersects')
+
+    def test_bbox(self):
+        from vamscli.commands.search import _parse_geo_options
+        result = _parse_geo_options(None, '47.7,-122.5,47.5,-122.2', None, 'within')
+        assert result == {
+            'relation': 'within',
+            'bbox': {
+                'topLeft': {'lat': 47.7, 'lon': -122.5},
+                'bottomRight': {'lat': 47.5, 'lon': -122.2},
+            },
+        }
+
+    def test_bbox_wrong_arg_count_raises(self):
+        from vamscli.commands.search import _parse_geo_options
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        with pytest.raises(InvalidSearchParametersError, match="--geo-bbox"):
+            _parse_geo_options(None, '47.7,-122.5,47.5', None, 'intersects')
+
+    def test_geojson_from_file(self, tmp_path):
+        from vamscli.commands.search import _parse_geo_options
+        polygon = {
+            "type": "Polygon",
+            "coordinates": [[[-122.5, 47.7], [-122.2, 47.7], [-122.2, 47.5], [-122.5, 47.5], [-122.5, 47.7]]],
+        }
+        path = tmp_path / "aoi.geojson"
+        path.write_text(json.dumps(polygon))
+        result = _parse_geo_options(None, None, str(path), 'contains')
+        assert result == {'relation': 'contains', 'geoJson': polygon}
+
+    def test_geojson_missing_file_raises(self, tmp_path):
+        from vamscli.commands.search import _parse_geo_options
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        missing = str(tmp_path / "does-not-exist.geojson")
+        with pytest.raises(InvalidSearchParametersError, match="not found"):
+            _parse_geo_options(None, None, missing, 'intersects')
+
+    def test_geojson_invalid_content_raises(self, tmp_path):
+        from vamscli.commands.search import _parse_geo_options
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        path = tmp_path / "bad.geojson"
+        path.write_text("not json {")
+        with pytest.raises(InvalidSearchParametersError, match="Invalid GeoJSON"):
+            _parse_geo_options(None, None, str(path), 'intersects')
+
+    def test_multiple_modes_rejected(self):
+        from vamscli.commands.search import _parse_geo_options
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        with pytest.raises(InvalidSearchParametersError, match="Only one of"):
+            _parse_geo_options('47.6,-122.3', '47.7,-122.5,47.5,-122.2', None, 'intersects')
+
+
+class TestSearchGeoSearch:
+    """End-to-end tests that geo flags translate into the geoSearch payload."""
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_with_geo_point_radius(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """search assets with --geo-point lat,lon,radius sends geoSearch.point payload."""
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_query.return_value = {
+                "hits": {"hits": [], "total": {"value": 0}}
+            }
+
+            result = cli_runner.invoke(cli, [
+                'search', 'assets',
+                '--geo-point', '47.6062,-122.3321,5000',
+                '--geo-relation', 'intersects',
+            ])
+
+            assert result.exit_code == 0
+            mocks['api_client'].search_query.assert_called_once()
+            body = mocks['api_client'].search_query.call_args[0][0]
+            assert body['entityTypes'] == ['asset']
+            assert 'geoSearch' in body
+            assert body['geoSearch'] == {
+                'relation': 'intersects',
+                'point': {'lat': 47.6062, 'lon': -122.3321, 'radiusMeters': 5000.0},
+            }
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_with_geo_bbox_within(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """search assets with --geo-bbox + --geo-relation within sends geoSearch.bbox payload."""
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_query.return_value = {
+                "hits": {"hits": [], "total": {"value": 0}}
+            }
+
+            result = cli_runner.invoke(cli, [
+                'search', 'assets',
+                '--geo-bbox', '47.7,-122.5,47.5,-122.2',
+                '--geo-relation', 'within',
+            ])
+
+            assert result.exit_code == 0
+            body = mocks['api_client'].search_query.call_args[0][0]
+            assert body['geoSearch'] == {
+                'relation': 'within',
+                'bbox': {
+                    'topLeft': {'lat': 47.7, 'lon': -122.5},
+                    'bottomRight': {'lat': 47.5, 'lon': -122.2},
+                },
+            }
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_files_with_geo_geojson(self, mock_is_feature_enabled, cli_runner, search_command_mocks, tmp_path):
+        """search files with --geo-geojson reads the file and forwards as geoSearch.geoJson."""
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_query.return_value = {
+                "hits": {"hits": [], "total": {"value": 0}}
+            }
+
+            polygon = {
+                "type": "Polygon",
+                "coordinates": [[[-122.5, 47.7], [-122.2, 47.7], [-122.2, 47.5], [-122.5, 47.5], [-122.5, 47.7]]],
+            }
+            geojson_path = tmp_path / "aoi.geojson"
+            geojson_path.write_text(json.dumps(polygon))
+
+            result = cli_runner.invoke(cli, [
+                'search', 'files',
+                '--geo-geojson', str(geojson_path),
+                '--geo-relation', 'contains',
+            ])
+
+            assert result.exit_code == 0
+            body = mocks['api_client'].search_query.call_args[0][0]
+            assert body['entityTypes'] == ['file']
+            assert body['geoSearch'] == {
+                'relation': 'contains',
+                'geoJson': polygon,
+            }
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_without_geo_options_omits_geo_search(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """search assets without any --geo-* flag must NOT add geoSearch to the request body."""
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_query.return_value = {
+                "hits": {"hits": [], "total": {"value": 0}}
+            }
+
+            result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test'])
+
+            assert result.exit_code == 0
+            body = mocks['api_client'].search_query.call_args[0][0]
+            assert 'geoSearch' not in body
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_rejects_multiple_geo_modes(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Combining --geo-point and --geo-bbox should fail validation before invoking the API."""
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+
+            result = cli_runner.invoke(cli, [
+                'search', 'assets',
+                '--geo-point', '47.6,-122.3',
+                '--geo-bbox', '47.7,-122.5,47.5,-122.2',
+            ])
+
+            assert result.exit_code == 1
+            mocks['api_client'].search_query.assert_not_called()
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_simple_with_geo_point(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """search simple with --geo-point sends geoSearch on the simple search request."""
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+            mocks['api_client'].search_simple.return_value = {
+                "hits": {"hits": [], "total": {"value": 0}}
+            }
+
+            result = cli_runner.invoke(cli, [
+                'search', 'simple',
+                '-q', 'tower',
+                '--geo-point', '47.6,-122.3,2000',
+            ])
+
+            assert result.exit_code == 0
+            mocks['api_client'].search_simple.assert_called_once()
+            body = mocks['api_client'].search_simple.call_args[0][0]
+            assert body['query'] == 'tower'
+            assert body['geoSearch'] == {
+                'relation': 'intersects',
+                'point': {'lat': 47.6, 'lon': -122.3, 'radiusMeters': 2000.0},
+            }
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_geo_relation_choice_validation(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Click validates --geo-relation against the allowed choices."""
+        with search_command_mocks as mocks:
+            mock_is_feature_enabled.return_value = False
+
+            result = cli_runner.invoke(cli, [
+                'search', 'assets',
+                '--geo-point', '47.6,-122.3',
+                '--geo-relation', 'overlaps',  # not a valid choice
+            ])
+
+            assert result.exit_code != 0
+            mocks['api_client'].search_query.assert_not_called()
+
+
+class TestSearchRecordTypeColumn:
+    """The record-type discriminator reaches the CLI's rendered output.
+
+    The formatters build their columns from the union of `_source` keys across the
+    hits, so `str_rectype` needs no per-field handling — but that also means a
+    backend that stops emitting it removes the column silently. These assertions
+    pin the behaviour that makes a mixed `search simple` result readable.
+    """
+
+    _MIXED_RESULT = {
+        "hits": {
+            "total": {"value": 2},
+            "hits": [
+                {
+                    "_id": "my-db:asset-001",
+                    "_source": {
+                        "str_rectype": "asset",
+                        "str_databaseid": "my-db",
+                        "str_assetid": "asset-001",
+                        "str_assetname": "Pump",
+                    },
+                },
+                {
+                    "_id": "my-db:asset-001:/scans/pump.e57",
+                    "_source": {
+                        "str_rectype": "file",
+                        "str_databaseid": "my-db",
+                        "str_assetid": "asset-001",
+                        "str_key": "/scans/pump.e57",
+                    },
+                },
+            ],
+        }
+    }
+
+    def test_table_output_carries_the_record_type_column(self):
+        from vamscli.commands.search import _format_table_output
+
+        output = _format_table_output(self._MIXED_RESULT, "mixed")
+        header = output.splitlines()[0]
+
+        # Control: the header is really the column list, so a missing column is a
+        # real absence rather than a mis-parsed line.
+        assert "str_assetid" in header
+        assert "str_rectype" in header
+        assert "asset" in output and "file" in output
+
+    def test_csv_output_carries_the_record_type_column(self):
+        import csv
+        from io import StringIO
+        from vamscli.commands.search import _format_csv_output
+
+        rows = list(csv.DictReader(StringIO(_format_csv_output(self._MIXED_RESULT, "mixed"))))
+
+        assert len(rows) == 2
+        assert [row["str_rectype"] for row in rows] == ["asset", "file"]
+
+    def test_only_one_record_type_column_is_rendered(self):
+        """A source carrying both spellings would render two near-identical columns."""
+        import csv
+        from io import StringIO
+        from vamscli.commands.search import _format_csv_output
+
+        reader = csv.DictReader(StringIO(_format_csv_output(self._MIXED_RESULT, "mixed")))
+        columns = reader.fieldnames or []
+
+        # Control: the column list was really parsed.
+        assert "str_databaseid" in columns
+        assert [name for name in columns if "rectype" in name] == ["str_rectype"]
 
 
 if __name__ == '__main__':

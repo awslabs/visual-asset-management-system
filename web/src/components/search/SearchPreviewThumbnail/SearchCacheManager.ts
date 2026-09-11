@@ -25,12 +25,24 @@ interface CacheEntry<T> {
 interface AssetDetails {
     previewKey: string;
     downloadType: "assetPreview" | "assetFile";
+    /**
+     * The raw search-index previewFileKey that produced this entry (undefined when the
+     * entry came from an API fallback). Used to detect a stale cache when a newer search
+     * result reports a different preview key (added / changed / removed on another page).
+     */
+    sourcePreviewFileKey?: string;
 }
 
 interface FileDetails {
     previewKey: string;
     downloadType: "assetPreview" | "assetFile";
     hasPreview: boolean;
+    /**
+     * The raw search-index previewFileKey that produced this entry (undefined when the
+     * entry came from an API fallback). Used to detect a stale cache when a newer search
+     * result reports a different preview key.
+     */
+    sourcePreviewFileKey?: string;
 }
 
 interface PreviewImage {
@@ -60,7 +72,7 @@ class SearchCacheManager {
         this.previewCache = new Map();
         this.previewCacheSize = 0;
 
-        console.log("[SearchCacheManager] Initialized");
+        //console.log("[SearchCacheManager] Initialized");
     }
 
     // ==================== Asset Cache Methods ====================
@@ -73,7 +85,7 @@ class SearchCacheManager {
         const entry = this.assetCache.get(key);
 
         if (!entry) {
-            console.log(`[Cache CHECK] Asset key: ${key} - NOT FOUND in cache`);
+            //console.log(`[Cache CHECK] Asset key: ${key} - NOT FOUND in cache`);
             return null;
         }
 
@@ -81,14 +93,14 @@ class SearchCacheManager {
         const now = Date.now();
         const age = now - entry.timestamp;
         if (age > this.ASSET_TTL_MS) {
-            console.log(
-                `[Cache CHECK] Asset key: ${key} - EXPIRED (age: ${age}ms, TTL: ${this.ASSET_TTL_MS}ms)`
-            );
+            // console.log(
+            //     `[Cache CHECK] Asset key: ${key} - EXPIRED (age: ${age}ms, TTL: ${this.ASSET_TTL_MS}ms)`
+            // );
             this.assetCache.delete(key);
             return null;
         }
 
-        console.log(`[Cache CHECK] Asset key: ${key} - FOUND (age: ${age}ms)`);
+        //console.log(`[Cache CHECK] Asset key: ${key} - FOUND (age: ${age}ms)`);
 
         // Update last accessed time (for LRU)
         entry.lastAccessed = now;
@@ -113,9 +125,17 @@ class SearchCacheManager {
             lastAccessed: now,
         });
 
-        console.log(
-            `[Cache SET] Asset details for key: ${key}, cache size: ${this.assetCache.size}`
-        );
+        // console.log(
+        //     `[Cache SET] Asset details for key: ${key}, cache size: ${this.assetCache.size}`
+        // );
+    }
+
+    /**
+     * Remove an asset details entry (used to invalidate a stale entry when a newer
+     * search result reports a different preview key).
+     */
+    deleteAsset(key: string): void {
+        this.assetCache.delete(key);
     }
 
     // ==================== File Cache Methods ====================
@@ -161,7 +181,15 @@ class SearchCacheManager {
             lastAccessed: now,
         });
 
-        console.log(`[Cache SET] File details for key: ${key}, cache size: ${this.fileCache.size}`);
+        //console.log(`[Cache SET] File details for key: ${key}, cache size: ${this.fileCache.size}`);
+    }
+
+    /**
+     * Remove a file details entry (used to invalidate a stale entry when a newer
+     * search result reports a different preview key).
+     */
+    deleteFile(key: string): void {
+        this.fileCache.delete(key);
     }
 
     // ==================== Preview Cache Methods ====================
@@ -192,6 +220,20 @@ class SearchCacheManager {
         entry.lastAccessed = now;
 
         return entry.data;
+    }
+
+    /**
+     * Remove a preview image entry and reclaim its tracked size (used to invalidate a
+     * stale downloaded image when the underlying preview key changes or is removed).
+     */
+    deletePreview(key: string): void {
+        const entry = this.previewCache.get(key);
+        if (entry) {
+            this.previewCache.delete(key);
+            if (entry.size) {
+                this.previewCacheSize -= entry.size;
+            }
+        }
     }
 
     /**
@@ -279,7 +321,7 @@ class SearchCacheManager {
         this.previewCache.clear();
         this.previewCacheSize = 0;
 
-        console.log("[SearchCacheManager] All caches cleared");
+        //console.log("[SearchCacheManager] All caches cleared");
     }
 
     /**
@@ -314,9 +356,9 @@ let instance: SearchCacheManager | null = null;
 function getInstance(): SearchCacheManager {
     if (!instance) {
         instance = new SearchCacheManager();
-        console.log("[SearchCacheManager] Creating NEW singleton instance");
+        //console.log("[SearchCacheManager] Creating NEW singleton instance");
     } else {
-        console.log("[SearchCacheManager] Reusing existing singleton instance");
+        //console.log("[SearchCacheManager] Reusing existing singleton instance");
     }
     return instance;
 }

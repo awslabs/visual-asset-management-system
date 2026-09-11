@@ -4,6 +4,11 @@
  */
 
 import React, { useCallback, useState } from "react";
+import {
+    DEFAULT_AMBIENT_INTENSITY,
+    DEFAULT_DIRECTIONAL_INTENSITY,
+    DEFAULT_ENVIRONMENT_INTENSITY,
+} from "../utils/sceneLighting";
 
 interface ControlsProps {
     scene: any;
@@ -18,6 +23,10 @@ interface ControlsProps {
     // Control props
     enable3DSelection: boolean;
     onToggle3DSelection: (enabled: boolean) => void;
+    // Multi-file layout props
+    canSpreadModels?: boolean;
+    spreadModels?: boolean;
+    onToggleSpreadModels?: (spread: boolean) => void;
     // Animation props
     animations?: any[];
     animationPaused?: boolean;
@@ -36,13 +45,21 @@ const Controls: React.FC<ControlsProps> = ({
     onResetAllMaterials,
     enable3DSelection,
     onToggle3DSelection,
+    canSpreadModels,
+    spreadModels,
+    onToggleSpreadModels,
     animations,
     animationPaused,
     onToggleAnimation,
 }) => {
     const [background, setBackgroundState] = useState<string>("#333333");
-    const [ambientIntensity, setAmbientIntensity] = useState<number>(0.5);
-    const [directionalIntensity, setDirectionalIntensity] = useState<number>(0.8);
+    const [ambientIntensity, setAmbientIntensity] = useState<number>(DEFAULT_AMBIENT_INTENSITY);
+    const [directionalIntensity, setDirectionalIntensity] = useState<number>(
+        DEFAULT_DIRECTIONAL_INTENSITY
+    );
+    const [environmentIntensity, setEnvironmentIntensity] = useState<number>(
+        DEFAULT_ENVIRONMENT_INTENSITY
+    );
     const [wireframe, setWireframe] = useState<boolean>(false);
 
     const THREE = (window as any).THREE;
@@ -216,6 +233,32 @@ const Controls: React.FC<ControlsProps> = ({
         [scene]
     );
 
+    // Update the image-based environment's contribution.
+    //
+    // This is the control that brightens a physically-based material: its ambient diffuse and its
+    // whole specular response come from `scene.environment`, which neither light slider touches. A
+    // glTF mesh that declares no metallic-roughness values is metallic by specification default, so
+    // it has almost no diffuse albedo for a light to illuminate — raising the directional light adds
+    // a highlight and little else, while this changes how brightly the surface renders.
+    const updateEnvironmentIntensity = useCallback(
+        (intensity: number) => {
+            if (!scene) return;
+
+            try {
+                setEnvironmentIntensity(intensity);
+                // Present from Three.js r163. An older bundled build keeps the slider inert rather
+                // than throwing, which is why the property is checked instead of assumed.
+                if ("environmentIntensity" in scene) {
+                    scene.environmentIntensity = intensity;
+                }
+                console.log(`Environment intensity: ${intensity}`);
+            } catch (error) {
+                console.error("Error updating environment intensity:", error);
+            }
+        },
+        [scene]
+    );
+
     // Toggle wireframe
     const toggleWireframe = useCallback(() => {
         if (!threeRoot) return;
@@ -267,8 +310,9 @@ const Controls: React.FC<ControlsProps> = ({
 
             // Reset visual settings
             changeBackground("#333333");
-            updateAmbientLight(0.5);
-            updateDirectionalLight(0.8);
+            updateAmbientLight(DEFAULT_AMBIENT_INTENSITY);
+            updateDirectionalLight(DEFAULT_DIRECTIONAL_INTENSITY);
+            updateEnvironmentIntensity(DEFAULT_ENVIRONMENT_INTENSITY);
             if (wireframe) toggleWireframe();
 
             // Fit camera
@@ -282,6 +326,7 @@ const Controls: React.FC<ControlsProps> = ({
         changeBackground,
         updateAmbientLight,
         updateDirectionalLight,
+        updateEnvironmentIntensity,
         wireframe,
         toggleWireframe,
         fitToScene,
@@ -393,12 +438,30 @@ const Controls: React.FC<ControlsProps> = ({
                         />
                         <span>Enable 3D Selection</span>
                     </label>
+                    {canSpreadModels && onToggleSpreadModels && (
+                        <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
+                            <input
+                                type="checkbox"
+                                checked={!!spreadModels}
+                                onChange={(e) => onToggleSpreadModels(e.target.checked)}
+                                style={{ marginRight: "8px" }}
+                            />
+                            <span>Spread Models</span>
+                        </label>
+                    )}
                 </div>
                 <div style={{ fontSize: "0.7em", color: "#999", marginTop: "4px" }}>
                     {enable3DSelection
                         ? "Click objects in 3D view to select"
                         : "3D selection disabled"}
                 </div>
+                {canSpreadModels && (
+                    <div style={{ fontSize: "0.7em", color: "#999", marginTop: "4px" }}>
+                        {spreadModels
+                            ? "Files laid out side by side for viewing"
+                            : "Files shown at their authored coordinates, so they may overlap"}
+                    </div>
+                )}
             </div>
 
             {/* Animation Controls */}
@@ -474,7 +537,7 @@ const Controls: React.FC<ControlsProps> = ({
                     <input
                         type="range"
                         min="0"
-                        max="2"
+                        max="5"
                         step="0.1"
                         value={ambientIntensity}
                         onChange={(e) => updateAmbientLight(parseFloat(e.target.value))}
@@ -488,12 +551,29 @@ const Controls: React.FC<ControlsProps> = ({
                     <input
                         type="range"
                         min="0"
-                        max="2"
+                        max="5"
                         step="0.1"
                         value={directionalIntensity}
                         onChange={(e) => updateDirectionalLight(parseFloat(e.target.value))}
                         style={{ width: "100%" }}
                     />
+                </div>
+                <div style={{ marginBottom: "8px" }}>
+                    <label style={{ display: "block", marginBottom: "4px", fontSize: "0.8em" }}>
+                        Environment: {environmentIntensity.toFixed(2)}
+                    </label>
+                    <input
+                        type="range"
+                        min="0"
+                        max="3"
+                        step="0.1"
+                        value={environmentIntensity}
+                        onChange={(e) => updateEnvironmentIntensity(parseFloat(e.target.value))}
+                        style={{ width: "100%" }}
+                    />
+                    <div style={{ fontSize: "0.7em", color: "#999", marginTop: "2px" }}>
+                        Overall brightness of metallic and glossy surfaces
+                    </div>
                 </div>
             </div>
 

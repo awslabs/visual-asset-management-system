@@ -3,22 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useContext, useState } from "react";
-import {
-    Alert,
-    Box,
-    Button,
-    Container,
-    Grid,
-    Header,
-    SpaceBetween,
-} from "@cloudscape-design/components";
+import React, { useState } from "react";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import { AssetDetail } from "./AssetUpload";
 import { Metadata } from "../../components/single/Metadata";
 import { FileUploadTableItem } from "./FileUploadTable";
 import UploadManager from "./UploadManager";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
 import { useNavigate } from "react-router";
+import Synonyms from "../../synonyms";
 
 interface AssetUploadWorkflowProps {
     assetDetail: AssetDetail;
@@ -97,15 +95,24 @@ export default function AssetUploadWorkflow({
     return (
         <Container header={<Header variant="h2">Asset Upload</Header>}>
             <SpaceBetween direction="vertical" size="l">
+                {uploadError && (
+                    <Alert
+                        type="error"
+                        header="Upload Failed"
+                        dismissible
+                        onDismiss={() => setUploadError(null)}
+                    >
+                        {uploadError.message ||
+                            `The ${Synonyms.asset} upload could not be completed.`}
+                    </Alert>
+                )}
+
                 <UploadManager
                     assetDetail={assetDetail}
                     metadata={metadata}
                     fileItems={allFileItems}
                     onUploadComplete={handleUploadComplete}
-                    onError={(error) => {
-                        // Just log the error but don't switch to error state
-                        console.error("Upload error:", error);
-                    }}
+                    onError={handleUploadError}
                     isExistingAsset={isExistingAsset}
                     onCancel={onCancel}
                     keyPrefix={keyPrefix}

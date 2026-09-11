@@ -4,7 +4,12 @@
  */
 
 import React, { Suspense, useState, useEffect, useRef, Component } from "react";
-import { Container, Grid, Header, Spinner, Box, Alert } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Container from "@cloudscape-design/components/container";
+import Grid from "@cloudscape-design/components/grid";
+import Header from "@cloudscape-design/components/header";
+import Spinner from "@cloudscape-design/components/spinner";
 
 /**
  * Error boundary that catches render errors from viewer plugins.
@@ -90,6 +95,11 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     const [registryInitialized, setRegistryInitialized] = useState(false);
     const [viewerLoading, setViewerLoading] = useState(false);
     const mountedRef = useRef(true);
+    // Mirrors selectedViewerId so the compatibility effect can read the current
+    // selection without taking it as a dependency (re-running that effect on a
+    // selection change would clobber the user's pick).
+    const selectedViewerIdRef = useRef<string | null>(null);
+    selectedViewerIdRef.current = selectedViewerId;
 
     // Initialize plugin registry
     useEffect(() => {
@@ -128,23 +138,41 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         );
         setCompatibleViewers(viewerMetadata);
 
-        // Auto-select only if there's exactly one viewer available
-        // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers
-        if (viewerMetadata.length === 1 && !selectedViewerId) {
-            setSelectedViewerId(viewerMetadata[0].config.id);
-        } else if (viewerMetadata.length > 1 && !selectedViewerId) {
-            // Multiple viewers available - don't auto-select, force user choice
-            setSelectedViewerId(null);
-            setLoading(false); // Stop loading state to show the selector
-        } else if (viewerMetadata.length === 0) {
+        if (viewerMetadata.length === 0) {
             // Customize error message based on whether multiple files are selected
             const errorMessage = isMultiFile
                 ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
                       ", "
                   )}`
                 : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
+            setSelectedViewerId(null);
+            setLoadedViewer(null);
             setError(errorMessage);
             setLoading(false); // Stop loading when no viewers are found
+            return;
+        }
+
+        // The previous selection's error (including "no compatible viewers" for
+        // a file the user has already left) does not describe this selection.
+        setError(null);
+
+        // Auto-select only if there's exactly one viewer available
+        // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers
+        const currentId = selectedViewerIdRef.current;
+        const selectionStillCompatible =
+            !!currentId && viewerMetadata.some((metadata) => metadata.config.id === currentId);
+        if (selectionStillCompatible) {
+            return;
+        }
+        if (viewerMetadata.length === 1) {
+            setSelectedViewerId(viewerMetadata[0].config.id);
+        } else {
+            // Multiple viewers available - don't auto-select, force user choice.
+            // The previously selected viewer cannot render these files, so its
+            // component must come down with the selection.
+            setSelectedViewerId(null);
+            setLoadedViewer(null);
+            setLoading(false); // Stop loading state to show the selector
         }
     }, [files, isPreviewMode, registryInitialized]); // Removed selectedViewerId from dependencies
 
@@ -229,6 +257,13 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     // Determine the content to show inside the viewer container
     const isShowingViewer =
         registryInitialized && !loading && !viewerLoading && !error && compatibleViewers.length > 0;
+
+    // Per-file asset context (Decision #3). For a single file, prefer its own context.
+    // For multi-file, use the first file's context as the shared pair (same-asset case);
+    // top-level props remain the fallback for legacy callers that don't set per-file context.
+    const effectiveAssetId = (files.length === 1 ? files[0].assetId : files[0]?.assetId) ?? assetId;
+    const effectiveDatabaseId =
+        (files.length === 1 ? files[0].databaseId : files[0]?.databaseId) ?? databaseId;
 
     const renderStatusContent = () => {
         if (!registryInitialized || loading || viewerLoading) {
@@ -386,8 +421,8 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                     >
                                         {loadedViewer ? (
                                             <loadedViewer.component
-                                                assetId={assetId}
-                                                databaseId={databaseId}
+                                                assetId={effectiveAssetId}
+                                                databaseId={effectiveDatabaseId}
                                                 assetKey={
                                                     files.length === 1 ? files[0].key : undefined
                                                 }
@@ -396,6 +431,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                         ? files.map((f) => f.key)
                                                         : undefined
                                                 }
+                                                multiFiles={files.length > 1 ? files : undefined}
                                                 versionId={
                                                     files.length === 1
                                                         ? files[0].versionId

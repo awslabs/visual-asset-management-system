@@ -1,0 +1,33 @@
+{
+    "templateId": "cosmos-transfer-edge-2b",
+    "templateName": "Transfer (edge control)",
+    "description": "Style/content transfer with edge control signals using the Cosmos Transfer 2B model.",
+    "configFormat": "json",
+    "configBody": "{\"DISABLE_GUARDRAILS\": \"true\", \"CONTROL_WEIGHT\": \"1.0\", \"PROMPT\": \"{{PROMPT}}\", \"CONTROL_TYPE\": \"{{CONTROL_TYPE}}\", \"CONTROL_PATH\": \"{{CONTROL_PATH}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Transforms an existing video under the guidance of a control signal (edge detection for this template). Select the source video as the input file.\n\nAsset metadata this pipeline reads (optional):\n  COSMOS_TRANSFER_PROMPT        Describes the transformation to apply.\n  COSMOS_TRANSFER_CONTROL_TYPE  Control-signal type used to condition the transfer.\n  COSMOS_TRANSFER_CONTROL_PATH  Asset-relative path to the control input.\n\nHow to supply metadata: set these as metadata on the ASSET (Metadata tab on the asset page, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: a value you type into a field above WINS. Asset metadata is used only where the field is left blank, so a standing value on the asset acts as a per-asset default.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "The generation prompt. Leave blank to fall back to the COSMOS_TRANSFER_PROMPT key on the asset's metadata."
+        },
+        {
+            "tagKey": "CONTROL_TYPE",
+            "type": "string",
+            "required": false,
+            "label": "Control type",
+            "description": "Control signal to guide the restyling (e.g. edge). Blank falls back to COSMOS_TRANSFER_CONTROL_TYPE asset metadata, then the pipeline default."
+        },
+        {
+            "tagKey": "CONTROL_PATH",
+            "type": "string",
+            "required": false,
+            "label": "Control file path",
+            "description": "Asset-relative path to the control video. Blank falls back to COSMOS_TRANSFER_CONTROL_PATH asset metadata."
+        }
+    ]
+}

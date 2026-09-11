@@ -65,12 +65,12 @@ class PipelineStage(JsonEncodable):
         self.id = str(uuid.uuid4())
 
 
-@dataclass 
+@dataclass
 class PipelineDefinition(JsonEncodable):
     jobName: str
     stages: list[PipelineStage ]
-    inputMetadata: str
-    inputParameters: str
+    inputMetadataS3Location: str = ""
+    inputConfigurationS3Location: str = ""
     externalSfnTaskToken: str = ""
     localTest: str = "False"
     completedStages: list[PipelineStage] = None
@@ -82,8 +82,8 @@ class PipelineExecutionParams(JsonEncodable):
     jobName: str
     currentStageType: str
     definition: list[str] #Serialized definition list array of PipelineDefinition for CommandInput
-    inputMetadata: str
-    inputParameters: str
+    inputMetadataS3Location: str = ""
+    inputConfigurationS3Location: str = ""
     externalSfnTaskToken: str = ""
     status: PipelineStatus = PipelineStatus.PENDING
     

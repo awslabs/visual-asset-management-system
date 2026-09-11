@@ -60,7 +60,12 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
 
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
-    const hasPreview = !!previewKey;
+    // The preview is served by the asset download API, which refuses a non-distributable asset, so
+    // treat that asset as having no preview: the thumbnail, its enlarging modal, and the download
+    // call that would fail are all skipped. Compared against false so an asset record that predates
+    // the field keeps its preview.
+    const isNotDistributable = asset?.isDistributable === false;
+    const hasPreview = !!previewKey && !isNotDistributable;
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
     const [thumbnailError, setThumbnailError] = useState<boolean>(false);
@@ -237,6 +242,47 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
             >
                 <div style={{ marginBottom: "-10px" }}>
                     <div style={{ display: "flex", gap: "20px" }}>
+                        {/* Not-distributable notice. It sits in the slot the preview thumbnail would
+                            occupy, which is always free when this shows because a non-distributable
+                            asset renders no thumbnail, and it is capped in width and shorter than the
+                            info columns beside it — so it consumes otherwise-empty space rather than
+                            adding any height to the page. */}
+                        {isNotDistributable && (
+                            <div
+                                style={{
+                                    flexShrink: 0,
+                                    maxWidth: "200px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        border: "1px solid #8d6605",
+                                        borderRadius: "4px",
+                                        padding: "8px 10px",
+                                        backgroundColor: "rgba(141, 102, 5, 0.08)",
+                                    }}
+                                >
+                                    <div
+                                        style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            fontWeight: "bold",
+                                            marginBottom: "4px",
+                                        }}
+                                    >
+                                        <Icon name="status-warning" variant="warning" />
+                                        Not distributable
+                                    </div>
+                                    <Box variant="small">
+                                        {`File downloads, previews, and viewers are turned off for this ${Synonyms.asset}. Processing pipelines are unaffected.`}
+                                    </Box>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Optional preview thumbnail — only takes the space it needs */}
                         {hasPreview && thumbnailUrl && (
                             <div

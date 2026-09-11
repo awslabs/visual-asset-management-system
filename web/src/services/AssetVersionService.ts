@@ -20,13 +20,13 @@ export const fetchAllAssetVersions = async ({
     assetId,
     pageSize = 100,
     showArchived = false,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
         }
 
-        let allVersions = [];
+        let allVersions: any[] = [];
         let nextToken = null;
 
         do {
@@ -40,7 +40,10 @@ export const fetchAllAssetVersions = async ({
 
             if (!success || !response) {
                 console.log("Failed to fetch page of versions");
-                break;
+                return [
+                    false,
+                    typeof response === "string" ? response : "Failed to load asset versions",
+                ];
             }
 
             const versions = response.versions || [];
@@ -58,7 +61,7 @@ export const fetchAllAssetVersions = async ({
         return [true, { versions: allVersions, totalCount: allVersions.length }];
     } catch (error) {
         console.log("Error fetching all asset versions:", error);
-        return [false, error?.message || "Failed to fetch all asset versions"];
+        return [false, (error as any)?.message || "Failed to fetch all asset versions"];
     }
 };
 
@@ -78,13 +81,13 @@ export const fetchAssetVersions = async ({
     pageSize = 100,
     startingToken = null,
     showArchived = false,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
         }
 
-        const queryParams = {
+        const queryParams: any = {
             pageSize: pageSize.toString(),
         };
 
@@ -152,7 +155,7 @@ export const fetchAssetVersions = async ({
         }
     } catch (error) {
         console.log("Error fetching asset versions:", error);
-        return [false, error?.message || "Failed to fetch asset versions"];
+        return [false, (error as any)?.message || "Failed to fetch asset versions"];
     }
 };
 
@@ -164,7 +167,7 @@ export const fetchAssetVersions = async ({
  * @param {string} params.assetVersionId - Asset version ID
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId }) => {
+export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId }: any) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
@@ -197,7 +200,7 @@ export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId })
         }
     } catch (error) {
         console.log("Error fetching asset version:", error);
-        return [false, error?.message || "Failed to fetch asset version"];
+        return [false, (error as any)?.message || "Failed to fetch asset version"];
     }
 };
 
@@ -222,7 +225,7 @@ export const createAssetVersion = async ({
     files = [],
     comment,
     versionAlias,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -232,7 +235,7 @@ export const createAssetVersion = async ({
             return [false, "Comment is required"];
         }
 
-        const body = {
+        const body: any = {
             useLatestFiles,
             comment: comment.trim(),
         };
@@ -243,7 +246,7 @@ export const createAssetVersion = async ({
 
         if (!useLatestFiles && files.length > 0) {
             // Format files according to the new model structure
-            body.files = files.map((file) => ({
+            body.files = files.map((file: any) => ({
                 relativeKey: file.relativeKey || file.key,
                 versionId: file.versionId,
             }));
@@ -280,7 +283,7 @@ export const createAssetVersion = async ({
         }
     } catch (error) {
         console.log("Error creating asset version:", error);
-        return [false, error?.message || "Failed to create asset version"];
+        return [false, (error as any)?.message || "Failed to create asset version"];
     }
 };
 
@@ -300,13 +303,13 @@ export const revertAssetVersion = async ({
     assetVersionId,
     comment = "",
     revertMetadata = false,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
         }
 
-        const body = {
+        const body: any = {
             revertMetadata: revertMetadata,
         };
 
@@ -345,7 +348,7 @@ export const revertAssetVersion = async ({
         }
     } catch (error) {
         console.log("Error reverting asset version:", error);
-        return [false, error?.message || "Failed to revert asset version"];
+        return [false, (error as any)?.message || "Failed to revert asset version"];
     }
 };
 
@@ -365,7 +368,7 @@ export const compareAssetVersions = async ({
     version1Id,
     version2Id,
     compareWithCurrent = false,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId || !version1Id) {
             return [false, "Required parameters missing"];
@@ -399,7 +402,7 @@ export const compareAssetVersions = async ({
 
             // Convert S3Files to FileVersion format for comparison
             version2 = {
-                files: currentFiles.map((file) => ({
+                files: currentFiles.map((file: any) => ({
                     relativeKey: file.relativePath || file.key,
                     versionId: file.versionId,
                     size: file.size,
@@ -431,7 +434,7 @@ export const compareAssetVersions = async ({
         return [true, comparison];
     } catch (error) {
         console.log("Error comparing versions:", error);
-        return [false, error?.message || "Failed to compare versions"];
+        return [false, (error as any)?.message || "Failed to compare versions"];
     }
 };
 
@@ -441,21 +444,21 @@ export const compareAssetVersions = async ({
  * @param {Object} version2 - Second version
  * @returns {Object} Comparison result
  */
-function generateComparison(version1, version2) {
+function generateComparison(version1: any, version2: any) {
     // Map files by relative key for easier comparison
-    const files1Map = new Map(version1.files.map((f) => [f.relativeKey, f]));
-    const files2Map = new Map(version2.files.map((f) => [f.relativeKey, f]));
+    const files1Map = new Map<any, any>(version1.files.map((f: any) => [f.relativeKey, f]));
+    const files2Map = new Map<any, any>(version2.files.map((f: any) => [f.relativeKey, f]));
 
     // Get all unique keys
     const allKeys = new Set([...files1Map.keys(), ...files2Map.keys()]);
 
     // Generate comparison for each file
-    const fileComparisons = [];
+    const fileComparisons: any[] = [];
     for (const key of allKeys) {
         const file1 = files1Map.get(key);
         const file2 = files2Map.get(key);
 
-        let status;
+        let status: string | undefined;
         if (!file1 && file2) {
             status = "added";
         } else if (file1 && !file2) {
@@ -481,8 +484,8 @@ function generateComparison(version1, version2) {
     }
 
     // Sort by status and name
-    const statusOrder = { added: 1, removed: 2, modified: 3, unchanged: 4 };
-    fileComparisons.sort((a, b) => {
+    const statusOrder: any = { added: 1, removed: 2, modified: 3, unchanged: 4 };
+    fileComparisons.sort((a: any, b: any) => {
         const statusDiff = statusOrder[a.status] - statusOrder[b.status];
         if (statusDiff !== 0) return statusDiff;
         return a.relativeKey.localeCompare(b.relativeKey);
@@ -490,10 +493,10 @@ function generateComparison(version1, version2) {
 
     // Generate summary
     const summary = {
-        added: fileComparisons.filter((f) => f.status === "added").length,
-        removed: fileComparisons.filter((f) => f.status === "removed").length,
-        modified: fileComparisons.filter((f) => f.status === "modified").length,
-        unchanged: fileComparisons.filter((f) => f.status === "unchanged").length,
+        added: fileComparisons.filter((f: any) => f.status === "added").length,
+        removed: fileComparisons.filter((f: any) => f.status === "removed").length,
+        modified: fileComparisons.filter((f: any) => f.status === "modified").length,
+        unchanged: fileComparisons.filter((f: any) => f.status === "unchanged").length,
         total: fileComparisons.length,
     };
 
@@ -513,7 +516,7 @@ function generateComparison(version1, version2) {
  * @param {string} params.filePath - File path
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchFileVersions = async ({ databaseId, assetId, filePath }) => {
+export const fetchFileVersions = async ({ databaseId, assetId, filePath }: any) => {
     try {
         if (!databaseId || !assetId || !filePath) {
             return [false, "Database ID, Asset ID, and File Path are required"];
@@ -540,7 +543,7 @@ export const fetchFileVersions = async ({ databaseId, assetId, filePath }) => {
         }
     } catch (error) {
         console.log("Error fetching file versions:", error);
-        return [false, error?.message || "Failed to fetch file versions"];
+        return [false, (error as any)?.message || "Failed to fetch file versions"];
     }
 };
 
@@ -553,7 +556,7 @@ export const fetchFileVersions = async ({ databaseId, assetId, filePath }) => {
  * @param {Object} params.body - Update body with optional comment and versionAlias
  * @returns {Promise<[boolean, any]>}
  */
-export const updateAssetVersion = async ({ databaseId, assetId, assetVersionId, body }) => {
+export const updateAssetVersion = async ({ databaseId, assetId, assetVersionId, body }: any) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
@@ -598,7 +601,7 @@ export const updateAssetVersion = async ({ databaseId, assetId, assetVersionId, 
         }
     } catch (error) {
         console.log("Error updating asset version:", error);
-        return [false, error?.message || "Failed to update asset version"];
+        return [false, (error as any)?.message || "Failed to update asset version"];
     }
 };
 
@@ -610,7 +613,7 @@ export const updateAssetVersion = async ({ databaseId, assetId, assetVersionId, 
  * @param {string} params.assetVersionId - Asset version ID
  * @returns {Promise<[boolean, any]>}
  */
-export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId }) => {
+export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId }: any) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
@@ -648,7 +651,7 @@ export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId 
         }
     } catch (error) {
         console.log("Error archiving asset version:", error);
-        return [false, error?.message || "Failed to archive asset version"];
+        return [false, (error as any)?.message || "Failed to archive asset version"];
     }
 };
 
@@ -660,7 +663,7 @@ export const archiveAssetVersion = async ({ databaseId, assetId, assetVersionId 
  * @param {string} params.assetVersionId - Asset version ID
  * @returns {Promise<[boolean, any]>}
  */
-export const unarchiveAssetVersion = async ({ databaseId, assetId, assetVersionId }) => {
+export const unarchiveAssetVersion = async ({ databaseId, assetId, assetVersionId }: any) => {
     try {
         if (!databaseId || !assetId || !assetVersionId) {
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
@@ -698,6 +701,6 @@ export const unarchiveAssetVersion = async ({ databaseId, assetId, assetVersionI
         }
     } catch (error) {
         console.log("Error unarchiving asset version:", error);
-        return [false, error?.message || "Failed to unarchive asset version"];
+        return [false, (error as any)?.message || "Failed to unarchive asset version"];
     }
 };

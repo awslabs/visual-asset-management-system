@@ -9,6 +9,8 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as events from "aws-cdk-lib/aws-events";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -21,6 +23,7 @@ import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 
 export function buildVamsExecuteRapidPipelineFunction(
@@ -61,6 +64,20 @@ export function buildVamsExecuteRapidPipelineFunction(
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -73,6 +90,8 @@ export function buildOpenPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -100,12 +119,16 @@ export function buildOpenPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
+    orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
     const stateTaskPolicy = new iam.PolicyStatement({
@@ -116,6 +139,7 @@ export function buildOpenPipelineFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -166,8 +190,35 @@ export function buildConstructPipelineFunction(
         })
     );
 
+    // constructPipeline reports the workflow's waitForCallback token when definition construction
+    // raises. This state is a `tasks.LambdaInvoke` with no `.addCatch`, so a raise ends the pipeline's
+    // state machine before `pipelineEnd` runs and nothing else can report on the token — the run would
+    // display RUNNING for its full taskTimeout.
+    //
+    // The grant must land in the SAME change as the handler's call. Without it the call raises
+    // AccessDeniedException, the handler logs it, and the task hangs exactly as before — the only
+    // difference being one log line. `taskTokenFailureGrants.test.ts` pairs the calling handler with its
+    // builder, so it passes while the handler makes no call and turns red the moment it starts.
+    // Scoped to this deployment's account and region, matching every other pipeline's task-token grant.
+    // A task token names no state machine the builder can resolve, so the resource part stays a
+    // wildcard; the partition/region/account prefix is what keeps it from being an unbounded `*`.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskFailure"],
+            effect: iam.Effect.ALLOW,
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
+        })
+    );
+
+    grantReadPermissionsToAllAssetBuckets(fun);
+
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -222,5 +273,6 @@ export function buildPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
