@@ -107,4 +107,151 @@ class TestFixtureGenerator:
         assert gen.PART_STEPS[1][0].text.startswith("Step one.")
 
 
+R0_PROBES = (
+    "transcribe-conditioned-statement", "silent-flac-transcription", "language-codes", "bedrock-converse",
+    "vpc-endpoint-services", "fargate-vcpu-quota", "batch-9kb-command", "batch-failing-container-cause",
+)
+
+
+class _FakeSts:
+    def get_caller_identity(self):
+        return {"Arn": "arn:aws-us-gov:sts::123456789012:assumed-role/Admin/probe", "Account": "123456789012",
+                "UserId": "AROAEXAMPLE:probe"}
+
+
+class _FakeSession:
+    """Only STS answers; any other client means a probe touched AWS before its SKIP check."""
+
+    def client(self, service, **kwargs):
+        if service == "sts":
+            return _FakeSts()
+        raise AssertionError(f"probe built a {service!r} client without its prerequisites")
+
+
+class TestR0Probes:
+    def test_probe_registry_matches_the_r0_table(self, monkeypatch):
+        probes = _fresh_import("video_sop_bom_r0_probes", monkeypatch)
+        assert tuple(probes.PROBES) == R0_PROBES
+        assert all(probes.PROBE_SETTLES[name] for name in R0_PROBES)
+        # The probe's copy of the enum is pinned to the container's vocab (the same repository, three
+        # directories up), and the batch-table confirmation is data the enum must match.
+        container = os.path.join(HERE, "..", "..", "..", "backendPipelines", "genAi", "videoSopBom", "container")
+        assert os.path.isdir(container), container
+        sys.path.insert(0, os.path.abspath(container))
+        from video_sop_bom_pipeline import vocab  # noqa: PLC0415
+
+        assert probes.LANGUAGE_CODES == vocab.LANGUAGE_CODES
+        assert probes.LANGUAGE_CODES[0] == "auto"
+        assert set(probes.LANGUAGE_CODES[1:]) == set(probes.BATCH_CONFIRMED["codes"])
+        assert probes.BATCH_CONFIRMED["date"] == "2026-09-09" and probes.BATCH_CONFIRMED["source"].startswith("https://")
+
+    def test_probe_role_policy_is_exactly_the_d7_statement(self):
+        import video_sop_bom_r0_probes as probes  # noqa: PLC0415
+        key = "arn:aws-us-gov:kms:us-gov-west-1:123456789012:key/0f1e2d3c"
+        policy = probes.build_probe_role_policy("vams-aux", key, "aws-us-gov", "us-gov-west-1", "123456789012")
+        start, jobs, s3, kms = policy["Statement"]
+        assert start["Action"] == ["transcribe:StartTranscriptionJob"] and start["Resource"] == "*"
+        assert start["Condition"] == {"StringEquals": {
+            "transcribe:OutputBucketName": "vams-aux", "transcribe:OutputEncryptionKMSKeyId": key}}
+        assert jobs["Action"] == ["transcribe:GetTranscriptionJob", "transcribe:DeleteTranscriptionJob"]
+        assert jobs["Resource"] == "arn:aws-us-gov:transcribe:us-gov-west-1:123456789012:transcription-job/vams-video-sop-bom-*"
+        assert s3["Resource"] == ["arn:aws-us-gov:s3:::vams-aux", "arn:aws-us-gov:s3:::vams-aux/*"]
+        assert "s3:DeleteObject" in s3["Action"]
+        assert kms["Resource"] == key and "kms:GenerateDataKey*" in kms["Action"]
+        without_key = probes.build_probe_role_policy("vams-aux", "", "aws", "us-east-1", "123456789012")
+        assert len(without_key["Statement"]) == 3
+        assert without_key["Statement"][0]["Condition"] == {"StringEquals": {"transcribe:OutputBucketName": "vams-aux"}}
+        assert "transcribe:OutputEncryptionKMSKeyId" not in json.dumps(without_key)
+
+    def test_probe_without_prerequisite_prints_skip_never_pass(self, tmp_path, capsys):
+        import video_sop_bom_r0_probes as probes  # noqa: PLC0415
+        report = tmp_path / "r0.json"
+        rc = probes.main(["--region", "us-gov-west-1", "--only", "batch-9kb-command",
+                          "--only", "transcribe-conditioned-statement", "--report", str(report)],
+                         session_factory=lambda args: _FakeSession())
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "identity: arn:aws-us-gov:sts::123456789012:assumed-role/Admin/probe" in out
+        assert "[SKIP] batch-9kb-command -- needs --batch-job-queue and --batch-job-definition" in out
+        assert "[SKIP] transcribe-conditioned-statement -- needs --aux-bucket" in out
+        assert "PASS" not in out and "[OBSERVED]" not in out
+        assert "R0 PROBES: observed 0  skipped 2  errors 0" in out
+        saved = json.loads(report.read_text(encoding="utf-8"))
+        assert set(saved["probes"]) == {"batch-9kb-command", "transcribe-conditioned-statement"}
+        assert all("skip" in entry for entry in saved["probes"].values())
+        assert saved["title"] == probes.REPORT_TITLE and saved["verdict"] == "RECORDED"
+        assert saved["rows"] == [["batch-9kb-command", "SKIP: needs --batch-job-queue and --batch-job-definition"],
+                                 ["transcribe-conditioned-statement", "SKIP: needs --aux-bucket"]]
+        assert all(saved[key] is None for key in probes.FLAT_KEYS), "a skipped probe records no value"
+
+    def test_language_codes_probe_prints_observed_lines_and_report_values(self, tmp_path, capsys):
+        """Positive control for the [OBSERVED] path: this probe needs no credentials (the SDK model is
+        local), so it completes under the fake session; the alias flag spellings are exercised here,
+        while WP06 Task 8 passes the canonical ones."""
+        import video_sop_bom_r0_probes as probes  # noqa: PLC0415
+        report = tmp_path / "r0.json"
+        rc = probes.main(["--region", "us-east-1", "--only", "language-codes", "--json-out", str(report),
+                          "--model-id", "m", "--job-queue", "q", "--fixture-flac", "f.flac"],
+                         session_factory=lambda args: _FakeSession())
+        out = capsys.readouterr().out
+        assert rc == 0
+        for code in probes.LANGUAGE_CODES[1:]:
+            assert f"  [OBSERVED] sdk_enum.{code} = True" in out, code
+        assert "  [OBSERVED] auto = IdentifyLanguage=True (not a LanguageCode value)" in out
+        assert "[SKIP]" not in out and "PASS" not in out
+        assert "R0 PROBES: observed 14  skipped 0  errors 0" in out
+        saved = json.loads(report.read_text(encoding="utf-8"))
+        assert saved["probes"]["language-codes"]["sdk_enum.en-US"] is True
+        assert "skip" not in saved["probes"]["language-codes"]
+        assert saved["languageCodeEnumSupported"] == list(probes.LANGUAGE_CODES[1:])
+        assert saved["rows"][0][0] == "language-codes" and saved["rows"][0][1].startswith("sdk_enum.en-US=True")
+        assert saved["fargateOnDemandVcpuQuota"] is None, "a probe that did not run records None"
+
+    def test_summarize_maps_probe_observations_onto_the_flat_keys(self):
+        import video_sop_bom_r0_probes as probes  # noqa: PLC0415
+        observations = {
+            "silent-flac-transcription": {"en_us.status": "COMPLETED", "en_us.subtitle_file_uris": None,
+                                          "auto.status": "FAILED", "seconds": 61.0},
+            "fargate-vcpu-quota": {"applied_value": 6.0, "seconds": 0.4},
+            "bedrock-converse": {"model_id": "m", "error": "AccessDeniedException: no access", "seconds": 0.3},
+            "vpc-endpoint-services": {"com.amazonaws.us-east-1.transcribe": ["Interface"],
+                                      "com.amazonaws.us-east-1.bedrock-runtime": "absent", "seconds": 0.2},
+            "transcribe-conditioned-statement": {"start_with_key": "accepted", "start_without_key": "AccessDeniedException: x",
+                                                 "start_mismatched_bucket": "AccessDeniedException: y", "seconds": 90.0},
+            "batch-9kb-command": {"submit_job": "ClientException: too long", "seconds": 0.5},
+            "batch-failing-container-cause": {"top_level_keys": ["container", "status", "statusReason"], "seconds": 40.0},
+            "language-codes": {"sdk_enum.en-US": True, "sdk_enum.zh-CN": False, "seconds": 0.1},
+        }
+        flat = probes.summarize(observations, "us-east-1")
+        assert set(probes.FLAT_KEYS) < set(flat) and flat["title"] == probes.REPORT_TITLE
+        assert flat["identifyLanguageOnSilence"] == "FAILED" and flat["languageCodeOnSilence"] == "COMPLETED"
+        assert flat["subtitleFileUrisOnSilence"] is False
+        assert flat["fargateOnDemandVcpuQuota"] == 6.0
+        assert flat["bedrockConverseProbe"] == "AccessDeniedException"
+        assert flat["transcribeEndpointServiceName"] == "com.amazonaws.us-east-1.transcribe"
+        assert flat["bedrockRuntimeEndpointServiceName"] is None
+        assert flat["conditionedStartTranscriptionJob"] == {
+            "withKey": "accepted", "withoutKey": "AccessDeniedException: x", "mismatchedBucket": "AccessDeniedException: y"}
+        assert flat["overridesCapSurface"] == "validation"
+        assert flat["noCallbackCauseKeys"] == ["container", "status", "statusReason"]
+        assert flat["languageCodeEnumSupported"] == ["en-US"]
+        assert [row[0] for row in flat["rows"]] == list(observations)
+        accepted = {"bedrock-converse": {"stopReason": "max_tokens"},
+                    "batch-9kb-command": {"submit_job": "accepted", "status": "FAILED"}}
+        assert probes.summarize(accepted, "us-east-1")["bedrockConverseProbe"] == "ok"
+        assert probes.summarize(accepted, "us-east-1")["overridesCapSurface"] == "job-failed"
+        skipped = {"bedrock-converse": {"skip": "x", "seconds": 0.0}}
+        assert all(probes.summarize(skipped, "us-east-1")[key] is None for key in probes.FLAT_KEYS)
+        assert all(probes.summarize({}, "us-east-1")[key] is None for key in probes.FLAT_KEYS)
+
+    def test_list_probes_and_language_enum_run_offline(self, capsys):
+        import video_sop_bom_r0_probes as probes  # noqa: PLC0415
+        assert probes.main(["--list-probes"]) == 0
+        out = capsys.readouterr().out
+        assert all(name in out for name in R0_PROBES)
+        present = probes.language_codes_in_service_model(probes.LANGUAGE_CODES, "us-east-1")
+        assert "auto" not in present and len(present) == 12
+        assert all(present.values()), [c for c, ok in present.items() if not ok]
+
+
 # --- end of fixture-and-probe tests ---
