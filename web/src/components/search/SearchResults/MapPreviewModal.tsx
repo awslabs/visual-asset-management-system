@@ -8,6 +8,7 @@ import Modal from "@cloudscape-design/components/modal";
 import Box from "@cloudscape-design/components/box";
 import Map, { Layer, MapRef, Marker, NavigationControl, Source } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "../../../common/utils/maplibreWorker";
 import { LocationData } from "../utils/locationUtils";
 import { offsetForKey, splitGeoJsonForColoring } from "../utils/polygonColor";
 

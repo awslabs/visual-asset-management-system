@@ -92,7 +92,7 @@ This software includes third party software subject to the following copyrights:
 | react-error-boundary                | ^4.0.9        | MIT                     |
 | react-hook-form                     | ^7.53.0       | MIT                     |
 | react-loading-icons                 | ^1.1.0        | MIT                     |
-| react-map-gl                        | ^8.1.0        | MIT                     |
+| react-map-gl                        | ^8.1.3        | MIT                     |
 | react-papaparse                     | ^3.18.1       | MIT                     |
 | react-pdf                           | ^10.1.0       | MIT                     |
 | react-router                        | ^7.18.2       | MIT                     |

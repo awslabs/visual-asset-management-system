@@ -14,6 +14,7 @@ import Map, {
     Layer,
 } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "../../common/utils/maplibreWorker";
 import { SearchPageViewProps } from "./SearchPageTypes";
 import {
     Box,
