@@ -32,7 +32,7 @@
         "framesSkipped": { "type": "array", "items": { "$ref": "#/$defs/skippedFrame" } },
         "limits": { "$ref": "#/$defs/limits" },
         "warnings": {
-            "description": "Contains \"no speech detected\" for a silent run.",
+            "description": "Non-fatal notices recorded during the run.",
             "type": "array",
             "items": { "type": "string" }
         },

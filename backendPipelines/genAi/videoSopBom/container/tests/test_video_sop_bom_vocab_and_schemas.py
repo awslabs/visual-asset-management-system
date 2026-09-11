@@ -532,8 +532,8 @@ SOP_EXAMPLE = {
     "safety_notes": ["Wear safety glasses when prying the gasket."],
     "steps": [SOP_STEP_EXAMPLE],
 }
-EMPTY_SOP = {**SOP_EXAMPLE, "product_name_from_narration": None, "source_videos": ["/silent.mp4"],
-             "summary": "", "safety_notes": [], "steps": []}
+ZERO_STEP_SOP = {**SOP_EXAMPLE, "product_name_from_narration": None, "source_videos": ["/teardown-part1.mp4"],
+                 "summary": "", "safety_notes": [], "steps": []}
 
 LAB_SUMMARY_EXAMPLE = {
     "product_name": "Cognex DataMan 80",
@@ -591,8 +591,8 @@ class TestSopAndLabSummarySchemas:
         assert "does not match" in _errors(schema, {**SOP_EXAMPLE, "steps": [no_slash]})[0]
         assert _errors(schema, {**SOP_EXAMPLE, "steps": [{**SOP_STEP_EXAMPLE, "frame_ref": None}]}) == []
 
-    def test_sop_schema_accepts_the_empty_deliverable(self):
-        assert _errors(load_schema("sop_schema"), EMPTY_SOP) == []
+    def test_sop_schema_accepts_zero_steps(self):
+        assert _errors(load_schema("sop_schema"), ZERO_STEP_SOP) == []
 
     def test_lab_summary_schema_accepts_example_and_computed_zero_set(self):
         schema = load_schema("lab_summary_schema")
@@ -754,12 +754,12 @@ ANALYSIS_REPORT_EXAMPLE = {
     "limits": LIMITS_EXAMPLE, "warnings": [],
     "vocabularyMisses": [{"row": 7, "field": "material_or_component_type", "value": "Cardboard"}],
 }
-NO_SPEECH_REPORT = {
+TRANSCRIPT_MODE_REPORT = {
     **ANALYSIS_REPORT_EXAMPLE, "mode": "transcript", "config": dict(TRANSCRIPT_CONFIG_EXAMPLE),
     "stages": [STAGE_EXAMPLE], "windows": 0, "framesRequested": 0, "framesExtracted": 0, "framesSkipped": [],
     "limits": {**LIMITS_EXAMPLE, "observed": {"totalInputBytes": 1048576, "totalDurationSeconds": 30.0,
-                                             "language": "en-US", "subtitles": []}},
-    "warnings": ["no speech detected"], "vocabularyMisses": [],
+                                             "language": "en-US", "subtitles": ["transcript.vtt", "transcript.srt"]}},
+    "warnings": [], "vocabularyMisses": [],
 }
 SUMMARY_EXAMPLE = {
     "mode": "full", "status": "SUCCEEDED", "fileCount": 16,
@@ -827,11 +827,11 @@ class TestModelToolSchemas:
         assert _errors(schema, {**FINALIZE_EXAMPLE, "dependency_edges": [edge]}) == ["'5' is not of type 'integer', 'null'"]
         assert _errors(schema, {**FINALIZE_EXAMPLE, "step_bom_refs": [{"step": 1, "row_indexes": ["0"]}]}) == ["'0' is not of type 'integer'"]
 
-    def test_analysis_report_schema_accepts_full_and_no_speech_runs(self):
+    def test_analysis_report_schema_accepts_full_and_transcript_mode_runs(self):
         schema = load_schema("analysis_report_schema")
         Draft202012Validator.check_schema(schema)
         assert _errors(schema, ANALYSIS_REPORT_EXAMPLE) == []
-        assert _errors(schema, NO_SPEECH_REPORT) == []
+        assert _errors(schema, TRANSCRIPT_MODE_REPORT) == []
         skipped = {**ANALYSIS_REPORT_EXAMPLE, "framesSkipped": [{"momentIndex": 1, "reason": "x"}]}
         assert _errors(schema, skipped) == ["'timestamp_seconds' is a required property"]
         miss = {**ANALYSIS_REPORT_EXAMPLE, "vocabularyMisses": [{"row": 7, "field": "qty", "value": "2"}]}
@@ -862,7 +862,7 @@ class TestModelToolSchemas:
         assert _errors(schema, SUMMARY_EXAMPLE) == []
         transcript_only = {
             **SUMMARY_EXAMPLE, "mode": "transcript", "config": dict(TRANSCRIPT_CONFIG_EXAMPLE),
-            "bedrock": {"calls": 0, "inputTokens": 0, "outputTokens": 0}, "warnings": ["no speech detected"],
+            "bedrock": {"calls": 0, "inputTokens": 0, "outputTokens": 0}, "warnings": [],
             "paths": {k: v for k, v in SUMMARY_EXAMPLE["paths"].items() if k in ("transcript", "timeline", "analysisReport")},
         }
         assert _errors(schema, transcript_only) == []

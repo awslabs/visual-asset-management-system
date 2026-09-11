@@ -2,7 +2,7 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "vams:videoSopBom/summary_schema.json",
     "title": "results/summary.json",
-    "description": "The small results document the execution details page shows, written in both modes (under 50 KB, checked by the writer) and never named execution.status.json. bedrock.calls is the in-band evidence the smoke arms read (0 in transcript mode and for a silent run).",
+    "description": "The small results document the execution details page shows, written in both modes (under 50 KB, checked by the writer) and never named execution.status.json. bedrock.calls is the in-band evidence the smoke arms read (0 in transcript mode). A run whose input carries no speech is rejected on the task token and writes no results document.",
     "type": "object",
     "additionalProperties": false,
     "required": [
