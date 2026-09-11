@@ -231,7 +231,8 @@
                 "minFiles": 2,
                 "maxFiles": 2,
                 "allowSameFileDifferentVersions": true,
-                "allowDifferentFiles": true
+                "allowDifferentFiles": true,
+                "allowCrossAsset": true
             }
         },
         {

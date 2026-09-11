@@ -900,6 +900,36 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+| `compareMode`                | object?           | Compare-mode opt-in (see 8.5)                        |
+
+### 8.5 Compare Mode (cross-asset / multi-version)
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` accepts
+`mode: "compare"`, which surfaces only viewers declaring `compareMode.enabled` whose
+`[minFiles, maxFiles]` window and shape flags admit the selection. The classification is pure and
+unit-tested in `src/visualizerPlugin/core/compareShape.ts` (`deriveCompareContext(files)` →
+`{ fileCount, shape, crossAsset }`); the registry re-exports it. **File identity is database + asset +
+key, never the key alone** — the same key under two assets is `"different-files"` + `crossAsset: true`.
+
+`compareMode` fields: `enabled`, `minFiles`, `maxFiles`, `allowSameFileDifferentVersions`,
+`allowDifferentFiles`, and `allowCrossAsset?` (default: not allowed).
+
+Contract for `compareFiles` entries (`ViewerPluginProps.compareFiles`, index 0 = left/base):
+
+-   Each entry is a resolved `{ databaseId, assetId, key, versionId? }`. `DynamicViewer` fills a missing
+    per-entry db/asset from its **top-level** props (never from `files[0]`) before classifying and before
+    handing the list to the viewer.
+-   Missing `versionId` = **latest** (search selections arrive this way via `searchRowToFileInfo`).
+-   The viewer fetches every entry under **its own** db/asset via `downloadAsset` — each asset is
+    Casbin-authorized independently — and renders a per-entry 401/403/410/404 as **that entry's** state
+    while the other entry still renders. `downloadAsset` returns `[false, message, status]` on failure.
+-   A viewer opting into `allowCrossAsset` offers a per-entry version picker (`fetchFileVersions`, one
+    list per db+asset+key) and re-fetches only the entry whose version changed.
+
+Reference implementation: `viewers/TextDiffViewerPlugin/TextDiffViewerComponent.tsx` (per-side
+state, per-side error panel, per-side `Select` version picker; diff library dynamically imported).
+Surfaces: search results "Compare Selected" (rows may span assets), and the version-compare actions in
+`AssetVersionComparison.tsx` / `FileVersionsList.tsx`, all hosted by `FileViewerModal`.
 
 ---
 

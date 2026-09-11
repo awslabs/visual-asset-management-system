@@ -6,10 +6,21 @@
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
 import { supportsAllExtensions } from "./extensionMatching";
+import { CompareContext, admitsCompareShape } from "./compareShape";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
+
+// Compare classification lives in ./compareShape (pure, unit-testable); re-exported here so existing
+// callers keep importing it from the registry.
+export {
+    deriveCompareShape,
+    deriveCrossAsset,
+    deriveCompareContext,
+    admitsCompareShape,
+} from "./compareShape";
+export type { CompareShape, CompareContext } from "./compareShape";
 
 export interface ViewerPlugin {
     config: ViewerPluginConfig;
@@ -26,17 +37,6 @@ export interface ViewerPluginMetadata {
 /** Which surface is asking for viewers. "visualize" is the default single/multi-file render path;
  *  "compare" surfaces only compare-capable viewers. */
 export type ViewerMode = "visualize" | "compare";
-
-/** The shape of a compare selection, used to gate allowSameFileDifferentVersions vs
- *  allowDifferentFiles. */
-export type CompareShape = "same-file-versions" | "different-files";
-
-export interface CompareContext {
-    /** Number of files in the compare selection. */
-    fileCount: number;
-    /** Whether the selection is N versions of one key or N distinct keys. */
-    shape: CompareShape;
-}
 
 export class PluginRegistry {
     private static instance: PluginRegistry;
@@ -380,8 +380,9 @@ export class PluginRegistry {
      *  - it declares `compareMode.enabled`
      *  - the selected file count is within [minFiles, maxFiles]
      *  - it can render every selected extension (supportsAllExtensions)
-     *  - the selection SHAPE is allowed: N versions of one key requires
-     *    `allowSameFileDifferentVersions`, N distinct keys requires `allowDifferentFiles`.
+     *  - the selection SHAPE is allowed (see admitsCompareShape): N versions of one file requires
+     *    `allowSameFileDifferentVersions`, N distinct files requires `allowDifferentFiles`, and
+     *    entries spanning assets require `allowCrossAsset`.
      *
      * `compareContext` describes the selection shape. When absent, only the count/extension checks
      * apply (the caller has not resolved the shape yet).
@@ -407,17 +408,9 @@ export class PluginRegistry {
             return false;
         }
 
-        // Selection-shape gating.
-        if (compareContext) {
-            if (
-                compareContext.shape === "same-file-versions" &&
-                !compare.allowSameFileDifferentVersions
-            ) {
-                return false;
-            }
-            if (compareContext.shape === "different-files" && !compare.allowDifferentFiles) {
-                return false;
-            }
+        // Selection-shape gating (same-file-versions / different-files / cross-asset).
+        if (compareContext && !admitsCompareShape(compare, compareContext)) {
+            return false;
         }
 
         return true;
@@ -595,14 +588,4 @@ export function getFileExtensions(
     });
 
     return Array.from(extensions);
-}
-
-/**
- * Classify a compare selection into its shape. When every file shares one asset-relative key (and
- * only their versionIds differ), the selection is N versions of one file; otherwise it spans
- * distinct keys. Files are compared by their `key`.
- */
-export function deriveCompareShape(files: Array<{ key: string }>): CompareShape {
-    const uniqueKeys = new Set(files.map((f) => f.key));
-    return uniqueKeys.size <= 1 ? "same-file-versions" : "different-files";
 }

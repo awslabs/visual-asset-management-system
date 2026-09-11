@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState, useEffect, useRef, Component } from "react";
+import React, { Suspense, useState, useEffect, useMemo, useRef, Component } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Container from "@cloudscape-design/components/container";
@@ -52,7 +52,7 @@ class ViewerErrorBoundary extends Component<
 import {
     PluginRegistry,
     getFileExtensions,
-    deriveCompareShape,
+    deriveCompareContext,
     ViewerPlugin,
     ViewerPluginMetadata,
     ViewerMode,
@@ -107,6 +107,23 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     const selectedViewerIdRef = useRef<string | null>(null);
     selectedViewerIdRef.current = selectedViewerId;
 
+    // Compare entries with their owning database/asset resolved. An entry that names its own pair keeps
+    // it; one that does not (legacy callers) takes the caller's TOP-LEVEL pair — never files[0]'s, which
+    // is what the visualize-path effectiveAssetId below falls back to. In compare mode that fallback
+    // would silently re-home a second entry under the first entry's asset. The shape/cross-asset
+    // classification and the viewer both consume this resolved list. Memoized on the inputs so the
+    // compatibility effect and the viewer's own effects see a stable reference between renders.
+    const compareFiles = useMemo<FileInfo[] | undefined>(() => {
+        if (mode !== "compare") {
+            return undefined;
+        }
+        return files.map((file) => ({
+            ...file,
+            assetId: file.assetId ?? assetId,
+            databaseId: file.databaseId ?? databaseId,
+        }));
+    }, [mode, files, assetId, databaseId]);
+
     // Initialize plugin registry
     useEffect(() => {
         const initializeRegistry = async () => {
@@ -139,10 +156,15 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
 
         const viewerMetadata =
             mode === "compare"
-                ? registry.getCompatibleViewers(fileExtensions, isMultiFile, false, "compare", {
-                      fileCount: files.length,
-                      shape: deriveCompareShape(files),
-                  })
+                ? registry.getCompatibleViewers(
+                      fileExtensions,
+                      isMultiFile,
+                      false,
+                      "compare",
+                      // Classified on the RESOLVED entries so a missing per-entry asset id does not
+                      // read as "a different asset" (or hide a real cross-asset selection).
+                      deriveCompareContext(compareFiles ?? files)
+                  )
                 : registry.getCompatibleViewers(fileExtensions, isMultiFile, isPreviewMode);
         setCompatibleViewers(viewerMetadata);
 
@@ -187,7 +209,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
             setLoadedViewer(null);
             setLoading(false); // Stop loading state to show the selector
         }
-    }, [files, isPreviewMode, registryInitialized, mode]); // Removed selectedViewerId from dependencies
+    }, [files, compareFiles, isPreviewMode, registryInitialized, mode]); // Removed selectedViewerId from dependencies
 
     // Load selected viewer lazily
     useEffect(() => {
@@ -271,12 +293,19 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     const isShowingViewer =
         registryInitialized && !loading && !viewerLoading && !error && compatibleViewers.length > 0;
 
-    // Per-file asset context (Decision #3). For a single file, prefer its own context.
-    // For multi-file, use the first file's context as the shared pair (same-asset case);
+    // Per-file asset context (Decision #3) for the VISUALIZE path. For a single file, prefer its own
+    // context. For multi-file, use the first file's context as the shared pair (same-asset case);
     // top-level props remain the fallback for legacy callers that don't set per-file context.
-    const effectiveAssetId = (files.length === 1 ? files[0].assetId : files[0]?.assetId) ?? assetId;
+    // Compare mode does not use this: each compare entry is resolved individually (see compareFiles),
+    // so the viewer receives the caller's top-level pair untouched and must never read files[0]'s.
+    const effectiveAssetId =
+        mode === "compare"
+            ? assetId
+            : (files.length === 1 ? files[0].assetId : files[0]?.assetId) ?? assetId;
     const effectiveDatabaseId =
-        (files.length === 1 ? files[0].databaseId : files[0]?.databaseId) ?? databaseId;
+        mode === "compare"
+            ? databaseId
+            : (files.length === 1 ? files[0].databaseId : files[0]?.databaseId) ?? databaseId;
 
     const renderStatusContent = () => {
         if (!registryInitialized || loading || viewerLoading) {
@@ -459,9 +488,7 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                 onDeletePreview={onDeletePreview}
                                                 isPreviewFile={isPreviewMode}
                                                 compareMode={mode === "compare"}
-                                                compareFiles={
-                                                    mode === "compare" ? files : undefined
-                                                }
+                                                compareFiles={compareFiles}
                                                 customParameters={
                                                     loadedViewer.config.customParameters
                                                 }

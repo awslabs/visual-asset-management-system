@@ -45,6 +45,13 @@ export interface CompareModeConfig {
     allowSameFileDifferentVersions: boolean;
     /** Allow comparing N DISTINCT files (different asset-relative keys). */
     allowDifferentFiles: boolean;
+    /**
+     * Allow entries that belong to DIFFERENT assets (or databases). Off when absent: a viewer must
+     * opt in because each entry is then fetched under its own asset and authorized independently
+     * (Casbin, per asset), so the viewer has to render a per-entry "not authorized / unavailable"
+     * state rather than a single failure for the whole comparison.
+     */
+    allowCrossAsset?: boolean;
 }
 
 export interface ViewerPluginProps {
@@ -68,8 +75,12 @@ export interface ViewerPluginProps {
      *  `compareMode.enabled` should read `compareFiles` (ordered) instead of the single-file props. */
     compareMode?: boolean;
     /** Ordered files to compare (compare mode only). Order is significant — index 0 is the base /
-     *  "left" side. Each entry keeps its own versionId (and per-file assetId/databaseId, Decision #3)
-     *  so a viewer can compare N versions of one key or N distinct keys. */
+     *  "left" side. Each entry is a fully resolved {databaseId, assetId, key, versionId?}: DynamicViewer
+     *  fills a missing per-entry database/asset from its top-level props before handing the list over,
+     *  so a viewer fetches each entry under ITS OWN asset (never the shared top-level pair) and treats a
+     *  missing versionId as "latest". Entries may span assets when the viewer declares
+     *  `compareMode.allowCrossAsset`; each asset is authorized independently, so a viewer must handle a
+     *  per-entry 401/403/410 without collapsing the other entries. */
     compareFiles?: FileInfo[];
 }
 
