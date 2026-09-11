@@ -1,0 +1,74 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/config_schema.json",
+    "title": "Rendered template configuration of the Video SOP/BOM Extraction pipeline",
+    "description": "The JSON body of the video-sop-bom-full or video-sop-bom-transcript-only template after tag substitution. constructPipeline rejects (never clamps) a body that fails this schema; the container validates the copy carried in definition.json again. In full mode the three typed tags (maxKeyFrames, partLevelBase, generateLabSummary) are required; the free-text tags are optional and an absent value means an empty string.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["mode", "languageCode", "videoOrder"],
+    "if": {
+        "properties": {
+            "mode": {
+                "const": "full"
+            }
+        },
+        "required": ["mode"]
+    },
+    "then": {
+        "required": ["maxKeyFrames", "partLevelBase", "generateLabSummary"]
+    },
+    "properties": {
+        "mode": {
+            "type": "string",
+            "enum": ["full", "transcript"]
+        },
+        "languageCode": {
+            "description": "auto selects Amazon Transcribe language identification; every other value is passed as LanguageCode.",
+            "type": "string",
+            "enum": [
+                "auto",
+                "en-US",
+                "en-GB",
+                "en-AU",
+                "de-DE",
+                "fr-FR",
+                "es-US",
+                "es-ES",
+                "it-IT",
+                "pt-BR",
+                "ja-JP",
+                "ko-KR",
+                "zh-CN"
+            ]
+        },
+        "videoOrder": {
+            "type": "string",
+            "enum": ["selection", "filename"]
+        },
+        "productName": {
+            "description": "PRODUCT_NAME tag; empty means use the asset name.",
+            "type": "string",
+            "maxLength": 256
+        },
+        "contributors": {
+            "type": "string",
+            "maxLength": 256
+        },
+        "maxKeyFrames": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+        },
+        "partLevelBase": {
+            "type": "string",
+            "enum": ["0", "1"]
+        },
+        "generateLabSummary": {
+            "type": "boolean"
+        },
+        "additionalInstructions": {
+            "type": "string",
+            "maxLength": 4000
+        }
+    }
+}
