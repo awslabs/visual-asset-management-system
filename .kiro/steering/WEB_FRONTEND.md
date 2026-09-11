@@ -419,6 +419,11 @@ maplibre-gl 6 also removed the public `map.transform` property; `react-map-gl` v
 Both rules are held in place by `src/common/utils/maplibreWorker.test.ts`, which scans the source tree
 for map consumers and checks the installed versions.
 
+Under Jest neither import resolves: `maplibre-gl` has no `require` export condition and `?worker&url` is
+Vite-only, so `jest.config.js` maps both to `src/__mocks__/emptyModule.js`, as it already does for the
+Monaco worker imports. A suite that reaches a map component through a page import therefore loads a
+no-op setup module rather than failing to resolve.
+
 ---
 
 ## 4. API Integration Patterns
