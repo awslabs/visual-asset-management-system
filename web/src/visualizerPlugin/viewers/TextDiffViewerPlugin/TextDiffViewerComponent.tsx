@@ -4,7 +4,10 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Box, SegmentedControl, Spinner, Toggle } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
+import Spinner from "@cloudscape-design/components/spinner";
+import Toggle from "@cloudscape-design/components/toggle";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/hljs/json";
 import xml from "react-syntax-highlighter/dist/esm/languages/hljs/xml";
