@@ -136,6 +136,7 @@ web/
       sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
+      maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
@@ -380,6 +381,23 @@ base list is what keeps a default deployment protected.
 
 Adding a `<script src="...">` (external) needs no hash; it is matched by host-source instead. It may
 still need a `connect-src`/`script-src` origin added if it loads from a new host.
+
+### Rule 10: A maplibre Map Needs the Worker Setup Module and react-map-gl >= 8.1.2
+
+`maplibre-gl` 6 is ESM-only and ships its web worker as a separate module (`dist/maplibre-gl-worker.mjs`,
+which imports `maplibre-gl-shared.mjs`). By default it resolves that worker as a sibling of the main
+module's `import.meta.url`, a file the Vite bundle never emits, so the worker request fails and no map
+renders. `src/common/utils/maplibreWorker.ts` registers a bundled copy through `setWorkerUrl()` using
+Vite's `?worker&url` import (plain `?url` copies the worker without its shared chunk and breaks on its
+first import). **Every module that imports `react-map-gl/maplibre` or a runtime value from `maplibre-gl`
+imports that setup module for its side effect** before the map mounts.
+
+maplibre-gl 6 also removed the public `map.transform` property; `react-map-gl` versions before 8.1.2 read
+`transform.center` on every camera update and crash each map into the page error boundary. Keep
+`react-map-gl` at 8.1.2 or later while `maplibre-gl` is on 6.x.
+
+Both rules are held in place by `src/common/utils/maplibreWorker.test.ts`, which scans the source tree
+for map consumers and checks the installed versions.
 
 ---
 
@@ -1175,7 +1193,7 @@ See section 9.4 for the full Synonyms rules.
 | `react-router-dom`              | ^6.0.0               | Client-side routing                  |
 | `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
 | `three`                         | (via customInstalls) | 3D rendering engine                  |
-| `maplibre-gl`                   | ^5.8.0               | Map rendering                        |
+| `maplibre-gl`                   | ^6.9.0               | Map rendering                        |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                          |
 | `papaparse`                     | ^5.4.1               | CSV parsing                          |
 | `dompurify`                     | ^3.4.11              | HTML sanitization                    |
