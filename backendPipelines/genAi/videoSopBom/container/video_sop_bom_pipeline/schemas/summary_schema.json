@@ -1,0 +1,111 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/summary_schema.json",
+    "title": "results/summary.json",
+    "description": "The small results document the execution details page shows, written in both modes (under 50 KB, checked by the writer) and never named execution.status.json. bedrock.calls is the in-band evidence the smoke arms read (0 in transcript mode and for a silent run).",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "mode",
+        "status",
+        "fileCount",
+        "bedrock",
+        "limits",
+        "timings",
+        "warnings",
+        "paths",
+        "config"
+    ],
+    "properties": {
+        "mode": { "type": "string", "enum": ["full", "transcript"] },
+        "status": {
+            "description": "A FAILED run ingests nothing, so only SUCCEEDED reaches the asset; the value is kept for readers of a local run.",
+            "type": "string",
+            "enum": ["SUCCEEDED", "FAILED"]
+        },
+        "fileCount": {
+            "description": "Files written under outputs.files.",
+            "type": "integer",
+            "minimum": 0
+        },
+        "bedrock": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["calls", "inputTokens", "outputTokens"],
+            "properties": {
+                "calls": { "type": "integer", "minimum": 0 },
+                "inputTokens": { "type": "integer", "minimum": 0 },
+                "outputTokens": { "type": "integer", "minimum": 0 }
+            }
+        },
+        "limits": { "$ref": "#/$defs/limits" },
+        "timings": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["stages", "elapsedS"],
+            "properties": {
+                "stages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["name", "durationS"],
+                        "properties": {
+                            "name": { "type": "string", "minLength": 1 },
+                            "durationS": { "type": "number", "minimum": 0 }
+                        }
+                    }
+                },
+                "elapsedS": { "type": "number", "minimum": 0 }
+            }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "paths": {
+            "description": "Post-extension asset paths of the deliverables keyed by a short name (transcript, timeline, sop, bom, bomCsv, frames, labSummary, analysisReport); the three required ones exist in both modes.",
+            "type": "object",
+            "required": ["transcript", "timeline", "analysisReport"],
+            "additionalProperties": { "type": "string", "pattern": "^/sop-bom/.+" }
+        },
+        "config": {
+            "description": "The resolved config echo, validated separately against config_schema.json.",
+            "type": "object"
+        }
+    },
+    "$defs": {
+        "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["configured", "observed"],
+            "properties": {
+                "configured": {
+                    "description": "The four caps from the definition document's limits that applied to this run; maxKeyFramesCeiling stays in the definition.",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "maxVideoFiles",
+                        "maxVideoFileSizeMb",
+                        "maxTotalInputSizeMb",
+                        "maxTotalDurationMinutes"
+                    ],
+                    "properties": {
+                        "maxVideoFiles": { "type": "integer", "minimum": 1 },
+                        "maxVideoFileSizeMb": { "type": "integer", "minimum": 1 },
+                        "maxTotalInputSizeMb": { "type": "integer", "minimum": 1 },
+                        "maxTotalDurationMinutes": { "type": "integer", "minimum": 1 }
+                    }
+                },
+                "observed": {
+                    "description": "What the run measured against the caps; the two required keys are written by every run, the container may add others.",
+                    "type": "object",
+                    "required": ["totalInputBytes", "totalDurationSeconds"],
+                    "properties": {
+                        "totalInputBytes": { "type": "integer", "minimum": 0 },
+                        "totalDurationSeconds": { "type": "number", "minimum": 0 },
+                        "language": { "type": ["string", "null"] },
+                        "subtitles": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -445,4 +445,442 @@ class TestConfigAndDefinitionSchemas:
         assert load_schema("definition_schema")["properties"]["config"]["type"] == "object"
 
 
+TIMELINE_EXAMPLE = {
+    "video_keys": ["/teardown-part1.mp4", "/teardown-part2.MP4"],
+    "video_timeline": [
+        {"index": 0, "video_key": "/teardown-part1.mp4", "start_offset": 0.0, "end_offset": 75.2, "duration": 75.2},
+        {"index": 1, "video_key": "/teardown-part2.MP4", "start_offset": 75.2, "end_offset": 150.9, "duration": 75.7},
+    ],
+    "total_duration": 150.9,
+}
+
+FRAMES_EXAMPLE = {
+    "executionId": _EXEC_ID,
+    "frames": [
+        {"momentIndex": 0, "file": "keyframe-0000-00h00m45s.jpg",
+         "path": f"/sop-bom/{_EXEC_ID}/keyframe-0000-00h00m45s.jpg",
+         "timestamp_seconds": 45.2, "local_timestamp": 45.2, "video_index": 0,
+         "video_key": "/teardown-part1.mp4", "reason": "Component reveal - back cover",
+         "expected_content": "aluminum housing with four Torx screws"},
+        {"momentIndex": 2, "file": "keyframe-0002-00h01m31s.jpg",
+         "path": f"/sop-bom/{_EXEC_ID}/keyframe-0002-00h01m31s.jpg",
+         "timestamp_seconds": 91.0, "local_timestamp": 15.8, "video_index": 1,
+         "video_key": "/teardown-part2.MP4", "reason": "Cable disconnect",
+         "expected_content": "flat flex cable and latch connector"},
+    ],
+    "skipped": [{"momentIndex": 1, "timestamp_seconds": 60.0,
+                 "reason": "ffmpeg exit 1: seek beyond the end of the stream"}],
+    "video_timeline": TIMELINE_EXAMPLE["video_timeline"],
+}
+EMPTY_FRAMES = {"executionId": _EXEC_ID, "frames": [], "skipped": [],
+                "video_timeline": TIMELINE_EXAMPLE["video_timeline"][:1]}
+
+
+@pytest.mark.unit
+class TestTimelineAndFramesSchemas:
+    def test_timeline_schema_accepts_example_and_rejects_wrong_type(self):
+        schema = load_schema("timeline_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, TIMELINE_EXAMPLE) == []
+        bad = {**TIMELINE_EXAMPLE, "total_duration": "150.9"}
+        assert _errors(schema, bad) == ["'150.9' is not of type 'number'"]
+        zero = {**TIMELINE_EXAMPLE, "video_timeline": [{**TIMELINE_EXAMPLE["video_timeline"][0], "duration": 0}]}
+        assert _errors(schema, zero) == ["0 is less than or equal to the minimum of 0"]
+
+    def test_frames_schema_accepts_example_and_the_empty_set(self):
+        schema = load_schema("frames_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, FRAMES_EXAMPLE) == []
+        assert _errors(schema, EMPTY_FRAMES) == []
+
+    def test_frames_schema_requires_moment_index_and_rejects_wrong_type(self):
+        schema = load_schema("frames_schema")
+        frame = dict(FRAMES_EXAMPLE["frames"][0])
+        del frame["momentIndex"]
+        assert _errors(schema, {**FRAMES_EXAMPLE, "frames": [frame]}) == ["'momentIndex' is a required property"]
+        wrong = {**FRAMES_EXAMPLE["frames"][0], "momentIndex": "0"}
+        assert _errors(schema, {**FRAMES_EXAMPLE, "frames": [wrong]}) == ["'0' is not of type 'integer'"]
+        snake = {k if k != "momentIndex" else "moment_index": v for k, v in FRAMES_EXAMPLE["frames"][0].items()}
+        assert _errors(schema, {**FRAMES_EXAMPLE, "frames": [snake]}) == [
+            "'momentIndex' is a required property",
+            "Additional properties are not allowed ('moment_index' was unexpected)"]
+        for bad_path in ("keyframe-0000-00h00m45s.jpg", f"sop-bom/{_EXEC_ID}/keyframe-0000-00h00m45s.jpg"):
+            bad = {**FRAMES_EXAMPLE["frames"][0], "path": bad_path}
+            assert "does not match" in _errors(schema, {**FRAMES_EXAMPLE, "frames": [bad]})[0], bad_path
+        skipped = {"momentIndex": 1, "reason": "x"}
+        assert _errors(schema, {**FRAMES_EXAMPLE, "skipped": [skipped]}) == ["'timestamp_seconds' is a required property"]
+
+
+SOP_STEP_EXAMPLE = {
+    "step": 4, "action": "remove", "component": "back cover",
+    "fasteners": ["4x Torx T8 screws"], "locations": ["one screw at each corner"],
+    "dependencies": [{"step": 3, "text": "reader weighed"}, {"step": None, "text": "rubber feet removed"}],
+    "tools": ["Torx T8 screwdriver"],
+    "motion": {"allowed": ["lift vertically"], "restricted": ["slide laterally - the gasket will tear"]},
+    "force": {"amount": "light", "indicator": "cover releases once the screws are out"},
+    "failure_modes": ["gasket tear"], "notes": "",
+    "timestamp_seconds": 61.5, "video_index": 0, "local_timestamp_seconds": 61.5,
+    "frame_ref": f"/sop-bom/{_EXEC_ID}/keyframe-0002-00h01m01s.jpg",
+    "bom_refs": ["cognex-dataman-80-004"],
+}
+SOP_EXAMPLE = {
+    "title": "Cognex DataMan 80 \u2014 teardown SOP",
+    "product_name": "Cognex DataMan 80",
+    "product_name_from_narration": "Cognex DataMan 80 barcode reader",
+    "source_videos": ["/teardown-part1.mp4", "/teardown-part2.MP4"],
+    "summary": "Ten-step teardown of a fixed-mount barcode reader.",
+    "safety_notes": ["Wear safety glasses when prying the gasket."],
+    "steps": [SOP_STEP_EXAMPLE],
+}
+EMPTY_SOP = {**SOP_EXAMPLE, "product_name_from_narration": None, "source_videos": ["/silent.mp4"],
+             "summary": "", "safety_notes": [], "steps": []}
+
+LAB_SUMMARY_EXAMPLE = {
+    "product_name": "Cognex DataMan 80",
+    "product_name_from_narration": "Cognex DataMan 80 barcode reader",
+    "product_description": "Fixed-mount industrial barcode reader.",
+    "product_source_url": None,
+    "background": "Amazon Worldwide Sustainability wishes to accurately characterize ...",
+    "materials_methodology": "Analysis used: Photography, Mass Balance, NIR Handheld Spectrometer, FTIR",
+    "safety_considerations": vocab.LAB_SUMMARY_DEFAULT_SAFETY,
+    "existing_bom_provided": False,
+    "existing_bom_notes": vocab.LAB_SUMMARY_DEFAULT_EXISTING_BOM,
+    "total_mass_g": 264.14,
+    "component_count": 41,
+    "materials_breakdown": [{"material": "Aluminum", "mass_g": 37.84, "percentage": 14.33}],
+    "primary_manufacturing_processes": "The metallic housing is made with aluminum die casting.",
+    "key_observations": ["Most of the total mass is packaging."],
+    "comparative_analysis": vocab.LAB_SUMMARY_DEFAULT_COMPARATIVE,
+    "contributors": "Andrew Smith (andrehs@example.com), Tom Franklin (fythomas@example.com)",
+}
+EMPTY_LAB_SUMMARY = {**LAB_SUMMARY_EXAMPLE, "product_name_from_narration": None, "product_description": "",
+                     "background": "", "materials_methodology": "", "total_mass_g": 0, "component_count": 0,
+                     "materials_breakdown": [], "primary_manufacturing_processes": "", "key_observations": [],
+                     "contributors": ""}
+
+
+@pytest.mark.unit
+class TestSopAndLabSummarySchemas:
+    def test_sop_schema_accepts_example(self):
+        schema = load_schema("sop_schema")
+        Draft202012Validator.check_schema(schema)
+        assert schema["$id"] == "vams:videoSopBom/sop_schema.json"
+        assert _errors(schema, SOP_EXAMPLE) == []
+
+    def test_sop_schema_dependencies_are_step_text_objects(self):
+        schema = load_schema("sop_schema")
+        integer_dependency = {**SOP_STEP_EXAMPLE, "dependencies": [3]}
+        assert _errors(schema, {**SOP_EXAMPLE, "steps": [integer_dependency]}) == ["3 is not of type 'object'"]
+        prose_only = {**SOP_STEP_EXAMPLE, "dependencies": [{"step": None, "text": "battery disconnected"}]}
+        assert _errors(schema, {**SOP_EXAMPLE, "steps": [prose_only]}) == []
+        no_text = {**SOP_STEP_EXAMPLE, "dependencies": [{"step": 2}]}
+        assert _errors(schema, {**SOP_EXAMPLE, "steps": [no_text]}) == ["'text' is a required property"]
+
+    def test_sop_schema_rejects_wrong_typed_field_and_unknown_step_key(self):
+        schema = load_schema("sop_schema")
+        wrong = {**SOP_STEP_EXAMPLE, "timestamp_seconds": "61.5"}
+        assert _errors(schema, {**SOP_EXAMPLE, "steps": [wrong]}) == ["'61.5' is not of type 'number'"]
+        unknown = {**SOP_STEP_EXAMPLE, "frame_index": 2}
+        assert _errors(schema, {**SOP_EXAMPLE, "steps": [unknown]}) == [
+            "Additional properties are not allowed ('frame_index' was unexpected)"]
+        bad_force = {**SOP_STEP_EXAMPLE, "force": {"amount": "gentle", "indicator": None}}
+        assert _errors(schema, {**SOP_EXAMPLE, "steps": [bad_force]}) == [
+            "'gentle' is not one of ['light', 'moderate', 'firm', None]"]
+        assert tuple(schema["$defs"]["step"]["properties"]["force"]["properties"]["amount"]["enum"][:3]) == vocab.FORCE_AMOUNTS
+        no_slash = {**SOP_STEP_EXAMPLE, "frame_ref": f"sop-bom/{_EXEC_ID}/keyframe-0002-00h01m01s.jpg"}
+        assert "does not match" in _errors(schema, {**SOP_EXAMPLE, "steps": [no_slash]})[0]
+        assert _errors(schema, {**SOP_EXAMPLE, "steps": [{**SOP_STEP_EXAMPLE, "frame_ref": None}]}) == []
+
+    def test_sop_schema_accepts_the_empty_deliverable(self):
+        assert _errors(load_schema("sop_schema"), EMPTY_SOP) == []
+
+    def test_lab_summary_schema_accepts_example_and_computed_zero_set(self):
+        schema = load_schema("lab_summary_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, LAB_SUMMARY_EXAMPLE) == []
+        assert _errors(schema, EMPTY_LAB_SUMMARY) == []
+        as_string = {**LAB_SUMMARY_EXAMPLE, "key_observations": "One paragraph."}
+        assert _errors(schema, as_string) == []
+
+    def test_lab_summary_schema_rejects_wrong_type(self):
+        schema = load_schema("lab_summary_schema")
+        assert _errors(schema, {**LAB_SUMMARY_EXAMPLE, "total_mass_g": "264.14"}) == ["'264.14' is not of type 'number'"]
+        assert _errors(schema, {**LAB_SUMMARY_EXAMPLE, "component_count": 41.5}) == ["41.5 is not of type 'integer'"]
+        assert _errors(schema, {**LAB_SUMMARY_EXAMPLE, "existing_bom_provided": "false"}) == ["'false' is not of type 'boolean'"]
+        missing = {k: v for k, v in LAB_SUMMARY_EXAMPLE.items() if k != "product_name_from_narration"}
+        assert _errors(schema, missing) == ["'product_name_from_narration' is a required property"]
+
+
+LCA_ROW_EXAMPLE = {column: None for column in vocab.LCA_BOM_COLUMNS}
+LCA_ROW_EXAMPLE.update({
+    "part_level": 0, "part_type": "Packaged Product Assembly", "lab_part_number": "cognex-dataman-80-001",
+    "manufacturer_part_number": "", "alternative": "No", "part_description": "Shipped Cognex box", "qty": 1,
+    "material_or_component_type": "Packaged Product Assembly", "mass_g_per_unit": 264.14,
+    "primary_manufacturing_process": "Assembly - FATP",
+})
+BOM_EXAMPLE = {"product_name": "Cognex DataMan 80", "part_level_base": "0", "rows": [LCA_ROW_EXAMPLE]}
+EMPTY_BOM = {"product_name": "Cognex DataMan 80", "part_level_base": "0", "rows": []}
+VOCABULARY_MISS_ROW = {**LCA_ROW_EXAMPLE, "part_type": None, "material_or_component_type": None,
+                       "material_notes": "part_type (raw): Battery; material_or_component_type (raw): Cardboard"}
+DRAFT_ROW_EXAMPLE = {
+    "part_level": 1, "part_type": "Enclosure", "part_description": "aluminum die cast housing", "qty": 1,
+    "material_or_component_type": "Aluminum", "mass_g_per_unit": 37.84,
+    "primary_manufacturing_process": "Forming - Metalwork",
+}
+
+
+@pytest.mark.unit
+class TestBomRowSchema:
+    def test_lca_row_properties_are_exactly_the_66_columns_in_order(self):
+        schema = load_schema("bom_row_schema")
+        Draft202012Validator.check_schema(schema)
+        row = schema["$defs"]["lcaRow"]
+        assert tuple(row["properties"]) == vocab.LCA_BOM_COLUMNS
+        assert tuple(row["required"]) == vocab.LCA_BOM_REQUIRED_COLUMNS
+        assert row["additionalProperties"] is False
+
+    def test_bom_row_enums_equal_vocab_constants(self):
+        defs = load_schema("bom_row_schema")["$defs"]
+        assert tuple(defs["partType"]["enum"]) == vocab.PART_TYPES
+        assert tuple(defs["materialOrComponentType"]["enum"]) == vocab.MATERIAL_TYPES
+        assert tuple(defs["primaryManufacturingTechnique"]["enum"]) == vocab.PRIMARY_TECHNIQUES
+        assert tuple(defs["secondaryManufacturingTechnique"]["enum"]) == vocab.SECONDARY_TECHNIQUES
+        assert tuple(defs["yesNo"]["enum"]) == vocab.YES_NO
+        assert tuple(defs["methodForWeight"]["enum"]) == vocab.METHOD_FOR_WEIGHT
+        assert tuple(defs["icType"]["enum"]) == vocab.IC_TYPES
+        assert tuple(defs["icPackageType"]["enum"]) == vocab.IC_PACKAGE_TYPES
+        assert tuple(defs["icProcessNodePrimary"]["enum"]) == vocab.IC_PROCESS_NODE_PRIMARY
+        assert tuple(defs["icProcessNodeSecondary"]["enum"]) == vocab.IC_PROCESS_NODE_SECONDARY
+        assert tuple(defs["pcbType"]["enum"]) == vocab.PCB_TYPES
+        assert tuple(defs["pcbBoardFinish"]["enum"]) == vocab.PCB_BOARD_FINISHES
+        assert tuple(defs["displayType"]["enum"]) == vocab.DISPLAY_TYPES
+        assert tuple(defs["batteryType"]["enum"]) == vocab.BATTERY_TYPES
+        schema = load_schema("bom_row_schema")
+        assert tuple(schema["properties"]["part_level_base"]["enum"]) == vocab.PART_LEVEL_BASES
+
+    def test_bom_document_accepts_example_row_and_empty_rows(self):
+        schema = load_schema("bom_row_schema")
+        assert _errors(schema, BOM_EXAMPLE) == []
+        assert _errors(schema, EMPTY_BOM) == []
+        assert _errors(schema, {"rows": []}) == []
+        assert _errors(schema, {**BOM_EXAMPLE, "part_level_base": 0}) == [
+            "0 is not of type 'string'", "0 is not one of ['0', '1']"]
+        assert _errors(schema, {**BOM_EXAMPLE, "columns": list(vocab.LCA_BOM_COLUMNS)}) == [
+            "Additional properties are not allowed ('columns' was unexpected)"]
+
+    def test_bom_row_rejects_wrong_type_and_out_of_vocabulary_values(self):
+        schema = load_schema("bom_row_schema")
+        wrong_qty = {**LCA_ROW_EXAMPLE, "qty": "1"}
+        assert _errors(schema, {"rows": [wrong_qty]}) == ["'1' is not of type 'number'"]
+        # The two vocabulary columns are anyOf [enum, null]: an out-of-vocabulary string is rejected,
+        # null (with the raw value kept in material_notes) is the valid way to record a miss.
+        bogus_type = {**LCA_ROW_EXAMPLE, "part_type": "Battery"}
+        assert _errors(schema, {"rows": [bogus_type]}) == ["'Battery' is not valid under any of the given schemas"]
+        trailing_space = {**LCA_ROW_EXAMPLE, "material_or_component_type": "HDPE "}
+        assert _errors(schema, {"rows": [trailing_space]}) == ["'HDPE ' is not valid under any of the given schemas"]
+        assert _errors(schema, {"rows": [VOCABULARY_MISS_ROW]}) == []
+        empty_string_cell = {**LCA_ROW_EXAMPLE, "mass_g_per_unit": ""}
+        assert _errors(schema, {"rows": [empty_string_cell]}) == ["'' is not of type 'number', 'null'"]
+        extra_column = {**LCA_ROW_EXAMPLE, "primary_mfg_country": "CN"}
+        assert _errors(schema, {"rows": [extra_column]}) == [
+            "Additional properties are not allowed ('primary_mfg_country' was unexpected)"]
+        bad_country = {**LCA_ROW_EXAMPLE, "manufacturing_country": "China"}
+        assert len(_errors(schema, {"rows": [bad_country]})) == 1
+
+    def test_draft_row_accepts_the_reference_shape(self):
+        schema = load_schema("bom_row_schema")
+        draft = {"$ref": "#/$defs/draftRow", "$defs": schema["$defs"]}
+        assert _errors(draft, DRAFT_ROW_EXAMPLE) == []
+        assert _errors(draft, {**DRAFT_ROW_EXAMPLE, "mass_g_per_unit": None}) == []
+        assert _errors(draft, {**DRAFT_ROW_EXAMPLE, "part_level": 6}) == ["6 is greater than the maximum of 5"]
+
+
+WINDOW_EXAMPLE = {
+    "product_name_from_narration": "Cognex DataMan 80",
+    "steps": [{
+        "step": 1, "timestamp_seconds": 12.4, "action": "cut", "component": "packing tape",
+        "fasteners": [], "locations": ["along the box lid"], "dependencies": [],
+        "tools": ["box cutter"], "motion": {"allowed": ["draw the blade along the seam"], "restricted": []},
+        "force": {"amount": "light", "indicator": None}, "failure_modes": ["cutting into the foam insert"],
+        "notes": "clear packing tape",
+    }],
+    "components": [{
+        "part_level": 0, "part_type": "Packaged Product Assembly", "part_description": "Shipped Cognex box",
+        "qty": 1, "material_or_component_type": "Packaged Product Assembly", "mass_g_per_unit": None,
+        "primary_manufacturing_process": "Assembly - FATP", "first_seen_timestamp_seconds": 3.0,
+    }],
+    "key_moments": [{"timestamp_seconds": 12.4, "reason": "Component reveal - foam insert",
+                     "expected_content": "white foam insert in a cardboard box"}],
+}
+VISION_EXAMPLE = {"frame_analyses": [{
+    "momentIndex": 0, "confirmed": True, "components_seen": ["cardboard box", "white foam insert"],
+    "corrections": None, "additional_details": "Brown corrugated box with a printed label.",
+}]}
+FINALIZE_EXAMPLE = {
+    "bom_rows": [{
+        "part_level": 0, "part_type": "Packaged Product Assembly", "manufacturer_part_number": "",
+        "alternative": "No", "part_description": "Shipped Cognex box", "qty": 1,
+        "material_or_component_type": "Packaged Product Assembly", "mass_g_per_unit": 264.14,
+        "primary_manufacturing_process": "Assembly - FATP",
+    }],
+    "step_bom_refs": [{"step": 1, "row_indexes": [0]}],
+    "dependency_edges": [{"step": 6, "depends_on_step": 5, "text": "back cover removed"},
+                         {"step": 1, "depends_on_step": None, "text": "bench cleared"}],
+    "summary": "Ten-step teardown.",
+    "safety_notes": [],
+    "lab_summary": {
+        "product_description": "Fixed-mount barcode reader.", "product_source_url": None,
+        "background": "Teardown for materials characterization.", "materials_methodology": "Mass balance.",
+        "safety_considerations": vocab.LAB_SUMMARY_DEFAULT_SAFETY, "existing_bom_provided": False,
+        "existing_bom_notes": vocab.LAB_SUMMARY_DEFAULT_EXISTING_BOM,
+        "primary_manufacturing_processes": "Die casting, SMT, injection molding.",
+        "key_observations": ["Most of the mass is packaging."],
+        "comparative_analysis": vocab.LAB_SUMMARY_DEFAULT_COMPARATIVE,
+    },
+}
+STAGE_EXAMPLE = {"name": "transcribe", "startedAt": "2026-09-09T12:00:00Z", "durationS": 412.5,
+                 "inputTokens": 0, "outputTokens": 0, "calls": 0}
+LIMITS_EXAMPLE = {
+    # The four D5 caps; maxKeyFramesCeiling stays in the definition document.
+    "configured": {k: v for k, v in DEFINITION_EXAMPLE["limits"].items() if k != "maxKeyFramesCeiling"},
+    "observed": {"totalInputBytes": 24117248, "totalDurationSeconds": 150.9, "language": "en-US",
+                 "subtitles": ["transcript.vtt", "transcript.srt"]},
+}
+ANALYSIS_REPORT_EXAMPLE = {
+    "mode": "full", "config": dict(FULL_CONFIG_EXAMPLE), "modelId": "global.anthropic.claude-sonnet-5",
+    "stages": [STAGE_EXAMPLE, {"name": "extract", "startedAt": "2026-09-09T12:07:00Z", "durationS": 95.1,
+                               "inputTokens": 18234, "outputTokens": 6120, "calls": 1}],
+    "windows": 1, "framesRequested": 3, "framesExtracted": 2, "framesSkipped": [FRAMES_EXAMPLE["skipped"][0]],
+    "limits": LIMITS_EXAMPLE, "warnings": [],
+    "vocabularyMisses": [{"row": 7, "field": "material_or_component_type", "value": "Cardboard"}],
+}
+NO_SPEECH_REPORT = {
+    **ANALYSIS_REPORT_EXAMPLE, "mode": "transcript", "config": dict(TRANSCRIPT_CONFIG_EXAMPLE),
+    "stages": [STAGE_EXAMPLE], "windows": 0, "framesRequested": 0, "framesExtracted": 0, "framesSkipped": [],
+    "limits": {**LIMITS_EXAMPLE, "observed": {"totalInputBytes": 1048576, "totalDurationSeconds": 30.0,
+                                             "language": "en-US", "subtitles": []}},
+    "warnings": ["no speech detected"], "vocabularyMisses": [],
+}
+SUMMARY_EXAMPLE = {
+    "mode": "full", "status": "SUCCEEDED", "fileCount": 16,
+    "bedrock": {"calls": 4, "inputTokens": 61200, "outputTokens": 14880},
+    "limits": LIMITS_EXAMPLE,
+    "timings": {"stages": [{"name": "transcribe", "durationS": 412.5}, {"name": "extract", "durationS": 95.1}],
+                "elapsedS": 611.4},
+    "warnings": [],
+    "paths": {name: f"/sop-bom/{_EXEC_ID}/{file}" for name, file in (
+        ("transcript", "transcript.json"), ("timeline", "video-timeline.json"), ("sop", "sop.json"),
+        ("bom", "bom.json"), ("bomCsv", "bom.csv"), ("frames", "frames.json"),
+        ("labSummary", "lab-summary.json"), ("analysisReport", "analysis-report.json"))},
+    "config": dict(FULL_CONFIG_EXAMPLE),
+}
+
+
+@pytest.mark.unit
+class TestModelToolSchemas:
+    def test_window_extraction_schema_accepts_example(self):
+        schema = load_schema("window_extraction_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, WINDOW_EXAMPLE) == []
+        assert _errors(schema, {**WINDOW_EXAMPLE, "steps": [], "components": [], "key_moments": []}) == []
+
+    def test_window_extraction_rejects_wrong_type_and_integer_dependencies(self):
+        schema = load_schema("window_extraction_schema")
+        step = {**WINDOW_EXAMPLE["steps"][0], "dependencies": [1]}
+        assert _errors(schema, {**WINDOW_EXAMPLE, "steps": [step]}) == ["1 is not of type 'object'"]
+        moment = {**WINDOW_EXAMPLE["key_moments"][0], "timestamp_seconds": "12.4"}
+        assert _errors(schema, {**WINDOW_EXAMPLE, "key_moments": [moment]}) == ["'12.4' is not of type 'number'"]
+        component = {**WINDOW_EXAMPLE["components"][0], "part_level": 6}
+        assert _errors(schema, {**WINDOW_EXAMPLE, "components": [component]}) == ["6 is greater than the maximum of 5"]
+
+    def test_vision_schema_is_keyed_by_moment_index(self):
+        schema = load_schema("vision_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, VISION_EXAMPLE) == []
+        analysis = dict(VISION_EXAMPLE["frame_analyses"][0])
+        del analysis["momentIndex"]
+        assert _errors(schema, {"frame_analyses": [analysis]}) == ["'momentIndex' is a required property"]
+        by_time = {**VISION_EXAMPLE["frame_analyses"][0], "timestamp": 45.2}
+        assert _errors(schema, {"frame_analyses": [by_time]}) == [
+            "Additional properties are not allowed ('timestamp' was unexpected)"]
+        assert _errors(schema, {"frames": VISION_EXAMPLE["frame_analyses"]}) == [
+            "'frame_analyses' is a required property",
+            "Additional properties are not allowed ('frames' was unexpected)"]
+
+    def test_finalize_schema_accepts_example_and_row_keys_are_lca_columns(self):
+        schema = load_schema("finalize_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, FINALIZE_EXAMPLE) == []
+        row_keys = tuple(schema["$defs"]["finalRow"]["properties"])
+        assert len(row_keys) == 22
+        assert set(row_keys) < set(vocab.LCA_BOM_COLUMNS)
+        assert "lab_part_number" not in row_keys, "assigned by the renderer, never by the model"
+        assert set(schema["$defs"]["finalRow"]["required"]) <= set(row_keys)
+        assert set(schema["$defs"]["labSummaryText"]["properties"]).isdisjoint(
+            {"total_mass_g", "component_count", "materials_breakdown", "contributors", "product_name"})
+
+    def test_finalize_schema_rejects_wrong_type(self):
+        schema = load_schema("finalize_schema")
+        row = {**FINALIZE_EXAMPLE["bom_rows"][0], "qty": "1"}
+        assert _errors(schema, {**FINALIZE_EXAMPLE, "bom_rows": [row]}) == ["'1' is not of type 'number'"]
+        edge = {"step": 6, "depends_on_step": "5", "text": "x"}
+        assert _errors(schema, {**FINALIZE_EXAMPLE, "dependency_edges": [edge]}) == ["'5' is not of type 'integer', 'null'"]
+        assert _errors(schema, {**FINALIZE_EXAMPLE, "step_bom_refs": [{"step": 1, "row_indexes": ["0"]}]}) == ["'0' is not of type 'integer'"]
+
+    def test_analysis_report_schema_accepts_full_and_no_speech_runs(self):
+        schema = load_schema("analysis_report_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, ANALYSIS_REPORT_EXAMPLE) == []
+        assert _errors(schema, NO_SPEECH_REPORT) == []
+        skipped = {**ANALYSIS_REPORT_EXAMPLE, "framesSkipped": [{"momentIndex": 1, "reason": "x"}]}
+        assert _errors(schema, skipped) == ["'timestamp_seconds' is a required property"]
+        miss = {**ANALYSIS_REPORT_EXAMPLE, "vocabularyMisses": [{"row": 7, "field": "qty", "value": "2"}]}
+        enum_columns = ["part_type", "material_or_component_type", "primary_manufacturing_process",
+                        "secondary_manufacturing_process", "method_for_weight", "ic_type", "ic_package_type",
+                        "pcb_type", "pcb_board_finish", "display_type", "battery_type"]
+        assert _errors(schema, miss) == [f"'qty' is not one of {enum_columns!r}"]
+        assert all(column in vocab.LCA_BOM_COLUMNS for column in enum_columns)
+        battery_miss = {**ANALYSIS_REPORT_EXAMPLE, "vocabularyMisses": [
+            {"row": 1, "field": "battery_type", "value": "Battery-Unobtainium"}]}
+        assert _errors(schema, battery_miss) == []
+        stage = {**ANALYSIS_REPORT_EXAMPLE, "stages": [{**STAGE_EXAMPLE, "calls": 1.5}]}
+        assert _errors(schema, stage) == ["1.5 is not of type 'integer'"]
+        indexed = {**ANALYSIS_REPORT_EXAMPLE, "stages": [{**STAGE_EXAMPLE, "index": 3}]}
+        assert _errors(schema, indexed) == ["Additional properties are not allowed ('index' was unexpected)"]
+        observed = {**LIMITS_EXAMPLE, "observed": {"language": "en-US"}}
+        assert _errors(schema, {**ANALYSIS_REPORT_EXAMPLE, "limits": observed}) == [
+            "'totalDurationSeconds' is a required property", "'totalInputBytes' is a required property"]
+        # spec section 3.2: limits.configured carries the four caps; the definition's fifth key is rejected.
+        five_caps = {**LIMITS_EXAMPLE, "configured": dict(DEFINITION_EXAMPLE["limits"])}
+        assert _errors(schema, {**ANALYSIS_REPORT_EXAMPLE, "limits": five_caps}) == [
+            "Additional properties are not allowed ('maxKeyFramesCeiling' was unexpected)"]
+        assert schema["$defs"]["skippedFrame"] == load_schema("frames_schema")["$defs"]["skippedFrame"]
+
+    def test_summary_schema_accepts_example_and_pins_counters_and_paths(self):
+        schema = load_schema("summary_schema")
+        Draft202012Validator.check_schema(schema)
+        assert _errors(schema, SUMMARY_EXAMPLE) == []
+        transcript_only = {
+            **SUMMARY_EXAMPLE, "mode": "transcript", "config": dict(TRANSCRIPT_CONFIG_EXAMPLE),
+            "bedrock": {"calls": 0, "inputTokens": 0, "outputTokens": 0}, "warnings": ["no speech detected"],
+            "paths": {k: v for k, v in SUMMARY_EXAMPLE["paths"].items() if k in ("transcript", "timeline", "analysisReport")},
+        }
+        assert _errors(schema, transcript_only) == []
+        assert _errors(schema, {**SUMMARY_EXAMPLE, "bedrock": {"calls": 4, "inputTokens": 61200}}) == [
+            "'outputTokens' is a required property"]
+        no_slash = {**SUMMARY_EXAMPLE, "paths": {**SUMMARY_EXAMPLE["paths"], "sop": f"sop-bom/{_EXEC_ID}/sop.json"}}
+        assert "does not match" in _errors(schema, no_slash)[0]
+        assert _errors(schema, {**SUMMARY_EXAMPLE, "status": "RUNNING"}) == [
+            "'RUNNING' is not one of ['SUCCEEDED', 'FAILED']"]
+        assert schema["$defs"]["limits"] == load_schema("analysis_report_schema")["$defs"]["limits"]
+
+    def test_every_schema_loads_and_is_valid(self):
+        for name in SCHEMA_NAMES:
+            schema = load_schema(name)
+            Draft202012Validator.check_schema(schema)
+            assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema", name
+            assert schema["$id"] == f"vams:videoSopBom/{name}.json", name
+            assert schema["type"] == "object" and schema["additionalProperties"] is False, name
+
+
 # --- end of vocab-and-schemas tests ---

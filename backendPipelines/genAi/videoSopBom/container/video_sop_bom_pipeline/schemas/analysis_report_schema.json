@@ -1,0 +1,138 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vams:videoSopBom/analysis_report_schema.json",
+    "title": "analysis-report.json",
+    "description": "Per-run report written in both modes: the resolved config, the model id, one entry per stage with its Amazon Bedrock counters, window and frame counts, the caps that applied and what the run observed against them, warnings and vocabulary misses. Never transcript text, prompt bodies or model output.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "mode",
+        "config",
+        "modelId",
+        "stages",
+        "windows",
+        "framesRequested",
+        "framesExtracted",
+        "framesSkipped",
+        "limits",
+        "warnings",
+        "vocabularyMisses"
+    ],
+    "properties": {
+        "mode": { "type": "string", "enum": ["full", "transcript"] },
+        "config": {
+            "description": "The resolved config echo, validated separately against config_schema.json.",
+            "type": "object"
+        },
+        "modelId": { "type": "string", "minLength": 1 },
+        "stages": { "type": "array", "items": { "$ref": "#/$defs/stage" } },
+        "windows": { "type": "integer", "minimum": 0 },
+        "framesRequested": { "type": "integer", "minimum": 0 },
+        "framesExtracted": { "type": "integer", "minimum": 0 },
+        "framesSkipped": { "type": "array", "items": { "$ref": "#/$defs/skippedFrame" } },
+        "limits": { "$ref": "#/$defs/limits" },
+        "warnings": {
+            "description": "Contains \"no speech detected\" for a silent run.",
+            "type": "array",
+            "items": { "type": "string" }
+        },
+        "vocabularyMisses": { "type": "array", "items": { "$ref": "#/$defs/vocabularyMiss" } }
+    },
+    "$defs": {
+        "stage": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "startedAt", "durationS", "inputTokens", "outputTokens", "calls"],
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "startedAt": { "description": "ISO 8601, UTC.", "type": "string", "minLength": 1 },
+                "durationS": { "type": "number", "minimum": 0 },
+                "inputTokens": { "type": "integer", "minimum": 0 },
+                "outputTokens": { "type": "integer", "minimum": 0 },
+                "calls": {
+                    "description": "Amazon Bedrock Converse calls made in this stage.",
+                    "type": "integer",
+                    "minimum": 0
+                }
+            }
+        },
+        "skippedFrame": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["momentIndex", "timestamp_seconds", "reason"],
+            "properties": {
+                "momentIndex": { "type": "integer", "minimum": 0 },
+                "timestamp_seconds": { "type": "number", "minimum": 0 },
+                "reason": { "type": "string" }
+            }
+        },
+        "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["configured", "observed"],
+            "properties": {
+                "configured": {
+                    "description": "The four caps from the definition document's limits that applied to this run; maxKeyFramesCeiling stays in the definition.",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "maxVideoFiles",
+                        "maxVideoFileSizeMb",
+                        "maxTotalInputSizeMb",
+                        "maxTotalDurationMinutes"
+                    ],
+                    "properties": {
+                        "maxVideoFiles": { "type": "integer", "minimum": 1 },
+                        "maxVideoFileSizeMb": { "type": "integer", "minimum": 1 },
+                        "maxTotalInputSizeMb": { "type": "integer", "minimum": 1 },
+                        "maxTotalDurationMinutes": { "type": "integer", "minimum": 1 }
+                    }
+                },
+                "observed": {
+                    "description": "What the run measured against the caps; the two required keys are written by every run, the container may add others.",
+                    "type": "object",
+                    "required": ["totalInputBytes", "totalDurationSeconds"],
+                    "properties": {
+                        "totalInputBytes": { "type": "integer", "minimum": 0 },
+                        "totalDurationSeconds": { "type": "number", "minimum": 0 },
+                        "language": { "type": ["string", "null"] },
+                        "subtitles": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            }
+        },
+        "vocabularyMiss": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["row", "field", "value"],
+            "properties": {
+                "row": {
+                    "description": "1-based BOM row number (the lab_part_number sequence).",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "field": {
+                    "description": "One of the enum-typed lcaRow columns the renderer normalises.",
+                    "type": "string",
+                    "enum": [
+                        "part_type",
+                        "material_or_component_type",
+                        "primary_manufacturing_process",
+                        "secondary_manufacturing_process",
+                        "method_for_weight",
+                        "ic_type",
+                        "ic_package_type",
+                        "pcb_type",
+                        "pcb_board_finish",
+                        "display_type",
+                        "battery_type"
+                    ]
+                },
+                "value": {
+                    "description": "The raw model value; the row keeps it in material_notes and carries null in the field.",
+                    "type": "string"
+                }
+            }
+        }
+    }
+}
