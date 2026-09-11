@@ -971,6 +971,45 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // The Video SOP/BOM caps travel to the pipeline's Lambdas as environment variables, so every leaf
+    // is filled here: an absent one would reach the Lambda as the string "undefined".
+    if (config.app.pipelines.useGenAiVideoSopBom == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            bedrockModelId: "",
+            limits: { maxVideoFiles: 4, maxTotalDurationMinutes: 240 },
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.enabled = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.useCodeBuild == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.useCodeBuild = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.bedrockModelId == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits = {
+            maxVideoFiles: 4,
+            maxTotalDurationMinutes: 240,
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = 4;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 240;
+    }
+
     // Pipeline constructs gate the VamsSchemaRegistration custom resource on
     // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
     // would deploy the pipeline stack with no VAMS registration. A partially-specified block
@@ -996,6 +1035,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiVideoSopBom);
     defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEks);
@@ -1373,6 +1413,7 @@ export function getConfig(app: cdk.App): Config {
             "useNvidiaCosmos",
             "useNvidiaCosmos3",
             "useNvidiaGr00t",
+            "useGenAiVideoSopBom",
         ];
         const enabledOutsideSupport = codeBuildPipelinePaths.filter(
             (name) => pipelines[name]?.useCodeBuild === true
@@ -1480,6 +1521,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(

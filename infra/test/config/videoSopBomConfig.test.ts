@@ -26,7 +26,42 @@
  *    the same inputs `getConfig()` is given, and the rule ids that must fire are asserted by name.
  */
 
+import * as fs from "fs";
 import * as Config from "../../config/config";
+import commercialTemplate from "../../config/config.template.commercial.json";
+import { newTestApp } from "../support/testApp";
+
+const realReadFileSync = jest.requireActual("fs").readFileSync;
+
+jest.mock("fs", () => {
+    const actual = jest.requireActual("fs");
+    return { ...actual, readFileSync: jest.fn(actual.readFileSync) };
+});
+
+/**
+ * Builds a config.json from the commercial template, applies `mutate`, and returns a thunk that calls
+ * getConfig() on it — the shape configValidationHardening.test.ts uses. Only the config filename is
+ * intercepted; the policy JSON reads getConfig() also performs fall through to the real fs.
+ */
+function resolve(mutate: (c: any) => void): () => Config.Config {
+    const config = JSON.parse(JSON.stringify(commercialTemplate));
+    config.env.region = "us-east-1";
+    config.env.account = "123456789012";
+    config.app.baseStackName = "vamstest";
+    mutate(config);
+    (fs.readFileSync as unknown as jest.Mock).mockImplementation(
+        (p: string, ...rest: unknown[]) => {
+            if (typeof p === "string" && p.endsWith("config.json")) return JSON.stringify(config);
+            return realReadFileSync(p, ...rest);
+        }
+    );
+    return () => Config.getConfig(newTestApp());
+}
+
+afterEach(() => {
+    // Restored to delegating rather than cleared, or a later synth in this process reads nothing.
+    (fs.readFileSync as unknown as jest.Mock).mockImplementation(realReadFileSync);
+});
 
 describe("Video SOP/BOM compute-tied constants", () => {
     test("the constants hold their registry values", () => {
@@ -158,6 +193,76 @@ describe("validateBedrockModelId is one helper for both GenAI pipelines", () => 
     test.each(FLAG_PATHS)('a "us-gov." id is accepted in GovCloud under %s', (flagPath) => {
         expect(() =>
             Config.validateBedrockModelId(flagPath, US_GOV_ID, "aws-us-gov")
+        ).not.toThrow();
+    });
+});
+
+describe("getConfig() backfills and enumerations for useGenAiVideoSopBom", () => {
+    const DEFAULT_LIMITS = { maxVideoFiles: 4, maxTotalDurationMinutes: 240 };
+
+    test("an absent block resolves to the disabled defaults", () => {
+        const config = resolve((c) => {
+            delete c.app.pipelines.useGenAiVideoSopBom;
+        })();
+        expect(config.app.pipelines.useGenAiVideoSopBom).toEqual({
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            bedrockModelId: "",
+            limits: DEFAULT_LIMITS,
+        });
+    });
+
+    test("a block holding only `enabled` is completed leaf by leaf", () => {
+        // autoRegisterWithVAMS comes from defaultAutoRegisterFlags (true for a present block, as the
+        // templates ship); the rest are the per-leaf backfills.
+        const config = resolve((c) => {
+            c.app.pipelines.useGenAiVideoSopBom = { enabled: false };
+        })();
+        expect(config.app.pipelines.useGenAiVideoSopBom).toEqual({
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: true,
+            bedrockModelId: "",
+            limits: DEFAULT_LIMITS,
+        });
+    });
+
+    test("a limits block missing one leaf gets that leaf and keeps the other", () => {
+        const config = resolve((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.limits = { maxVideoFiles: 2 };
+        })();
+        expect(config.app.pipelines.useGenAiVideoSopBom.limits).toEqual({
+            maxVideoFiles: 2,
+            maxTotalDurationMinutes: 240,
+        });
+    });
+
+    test("the shipped commercial block survives resolution unchanged", () => {
+        const config = resolve(() => undefined)();
+        expect(config.app.pipelines.useGenAiVideoSopBom).toEqual({
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: true,
+            bedrockModelId: "global.anthropic.claude-sonnet-5",
+            limits: DEFAULT_LIMITS,
+        });
+    });
+
+    test("enabling the pipeline without a VPC is rejected, naming it", () => {
+        expect(
+            resolve((c) => {
+                c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+            })
+        ).toThrow(/require a VPC: pipelines\.useGenAiVideoSopBom\./);
+    });
+
+    test("[control] the same configuration with the VPC on is accepted", () => {
+        expect(
+            resolve((c) => {
+                c.app.useGlobalVpc.enabled = true;
+                c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+            })
         ).not.toThrow();
     });
 });
