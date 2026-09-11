@@ -30,6 +30,11 @@ import * as fs from "fs";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
+import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
+import {
+    RULES,
+    evaluateRules,
+} from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -56,6 +61,23 @@ function resolve(mutate: (c: any) => void): () => Config.Config {
         }
     );
     return () => Config.getConfig(newTestApp());
+}
+
+/**
+ * Everything a GovCloud-partition config needs in order to reach the rules under test, in the shape
+ * configValidationHardening.test.ts uses. The REGION carries the partition: getConfig() derives
+ * config.env.partition from it, so a partition set in config.json would be overwritten.
+ */
+function restrictedPartition(c: any) {
+    c.env.region = "us-gov-west-1";
+    c.app.govCloud.enabled = true;
+    c.app.useGlobalVpc.enabled = true;
+    c.app.useCloudFront.enabled = false;
+    c.app.useAlb.enabled = true;
+    c.app.useLocationService.enabled = false;
+    c.app.openSearch.useServerless.enabled = false;
+    c.app.openSearch.useServerless.nextGen = false;
+    c.app.openSearch.useProvisioned.enabled = true;
 }
 
 afterEach(() => {
@@ -264,5 +286,182 @@ describe("getConfig() backfills and enumerations for useGenAiVideoSopBom", () =>
                 c.app.pipelines.useGenAiVideoSopBom.enabled = true;
             })
         ).not.toThrow();
+    });
+});
+
+describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAiVideoSopBom", () => {
+    type Profile = "commercial" | "govcloud" | "eusovereign";
+    const PIPELINE_RULE_IDS = [
+        "vpc-required-genai-video-sop-bom",
+        "video-sop-bom-bedrock-model-id-required",
+        "video-sop-bom-bedrock-model-id-commercial-only-prefix",
+        "video-sop-bom-commercial-or-govcloud-only",
+        "video-sop-bom-max-video-files-range",
+        "video-sop-bom-max-total-duration-range",
+    ];
+    const PARTITION_REASON =
+        "not validated outside the commercial and GovCloud partitions: Amazon Transcribe endpoint " +
+        "availability is unverified and the service-helper has no row for this partition; a missing " +
+        "endpoint hangs a run until its timeout.";
+    const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
+    const EU_ID = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
+    /** The ids of this pipeline's rules that fire on `profile`'s preset after `mutate`. */
+    const firing = (profile: Profile, mutate: (c: any) => void): string[] => {
+        const config = makeDefaultConfig(profile);
+        mutate(config);
+        return evaluateRules(config)
+            .map((rule) => rule.id)
+            .filter((id) => PIPELINE_RULE_IDS.includes(id));
+    };
+    /**
+     * The commercial preset ships env.region null, and the partition-keyed rules are silent while the
+     * region is unset. Setting us-east-1 makes the "raises none" control prove that `aws` is allowed
+     * rather than that nothing was evaluated.
+     */
+    const enable = (c: any) => {
+        c.env.region = "us-east-1";
+        c.app.useGlobalVpc.enabled = true;
+        c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+    };
+    /**
+     * The GovCloud preset also ships env.region null (it deep-equals the govcloud template), so
+     * isCommercialPartition() would report commercial and the prefix rule could never fire. The region
+     * is what carries the partition, as configValidationHardening's restrictedPartition() notes.
+     */
+    const govcloud = (c: any) => {
+        c.env.region = "us-gov-west-1";
+        c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+    };
+
+    test("[control] every rule id this test names exists exactly once", () => {
+        // A renamed rule would otherwise make every "raises nothing" assertion below pass vacuously.
+        const ids = RULES.map((rule) => rule.id);
+        for (const id of PIPELINE_RULE_IDS) {
+            expect(ids.filter((candidate) => candidate === id)).toHaveLength(1);
+        }
+    });
+
+    test("[control] the commercial preset at us-east-1 with the pipeline enabled and a VPC raises none of them", () => {
+        expect(firing("commercial", enable)).toEqual([]);
+    });
+
+    test("[control] with env.region unset the partition-keyed rules stay silent, as the labeling rule does", () => {
+        // A commercial prefix on the GovCloud preset with no region: isCommercialPartition() reports
+        // commercial and partitionForRegionName() reports undefined, so neither partition rule fires.
+        // This is the builder's documented behaviour (the deploy-time region may come from CDK context),
+        // pinned so the three GovCloud tests below are read as needing the region set, not as optional.
+        expect(
+            firing("govcloud", (c) => {
+                c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                    "global.anthropic.claude-sonnet-5";
+            })
+        ).toEqual([]);
+    });
+
+    test("enabling without a VPC raises the VPC rule under the label getConfig() uses", () => {
+        const config = makeDefaultConfig("commercial");
+        config.app.pipelines.useGenAiVideoSopBom.enabled = true;
+        const rule = evaluateRules(config).find((r) => r.id === "vpc-required-genai-video-sop-bom");
+        expect(rule).toBeDefined();
+        expect(rule?.severity).toBe("error");
+        expect(rule?.message).toContain("pipelines.useGenAiVideoSopBom");
+    });
+
+    test("the EU Sovereign preset refuses the pipeline, and only for the partition", () => {
+        expect(
+            firing("eusovereign", (c) => {
+                c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+            })
+        ).toEqual(["video-sop-bom-commercial-or-govcloud-only"]);
+    });
+
+    test("getConfig() and the builder state the partition reason in the same words", () => {
+        const builder = makeDefaultConfig("eusovereign");
+        builder.app.pipelines.useGenAiVideoSopBom.enabled = true;
+        builder.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+        const rule = evaluateRules(builder).find(
+            (r) => r.id === "video-sop-bom-commercial-or-govcloud-only"
+        );
+        expect(rule?.message).toContain(PARTITION_REASON);
+
+        let deployMessage = "";
+        try {
+            resolve((c) => {
+                // Not enable(): that helper pins us-east-1, and the region set last wins.
+                restrictedPartition(c);
+                c.env.region = "eusc-de-east-1";
+                c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+            })();
+        } catch (e) {
+            deployMessage = (e as Error).message;
+        }
+        expect(deployMessage).toContain(PARTITION_REASON);
+    });
+
+    test("the GovCloud preset at us-gov-west-1 with a model id offered there raises nothing", () => {
+        // With the region set, partitionForRegionName() resolves aws-us-gov, so this proves the
+        // partition rule allows GovCloud rather than that it never looked.
+        expect(
+            firing("govcloud", (c) => {
+                govcloud(c);
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = US_GOV_ID;
+            })
+        ).toEqual([]);
+    });
+
+    test("the GovCloud preset's empty model id raises the required rule, not the partition rule", () => {
+        expect(firing("govcloud", govcloud)).toEqual(["video-sop-bom-bedrock-model-id-required"]);
+    });
+
+    test("a commercial prefix in GovCloud raises the prefix rule", () => {
+        expect(
+            firing("govcloud", (c) => {
+                govcloud(c);
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                    "global.anthropic.claude-sonnet-5";
+            })
+        ).toEqual(["video-sop-bom-bedrock-model-id-commercial-only-prefix"]);
+    });
+
+    test.each([0, 5, -1, 2.5, "4"])("maxVideoFiles %p raises the range rule", (value) => {
+        expect(
+            firing("commercial", (c) => {
+                enable(c);
+                c.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = value;
+            })
+        ).toEqual(["video-sop-bom-max-video-files-range"]);
+    });
+
+    test.each([0, 481, 1.5, "240"])("maxTotalDurationMinutes %p raises the range rule", (value) => {
+        expect(
+            firing("commercial", (c) => {
+                enable(c);
+                c.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = value;
+            })
+        ).toEqual(["video-sop-bom-max-total-duration-range"]);
+    });
+
+    test("an absent limits leaf raises nothing, mirroring the getConfig() backfill", () => {
+        expect(
+            firing("commercial", (c) => {
+                enable(c);
+                delete c.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles;
+            })
+        ).toEqual([]);
+    });
+
+    test("a disabled pipeline raises none of its rules whatever the values", () => {
+        expect(
+            firing("eusovereign", (c) => {
+                c.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = 99;
+                c.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 0;
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                    "global.anthropic.claude-sonnet-5";
+            })
+        ).toEqual([]);
     });
 });
