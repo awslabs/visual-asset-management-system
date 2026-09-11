@@ -282,7 +282,8 @@ describe("Bedrock model id validation (S1-INFRA-035)", () => {
     });
 
     test("the restricted templates ship it empty and the pipeline disabled", () => {
-        // The pairing that makes emptying the value safe: it is only required when enabled.
+        // The pairing that makes emptying the value safe: it is only required when enabled. The
+        // Video SOP/BOM pipeline ships the same way, for the same reason.
         for (const name of ["govcloud", "eusovereign"]) {
             const template = JSON.parse(
                 realReadFileSync(
@@ -290,9 +291,11 @@ describe("Bedrock model id validation (S1-INFRA-035)", () => {
                     "utf-8"
                 )
             );
-            const genAi = template.app.pipelines.useGenAiMetadata3dLabeling;
-            expect(genAi.bedrockModelId).toBe("");
-            expect(genAi.enabled).toBe(false);
+            for (const pipeline of ["useGenAiMetadata3dLabeling", "useGenAiVideoSopBom"]) {
+                const block = template.app.pipelines[pipeline];
+                expect(block.bedrockModelId).toBe("");
+                expect(block.enabled).toBe(false);
+            }
         }
     });
 });

@@ -3297,6 +3297,16 @@ export interface ConfigPublic {
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
             };
+            useGenAiVideoSopBom: {
+                enabled: boolean;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                bedrockModelId: string;
+                limits: {
+                    maxVideoFiles: number;
+                    maxTotalDurationMinutes: number;
+                };
+            };
             useRapidPipeline: {
                 useEcs: {
                     enabled: boolean;
