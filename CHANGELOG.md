@@ -12,6 +12,14 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Security / CDK** The GenAI 3D metadata labeling lambda's Amazon Bedrock grant names the configured inference profile instead of every inference profile in the account.
+-   **CDK** The GenAI 3D metadata labeling, 3D preview thumbnail, and Potree point cloud viewer state machines can describe and terminate the AWS Batch jobs they submit, so stopping an execution also stops its Fargate container.
+-   **CDK** The Fargate pipeline job definitions (coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree) write container output to `/aws/vendedlogs/Pipelines/<Name><hash>` log groups encrypted with the deployment's KMS key and readable from the execution log view, instead of AWS Batch's default `/aws/batch/job` group.
+    -   Note: The new groups are explicitly named; delete any orphaned copy before redeploying the same configuration into the same account.
+-   **Security / Pipelines** Every pipeline logger redacts the Step Functions task token under all of its spellings (`TaskToken`, `taskToken`, `sfnExternalTaskToken`, `externalSfnTaskToken`, `TASK_TOKEN`), including inside lists, and the 14 vendored logger copies are identical.
+-   **Documentation** `NOTICE.md` and the notices page record the GPL-2.0-or-later FFmpeg package installed in the NVIDIA Cosmos Predict, Cosmos Reason, Cosmos Transfer, Cosmos 3, and GR00T fine-tuning container images.
+-   **Documentation** The configuration reference describes what `app.useFips` changes: the hostnames VAMS composes at synthesis and the KMS FIPS VPC endpoint, not the SDK clients in Lambda functions and containers; `AWS_USE_FIPS_ENDPOINT` is a synthesis-time source of the flag rather than a requirement alongside it.
+
 ### Chores
 
 ### Known Outstanding Issues
