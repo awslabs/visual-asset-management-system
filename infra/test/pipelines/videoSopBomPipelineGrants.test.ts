@@ -10,8 +10,8 @@
  *   1. The container JOB role — the credentials reachable from inside a container that decodes untrusted
  *      media — carries inline statements only: versioned reads on every asset bucket (two are registered
  *      here, one under a key prefix), writes only under the DEFAULT record's pipelines/ prefix and the
- *      auxiliary bucket, Bedrock on a Region-wildcard foundation-model ARN plus the account's inference
- *      profiles, Transcribe pinned to the auxiliary bucket by condition key, and task-token
+ *      auxiliary bucket, Bedrock on a Region-wildcard foundation-model ARN plus the configured inference
+ *      profile only, Transcribe pinned to the auxiliary bucket by condition key, and task-token
  *      success/failure with no heartbeat.
  *   2. The EXECUTION role is the ECS agent's: the two managed policies, no inline policies, and on top
  *      only the image pull the ECR bind writes and the awslogs write the container log group needs.
@@ -333,7 +333,7 @@ describe("VideoSopBomContainerJobRole", () => {
         expect(resources.some((resource) => resource.includes(otherBucketLogicalId))).toBe(false);
     });
 
-    test("invokes Bedrock on the model (Region-wildcard) and the account's inference profiles", () => {
+    test("invokes Bedrock on the model (Region-wildcard) and the configured inference profile only", () => {
         const statement = inlineStatements("VideoSopBomContainerJobRole").find((entry) =>
             actionsOf(entry).includes("bedrock:InvokeModel")
         );
@@ -349,7 +349,14 @@ describe("VideoSopBomContainerJobRole", () => {
         expect(wildcardRegion[0]).not.toMatch(
             /foundation-model\/(global|us-gov|us|eu|apac|au|jp)\./
         );
-        expect(resources).toContain(`arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/*`);
+        // The inference-profile ARN names the configured id exactly; no profile wildcard is granted.
+        const configuredModelId = mockConfig.app.pipelines.useGenAiVideoSopBom.bedrockModelId;
+        expect(configuredModelId).toMatch(/^global\./);
+        expect(resources).toContain(
+            `arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/${configuredModelId}`
+        );
+        expect(resources.some((resource) => /inference-profile\/\*/.test(resource))).toBe(false);
+        expect(resources.some((resource) => /\*$/.test(resource))).toBe(false);
     });
 
     test("starts transcription jobs only into the auxiliary bucket under the deployment key", () => {

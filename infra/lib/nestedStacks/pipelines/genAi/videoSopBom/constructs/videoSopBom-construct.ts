@@ -156,7 +156,9 @@ export class VideoSopBomConstruct extends Construct {
 
         // The foundation-model id underneath any cross-Region inference-profile prefix. The Region
         // segment is a wildcard because geo and global inference profiles route a request to
-        // destination Regions the caller cannot enumerate; the model id itself stays exact.
+        // destination Regions the caller cannot enumerate; the model id itself stays exact. The
+        // inference-profile ARN names the configured id as-is: with a cross-Region prefix it is the
+        // profile the container invokes, and a bare foundation-model id names no profile at all.
         const bedrockModelId = resolveVideoSopBomBedrockModelId(props.config);
         const bedrockFoundationModel = bedrockModelId.replace(
             /^(global|us-gov|us|eu|apac|au|jp)\./,
@@ -170,7 +172,7 @@ export class VideoSopBomConstruct extends Construct {
                     resources: [
                         `arn:${ServiceHelper.Partition()}:bedrock:*::foundation-model/${bedrockFoundationModel}`,
                         `arn:${ServiceHelper.Partition()}:bedrock:::foundation-model/${bedrockFoundationModel}`,
-                        `arn:${ServiceHelper.Partition()}:bedrock:${region}:${account}:inference-profile/*`,
+                        `arn:${ServiceHelper.Partition()}:bedrock:${region}:${account}:inference-profile/${bedrockModelId}`,
                     ],
                 }),
             ],
@@ -584,16 +586,6 @@ export class VideoSopBomConstruct extends Construct {
                         "wildcard; the model id in it is exact.",
                     appliesTo: [
                         { regex: "/^Resource::arn:.*:bedrock:\\*::foundation-model/.*$/g" },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "The Bedrock inference profile is selected by the operator through " +
-                        "pipelines.useGenAiVideoSopBom.bedrockModelId, so its identifier is not known at " +
-                        "synthesis. Scoped to this account and Region, and to inference profiles only.",
-                    appliesTo: [
-                        { regex: "/^Resource::arn:.*:bedrock:.*:inference-profile/\\*$/g" },
                     ],
                 },
                 {
