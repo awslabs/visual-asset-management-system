@@ -215,12 +215,13 @@ This software includes third party software subject to the following copyrights:
 
 **Other Pipeline Components**
 
-| Name            | Version                                                                                                                                                   | Related Pipeline             | License      |
-| :-------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------- | :----------- |
-| PDAL            | [master-latest](https://github.com/PDAL/PDAL)                                                                                                             | POTREE VIEWER                | BSD          |
-| PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                | BSD-2-Clause |
-| Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION | GNU GPLv3    |
-| SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                | MIT          |
+| Name            | Version                                                                                                                                                   | Related Pipeline             | License          |
+| :-------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------- | :--------------- |
+| PDAL            | [master-latest](https://github.com/PDAL/PDAL)                                                                                                             | POTREE VIEWER                | BSD              |
+| PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                | BSD-2-Clause     |
+| Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION | GNU GPLv3        |
+| SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                | MIT              |
+| FFmpeg          | 7:7.1.5-0+deb13u1 (Debian trixie `ffmpeg` package)                                                                                                        | VIDEO SOP/BOM EXTRACTION     | GPL-2.0-or-later |
 
 ### Preview 3D Thumbnail Pipeline
 
@@ -268,6 +269,26 @@ Copyright (c) 2012, Howard Butler, hobu.inc at gmail.com
 Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
 All rights reserved.
 ```
+
+### Video SOP/BOM Extraction Pipeline
+
+**Video SOP/BOM Extraction Pipeline Dependencies**
+
+| Name                         | Version           | License          | Notes                                                                                                 |
+| :--------------------------- | :---------------- | :--------------- | :---------------------------------------------------------------------------------------------------- |
+| FFmpeg (`ffmpeg`, `ffprobe`) | 7:7.1.5-0+deb13u1 | GPL-2.0-or-later | Debian `ffmpeg` apt package: stream probing, audio extraction and FLAC encoding, key-frame extraction |
+| boto3                        | 1.43.93           | Apache-2.0       | AWS SDK for Python (Amazon S3, Amazon Transcribe, Amazon Bedrock, AWS Step Functions)                 |
+| botocore                     | 1.43.93           | Apache-2.0       | Low-level AWS service client library used by boto3                                                    |
+| jsonschema                   | 4.26.0            | MIT              | Configuration and output schema validation                                                            |
+| Pillow                       | 12.3.0            | HPND             | Key-frame scaling and JPEG encoding                                                                   |
+
+**Container Base Image**
+
+The Video SOP/BOM Extraction container uses the Debian-based `python:3.12-slim` image, pinned by digest, and installs the Debian `ffmpeg` package from the distribution's package archive.
+
+**FFmpeg License Notice**
+
+Debian builds FFmpeg with `--enable-gpl`, so the `ffmpeg` and `ffprobe` binaries in this image are licensed under the GNU General Public License version 2 or later (GPL-2.0-or-later). The pipeline runs them as separate processes over a command line and does not link against the FFmpeg libraries; the binaries are consumed unmodified from the Debian package. The GPL terms apply only when this optional pipeline (`app.pipelines.useGenAiVideoSopBom.enabled`) is enabled. Review the license requirements with your legal team before enabling it.
 
 ### Gaussian Splat Toolbox Pipeline
 
