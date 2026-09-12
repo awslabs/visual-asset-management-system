@@ -280,11 +280,14 @@ describe("deploy-time trigger enable across the pipeline constructs", () => {
             .sort();
     });
 
-    test("the scan reaches the Isaac Lab construct", () => {
+    test("the scan reaches the Isaac Lab construct and the video SOP/BOM construct", () => {
         // Positive control for the exclusion below: a walk that found the wrong directory would report
-        // the Isaac Lab construct as passing no triggerEnabled without ever reading it.
+        // the Isaac Lab construct as passing no triggerEnabled without ever reading it. Seventeen
+        // `-construct.ts` files register a bundle; the video SOP/BOM construct is the one that registers
+        // a bundle shipping no trigger, so it is named as well as counted.
         expect(registering).toContain("isaacLabTraining-construct.ts");
-        expect(registering.length).toBeGreaterThanOrEqual(14);
+        expect(registering).toContain("videoSopBom-construct.ts");
+        expect(registering.length).toBeGreaterThanOrEqual(17);
     });
 
     test("the Isaac Lab construct wires no deploy-time trigger enable", () => {

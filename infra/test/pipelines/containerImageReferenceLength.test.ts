@@ -47,6 +47,9 @@ const MUST_BE_EXPLICITLY_NAMED: Record<string, string> = {
     EcrRepoCoordTransform:
         "auto-generated URI measured 237 chars on the reference deployment; 237 + 33 = 270 > 255, and " +
         "AWS Batch rejected every job at submit",
+    EcrRepoVideoSopBom:
+        "nested under PipelineBuilder at the same depth as coordinateTransform, whose identically " +
+        "shaped path measured 237 chars; an auto-generated name would overrun the cap the same way",
 };
 
 function ecrRepositories(s: SynthResult) {

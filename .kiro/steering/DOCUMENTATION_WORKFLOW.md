@@ -34,7 +34,7 @@ documentation/
     │       └── custom.css           # Custom theme CSS
     ├── static/
     │   └── img/                     # Static images referenced in docs
-    └── docs/                        # Source Markdown files (78+ pages)
+    └── docs/                        # Source Markdown files (136 pages)
         ├── index.md                 # Landing page
         ├── overview/                # Solution overview, benefits, use cases, features, costs
         ├── concepts/                # Core concepts: databases, assets, files, pipelines, metadata, permissions
@@ -42,7 +42,7 @@ documentation/
         ├── deployment/              # Prerequisites, deploy, config reference, external S3, update, uninstall
         ├── user-guide/              # Getting started, web UI, upload tutorial, asset mgmt, search, metadata, permissions
         ├── cli/                     # CLI getting started, installation, command reference, automation
-        ├── pipelines/               # Pipeline overview + 10 individual pipeline docs + custom pipeline guide
+        ├── pipelines/               # Pipeline overview + 16 individual pipeline docs + custom pipeline guide + v2.5→v2.6 porting guide
         ├── developer/               # Dev setup, backend, frontend, CDK, viewer plugins, audit logging
         ├── api/                     # API overview, auth, assets, files, metadata, search, pipelines, workflows, tags
         ├── troubleshooting/         # Common issues, known limitations, FAQ
@@ -56,15 +56,15 @@ The sidebar uses a hierarchical tree with collapsible categories:
 ```
 Home (index.md)
 ├── Overview (5 pages)
-├── Core Concepts (8 pages)
+├── Core Concepts (10 pages)
 ├── Architecture (6 pages)
-├── Deployment (7 pages)
-├── User Guide (11 pages)
+├── Deployment (8 pages)
+├── User Guide (13 pages)
 └── Developer Guide
     ├── Setup, Backend, Frontend, CDK, Viewer Plugins, Audit Logging
     ├── CLI Reference (4+ pages with commands/ subcategory)
-    ├── Pipelines (11 pages)
-    ├── API Reference (11 pages)
+    ├── Pipelines (19 pages)
+    ├── API Reference (16 pages)
     └── Troubleshooting (3 pages)
 Additional (5 pages)
 ```

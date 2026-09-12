@@ -814,6 +814,19 @@ export function storageResourcesBuilder(
                 enabled: true,
                 abortIncompleteMultipartUploadAfter: Duration.days(14),
             },
+            // The video SOP/BOM pipeline's scratch objects (pipelines/<pipelineId>/<executionId>/...:
+            // definition document, extracted audio, Transcribe output, analysis artefacts). A run deletes
+            // its own on success; the objects a crashed or aborted run leaves behind expire here. Other
+            // pipelines' working prefixes are untouched.
+            ...(config.app.pipelines.useGenAiVideoSopBom?.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: "pipelines/genai-video-sop-bom/",
+                          expiration: Duration.days(30),
+                      },
+                  ]
+                : []),
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",

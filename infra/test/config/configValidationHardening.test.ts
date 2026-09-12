@@ -4,7 +4,7 @@
  */
 
 /**
- * Four `getConfig()` rules for configuration that used to deploy and fail later.
+ * `getConfig()` rules for configuration that would otherwise deploy and fail later.
  *
  *  * **S1-INFRA-037** — the OIDC placeholder guard rejected two of five shipped values. `clientId`
  *    ("vams-oidc-client") and `cognitoDomainPrefix` ("vams") passed a non-empty check, so a deployment
@@ -23,6 +23,11 @@
  *  * **S1-INFRA-069** — the Physna endpoints were checked for parseability alone. `new URL()` accepts
  *    `http://` and `http://169.254.169.254/`, and the add-on sends the Physna OAuth client secret to
  *    the token endpoint as HTTP Basic credentials.
+ *
+ *  * **Video SOP/BOM Extraction (`useGenAiVideoSopBom`)** — the Bedrock rule through the helper both
+ *    GenAI pipelines share, the two operator-set limits, and the partition block: the pipeline calls
+ *    Amazon Transcribe from an isolated-subnet container through a VPC interface endpoint, and a
+ *    partition without that endpoint fails as a connect timeout at run time, not at deploy time.
  *
  * Every case asserts on the MESSAGE, not merely that something threw. These configurations have several
  * ways to be invalid at once — enabling a pipeline can trip a VPC rule, for instance — so "it throws"
@@ -282,7 +287,8 @@ describe("Bedrock model id validation (S1-INFRA-035)", () => {
     });
 
     test("the restricted templates ship it empty and the pipeline disabled", () => {
-        // The pairing that makes emptying the value safe: it is only required when enabled.
+        // The pairing that makes emptying the value safe: it is only required when enabled. The
+        // Video SOP/BOM pipeline ships the same way, for the same reason.
         for (const name of ["govcloud", "eusovereign"]) {
             const template = JSON.parse(
                 realReadFileSync(
@@ -290,9 +296,11 @@ describe("Bedrock model id validation (S1-INFRA-035)", () => {
                     "utf-8"
                 )
             );
-            const genAi = template.app.pipelines.useGenAiMetadata3dLabeling;
-            expect(genAi.bedrockModelId).toBe("");
-            expect(genAi.enabled).toBe(false);
+            for (const pipeline of ["useGenAiMetadata3dLabeling", "useGenAiVideoSopBom"]) {
+                const block = template.app.pipelines[pipeline];
+                expect(block.bedrockModelId).toBe("");
+                expect(block.enabled).toBe(false);
+            }
         }
     });
 });
@@ -359,5 +367,196 @@ describe("Physna outbound endpoint validation (S1-INFRA-069)", () => {
         expect(
             resolve((c) => enablePhysna(c, { apiBaseEndpoint: "https://10.0.0.5/v3/" }))
         ).toThrow(/apiBaseEndpoint.*loopback, link-local, or private/s);
+    });
+});
+
+describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", () => {
+    const enableVideoSopBom = (c: any) => {
+        c.app.useGlobalVpc.enabled = true;
+        c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+    };
+    /** The GovCloud-shaped config re-pointed at the EU Sovereign Cloud, which resolves to aws-eusc. */
+    const euSovereignPartition = (c: any) => {
+        restrictedPartition(c);
+        c.env.region = "eusc-de-east-1";
+    };
+    const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
+    /** The message getConfig() throws for `mutate`, or "" when it accepts the configuration. */
+    const rejection = (mutate: (c: any) => void): string => {
+        try {
+            resolve(mutate)();
+            return "";
+        } catch (e) {
+            return (e as Error).message;
+        }
+    };
+
+    describe("Bedrock model id — the shared helper applied under this flag too", () => {
+        test("the shipped commercial default is accepted in the commercial partition", () => {
+            expect(resolve((c) => enableVideoSopBom(c))).not.toThrow();
+        });
+
+        test("a commercial inference profile is rejected in GovCloud, naming this pipeline", () => {
+            expect(
+                resolve((c) => {
+                    enableVideoSopBom(c);
+                    restrictedPartition(c);
+                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                        "global.anthropic.claude-sonnet-5";
+                })
+            ).toThrow(
+                /pipelines\.useGenAiVideoSopBom\.bedrockModelId is .* exists only in the commercial partition/
+            );
+        });
+
+        test('the "us." prefix is rejected there as well', () => {
+            expect(
+                resolve((c) => {
+                    enableVideoSopBom(c);
+                    restrictedPartition(c);
+                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                        "us.anthropic.claude-sonnet-4-20250514-v1:0";
+                })
+            ).toThrow(/useGenAiVideoSopBom.*exists only in the commercial partition/);
+        });
+
+        test('a "us-gov." prefix is accepted in GovCloud', () => {
+            // A pattern-free not.toThrow(): restrictedPartition() yields a configuration getConfig()
+            // accepts, so this is a real control rather than one satisfied by some other rule throwing.
+            expect(
+                resolve((c) => {
+                    enableVideoSopBom(c);
+                    restrictedPartition(c);
+                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = US_GOV_ID;
+                })
+            ).not.toThrow();
+        });
+
+        test("an empty model id is rejected when the pipeline is enabled, naming this pipeline", () => {
+            expect(
+                resolve((c) => {
+                    enableVideoSopBom(c);
+                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+                })
+            ).toThrow(/pipelines\.useGenAiVideoSopBom is enabled but bedrockModelId is empty/);
+        });
+
+        test("the labeling pipeline's own rejection still names the labeling pipeline", () => {
+            // Both pipelines enabled in GovCloud; only the labeling id is empty. The helper must report
+            // the flag whose value is wrong, not the last one it was called for.
+            expect(
+                resolve((c) => {
+                    restrictedPartition(c);
+                    c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
+                    c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
+                    enableVideoSopBom(c);
+                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = US_GOV_ID;
+                })
+            ).toThrow(
+                /pipelines\.useGenAiMetadata3dLabeling is enabled but bedrockModelId is empty/
+            );
+        });
+    });
+
+    describe("limits", () => {
+        const withLimits = (limits: Record<string, unknown>) => (c: any) => {
+            enableVideoSopBom(c);
+            Object.assign(c.app.pipelines.useGenAiVideoSopBom.limits, limits);
+        };
+
+        test.each([0, 5, -1, 2.5, "4"])("maxVideoFiles %p is rejected", (value) => {
+            const run = resolve(withLimits({ maxVideoFiles: value }));
+            expect(run).toThrow(/limits\.maxVideoFiles must be an integer from 1 to 4/);
+            expect(run).toThrow(`Received: ${JSON.stringify(value)}`);
+        });
+
+        test.each([1, 4])("maxVideoFiles %p is accepted", (value) => {
+            expect(resolve(withLimits({ maxVideoFiles: value }))).not.toThrow();
+        });
+
+        test.each([0, 481, 1.5, "240"])("maxTotalDurationMinutes %p is rejected", (value) => {
+            const run = resolve(withLimits({ maxTotalDurationMinutes: value }));
+            expect(run).toThrow(/limits\.maxTotalDurationMinutes must be an integer from 1 to 480/);
+            expect(run).toThrow(`Received: ${JSON.stringify(value)}`);
+        });
+
+        test.each([1, 480])("maxTotalDurationMinutes %p is accepted", (value) => {
+            expect(resolve(withLimits({ maxTotalDurationMinutes: value }))).not.toThrow();
+        });
+
+        test("limits are not validated while the pipeline is disabled", () => {
+            expect(
+                resolve((c) => {
+                    c.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = 99;
+                })
+            ).not.toThrow();
+        });
+
+        test("an absent limits block is backfilled, not rejected", () => {
+            const config = resolve((c) => {
+                enableVideoSopBom(c);
+                delete c.app.pipelines.useGenAiVideoSopBom.limits;
+            })();
+            expect(config.app.pipelines.useGenAiVideoSopBom.limits).toEqual({
+                maxVideoFiles: 4,
+                maxTotalDurationMinutes: 240,
+            });
+        });
+    });
+
+    describe("partition hard-block", () => {
+        const PARTITION_REASON =
+            "not validated outside the commercial and GovCloud partitions: Amazon Transcribe endpoint " +
+            "availability is unverified and the service-helper has no row for this partition; a missing " +
+            "endpoint hangs a run until its timeout.";
+        const EU_ID = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
+        test("enabling in the EU Sovereign Cloud is rejected with the reason stated verbatim", () => {
+            expect(
+                resolve((c) => {
+                    enableVideoSopBom(c);
+                    euSovereignPartition(c);
+                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+                })
+            ).toThrow(PARTITION_REASON);
+        });
+
+        test("the message names the partition and the flag to change", () => {
+            const message = rejection((c) => {
+                enableVideoSopBom(c);
+                euSovereignPartition(c);
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+            });
+            expect(message).toContain("'aws-eusc' partition");
+            expect(message).toContain("Set app.pipelines.useGenAiVideoSopBom.enabled to false");
+        });
+
+        test("the partition rejection comes before the model-id one", () => {
+            // The restricted templates ship the model id empty. An operator who enables the pipeline
+            // there must be told the pipeline is unavailable, not sent to fill in a model id first.
+            const message = rejection((c) => {
+                enableVideoSopBom(c);
+                euSovereignPartition(c);
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+            });
+            expect(message).toContain(PARTITION_REASON);
+            expect(message).not.toContain("bedrockModelId is empty");
+        });
+
+        test("GovCloud is accepted with a model id offered there", () => {
+            expect(
+                resolve((c) => {
+                    enableVideoSopBom(c);
+                    restrictedPartition(c);
+                    c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = US_GOV_ID;
+                })
+            ).not.toThrow();
+        });
+
+        test("[control] the EU Sovereign Cloud with the pipeline disabled is accepted", () => {
+            // Proves the trigger is the flag, not the partition: the same configuration passes when
+            // the pipeline stays off, so the rejection above is attributable to enabling it.
+            expect(resolve((c) => euSovereignPartition(c))).not.toThrow();
+        });
     });
 });

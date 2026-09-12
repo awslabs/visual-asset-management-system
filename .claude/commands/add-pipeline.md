@@ -352,7 +352,7 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 
 ### Step 7: Update the VPC Builder (Batch/ECS/Fargate pipelines)
 
-**CRITICAL:** Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Search for `useSplatToolbox` in the file to find all locations. Missing any one causes deployment failures:
+**CRITICAL:** A pipeline that uses AWS Batch, ECS, or Fargate goes into the `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` condition blocks its subnet placement requires — block 2 (pipeline endpoints) for every container pipeline; blocks 1 and 3 (subnet creation, ECS endpoint) only for compute that `pipelineBuilder-nestedStack.ts` places in `privateSubnets`; and a service-endpoint gate when the container calls a service that has no endpoint yet. The derivation is in `infra/lib/nestedStacks/pipelines/CLAUDE.md`. Search for `useSplatToolbox` (a private-subnet pipeline, present in all three blocks) and `useGenAiVideoSopBom` (an isolated-subnet pipeline, present in block 2 and its service gate) to find the locations. Missing a required block causes deployment failures:
 
 1. **Subnet creation condition** (~line 341): the `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. Without this, Batch compute environments fail with `"Resource subnets are required"`.
 2. **VPC endpoint condition** (~line 610): the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints. Without this, Batch jobs cannot pull container images.
@@ -397,7 +397,7 @@ After creating all files, verify:
 -   [ ] Backward-compatibility defaults + validation in `getConfig()`
 -   [ ] Pipeline nested stack is imported and registered in pipelineBuilder-nestedStack.ts
 -   [ ] `pipelineVamsLambdaFunctionName` is pushed to the array for pipeline registration
--   [ ] VPC builder updated in all three condition blocks (Batch/ECS/Fargate pipelines)
+-   [ ] VPC builder updated in the condition blocks the pipeline's subnet placement requires: the pipeline-endpoint block for every Batch/ECS/Fargate pipeline; the subnet-creation and ECS-endpoint blocks only for compute placed in `privateSubnets`; a service-endpoint gate when the container calls a service without an endpoint (see `infra/lib/nestedStacks/pipelines/CLAUDE.md`)
 -   [ ] `suppressCdkNagLambda` and CDK Nag suppressions with justified reasons on all resources
 -   [ ] Documentation updated: configuration-reference.md, pipelines page, overview table, features.md, sidebars.ts, root CLAUDE.md
 

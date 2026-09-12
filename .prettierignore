@@ -28,3 +28,13 @@ web/e2e/.report
 *.patch
 # Gitignored local scratch that prettier would otherwise report forever (it never ships).
 backendPipelines/3dRecon/splatToolbox/container/LOCAL_DEBUG_README.md
+# Model-facing prompt text of the Video SOP/BOM container. Its unit tests pin the bytes (list
+# markers, blank lines, the fenced operator block) and a formatter's reflow would change what the
+# model reads. Path-anchored with a trailing slash so it matches this one directory.
+backendPipelines/genAi/videoSopBom/container/video_sop_bom_pipeline/prompts/
+# Generated Video SOP/BOM smoke fixtures (make_teardown_videos.py): media plus a manifest.json the
+# generator rewrites on every run. The directory's own .gitignore keeps it out of git, which prettier
+# does not consult. Path-anchored with a trailing slash so it matches this one directory.
+tools/smoketest/v260/_video_sop_bom_fixtures/
+# JSON report video_sop_bom_r0_probes.py writes on a workstation (2-space json.dump output).
+tools/smoketest/v260/_video_sop_bom_r0_probes.json

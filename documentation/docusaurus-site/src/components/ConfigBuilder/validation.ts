@@ -566,6 +566,12 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
     },
+    {
+        id: "vpc-required-genai-video-sop-bom",
+        label: "pipelines.useGenAiVideoSopBom",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -2307,6 +2313,81 @@ export const RULES: Rule[] = [
         },
         message:
             'bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+    },
+    // The Video SOP/BOM Extraction pipeline's id goes through the same getConfig() helper
+    // (validateBedrockModelId), so the two rules above are restated for its path.
+    {
+        id: "video-sop-bom-bedrock-model-id-required",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useGenAiVideoSopBom.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId")),
+        message:
+            "useGenAiVideoSopBom requires a bedrockModelId available in this partition and Region; one model serves the pipeline's text and vision calls. The restricted-partition presets leave it empty because the commercial cross-Region inference profiles do not exist there.",
+    },
+    {
+        id: "video-sop-bom-bedrock-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const id = String(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId") ?? "");
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useGenAiVideoSopBom.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+    },
+
+    // ----- Video SOP/BOM Extraction partition and limits
+    // (config.ts: "not validated outside the commercial and GovCloud partitions") -----
+    //
+    // The pipeline calls Amazon Transcribe and Amazon Bedrock from an isolated-subnet container through
+    // VPC interface endpoints; where the Transcribe endpoint is unverified a missing one hangs a run
+    // until its timeout rather than failing. Keyed on the partition the configured region resolves to,
+    // and silent while the region is unset.
+    {
+        id: "video-sop-bom-commercial-or-govcloud-only",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && partition !== "aws" && partition !== "aws-us-gov";
+        },
+        message:
+            "useGenAiVideoSopBom is not validated outside the commercial and GovCloud partitions: Amazon Transcribe endpoint availability is unverified and the service-helper has no row for this partition; a missing endpoint hangs a run until its timeout. Set app.pipelines.useGenAiVideoSopBom.enabled to false for this deployment Region.",
+    },
+    // The two operator-set caps reach the pipeline's Lambdas as environment variables; a value outside
+    // the range the pipeline can honour is refused at deploy time rather than at the first run. An
+    // absent leaf is backfilled by getConfig(), so it is not reported here.
+    {
+        id: "video-sop-bom-max-video-files-range",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const value = g(c, "app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles");
+            if (isAbsent(value)) return false; // backfilled to 4
+            return typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 4;
+        },
+        message:
+            "useGenAiVideoSopBom.limits.maxVideoFiles must be an integer from 1 to 4 (videos per run).",
+    },
+    {
+        id: "video-sop-bom-max-total-duration-range",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const value = g(c, "app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes");
+            if (isAbsent(value)) return false; // backfilled to 240
+            return (
+                typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 480
+            );
+        },
+        message:
+            "useGenAiVideoSopBom.limits.maxTotalDurationMinutes must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe accepts at most 28,800 seconds of audio per job).",
     },
 
     // ----- Physna outbound endpoints (config.ts: "must use https, or the credentials VAMS sends to it travel in cleartext") -----
