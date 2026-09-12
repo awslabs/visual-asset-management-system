@@ -283,7 +283,6 @@ These non-pipeline endpoints are created based on the deployment configuration:
 | ----------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Amazon Cognito user pools     | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check                                                                                                                                        |
 | Amazon Cognito identity pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-identity` — token/credential exchange                                                                                                                                                      |
-| Amazon Cognito (FIPS)         | `useCognito.enabled` + `useFips` (not GovCloud / EU Sovereign)  | FIPS-compliant `cognito-idp` and `cognito-identity`                                                                                                                                                 |
 | AWS KMS                       | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                                                                                                                                                                  |
 | AWS KMS (FIPS)                | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                                                                                                                                                                  |
 | Amazon S3 (ALB web)           | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                                                                                                                                                                   |
@@ -328,7 +327,7 @@ When VAMS creates the OpenSearch Serverless VPC endpoint, it uses its own securi
 
 ### Pipeline Interface Endpoints
 
-VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition) depending on which pipelines are enabled.
+VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition, Amazon Transcribe) depending on which pipelines are enabled.
 
 The authoritative per-pipeline endpoint matrix lives with the pipeline documentation. See [Pipeline System Overview — VPC and Network Requirements](../pipelines/overview.md#vpc-and-network-requirements) for the full chart of which interface endpoints each pipeline requires.
 
@@ -373,9 +372,9 @@ VAMS VPCs are created with:
 
 ## FIPS Endpoint Usage
 
-When `useFips = true`, the partition-aware service helper (`service-helper.ts`) automatically resolves FIPS-compliant hostnames for all AWS service calls. This is achieved through the `SERVICE_LOOKUP` table in `const.ts`, which maps each service to its standard and FIPS hostname per partition.
+`app.useFips` selects a FIPS variant only where the CDK creates a FIPS-specific resource: the AWS KMS interface endpoint (`KMSEndpoint_FIPS`, created alongside the standard AWS KMS endpoint when `useKmsCmkEncryption.enabled` and `useFips` are both set) and the Amazon Cognito hosted-UI hostname. The partition-aware service helper (`service-helper.ts`) carries a standard and a FIPS hostname per service in the `SERVICE_LOOKUP` table in `const.ts`, but every other caller resolves the standard hostname, and the flag is not passed to Lambda functions or containers, so run-time AWS SDK calls use the Regional endpoints the SDK resolves by default. No FIPS variant exists for the Amazon Transcribe or Amazon Bedrock Runtime interface endpoints the Video SOP/BOM Extraction pipeline uses. The flag can be set in `config.json`, as the `useFips` CDK context value, or through the `AWS_USE_FIPS_ENDPOINT=true` environment variable at synthesis time.
 
-For example:
+The lookup table records, for example:
 
 | Service         | Standard Hostname                 | FIPS Hostname                          |
 | --------------- | --------------------------------- | -------------------------------------- |
@@ -384,7 +383,7 @@ For example:
 | AWS STS         | `sts.{region}.amazonaws.com`      | `sts-fips.{region}.amazonaws.com`      |
 
 :::note[GovCloud FIPS]
-In AWS GovCloud, all endpoints are inherently FIPS-compliant. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
+AWS documents that a deployment requiring FIPS 140-3 compliance should use the FIPS endpoints. VAMS does not require `useFips` in AWS GovCloud (US); the GovCloud configuration template sets it to `true`, which adds the AWS KMS FIPS endpoint described above. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
 :::
 
 ## Next Steps

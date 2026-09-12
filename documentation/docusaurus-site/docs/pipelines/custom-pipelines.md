@@ -541,10 +541,12 @@ Files written to `outputS3AssetFilesPath` are ingested onto the asset **before**
 read, so metadata naming a newly produced file is applied to a file that already exists. Write both in
 one execution; no second pass is required.
 
-Name the metadata file after the file's final **asset-relative** path, which includes the workflow's
-output base-execution path extension -- not the absolute Amazon S3 key. Metadata naming a file whose
-ingestion failed is rejected and the execution is recorded as failed, so metadata values never
-accumulate against files that did not land.
+Name the metadata file after the relative path the pipeline wrote under `outputS3AssetFilesPath` --
+not the absolute Amazon S3 key, and without the workflow's output base-execution path extension: the
+process-output step applies that extension itself when it derives the target, so the derived target is
+the file's final **asset-relative** path. The asset-level `asset.metadata.json` is unaffected by the
+extension. Metadata naming a file whose ingestion failed is rejected and the execution is recorded as
+failed, so metadata values never accumulate against files that did not land.
 :::
 
 ## Callbacks
@@ -618,8 +620,11 @@ Three details make the callback reliable:
     cause still reaches Amazon CloudWatch Logs.
 -   **Make the call conditional on a token.** A direct invocation carries no `TaskToken`; the callback
     helper returns without calling AWS Step Functions rather than failing on the missing value.
--   **Keep `cause` within 256 characters.** Longer text is truncated in the execution history; the full
-    message belongs in the log entry.
+-   **Keep `error` within 256 characters and put the readable sentence in `cause`.** `error` is a short
+    code — the AWS Step Functions API caps it at 256 characters — and the execution record renders
+    `executionError` as `<error>: <cause>`, so a `cause` must not start with the code. The API accepts a
+    `cause` of up to 32,768 characters and the execution record keeps the first 16 KiB; make its first line
+    one operator-readable sentence and put the full detail in the log entry.
 
 ## Registering sub-processes and logs
 
