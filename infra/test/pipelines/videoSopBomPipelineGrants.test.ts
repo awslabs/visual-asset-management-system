@@ -522,6 +522,17 @@ describe("the four pipeline Lambdas", () => {
 });
 
 describe("Lambda environment", () => {
+    test("the Bedrock model id is the configured one and an empty id is refused, never defaulted", () => {
+        expect(resolveVideoSopBomBedrockModelId(mockConfig)).toBe(
+            mockConfig.app.pipelines.useGenAiVideoSopBom.bedrockModelId
+        );
+        const blank = createMockConfig();
+        blank.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+        expect(() => resolveVideoSopBomBedrockModelId(blank)).toThrow(
+            /useGenAiVideoSopBom is enabled but bedrockModelId is empty/
+        );
+    });
+
     /** The registry table, one row per handler stem. */
     const EXPECTED_ENV: Record<string, string[]> = {
         vamsExecuteVideoSopBomPipeline: [

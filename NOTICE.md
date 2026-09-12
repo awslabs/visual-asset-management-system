@@ -221,7 +221,7 @@ This software includes third party software subject to the following copyrights:
 | PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                | BSD-2-Clause     |
 | Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION | GNU GPLv3        |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                | MIT              |
-| FFmpeg          | 7:7.1.5-0+deb13u1 (Debian trixie `ffmpeg` package)                                                                                                        | VIDEO SOP/BOM EXTRACTION     | GPL-2.0-or-later |
+| FFmpeg          | Debian trixie `ffmpeg` package (7.1.x, installed at build time; 7:7.1.5-0+deb13u1 in the reference build)                                                 | VIDEO SOP/BOM EXTRACTION     | GPL-2.0-or-later |
 
 ### Preview 3D Thumbnail Pipeline
 
@@ -274,17 +274,17 @@ All rights reserved.
 
 **Video SOP/BOM Extraction Pipeline Dependencies**
 
-| Name                         | Version           | License          | Notes                                                                                                 |
-| :--------------------------- | :---------------- | :--------------- | :---------------------------------------------------------------------------------------------------- |
-| FFmpeg (`ffmpeg`, `ffprobe`) | 7:7.1.5-0+deb13u1 | GPL-2.0-or-later | Debian `ffmpeg` apt package: stream probing, audio extraction and FLAC encoding, key-frame extraction |
-| boto3                        | 1.43.93           | Apache-2.0       | AWS SDK for Python (Amazon S3, Amazon Transcribe, Amazon Bedrock, AWS Step Functions)                 |
-| botocore                     | 1.43.93           | Apache-2.0       | Low-level AWS service client library used by boto3                                                    |
-| jsonschema                   | 4.26.0            | MIT              | Configuration and output schema validation                                                            |
-| Pillow                       | 12.3.0            | HPND             | Key-frame scaling and JPEG encoding                                                                   |
+| Name                         | Version                                                                                          | License          | Notes                                                                                                 |
+| :--------------------------- | :----------------------------------------------------------------------------------------------- | :--------------- | :---------------------------------------------------------------------------------------------------- |
+| FFmpeg (`ffmpeg`, `ffprobe`) | 7.1.x (Debian trixie package, installed at build time; 7:7.1.5-0+deb13u1 in the reference build) | GPL-2.0-or-later | Debian `ffmpeg` apt package: stream probing, audio extraction and FLAC encoding, key-frame extraction |
+| boto3                        | 1.43.93                                                                                          | Apache-2.0       | AWS SDK for Python (Amazon S3, Amazon Transcribe, Amazon Bedrock, AWS Step Functions)                 |
+| botocore                     | 1.43.93                                                                                          | Apache-2.0       | Low-level AWS service client library used by boto3                                                    |
+| jsonschema                   | 4.26.0                                                                                           | MIT              | Configuration and output schema validation                                                            |
+| Pillow                       | 12.3.0                                                                                           | HPND             | Key-frame scaling and JPEG encoding                                                                   |
 
 **Container Base Image**
 
-The Video SOP/BOM Extraction container uses the Debian-based `python:3.12-slim` image, pinned by digest, and installs the Debian `ffmpeg` package from the distribution's package archive.
+The Video SOP/BOM Extraction container uses the Debian-based `python:3.12-slim` image, pinned by digest, and installs the Debian trixie `ffmpeg` package from the distribution's package archive at image build time. The package is not version-pinned, so the shipped FFmpeg is whatever 7.1.x build the archive serves when the image is built; `7:7.1.5-0+deb13u1` is the version observed in the reference build, and `/usr/share/doc/ffmpeg/copyright` in the image records the build's license text.
 
 **FFmpeg License Notice**
 

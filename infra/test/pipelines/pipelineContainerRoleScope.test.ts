@@ -59,6 +59,12 @@ function enableContainerPipelines(c: any) {
         pipelines.useGenAiVideoSopBom.enabled = true;
         pipelines.useGenAiVideoSopBom.useCodeBuild = true;
         pipelines.useGenAiVideoSopBom.autoRegisterWithVAMS = false;
+        // The restricted-partition templates ship the model id empty because the pipeline is off there;
+        // the construct refuses an empty id, so this harness (which bypasses getConfig()) supplies a
+        // foundation-model id. The role scope under test does not depend on which id it is.
+        if (!pipelines.useGenAiVideoSopBom.bedrockModelId) {
+            pipelines.useGenAiVideoSopBom.bedrockModelId = "anthropic.claude-sonnet-5";
+        }
     }
 }
 

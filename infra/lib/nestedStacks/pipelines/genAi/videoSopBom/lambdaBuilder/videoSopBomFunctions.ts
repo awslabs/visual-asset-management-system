@@ -34,18 +34,21 @@ const LAMBDA_CODE_PATH = path.join(
 );
 
 /**
- * The Bedrock model id the pipeline invokes, with the commercial default standing in when the config
- * value is blank. The restricted-partition templates ship the id empty with the pipeline disabled,
- * `getConfig()` backfills an absent id to the empty string and refuses to enable the pipeline with one,
- * so the fallback is only ever reached by a synth that bypasses `getConfig()` — it keeps the construct
- * synthesizing in every template.
+ * The Bedrock model id the pipeline invokes, read from `app.pipelines.useGenAiVideoSopBom.bedrockModelId`.
+ * `getConfig()` refuses to enable the pipeline with an empty id, so a blank value here means the config
+ * bypassed `getConfig()`; the construct fails loudly rather than granting or invoking a model nobody
+ * configured.
  */
 export function resolveVideoSopBomBedrockModelId(config: Config.Config): string {
     const configured = config.app.pipelines.useGenAiVideoSopBom?.bedrockModelId;
     if (configured) {
         return configured;
     }
-    return "global.anthropic.claude-sonnet-5";
+    throw new Error(
+        "Configuration Error: pipelines.useGenAiVideoSopBom is enabled but bedrockModelId is empty. " +
+            "Set app.pipelines.useGenAiVideoSopBom.bedrockModelId to a model id available in this " +
+            "partition and Region."
+    );
 }
 
 export function buildConstructPipelineFunction(
