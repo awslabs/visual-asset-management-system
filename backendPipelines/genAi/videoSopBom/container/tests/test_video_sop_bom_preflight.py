@@ -93,8 +93,8 @@ class TestErrorCodes:
 
 class TestClientConfigs:
     """Client construction is offline (credentials are resolved at request time), so the four Config
-    shapes (the Bedrock read timeout, the single-attempt preflight and signal clients, and the shared
-    adaptive retry) are asserted on real clients.
+    shapes (the Bedrock read timeout, the one-retry preflight and signal clients — max_attempts 1, two
+    attempts — and the shared adaptive retry) are asserted on real clients.
 
     botocore rewrites `Config.retries` in place when the client is built — `max_attempts` N becomes
     `total_max_attempts` N + 1 in every mode — so the assertions read the post-construction form; the

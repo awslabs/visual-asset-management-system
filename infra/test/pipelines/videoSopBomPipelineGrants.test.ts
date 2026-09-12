@@ -698,7 +698,7 @@ describe("encryption at rest and logging", () => {
 describe("cdk-nag suppressions authored by the pipeline", () => {
     test("every AwsSolutions-IAM5 entry names a well-formed wildcard shape it covers", () => {
         // Scans the whole template, the CodeBuild child included: every IAM5 entry this pipeline writes
-        // carries appliesTo (master plan Global Constraints), and each entry is a shape cdk-nag can act
+        // carries appliesTo, and each entry is a shape cdk-nag can act
         // on. Applied-with-children suppressions from the shared helpers are stamped on the same
         // resources and are checked by the same rule.
         const resources = template.toJSON().Resources as Record<string, any>;

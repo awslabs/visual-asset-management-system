@@ -24,7 +24,8 @@ _PIPELINE_DIR = os.path.dirname(_LAMBDA_DIR)
 _SCHEMA_ROOT = os.path.join(_PIPELINE_DIR, "vamsSchema")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_PIPELINE_DIR)))
 
-# The five-places allow list (master plan Global Constraints). Spelled as the CDK / openPipeline
+# The allow list that appears identically in pipeline.json, workflow.json, the CDK construct literal,
+# the openPipeline default and the bundle description. Spelled as the CDK / openPipeline
 # literal; the bundle's fnmatch spelling is derived by _as_patterns.
 _ALLOWED_EXTENSIONS = ".mp4,.mov,.m4v,.webm,.mkv"
 

@@ -26,7 +26,7 @@ if "customLogging" not in sys.modules:
     sys.modules["customLogging"] = _cl_pkg
     sys.modules["customLogging.logger"] = _cl_logger
 
-# The values the CDK builders set (master plan, Lambda environment variables). Applied
+# The values the CDK Lambda builders (videoSopBomFunctions.ts) set as environment variables. Applied
 # unconditionally: a value exported in the shell must not change a test outcome. A test that needs
 # another value patches the module attribute, or monkeypatches the variable and reloads the module,
 # then restores it.

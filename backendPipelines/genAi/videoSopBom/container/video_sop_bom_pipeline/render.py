@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Stage 13: every deliverable rendered from the merged/finalized data (no model calls, no AWS calls).
-Every JSON document is validated against its shipped schema before it is written."""
+Each JSON deliverable that has a shipped schema is validated against it before it is written;
+asset.metadata.json is assembled from typed key/value entries and written without a schema."""
 
 import csv
 import json
@@ -304,7 +305,7 @@ def _lab_section_body(number, lab):
 
 
 def write_lab_summary_md(path, lab):
-    """Sections 1.1-1.9 with the titles lab_summary_schema.json fixes; 1.6 carries the computed totals table."""
+    """Sections 1.1-1.9 numbered and titled per vocab.LAB_SUMMARY_SECTIONS; 1.6 carries the computed totals table."""
     lines = [f"# Lab summary — {lab.get('product_name', '')}", ""]
     if lab.get("contributors"):
         lines += [f"Contributors: {lab['contributors']}", ""]
