@@ -118,7 +118,9 @@ All lookups return false until `PluginRegistry.initialize()` has run — gate th
 
 `TextDiffViewerPlugin/TextDiffViewerComponent.tsx` exposes the `react-diff-viewer-continued` modes as
 compact controls (`data-testid="text-diff-controls"`): layout (Side-by-side / Inline → `splitView`),
-granularity (Line / Word / Character → `compareMethod` `DiffMethod.LINES` / `WORDS` / `CHARS`), a
+granularity (Line / Word / Character → `compareMethod` `DiffMethod.LINES` / `WORDS` / `CHARS`; Line
+also sets `disableWordDiff`, since the library keeps marking words inside a changed line under any
+`compareMethod` — without it "Line" still shows word-level marks), a
 **Line numbers** toggle (`hideLineNumbers`), a **Collapse unchanged** toggle (`showDiffOnly`) with a
 context-lines picker (`extraLinesSurroundingDiff`, `data-testid="text-diff-context-lines"`, shown only
 while collapsing). The per-side labels (`text-diff-side-label-{left,right}`) and the titles handed to

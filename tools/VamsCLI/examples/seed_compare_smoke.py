@@ -159,6 +159,25 @@ def ensure_authenticated(cli: Cli) -> None:
     )
 
 
+def default_bucket_id(cli: Cli) -> str:
+    """bucketId of the deployment's default asset bucket (the `isDefault` entry of `database
+    list-buckets`). `database create --json-output` refuses to prompt, so it needs the id up front."""
+    if cli.dry_run:
+        return "<dry-run:default-bucket>"
+    payload = cli.run_json("database", "list-buckets", "--auto-paginate", check=False)
+    buckets = items_of(payload) if payload is not None else []
+    for bucket in buckets:
+        if bucket.get("isDefault") and bucket.get("bucketId"):
+            return str(bucket["bucketId"])
+    if len(buckets) == 1 and buckets[0].get("bucketId"):
+        # Older deployments do not project isDefault; with a single bucket there is no choice to make.
+        return str(buckets[0]["bucketId"])
+    raise SeedError(
+        "could not determine the default asset bucket: `vamscli database list-buckets` returned "
+        f"{len(buckets)} bucket(s) and none is flagged isDefault"
+    )
+
+
 def ensure_database(cli: Cli, database_id: str) -> None:
     existing = cli.run_json("database", "get", "-d", database_id, check=False)
     if existing is not None and not cli.dry_run:
@@ -171,6 +190,8 @@ def ensure_database(cli: Cli, database_id: str) -> None:
         database_id,
         "--description",
         "Compare-mode e2e smoke fixtures (seed_compare_smoke.py)",
+        "--default-bucket-id",
+        default_bucket_id(cli),
         "--json-output",
         check=False,
     )

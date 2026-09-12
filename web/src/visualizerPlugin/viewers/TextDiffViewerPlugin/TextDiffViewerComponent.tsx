@@ -65,7 +65,8 @@ const LATEST_VERSION = "__latest__";
 /**
  * How finely changed lines are diffed. Maps onto `react-diff-viewer-continued`'s `DiffMethod`:
  * `lines` → LINES (whole-line changes only), `words` → WORDS, `chars` → CHARS (per-character marks,
- * useful for a one-letter typo inside a long line).
+ * useful for a one-letter typo inside a long line). `lines` additionally sets `disableWordDiff`: the
+ * library keeps marking words inside a changed line under any `compareMethod` unless told not to.
  */
 type DiffGranularity = "lines" | "words" | "chars";
 
@@ -740,6 +741,10 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                         )}
                         rightTitle={renderDiffTitle(rightLabel, "right")}
                         compareMethod={compareMethod}
+                        // `compareMethod` alone does not stop the library from marking words INSIDE a
+                        // changed line — that is a separate switch. Line granularity means whole-line
+                        // changes only, so turn the intra-line marks off there.
+                        disableWordDiff={granularity === "lines"}
                         hideLineNumbers={!showLineNumbers}
                         showDiffOnly={collapseUnchanged}
                         extraLinesSurroundingDiff={contextLines}

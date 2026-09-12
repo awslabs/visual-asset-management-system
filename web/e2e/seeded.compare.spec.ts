@@ -147,11 +147,15 @@ test.describe("compare mode", () => {
             .first()
             .click();
 
-        // Select the first (only) asset-version snapshot; its file list appears below.
-        const versionRow = page.locator("table tbody tr").first();
-        await expect(versionRow).toBeVisible({ timeout: 60_000 });
-        const radio = versionRow.getByRole("radio");
-        test.skip((await radio.count()) === 0, "No asset version to select in this environment");
+        // Select the first (only) asset-version snapshot; its file list appears below. The Versions
+        // table first renders a loading row, which has no radio — wait for a real row's radio before
+        // deciding there is nothing to select, or a present version is skipped as absent.
+        const radio = page.locator("table tbody tr").getByRole("radio").first();
+        const hasVersion = await radio
+            .waitFor({ state: "visible", timeout: 60_000 })
+            .then(() => true)
+            .catch(() => false);
+        test.skip(!hasVersion, "No asset version to select in this environment");
         await radio.click();
 
         const textRow = page.locator("table tbody tr").filter({ hasText: TEXT }).first();
@@ -235,12 +239,16 @@ test.describe("compare mode", () => {
             timeout: 60_000,
         });
         await page.getByRole("button", { name: "Files", exact: true }).first().click();
-        await page.getByPlaceholder(/Search by keywords/i).fill("*");
-        await page.getByPlaceholder(/Search by keywords/i).press("Enter");
+        // An EMPTY query is match_all (the route already scopes to the seeded database); the backend
+        // escapes any typed text and wraps it in wildcards, so a literal "*" matches nothing.
+        const keywords = page.getByPlaceholder(/Search by keywords/i);
+        await keywords.fill("");
+        await keywords.press("Enter");
 
         const row = (name: string) =>
             page.locator("table tbody tr").filter({ hasText: name }).first();
         await expect(row(TEXT)).toBeVisible({ timeout: 60_000 });
+        await expect(row(JSON_FILE)).toBeVisible({ timeout: 60_000 });
         await expect(row(PNG)).toBeVisible({ timeout: 60_000 });
 
         await page.getByRole("button", { name: "Multi-select to view" }).click();

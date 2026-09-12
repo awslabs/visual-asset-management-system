@@ -36,6 +36,7 @@ jest.mock("./dependencies", () => ({
                 <div
                     data-testid="diff"
                     data-compare-method={props.compareMethod}
+                    data-disable-word-diff={String(props.disableWordDiff)}
                     data-hide-line-numbers={String(props.hideLineNumbers)}
                     data-show-diff-only={String(props.showDiffOnly)}
                     data-context-lines={String(props.extraLinesSurroundingDiff)}
@@ -228,6 +229,9 @@ describe("TextDiffViewerComponent", () => {
         renderDiff();
         const diff = await screen.findByTestId("diff");
         expect(diff.dataset.compareMethod).toBe("diffLines");
+        // Line granularity is whole-line changes only: the library's separate intra-line word marks
+        // are off, not just the compare method.
+        expect(diff.dataset.disableWordDiff).toBe("true");
         expect(diff.dataset.hideLineNumbers).toBe("false");
         expect(diff.dataset.showDiffOnly).toBe("true");
         expect(diff.dataset.contextLines).toBe("3");
@@ -247,11 +251,20 @@ describe("TextDiffViewerComponent", () => {
             granularity.findSegmentById("words")!.click();
         });
         expect(screen.getByTestId("diff").dataset.compareMethod).toBe("diffWords");
+        expect(screen.getByTestId("diff").dataset.disableWordDiff).toBe("false");
 
         await act(async () => {
             granularity.findSegmentById("chars")!.click();
         });
         expect(screen.getByTestId("diff").dataset.compareMethod).toBe("diffChars");
+        expect(screen.getByTestId("diff").dataset.disableWordDiff).toBe("false");
+
+        // Back to Line: the intra-line marks go away again.
+        await act(async () => {
+            granularity.findSegmentById("lines")!.click();
+        });
+        expect(screen.getByTestId("diff").dataset.compareMethod).toBe("diffLines");
+        expect(screen.getByTestId("diff").dataset.disableWordDiff).toBe("true");
     });
 
     it("hides line numbers and expands unchanged lines from the toggles", async () => {
