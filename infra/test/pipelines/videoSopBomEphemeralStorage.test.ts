@@ -123,3 +123,105 @@ describe("video SOP/BOM Fargate ephemeral storage", () => {
         );
     });
 });
+
+/**
+ * The run's second scratch volume is the auxiliary bucket's `pipelines/<pipelineName>/<executionId>/`
+ * prefix: the definition document, FLAC audio (gigabytes), Transcribe output and analysis artefacts. The
+ * container deletes the audio once Transcribe is terminal and the whole prefix on success, and keeps the
+ * transcript and analysis on a handled failure for diagnosis — but a crashed or aborted run deletes
+ * nothing, and the bucket carried no expiration at all. This rule is the backstop for those leftovers.
+ *
+ * The rule covers THIS pipeline's prefix root only — `pipelines/genai-video-sop-bom/`, the folder the
+ * bundle-registered workflow's execution writes under (executionRecords.aux_pipeline_prefix with the
+ * pipeline id as its name) — and exists only when the pipeline is enabled, so a deployment without it
+ * keeps the bucket's lifecycle exactly as it was.
+ */
+describe("auxiliary bucket scratch-prefix expiry", () => {
+    const VIDEO_SOP_BOM_AUX_PREFIX = "pipelines/genai-video-sop-bom/";
+
+    /** Lifecycle rules of the one auxiliary bucket in the assembly. */
+    const auxBucketRules = (from: SynthResult): any[] => {
+        const buckets = from
+            .ofType("AWS::S3::Bucket")
+            .filter((b) => /AssetAuxiliaryBucket/.test(b.logicalId));
+        expect(buckets).toHaveLength(1);
+        return ((buckets[0].properties as any).LifecycleConfiguration?.Rules ?? []) as any[];
+    };
+
+    test("[control] the pre-existing incomplete-multipart abort rule is still there", () => {
+        // Without this, a change that dropped `lifecycleRules` entirely would make "no rule expires
+        // outside the prefix" pass over an empty list.
+        const abort = auxBucketRules(synth).filter(
+            (rule) => rule.AbortIncompleteMultipartUpload?.DaysAfterInitiation === 14
+        );
+        expect(abort).toHaveLength(1);
+    });
+
+    test("expires objects under this pipeline's aux prefix after 30 days when the pipeline is enabled", () => {
+        const expiry = auxBucketRules(synth).filter(
+            (rule) => rule.Prefix === VIDEO_SOP_BOM_AUX_PREFIX
+        );
+        expect(expiry).toHaveLength(1);
+        expect(expiry[0].ExpirationInDays).toBe(30);
+        expect(expiry[0].Status).toBe("Enabled");
+    });
+
+    test("expires nothing outside this pipeline's aux prefix", () => {
+        // Viewer data, other pipelines' working files and the non-versioned auxiliary objects live under
+        // other prefixes and are not this pipeline's to expire.
+        const unscoped = auxBucketRules(synth).filter(
+            (rule) =>
+                rule.ExpirationInDays !== undefined && rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX
+        );
+        expect(unscoped).toEqual([]);
+    });
+
+    test("[control] the prefix the rule names is the one the platform derives for this pipeline id", () => {
+        // executionRecords.aux_pipeline_prefix(pipeline_name, execution_id) renders
+        // `pipelines/{pipelineName}/{executionId}/`, and the bundle-registered workflow reference carries
+        // no jobName, so pipelineName is the pipeline id the construct registers.
+        const executionRecords = fs.readFileSync(
+            path.resolve(
+                __dirname,
+                "../../../backend/backend/common/workflows/executionRecords.py"
+            ),
+            "utf-8"
+        );
+        expect(executionRecords).toContain('_PIPELINES_PREFIX = "pipelines/"');
+        expect(executionRecords).toContain(
+            'return f"{_PIPELINES_PREFIX}{pipeline_name}/{execution_id}/"'
+        );
+        const construct = fs.readFileSync(CONSTRUCT_SOURCE, "utf-8");
+        expect(construct).toContain('pipelineId: "genai-video-sop-bom"');
+        expect(VIDEO_SOP_BOM_AUX_PREFIX).toBe("pipelines/" + "genai-video-sop-bom" + "/");
+    });
+
+    describe("with the pipeline disabled", () => {
+        let disabledSynth: SynthResult;
+
+        beforeAll(() => {
+            disabledSynth = synthTemplate("commercial", {
+                mutate: (c: any) => {
+                    c.app.useGlobalVpc.enabled = true;
+                    c.app.useGlobalVpc.addVpcEndpoints = true;
+                    c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+                },
+                mutateKey: "video-sop-bom-aux-expiry-disabled",
+            });
+        });
+
+        test("[control] the abort rule is still there, so the bucket's lifecycle was read", () => {
+            const abort = auxBucketRules(disabledSynth).filter(
+                (rule) => rule.AbortIncompleteMultipartUpload?.DaysAfterInitiation === 14
+            );
+            expect(abort).toHaveLength(1);
+        });
+
+        test("no expiration rule is added", () => {
+            const expirations = auxBucketRules(disabledSynth).filter(
+                (rule) => rule.ExpirationInDays !== undefined
+            );
+            expect(expirations).toEqual([]);
+        });
+    });
+});
