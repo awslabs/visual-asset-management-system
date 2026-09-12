@@ -176,6 +176,23 @@ export class CoordinateTransformConstruct extends Construct {
             });
         }
 
+        // The container's stdout/stderr. A named vended group under /aws/vendedlogs/Pipelines/, which
+        // the execution-service Lambdas hold read grants for, so the execution log viewer can show
+        // the container stream; KMS-encrypted and retained for a year, unlike Batch's default group.
+        const containerLogGroup = new logs.LogGroup(this, "CoordTransformBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/CoordTransform" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "CoordTransformBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         // Batch Fargate pipeline
         const batchPipeline = new BatchFargatePipelineConstruct(
             this,
@@ -191,6 +208,7 @@ export class CoordinateTransformConstruct extends Construct {
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: containerLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",

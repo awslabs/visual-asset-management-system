@@ -183,6 +183,23 @@ export class Preview3dThumbnailConstruct extends NestedStack {
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
+        // The container's stdout/stderr. A named vended group under /aws/vendedlogs/Pipelines/, which
+        // the execution-service Lambdas hold read grants for, so the execution log viewer can show
+        // the container stream; KMS-encrypted and retained for a year, unlike Batch's default group.
+        const containerLogGroup = new logs.LogGroup(this, "Preview3dThumbnailBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/Preview3dThumbnail" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "Preview3dThumbnailBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.storageResources.encryption.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         /**
          * AWS Batch Job Definition & Compute Env for Preview 3D Thumbnail Container
          */
@@ -198,6 +215,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: containerLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",

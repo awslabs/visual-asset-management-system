@@ -211,6 +211,27 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
+        // The container's stdout/stderr. A named vended group under /aws/vendedlogs/Pipelines/, which
+        // the execution-service Lambdas hold read grants for, so the execution log viewer can show
+        // the container stream; KMS-encrypted and retained for a year, unlike Batch's default group.
+        const blenderRendererLogGroup = new logs.LogGroup(
+            this,
+            "Metadata3dLabelingBlenderRendererBatchJobLogGroup",
+            {
+                logGroupName:
+                    "/aws/vendedlogs/Pipelines/Metadata3dLabelingBlenderRenderer" +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "Metadata3dLabelingBlenderRendererBatchJobLogGroup",
+                        10
+                    ),
+                encryptionKey: props.storageResources.encryption.kmsKey,
+                retention: logs.RetentionDays.ONE_YEAR,
+                removalPolicy: cdk.RemovalPolicy.DESTROY,
+            }
+        );
+
         /**
          * AWS Batch Job Definition & Compute Env for Blender Image Renderer
          */
@@ -226,6 +247,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: blenderRendererLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
