@@ -670,7 +670,8 @@ Four things to know before writing one:
 The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
 
 **Enabling `useSplatToolbox` in a T1 synth requires `useCodeBuild: true`.** Splat is the only one of the
-fifteen pipeline Dockerfiles that is **not in the repository** —
+sixteen pipeline Dockerfiles that is **not in the repository** (recompute as
+`git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file) —
 `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
 Download Ignore", because it arrives from an upstream sync. With `useCodeBuild` false,
 `batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which
