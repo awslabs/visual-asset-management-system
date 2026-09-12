@@ -248,9 +248,9 @@ def _run_stages(ctx):
         ctx.observed["subtitles"] = sorted(transcript.subtitle_paths)
 
     with ctx.stage(7, "gate"):
-        # A speechless transcript is an input the pipeline cannot work from (owner decision 7): the run is
-        # rejected on the task token and nothing is ingested. On success the subtitle files are part of
-        # the deliverable set, so a COMPLETED job that wrote none is a Transcribe failure, not a variant.
+        # A speechless transcript is an input the pipeline cannot work from: the run is rejected on the
+        # task token and nothing is ingested. On success the subtitle files are part of the deliverable
+        # set, so a COMPLETED job that wrote none is a Transcribe failure, not a variant.
         if not speech:
             names = ", ".join(entry["name"] for entry in inputs)
             raise PipelineRejection(INPUT_REJECTED, f"no speech detected in {names}; a narrated video is required.")

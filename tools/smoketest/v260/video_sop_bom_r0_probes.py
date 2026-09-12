@@ -311,7 +311,7 @@ def transcribe_conditioned_statement(ctx: ProbeContext) -> None:
 
 
 @probe("silent-flac-transcription",
-       "COMPLETED versus FAILED on silence, SubtitleFileUris presence, language identification on no speech (owner decision 7 data)")
+       "COMPLETED versus FAILED on silence, SubtitleFileUris presence, language identification on no speech")
 def silent_flac_transcription(ctx: ProbeContext) -> None:
     args = ctx.args
     if not args.aux_bucket:
