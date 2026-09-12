@@ -87,6 +87,55 @@ class TestBomCsv:
         # A null JSON cell is an empty CSV cell.
         assert parsed[1][COL("manufacturing_country")] == "" and parsed[1][COL("material_notes")] == ""
 
+    @pytest.mark.parametrize("lead", ["=", "+", "-", "@", "\t", "\r"])
+    def test_a_text_cell_beginning_with_a_formula_lead_character_gets_a_leading_apostrophe(self, lead):
+        from video_sop_bom_pipeline import render
+
+        assert render._spreadsheet_safe(lead + "SUM(A1:A9)") == "'" + lead + "SUM(A1:A9)"
+        assert render._spreadsheet_safe(lead) == "'" + lead
+        assert lead in render.FORMULA_LEAD_CHARS and len(render.FORMULA_LEAD_CHARS) == 6
+
+    def test_other_text_empty_and_non_text_cells_are_unchanged(self):
+        from video_sop_bom_pipeline import render
+
+        assert render._spreadsheet_safe("Rear cover") == "Rear cover"
+        assert render._spreadsheet_safe("Bracket, 'L' shaped") == "Bracket, 'L' shaped"
+        assert render._spreadsheet_safe("") == ""
+        # Only the first character decides: a formula-lead character later in the text is left alone.
+        assert render._spreadsheet_safe("Rated 5 V @ 2 A") == "Rated 5 V @ 2 A"
+        assert render._spreadsheet_safe(4) == 4 and render._spreadsheet_safe(-12.5) == -12.5 and render._spreadsheet_safe(0) == 0
+        assert render._spreadsheet_safe(None) is None
+
+    def test_formula_lead_cells_round_trip_with_the_apostrophe_and_the_header_is_untouched(self, tmp_path):
+        from video_sop_bom_pipeline import render
+
+        leads = ["=", "+", "-", "@", "\t", "\r"]
+        rows, _ = render.build_bom_rows(
+            [_final_row(description=lead + "cmd|' /C calc'!A0") for lead in leads]
+            + [_final_row(description="Rear cover"), dict(_final_row(), manufacturer_part_number="=MPN-1")],
+            CONFIG, "P",
+        )
+        # A numeric value that reaches the writer as text (a negative one here) is a text cell like any other;
+        # the same value as a number is not touched.
+        rows.append(dict(rows[0], material_composition="-5", mass_g_per_unit=-5))
+        path = str(tmp_path / "bom.csv")
+        render.write_bom_csv(path, rows)
+        with open(path, "rb") as handle:
+            data = handle.read()
+        assert data.split(b"\n", 1)[0] == ",".join(LCA_BOM_COLUMNS).encode("utf-8")
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            parsed = list(csv.reader(handle))
+        assert parsed[0] == list(LCA_BOM_COLUMNS) and len(parsed) == 1 + len(rows) and all(len(line) == 66 for line in parsed)
+        for line, lead in zip(parsed[1:], leads):
+            assert line[COL("part_description")] == "'" + lead + "cmd|' /C calc'!A0"
+            assert line[COL("part_type")] == "Enclosure" and line[COL("lab_part_number")].startswith("p-")
+        assert parsed[7][COL("part_description")] == "Rear cover" and parsed[7][COL("mass_g_per_unit")] == "42.0"
+        assert parsed[8][COL("manufacturer_part_number")] == "'=MPN-1" and parsed[8][COL("part_description")] == "rear cover"
+        assert parsed[9][COL("material_composition")] == "'-5" and parsed[9][COL("mass_g_per_unit")] == "-5"
+        assert parsed[9][COL("part_level")] == "1" and parsed[9][COL("qty")] == "1"
+        # Empty (null) cells stay empty rather than becoming a lone apostrophe.
+        assert parsed[1][COL("manufacturing_country")] == "" and parsed[1][COL("material_notes")] == ""
+
 
 class TestBomRows:
     def test_vocabulary_is_normalised_case_insensitively_and_misses_are_null_with_the_raw_value_kept(self):

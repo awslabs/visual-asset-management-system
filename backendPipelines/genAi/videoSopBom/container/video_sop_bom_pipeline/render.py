@@ -64,6 +64,8 @@ ENUM_COLUMNS = (
 REQUIRED_ENUM_COLUMNS = ("part_type", "material_or_component_type")
 # finalRow columns copied as they come (their finalRow types already match lcaRow's).
 COPIED_COLUMNS = ("material_composition", "mass_g_per_unit", "pcb_layers", "battery_capacity_wh")
+# Leading characters a spreadsheet application reads as the start of a formula when it opens a CSV cell.
+FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
 
 
 def slugify(name):
@@ -135,13 +137,22 @@ def build_bom_rows(final_rows, config, product_name):
     return rows, misses
 
 
+def _spreadsheet_safe(value):
+    """`value` with a leading apostrophe when it is a str that begins with a formula-lead character, so a
+    spreadsheet application shows the cell as text instead of evaluating it; any other value unchanged."""
+    if isinstance(value, str) and value[:1] in FORMULA_LEAD_CHARS:
+        return "'" + value
+    return value
+
+
 def write_bom_csv(path, rows):
-    """Header row + data rows only; UTF-8 without BOM, LF line endings."""
+    """Header row + data rows only; UTF-8 without BOM, LF line endings. Text data cells that begin with a
+    formula-lead character carry a leading apostrophe; the header row and non-text cells are written as they are."""
     with open(path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(LCA_BOM_COLUMNS)
         for row in rows:
-            writer.writerow(["" if row.get(column) is None else row.get(column, "") for column in LCA_BOM_COLUMNS])
+            writer.writerow([_spreadsheet_safe("" if row.get(column) is None else row.get(column, "")) for column in LCA_BOM_COLUMNS])
 
 
 def _md(value):
