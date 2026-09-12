@@ -6,9 +6,15 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+-   New Video SOP/BOM Extraction Pipeline - Transcribes 1-4 narrated teardown videos with Amazon Transcribe and derives a step-by-step SOP, an LCA bill of materials (66-column `LCA-BOM-INPUT` CSV), a lab summary, and verification key frames with Amazon Bedrock, with deployment-configurable input caps enforced inside the pipeline and reported as readable execution errors
+
 ### ⚠ BREAKING CHANGES
 
 ### Features
+
+-   **Pipeline** Added the Video SOP/BOM Extraction pipeline (`genai-video-sop-bom`) — transcribes one to four narrated teardown videos (MP4, MOV, M4V, WebM, MKV) selected explicitly from one asset with Amazon Transcribe and derives a step-by-step SOP, a bill of materials in the 66-column `LCA-BOM-INPUT` layout (JSON, Markdown, and CSV), a lab summary, and key frames for visual verification with Amazon Bedrock (Anthropic Claude through the Converse API), running as one AWS Batch Fargate container in the isolated subnets behind Amazon Transcribe and Amazon Bedrock Runtime interface endpoints. Two templates (`video-sop-bom-full`, `video-sop-bom-transcript-only`) expose language, video order, product name, contributors, key-frame count, part-level base, lab-summary toggle, and additional instructions as typed tags; the file-count and total-duration caps are deployment configuration (`limits`), the byte caps are constants sized to the container's 100 GiB volume, and every refused run names the active limit in a readable cause. A video set with no detectable speech is rejected as `VideoSopBomInputRejected` rather than producing empty deliverables. Outputs land under `sop-bom/<executionId>/` on the asset with `sopBom_*` asset metadata and a results summary; there is no file-upload trigger. Enable via `app.pipelines.useGenAiVideoSopBom` (commercial and AWS GovCloud (US) partitions; the container ships GPL-licensed FFmpeg).
+    -   Note: Live smoke validation of this pipeline against a deployed environment is pending.
+-   **CDK** When the Video SOP/BOM Extraction pipeline is enabled, the auxiliary bucket expires objects under its `pipelines/genai-video-sop-bom/` prefix 30 days after creation, so temporary objects left by a crashed or aborted run are removed; other prefixes are untouched. The VPC builder creates an Amazon Transcribe interface endpoint and creates the Amazon Bedrock Runtime endpoint for container callers as well as for in-VPC Lambda callers. Fargate pipeline job definitions can set their own vCPU, memory, and Amazon CloudWatch log group through `BatchFargatePipelineConstruct`; existing job definitions keep their defaults. The Bedrock model-id validation is shared between the GenAI metadata labeling and Video SOP/BOM pipelines.
 
 ### Bug Fixes
 
