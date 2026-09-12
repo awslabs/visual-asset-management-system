@@ -517,8 +517,9 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     which must print exactly one hash. The logger is where task tokens are redacted from every log line,
     so a copy that drifts is a pipeline whose CloudWatch stream carries a bearer credential. Edit one
     copy, then propagate to the rest in the same change, and add the new pipeline's path to the
-    `LOGGER_COPIES` tuple in both `backendPipelines/tests/test_pipeline_logger_identity.py` (which pins
-    the single digest and fails on an unlisted copy) and `test_pipeline_logger_formatter.py`. Log an
+    `LOGGER_COPIES` tuple in `backendPipelines/tests/test_pipeline_logger_identity.py`, which pins the
+    single digest, fails on an unlisted copy, and is the list `test_pipeline_logger_formatter.py` reads
+    too. Log an
     event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never
     log a task token on its own.
 

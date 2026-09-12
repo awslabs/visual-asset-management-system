@@ -25,23 +25,19 @@ import pytest
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Kept in step with test_pipeline_logger_identity.LOGGER_COPIES, which asserts the list is complete.
-LOGGER_COPIES = (
-    "backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py",
-    "backendPipelines/conversion/coordinateTransform/lambda/customLogging/logger.py",
-    "backendPipelines/genAi/metadata3dLabeling/lambda/customLogging/logger.py",
-    "backendPipelines/genAi/nvidia/cosmos/3/lambda/customLogging/logger.py",
-    "backendPipelines/genAi/nvidia/cosmos/predict/lambda/customLogging/logger.py",
-    "backendPipelines/genAi/nvidia/cosmos/reason/lambda/customLogging/logger.py",
-    "backendPipelines/genAi/nvidia/cosmos/transfer/lambda/customLogging/logger.py",
-    "backendPipelines/genAi/nvidia/gr00t/lambda/customLogging/logger.py",
-    "backendPipelines/multi/modelOps/lambda/customLogging/logger.py",
-    "backendPipelines/multi/rapidPipeline/lambda/customLogging/logger.py",
-    "backendPipelines/multi/rapidPipelineEKS/lambda/customLogging/logger.py",
-    "backendPipelines/preview/3dThumbnail/lambda/customLogging/logger.py",
-    "backendPipelines/preview/pcPotreeViewer/lambda/customLogging/logger.py",
-    "backendPipelines/simulation/isaacLabTraining/lambda/customLogging/logger.py",
-)
+
+def _identity_module():
+    """The identity suite beside this file, loaded by path: this directory carries no __init__.py."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_pipeline_logger_identity.py")
+    spec = importlib.util.spec_from_file_location("pipeline_logger_identity_for_formatter", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# One list for both suites. The identity suite asserts it against every copy on disk, so a copy
+# added there is exercised here as well.
+LOGGER_COPIES = _identity_module().LOGGER_COPIES
 
 REDACTED = "<redacted>"
 
