@@ -408,6 +408,24 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             }
         );
 
+        // Stopping the state machine cancels the .sync Batch task, which requires terminating the
+        // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource
+        // type; job ids are generated at submit time, so TerminateJob is scoped to this account's jobs.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs"],
+                resources: ["*"],
+            })
+        );
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:TerminateJob"],
+                resources: [`arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job/*`],
+            })
+        );
+
         /**
          * Lambda Resources
          */
@@ -604,11 +622,17 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "PipelineProcessingStateMachine uses default policy that contains wildcard",
+                    reason:
+                        "batch:DescribeJobs supports no resource-level permissions and Batch job ids are " +
+                        "generated at submit time, so cancelling the .sync job on StopExecution needs " +
+                        "DescribeJobs on * and TerminateJob on job/*; BatchSubmitJob grants SubmitJob on " +
+                        "job-definition/* and LambdaInvoke grants the functions' version qualifiers, and " +
+                        "the logging and X-Ray delivery actions have no resource type.",
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
                         `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },
