@@ -31,7 +31,7 @@ BOM_SCHEMA = load_schema("bom_row_schema")
 
 
 def _final_row(description="rear cover", part_type="Enclosure", material="PC/ABS", process="Molding - Plastics", mass=42.0, qty=1, level=1, country=None, **band):
-    """A finalRow as WP00's finalize_schema.json defines it; `band` adds observable band columns."""
+    """A finalRow as finalize_schema.json defines it; `band` adds observable band columns."""
     row = {
         "part_level": level, "part_type": part_type, "part_description": description, "qty": qty,
         "material_or_component_type": material, "mass_g_per_unit": mass, "primary_manufacturing_process": process,
@@ -130,7 +130,7 @@ class TestBomRows:
             dict(_final_row(description="mystery part", part_type="Unobtainium", material="Adamantium", process=None), manufacturing_country="China"),
         ], CONFIG, "P")
         assert len(misses) == 2 and rows[1]["manufacturing_country"] is None
-        # The whole bom.json document, every key of every row, against WP00's bom_row_schema.json.
+        # The whole bom.json document, every key of every row, against the shipped bom_row_schema.json.
         jsonschema.validate({"product_name": "P", "part_level_base": CONFIG["partLevelBase"], "rows": rows}, BOM_SCHEMA)
         # Negative control: a "" blank (the pre-fix rendering) is not a valid null.
         broken = dict(rows[0], mass_g_per_unit="")
@@ -232,7 +232,7 @@ class TestLabSummary:
         assert lab["background"] == "b"
         jsonschema.validate(lab, load_schema("lab_summary_schema"))
 
-    def test_lab_summary_md_has_the_nine_wp00_sections(self, tmp_path):
+    def test_lab_summary_md_has_the_nine_schema_sections(self, tmp_path):
         from video_sop_bom_pipeline import render
         from video_sop_bom_pipeline.vocab import LAB_SUMMARY_SECTIONS
 
@@ -296,7 +296,7 @@ class TestJsonOutputs:
 
         definition = make_definition()
         # The helper drops a leading slash and asset_path restores it, so every asset path reads /sop-bom/<exec>/<file>
-        # (the form WP00's frames `path`, sop `frame_ref` and summary `paths` patterns require).
+        # (the form the frames `path`, sop `frame_ref` and summary `paths` patterns require).
         assert render.asset_path(definition, "sop.json") == "/sop-bom/exec-0001/sop.json" == "/" + apply_output_path_extension("sop-bom/sop.json", "/exec-0001/")
         path = str(tmp_path / "asset.metadata.json")
         render.write_asset_metadata(path, definition, {
@@ -333,7 +333,7 @@ class TestJsonOutputs:
         render.write_summary(path, summary)
         assert json.load(open(path, encoding="utf-8"))["bedrock"]["calls"] == 3
         assert render.SUMMARY_MAX_BYTES == 51200
-        # WP00's summary_schema.json is enforced before the size bound: a partial document is rejected.
+        # The shipped summary_schema.json is enforced before the size bound: a partial document is rejected.
         with pytest.raises(jsonschema.ValidationError):
             render.write_summary(path, {"mode": "full", "status": "SUCCEEDED", "bedrock": summary["bedrock"]})
         with pytest.raises(ValueError):

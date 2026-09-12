@@ -741,7 +741,7 @@ FINALIZE_EXAMPLE = {
 STAGE_EXAMPLE = {"name": "transcribe", "startedAt": "2026-09-09T12:00:00Z", "durationS": 412.5,
                  "inputTokens": 0, "outputTokens": 0, "calls": 0}
 LIMITS_EXAMPLE = {
-    # The four D5 caps; maxKeyFramesCeiling stays in the definition document.
+    # The four configured input caps; maxKeyFramesCeiling stays in the definition document.
     "configured": {k: v for k, v in DEFINITION_EXAMPLE["limits"].items() if k != "maxKeyFramesCeiling"},
     "observed": {"totalInputBytes": 24117248, "totalDurationSeconds": 150.9, "language": "en-US",
                  "subtitles": ["transcript.vtt", "transcript.srt"]},
@@ -850,7 +850,7 @@ class TestModelToolSchemas:
         observed = {**LIMITS_EXAMPLE, "observed": {"language": "en-US"}}
         assert _errors(schema, {**ANALYSIS_REPORT_EXAMPLE, "limits": observed}) == [
             "'totalDurationSeconds' is a required property", "'totalInputBytes' is a required property"]
-        # spec section 3.2: limits.configured carries the four caps; the definition's fifth key is rejected.
+        # limits.configured carries the four caps; the definition's fifth key is rejected.
         five_caps = {**LIMITS_EXAMPLE, "configured": dict(DEFINITION_EXAMPLE["limits"])}
         assert _errors(schema, {**ANALYSIS_REPORT_EXAMPLE, "limits": five_caps}) == [
             "Additional properties are not allowed ('maxKeyFramesCeiling' was unexpected)"]

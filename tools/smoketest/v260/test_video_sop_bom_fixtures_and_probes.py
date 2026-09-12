@@ -90,7 +90,7 @@ class TestFixtureGenerator:
         flattened = [n for v in gen.FIXTURE_FILES.values() for n in ([v] if isinstance(v, str) else v)]
         assert sorted(flattened) == sorted(expected) and len(flattened) == 12
         assert gen.DEFAULT_OUT == os.path.join(HERE, "_video_sop_bom_fixtures")
-        # Owner decision 7: a no-speech input is rejected on the task token, so the silent fixture
+        # A no-speech input is rejected on the task token, so the silent fixture
         # exercises that rejection rather than an empty-deliverable success.
         assert "VideoSopBomInputRejected" in gen.FIXTURE_DESCRIPTIONS[gen.SILENT_CLIP]
 
@@ -187,7 +187,7 @@ class TestR0Probes:
     def test_language_codes_probe_prints_observed_lines_and_report_values(self, tmp_path, capsys):
         """Positive control for the [OBSERVED] path: this probe needs no credentials (the SDK model is
         local), so it completes under the fake session; the alias flag spellings are exercised here,
-        while WP06 Task 8 passes the canonical ones."""
+        while the live smoke suite passes the canonical ones."""
         import video_sop_bom_r0_probes as probes  # noqa: PLC0415
         report = tmp_path / "r0.json"
         rc = probes.main(["--region", "us-east-1", "--only", "language-codes", "--json-out", str(report),

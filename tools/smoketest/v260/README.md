@@ -14,7 +14,7 @@ carries its own `.gitignore` — fixtures are generated, never committed — and
 suite's roles (`happy`, `tiny`, `long`, `size_small`, `size_big`, `silent`, `probe_flac`) to the file
 names. `--without-polly` exercises the whole mux path offline with silence in place of speech.
 
-[`video_sop_bom_r0_probes.py`](video_sop_bom_r0_probes.py) runs the spec's R0 pre-deploy probes. Each
+[`video_sop_bom_r0_probes.py`](video_sop_bom_r0_probes.py) runs the R0 pre-deploy probes. Each
 probe prints `[OBSERVED] key = value` lines, or `[SKIP] <probe> -- <reason>` when a prerequisite flag is
 missing; there is no PASS line, because the point is to record the values the design guessed at before a
 test is pinned to them. `--region` is required and never inferred from the profile. The JSON report

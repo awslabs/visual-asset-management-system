@@ -8,7 +8,7 @@ the ffmpeg bundled with `imageio-ffmpeg` muxes them into H.264/AAC MP4 clips. Th
 this module for `STEPS`, `KEYWORDS` and `COMPONENT_NOUNS` -- what R1 asserts the transcript and the
 SOP against -- so nothing here touches AWS at import time; clients are built inside `main()`.
 
-Fixture set (spec D13), written to `--out-dir` (default `_video_sop_bom_fixtures/` beside this file):
+Fixture set, written to `--out-dir` (default `_video_sop_bom_fixtures/` beside this file):
 
     teardown-part1.mp4, teardown-part2.MP4   the happy pair (~75 s each; the second is upper-case .MP4)
     tiny-1.mp4 .. tiny-5.mp4                 3 s silent clips for the count-rejection arm (R2)

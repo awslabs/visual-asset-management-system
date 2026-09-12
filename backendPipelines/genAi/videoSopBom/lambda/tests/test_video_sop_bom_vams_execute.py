@@ -281,9 +281,9 @@ class TestByteGates:
         invoke.assert_called_once()
 
     def test_a_cap_below_one_gigabyte_renders_in_whole_megabytes(self):
-        # The smoke round (WP06 R3/R3b) lowers a cap to a few MB and asserts the configured integer
+        # The live smoke round lowers a cap to a few MB and asserts the configured integer
         # appears in the cause; a GB-only rendering would read "0.0 GB" for both values and name
-        # neither (spec D5: the cause names both values).
+        # neither (the cause names both values).
         mod = _load()
         entries = [_entry("size-big.mp4")]
         with patch.object(mod, "MAX_VIDEO_FILE_SIZE_MB", 3):

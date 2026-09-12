@@ -397,19 +397,19 @@ class TestDefinitionDocument:
         assert definition["assetName"] == ""
 
     def test_both_document_shapes_validate_against_the_container_definition_schema(self):
-        # WP03's validate_definition applies WP00's definition_schema.json when the container loads
+        # The container's validate_definition applies definition_schema.json when it loads
         # the document; a document that fails it would surface only after the Batch job started.
         # Both shapes are checked: a workflow run, and a direct invocation without an orchestration
-        # prefix (empty pipelineExecutionId, `VideoSopBom__…` job name), which WP00's pattern
+        # prefix (empty pipelineExecutionId, `VideoSopBom__…` job name), which the schema's pattern
         # ({0,12}) and unconstrained ids admit. jsonschema is a dev-interpreter dependency of this
-        # test alone, never of a handler (Task 3). The canonical path is asserted to EXIST: a skip
+        # test alone, never of a handler. The canonical path is asserted to EXIST: a skip
         # would pass while proving nothing.
         import jsonschema
         mod = _load(_MODULE)
         schema_path = os.path.join(
             os.path.dirname(_LAMBDA_DIR), "container", "video_sop_bom_pipeline", "schemas",
             "definition_schema.json")
-        assert os.path.isfile(schema_path), f"{schema_path} is missing; WP00 ships it"
+        assert os.path.isfile(schema_path), f"{schema_path} is missing; the container package ships it"
         with open(schema_path, encoding="utf-8") as handle:
             schema = json.load(handle)
         _, s3, _ = _run(mod)

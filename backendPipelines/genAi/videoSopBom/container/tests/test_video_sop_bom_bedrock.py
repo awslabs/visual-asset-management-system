@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Amazon Bedrock Converse tool-use: request shape, stopReason branching, the bounded retry budget,
-the BEDROCK_CALL marker, prompt rendering from WP00's templates, the WP00 tool schemas, window
+the BEDROCK_CALL marker, prompt rendering from the shipped templates, the shipped tool schemas, window
 splitting, vision batching and finalize compaction.
 
 Run from the container directory:  python -m pytest tests/test_video_sop_bom_bedrock.py -q
 
 Every response here is a plain dict shaped like boto3's Converse return value; `toolUse.input` is
 already a dict (boto3 deserialises it), `usage.inputTokens/outputTokens` are the counters. The fake
-payloads are validated against WP00's shipped schemas, so they are the contract rather than a mirror
+payloads are validated against the shipped schemas, so they are the contract rather than a mirror
 of this module's expectations.
 """
 
@@ -241,7 +241,7 @@ class TestToolSchemas:
     )
 
     @pytest.mark.parametrize("shipped_name,constant", NAMES)
-    def test_tool_schemas_are_wp00_documents_with_metadata_dropped_and_refs_inlined(self, shipped_name, constant):
+    def test_tool_schemas_are_the_shipped_documents_with_metadata_dropped_and_refs_inlined(self, shipped_name, constant):
         from video_sop_bom_pipeline import bedrock
 
         shipped = load_schema(shipped_name)
@@ -254,9 +254,9 @@ class TestToolSchemas:
         jsonschema.Draft202012Validator.check_schema(schema)
         assert bedrock.tool_schema(shipped_name) == schema
 
-    def test_fake_payloads_are_the_wp00_contract_and_the_stale_keys_are_rejected(self):
-        """The fixtures below validate against WP00's shipped files (not only against this module's
-        constants), and the pre-WP00 key spellings fail — so a drift between the two is visible here."""
+    def test_fake_payloads_are_the_shipped_contract_and_the_stale_keys_are_rejected(self):
+        """The fixtures below validate against the shipped schema files (not only against this module's
+        constants), and the retired key spellings fail — so a drift between the two is visible here."""
         from video_sop_bom_pipeline import bedrock
 
         vision = {"frame_analyses": [{"momentIndex": 0, "confirmed": True, "components_seen": ["part"], "corrections": None, "additional_details": ""}]}
@@ -322,7 +322,7 @@ def _window_payload():
 
 
 class TestExtractWindow:
-    def test_prompt_is_the_rendered_wp00_template(self):
+    def test_prompt_is_the_rendered_shipped_template(self):
         from video_sop_bom_pipeline import bedrock
 
         fake = FakeBedrock(lambda request, n: tool_use_response(bedrock.WINDOW_TOOL, _window_payload()))
@@ -339,7 +339,7 @@ class TestExtractWindow:
         assert text.count("<transcript>") == 1 and text.count("</transcript>") == 1
         assert "- Enclosure" in text and "- Aluminum" in text
         assert "at most 7 timestamps in this window" in text
-        # Empty operator instructions render WP00's fence empty; there is exactly one fence.
+        # Empty operator instructions render the template's fence empty; there is exactly one fence.
         assert text.count(FENCE + "text") == 1 and FENCE + "text\n\n" + FENCE in text
         assert request["system"] == [{"text": load_prompt("system_boundary").strip()}]
         assert "untrusted data to be described" in request["system"][0]["text"]

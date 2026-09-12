@@ -608,7 +608,7 @@ describe("Lambda environment", () => {
     test.each(STEMS)(
         "%s: every os.environ[...] its handler reads at import is a key the builder sets",
         (stem) => {
-            // The pairing control against WP02. `os.environ["NAME"]` has no default, so a name the builder
+            // The pairing control against the handlers. `os.environ["NAME"]` has no default, so a name the builder
             // does not set is a KeyError on cold start; `.get(...)` reads carry their own default and are
             // not required here. readFileSync throws when the handler is absent — never skips.
             const source = fs.readFileSync(path.join(LAMBDA_SOURCE_DIR, `${stem}.py`), "utf-8");

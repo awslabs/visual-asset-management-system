@@ -205,7 +205,7 @@ def _run(tmp_path, monkeypatch, definition=None, transcript=SPEECH, subtitles=Tr
     probe_bedrock = FakeBedrock(lambda request, n: text_response("pong"))
     sfn = FakeSfn()
     clients = make_clients(s3=s3, transcribe=transcribe, bedrock=bedrock, sfn=sfn, preflight_bedrock=probe_bedrock)
-    # The video containers report 10 s each while the extracted tracks report 75 s + 80 s: spec D5 sums the
+    # The video containers report 10 s each while the extracted tracks report 75 s + 80 s: the duration cap sums the
     # audio tracks, so a sum over the container probes (20 s) could neither trip the 1-minute cap in the
     # rejection test nor produce the 155.0 s figure asserted below.
     durations = {"0_part1.mp4": 10.0, "1_part2.MP4": 10.0, "0.flac": 75.0, "1.flac": 80.0, "combined.flac": 155.0}
@@ -248,7 +248,7 @@ class TestRunFullMode:
         assert summary["mode"] == "full" and summary["status"] == "SUCCEEDED"
         assert summary["bedrock"]["calls"] == len(bedrock.calls) == 3, "one window, one vision batch, one finalize"
         assert summary["limits"]["configured"] == {"maxVideoFiles": 4, "maxVideoFileSizeMb": 4096, "maxTotalInputSizeMb": 16384, "maxTotalDurationMinutes": 240}
-        assert "maxKeyFramesCeiling" not in summary["limits"]["configured"], "spec D8: the four caps"
+        assert "maxKeyFramesCeiling" not in summary["limits"]["configured"], "limits.configured carries the four caps only"
         assert summary["limits"]["observed"]["totalDurationSeconds"] == 155.0, "the extracted tracks (75 + 80), not the 10 s containers"
         assert summary["limits"]["observed"]["subtitles"] == ["srt", "vtt"]
         assert summary["warnings"] == []
@@ -382,7 +382,7 @@ class TestRunTranscriptMode:
 
 
 class TestSubtitlesAlwaysOnSuccess:
-    """Owner decision 7 withdrew the "only when speech detected" qualifier: a speechless input is rejected,
+    """Subtitles are not conditional on detected speech: a speechless input is rejected,
     so every SUCCEEDED run carries transcript.vtt and transcript.srt, and a COMPLETED Transcribe job that
     wrote no subtitle files is a Transcribe failure rather than a variant of success."""
 
@@ -411,8 +411,8 @@ class TestRunRejections:
         return sfn.failures[0]
 
     def test_no_speech_is_an_input_rejection_naming_the_files_and_ingests_nothing(self, tmp_path, monkeypatch, vsb_task_token):
-        """Owner decision 7: the silent fixture is rejected on the task token; no deliverable, no metadata,
-        no results document and no Amazon Bedrock call — the spec's §6.4 empty deliverable set is withdrawn."""
+        """The silent fixture is rejected on the task token; no deliverable, no metadata,
+        no results document and no Amazon Bedrock call — there is no empty-deliverable success."""
         definition = make_definition()
         status, s3, transcribe, bedrock, sfn = _run(tmp_path, monkeypatch, definition=definition, transcript=EMPTY_TRANSCRIPT, subtitles=False)
         assert status == "FAILED"

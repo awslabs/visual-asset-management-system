@@ -40,7 +40,8 @@ class Clients:
 
 
 def build_clients(region):
-    """Every client the stages need, in the configurations spec D2/D6/D9 fix."""
+    """Every client the stages need: adaptive retries by default, a long read timeout for Bedrock, and
+    single-attempt clients for the preflight probes and the SIGTERM signal path."""
     return Clients(
         s3=boto3.client("s3", region_name=region, config=retry_config),
         transcribe=boto3.client("transcribe", region_name=region, config=retry_config),

@@ -49,7 +49,7 @@ FRAME_STEP_MATCH_S = 5.0
 # Two states only: a stage that raises still logs `end`; the REJECTED line names the failure.
 STAGE_MARKER = "STAGE %d %s %s %.1fs"
 USAGE_STAGE_PREFIXES = {"extract": "window-", "vision": "vision-", "finalize": "finalize"}
-# The four D5 caps reported as limits.configured; maxKeyFramesCeiling is a tag ceiling, not a run cap.
+# The four configured input caps reported as limits.configured; maxKeyFramesCeiling is a tag ceiling, not a run cap.
 CONFIGURED_CAPS = ("maxVideoFiles", "maxVideoFileSizeMb", "maxTotalInputSizeMb", "maxTotalDurationMinutes")
 
 
@@ -350,7 +350,7 @@ def _run_stages(ctx):
                 write_lab_summary_md(os.path.join(dirs["files"], "lab-summary.md"), lab)
                 paths["labSummary"] = asset_path(definition, "lab-summary.json")
                 values["sopBom_labSummaryPath"] = paths["labSummary"]
-            # frames.json is WP00's frames_schema shape: `file` is the bare JPEG name and `path` the asset
+            # frames.json follows frames_schema.json: `file` is the bare JPEG name and `path` the asset
             # path; the scratch path stays inside the container.
             write_json(os.path.join(dirs["files"], "frames.json"), {
                 "executionId": definition["executionId"],

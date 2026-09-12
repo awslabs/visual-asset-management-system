@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Preflight: the WP00 artefacts the container imports, the client configurations, the definition
+"""Preflight: the shipped schemas and prompts the container imports, the client configurations, the definition
 loader, and the API-probe connectivity + disk checks that run before any download.
 
 Run from the container directory:  python -m pytest tests/test_video_sop_bom_preflight.py -q
@@ -15,12 +15,12 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 
-# WP00's package root: a clobbered __init__.py fails this module at collection, loudly.
+# The package root: a clobbered __init__.py fails this module at collection, loudly.
 from video_sop_bom_pipeline import PROMPT_NAMES, SCHEMA_NAMES, load_prompt, load_schema  # noqa: E402
 
 _PACKAGE = os.path.join(os.path.dirname(_HERE), "video_sop_bom_pipeline")
 
-# The stems this WP passes to load_schema / load_prompt; every one must be in WP00's registry list.
+# The stems the container passes to load_schema / load_prompt; every one must be in the package's registry list.
 REQUIRED_SCHEMAS = {
     "definition_schema", "config_schema", "timeline_schema", "frames_schema", "sop_schema",
     "lab_summary_schema", "bom_row_schema", "analysis_report_schema", "summary_schema",
@@ -29,7 +29,7 @@ REQUIRED_SCHEMAS = {
 REQUIRED_PROMPTS = {"window_extraction", "vision_verification", "finalize", "system_boundary"}
 
 
-class TestWp00Artefacts:
+class TestShippedArtefacts:
     """The container imports these; a missing one fails at container runtime, not at build."""
 
     def test_schema_and_prompt_names_are_the_registry_lists(self):
@@ -39,12 +39,12 @@ class TestWp00Artefacts:
     @pytest.mark.parametrize("name", SCHEMA_NAMES)
     def test_schema_file_exists(self, name):
         path = os.path.join(_PACKAGE, "schemas", f"{name}.json")
-        assert os.path.isfile(path), f"WP00 schema missing: {path}"
+        assert os.path.isfile(path), f"shipped schema missing: {path}"
 
     @pytest.mark.parametrize("name", PROMPT_NAMES)
     def test_prompt_file_exists(self, name):
         path = os.path.join(_PACKAGE, "prompts", f"{name}.md")
-        assert os.path.isfile(path), f"WP00 prompt missing: {path}"
+        assert os.path.isfile(path), f"shipped prompt missing: {path}"
 
     def test_the_package_loaders_read_every_schema_and_prompt(self):
         for name in SCHEMA_NAMES:
@@ -93,11 +93,12 @@ class TestErrorCodes:
 
 class TestClientConfigs:
     """Client construction is offline (credentials are resolved at request time), so the four Config
-    shapes the spec fixes (D2, D6, D9 and the shared adaptive retry) are asserted on real clients.
+    shapes (the Bedrock read timeout, the single-attempt preflight and signal clients, and the shared
+    adaptive retry) are asserted on real clients.
 
     botocore rewrites `Config.retries` in place when the client is built — `max_attempts` N becomes
     `total_max_attempts` N + 1 in every mode — so the assertions read the post-construction form; the
-    literal the module passes is pinned by the source-text ratchet (Task 2's checkpoint), not here."""
+    literal the module passes is pinned by the repository's source-text ratchet, not here."""
 
     def test_build_clients_applies_the_four_configs(self):
         from video_sop_bom_pipeline import clients as clients_module
@@ -192,7 +193,7 @@ class TestDefinitionLoading:
         from video_sop_bom_pipeline import definition as definition_module
         from video_sop_bom_pipeline.errors import PipelineRejection
 
-        # WP00's config_schema.json requires the three typed tags when mode is "full"; constructPipeline
+        # The shipped config_schema.json requires the three typed tags when mode is "full"; constructPipeline
         # refuses such a body first, and this second validation of the definition.json copy pins the rule.
         broken = make_definition()
         del broken["config"]["partLevelBase"]

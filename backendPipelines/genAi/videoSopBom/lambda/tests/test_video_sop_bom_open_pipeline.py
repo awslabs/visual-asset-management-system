@@ -25,7 +25,7 @@ _TOKEN = "tok-123"
 _EXECUTION_ID = "3f7c1e9a2b4d48c6a1f05e8d7c9b0a12"
 _PIPELINE_EXECUTION_ID = "9e8d7c6b5a4f43e2b1a0f9e8d7c6b5a4"
 _PREFIX = f"vams.prod-us-east-1.execution.{_EXECUTION_ID}.pipeline.{_PIPELINE_EXECUTION_ID}"
-# WP00's definition_schema.json `batchJobName` pattern: the id segment is 0-12 characters (empty for
+# The container's definition_schema.json `batchJobName` pattern: the id segment is 0-12 characters (empty for
 # a direct invocation without an orchestration prefix).
 _NAME_SHAPE = re.compile(r"^VideoSopBom_[0-9A-Za-z-]{0,12}_\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -131,8 +131,8 @@ class TestStartsTheSubStateMachine:
 
     def test_a_direct_invocation_without_a_prefix_still_names_the_run(self):
         # No orchestration prefix means no pipeline execution id: the registry formula yields an
-        # empty middle segment, which WP00's definition_schema.json pattern ({0,12}) admits, and the
-        # two ids travel as "" (Task 6's conformance test validates that document too).
+        # empty middle segment, which the definition_schema.json pattern ({0,12}) admits, and the
+        # two ids travel as "" (the constructPipeline conformance test validates that document too).
         mod = _load()
         _, start, _, _ = _invoke(mod, _event(orchestrationEventPrefix=""))
         name = start.call_args.kwargs["name"]

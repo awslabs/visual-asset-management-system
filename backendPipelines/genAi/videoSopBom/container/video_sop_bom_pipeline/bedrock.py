@@ -3,7 +3,7 @@
 
 """Amazon Bedrock Converse with forced tool use: the three structured calls and the retry budget around them.
 
-The prompts and the tool input schemas are WP00's files: a prompt is rendered by substituting every
+The prompts and the tool input schemas are the package's shipped files: a prompt is rendered by substituting every
 `{{TOKEN}}` its `PROMPT_TOKENS` entry lists, and a tool schema is the shipped JSON Schema with its
 metadata keys dropped and its local `$ref`s inlined, so the model is steered by and validated against
 the same document."""
@@ -68,7 +68,7 @@ TOOL_DESCRIPTIONS = {
 SCHEMA_METADATA_KEYS = ("$schema", "$id", "title", "description", "$defs")
 _TOKEN = re.compile(r"\{\{([A-Z_]+)\}\}")
 
-# The D6 system prompt, sent verbatim on every call.
+# The system boundary prompt, sent verbatim on every call.
 SYSTEM_BOUNDARY = load_prompt("system_boundary").strip()
 
 
@@ -87,7 +87,7 @@ def _inline_refs(node, defs):
 
 
 def tool_schema(name):
-    """WP00's tool schema as a Converse `inputSchema.json`: top-level metadata dropped, local $refs inlined."""
+    """The shipped tool schema as a Converse `inputSchema.json`: top-level metadata dropped, local $refs inlined."""
     shipped = load_schema(name)
     defs = shipped.get("$defs", {})
     body = {key: value for key, value in shipped.items() if key not in SCHEMA_METADATA_KEYS}
@@ -100,7 +100,7 @@ FINALIZE_TOOL_SCHEMA = tool_schema("finalize_schema")
 
 
 def render_prompt(name, values):
-    """WP00's prompt with every `{{TOKEN}}` in PROMPT_TOKENS[name] substituted. A slot without a value is
+    """The shipped prompt with every `{{TOKEN}}` in PROMPT_TOKENS[name] substituted. A slot without a value is
     a programming error (KeyError), never a prompt the model sees."""
     template = load_prompt(name)
     missing = set(_TOKEN.findall(template)) - set(values)
@@ -281,7 +281,7 @@ def _operator(config):
 
 def extract_window(clients, model_id, window, config, product_name, *, max_key_moments, window_count=1, usage=None, **kw):
     """One window through the window_extraction prompt. `product_name` is carried for the finalize call's
-    sake (WP00's window template declares no PRODUCT_NAME slot); the window is described 1-based."""
+    sake (the window template declares no PRODUCT_NAME slot); the window is described 1-based."""
     text = render_prompt(PROMPT_NAMES_BY_TOOL[WINDOW_TOOL], {
         "WINDOW_INDEX": window.index + 1,
         "WINDOW_COUNT": max(1, window_count),

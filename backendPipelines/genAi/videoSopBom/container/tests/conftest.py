@@ -23,7 +23,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "unit: standalone unit test (no AWS calls)")
 
 
-# --- Container runtime fakes (WP03) -------------------------------------------------------------------
+# --- Container runtime fakes --------------------------------------------------------------------------
 # The container reaches AWS only through the `Clients` dataclass it is handed and reaches ffmpeg/ffprobe
 # only through `media._run`, so every runtime test substitutes plain objects for those two seams.
 # Stubber is deliberately not used: it is in-order and not thread-safe, and the fakes here need to answer
@@ -395,7 +395,7 @@ def fake_run_factory(durations=None, has_audio=True, fail_basenames=(), png_size
 @pytest.fixture
 def vsb_fake_run():
     # Container durations deliberately differ from the extracted tracks: the duration cap must sum the
-    # .flac probes (spec D5), and identical figures would let a container-duration sum pass unnoticed.
+    # .flac probes, and identical figures would let a container-duration sum pass unnoticed.
     return fake_run_factory({"part1.mp4": 10.0, "part2.MP4": 10.0, "0.flac": 75.0, "1.flac": 80.0, "combined.flac": 155.0})
 
 

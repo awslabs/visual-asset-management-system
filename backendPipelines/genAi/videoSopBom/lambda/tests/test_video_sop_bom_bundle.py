@@ -44,7 +44,7 @@ def _load_by_path(module_name, path):
 
 @pytest.mark.unit
 class TestCustomLoggingRedaction:
-    """Neither task token is written to any log (spec D18): the formatter redacts every spelling
+    """Neither task token is written to any log: the formatter redacts every spelling
     the handlers log under, in nested dicts and in lists of dicts."""
 
     def _logger_module(self):
@@ -70,7 +70,7 @@ class TestCustomLoggingRedaction:
     def test_lists_of_dicts_are_walked(self):
         # A list of dicts is where the coordinateTransform copy's walk stops: it recurses into dict
         # VALUES only, so a token keyed inside a list member would have passed through. (The redactor
-        # keys on dict keys; no WP02 handler logs a Batch name/value environment list.)
+        # keys on dict keys; no handler of this pipeline logs a Batch name/value environment list.)
         mod = self._logger_module()
         masked = mod.mask_sensitive_data(event={"environment": [{"TASK_TOKEN": "x"}, {"other": "y"}]})
         assert masked["environment"] == [{"TASK_TOKEN": "<redacted>"}, {"other": "y"}]
@@ -140,7 +140,7 @@ class TestVendoredCopies:
 
     def test_config_schema_is_byte_identical_to_the_container_copy(self):
         assert os.path.isfile(_CONTAINER_CONFIG_SCHEMA), (
-            f"{_CONTAINER_CONFIG_SCHEMA} is missing; WP00 ships it and this lambda validates "
+            f"{_CONTAINER_CONFIG_SCHEMA} is missing; the container package ships it and this lambda validates "
             f"against a copy of it")
         local = os.path.join(_LAMBDA_DIR, "config_schema.json")
         assert os.path.isfile(local), local
@@ -207,12 +207,12 @@ def _open_pipeline_default():
 
 
 def _cdk_allow_list():
-    """The literal WP04's construct passes to the openPipeline builder (same regex as the
-    cross-pipeline extension-gate harness). Asserted to EXIST: this arm fails, never skips, until
-    WP04 lands the construct."""
+    """The literal the CDK construct passes to the openPipeline builder (same regex as the
+    cross-pipeline extension-gate harness). Asserted to EXIST: this arm fails, never skips, when
+    the construct is absent."""
     path = os.path.join(_REPO_ROOT, "infra", "lib", "nestedStacks", "pipelines", "genAi",
                         "videoSopBom", "constructs", "videoSopBom-construct.ts")
-    assert os.path.isfile(path), f"{path} is missing; WP04 creates it"
+    assert os.path.isfile(path), f"{path} is missing; the CDK construct defines the allow list"
     source = open(path, encoding="utf-8").read()
     match = re.search(r"const allowedInputFileExtensions\s*=\s*([^;]*);", source)
     assert match, "no allowedInputFileExtensions declaration in the construct"

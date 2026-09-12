@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""R0 pre-deploy probes for the Video SOP/BOM Extraction pipeline (spec section 8, R0 table).
+"""R0 pre-deploy probes for the Video SOP/BOM Extraction pipeline.
 
 Each probe is one function that records what it OBSERVED. There is no PASS here: R0 exists to learn
 the values the design guessed at -- the .sync Cause key names, how the Batch overrides cap surfaces,
@@ -17,7 +17,8 @@ top level (None for a probe that did not run), the full per-probe observations u
 
 Probes (`--list-probes`):
 
-    transcribe-conditioned-statement  StartTranscriptionJob from a role holding exactly the D7 statement.
+    transcribe-conditioned-statement  StartTranscriptionJob from a role holding exactly the job role's
+                                      Transcribe statement.
                                       With the CMK: accepted, and the output object's encryption is read
                                       back. Without the key: expected AccessDeniedException. Mismatched
                                       bucket: expected denied. Needs --aux-bucket and --role-arn or
@@ -26,7 +27,7 @@ Probes (`--list-probes`):
                                       IdentifyLanguage=True, both requesting subtitles: COMPLETED or
                                       FAILED, FailureReason, SubtitleFileUris presence, pronunciation items.
     language-codes                    each LANGUAGE_CODE value against the Transcribe SDK enum (offline;
-                                      the batch-table check is WP00 Task 3).
+                                      the shipped config_schema.json enum is the batch-table check).
     bedrock-converse                  converse(maxTokens=1) on the default model id: model access.
     vpc-endpoint-services             describe-vpc-endpoint-services for transcribe and bedrock-runtime.
     fargate-vcpu-quota                the Fargate On-Demand vCPU quota and its default.
@@ -148,7 +149,7 @@ def _error_message(exc: ClientError) -> str:
 
 
 def build_probe_role_policy(aux_bucket: str, kms_key_arn: str, partition: str, region: str, account: str) -> dict:
-    """Exactly the job role's Transcribe + aux-bucket statements (spec D7, section 3.4), for a probe role."""
+    """Exactly the job role's Transcribe + aux-bucket statements, for a probe role."""
     conditions = {"StringEquals": {"transcribe:OutputBucketName": aux_bucket}}
     if kms_key_arn:
         conditions["StringEquals"]["transcribe:OutputEncryptionKMSKeyId"] = kms_key_arn
@@ -227,7 +228,7 @@ def _delete_prefix(s3, bucket: str, prefix: str) -> int:
 
 
 @probe("transcribe-conditioned-statement",
-       "the caller-identity chain and the D7 condition keys: key ARN match, denial without the key, denial on a foreign bucket")
+       "the caller-identity chain and the Transcribe condition keys: key ARN match, denial without the key, denial on a foreign bucket")
 def transcribe_conditioned_statement(ctx: ProbeContext) -> None:
     args = ctx.args
     if not args.aux_bucket:
@@ -352,7 +353,7 @@ def silent_flac_transcription(ctx: ProbeContext) -> None:
     ctx.observe("aux_objects_deleted", _delete_prefix(s3, args.aux_bucket, prefix))
 
 
-@probe("language-codes", "each LANGUAGE_CODE value against the Transcribe SDK enum (offline); the batch-table check is WP00 Task 3")
+@probe("language-codes", "each LANGUAGE_CODE value against the Transcribe SDK enum (offline); the shipped config_schema.json enum is the batch-table check")
 def language_codes(ctx: ProbeContext) -> None:
     for code, present in language_codes_in_service_model(LANGUAGE_CODES, ctx.region).items():
         ctx.observe(f"sdk_enum.{code}", present)
@@ -386,7 +387,7 @@ def vpc_endpoint_services(ctx: ProbeContext) -> None:
         ctx.observe(name, found.get(name, "absent"))
 
 
-@probe("fargate-vcpu-quota", "the Fargate On-Demand vCPU quota that serialises concurrent runs (spec D2)")
+@probe("fargate-vcpu-quota", "the Fargate On-Demand vCPU quota that serialises concurrent runs")
 def fargate_vcpu_quota(ctx: ProbeContext) -> None:
     quotas = ctx.client("service-quotas")
     for page in quotas.get_paginator("list_service_quotas").paginate(ServiceCode="fargate"):
@@ -538,7 +539,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--list-probes", action="store_true", help="print the probes and exit")
     parser.add_argument("--aux-bucket", help="the deployment's auxiliary bucket name")
     parser.add_argument("--kms-key-arn", default="", help="the deployment's CMK ARN when useKmsCmkEncryption is on")
-    parser.add_argument("--role-arn", help="an existing role holding exactly the D7 statement")
+    parser.add_argument("--role-arn", help="an existing role holding exactly the job role's Transcribe statement")
     parser.add_argument("--create-role", action="store_true", help="create (and afterwards delete) the probe role")
     parser.add_argument("--keep-role", action="store_true", help="leave a created probe role in place")
     parser.add_argument("--flac", "--fixture-flac", dest="flac", default=DEFAULT_FLAC,

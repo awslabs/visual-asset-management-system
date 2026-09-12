@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Stage 13: every deliverable rendered from the merged/finalized data (no model calls, no AWS calls).
-Every JSON document is validated against WP00's schema of it before it is written."""
+Every JSON document is validated against its shipped schema before it is written."""
 
 import csv
 import json
@@ -304,7 +304,7 @@ def _lab_section_body(number, lab):
 
 
 def write_lab_summary_md(path, lab):
-    """Sections 1.1-1.9 with WP00's titles; 1.6 carries the computed totals table."""
+    """Sections 1.1-1.9 with the titles lab_summary_schema.json fixes; 1.6 carries the computed totals table."""
     lines = [f"# Lab summary — {lab.get('product_name', '')}", ""]
     if lab.get("contributors"):
         lines += [f"Contributors: {lab['contributors']}", ""]
@@ -315,7 +315,7 @@ def write_lab_summary_md(path, lab):
 
 
 def write_json(path, obj, schema_name=None):
-    """Write `obj`; when `schema_name` (a WP00 schema stem) is given, validate against it first."""
+    """Write `obj`; when `schema_name` (a shipped schema stem) is given, validate against it first."""
     if schema_name:
         jsonschema.validate(obj, load_schema(schema_name))
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
@@ -330,7 +330,7 @@ def write_analysis_report(path, report):
 def asset_path(definition, filename):
     """The asset-relative path a file lands at after the platform inserts the run leaf, with the leading
     slash asset paths carry (`/sop-bom/<executionId>/<filename>`, like inputFiles[].relativePath): the
-    vendored helper drops a leading slash, so it is restored here — the form WP00's frames `path`,
+    vendored helper drops a leading slash, so it is restored here — the form the frames `path`,
     sop `frame_ref` and summary `paths` patterns require."""
     extension = definition["outputTarget"]["fileBaseExecutionPathExtension"]
     return "/" + apply_output_path_extension(OUTPUT_FOLDER + filename, extension)
