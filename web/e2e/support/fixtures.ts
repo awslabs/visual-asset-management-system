@@ -184,6 +184,27 @@ export async function openAssetFile(
     assetId: string,
     filename: string
 ): Promise<void> {
+    await openFileManager(page, databaseId, assetId);
+    await selectTreePath(page, filename);
+
+    const view = page.getByRole("button", { name: /view file/i }).first();
+    await expect(view, "View File is absent — is the asset distributable?").toBeVisible({
+        timeout: 30_000,
+    });
+    await clickWhenActionable(view, "the View File button");
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+}
+
+/**
+ * Land on an asset's File Manager tab with its tree rendered. The first half of {@link openAssetFile};
+ * on its own for specs that select files in the tree (multi-select, the detail panel's viewer icons)
+ * rather than opening one in the File Visualizer.
+ */
+export async function openFileManager(
+    page: Page,
+    databaseId: string,
+    assetId: string
+): Promise<void> {
     await page.goto(`/#/databases/${databaseId}/assets/${assetId}`, {
         waitUntil: "domcontentloaded",
     });
@@ -194,9 +215,9 @@ export async function openAssetFile(
     } catch (err) {
         if (await page.getByText(/Something went wrong on this page/i).count()) {
             throw new Error(
-                `the asset detail page hit its error boundary while opening ${filename}. The shell ` +
-                    `survived, but a component threw during render — React error boundaries do not ` +
-                    `surface as 'pageerror', so check the console transcript and network log.`
+                `the asset detail page hit its error boundary for ${databaseId}/${assetId}. The ` +
+                    `shell survived, but a component threw during render — React error boundaries ` +
+                    `do not surface as 'pageerror', so check the console transcript and network log.`
             );
         }
         throw err;
@@ -216,28 +237,70 @@ export async function openAssetFile(
             timeout: 60_000,
         })
         .toBeGreaterThan(0);
+}
 
-    // A file inside a folder is not visible until its folder is expanded, so walk the path segments and
-    // click each one. Passing "tileset/tileset.json" as a single label matches nothing.
+/**
+ * Select a file in the File Manager tree by its asset-relative path, expanding folders on the way.
+ * A file inside a folder is not visible until its folder is expanded, so walk the path segments and
+ * click each one; passing "tileset/tileset.json" as a single label matches nothing. Pass
+ * `modifiers: ["Control"]` to ADD the file to the current selection (multi-select).
+ */
+export async function selectTreePath(
+    page: Page,
+    filename: string,
+    options: { modifiers?: Array<"Control" | "Shift"> } = {}
+): Promise<void> {
     const segments = filename.split("/").filter(Boolean);
     for (const segment of segments) {
         const node = treeNode(page, segment);
-        await expect(node, `${segment} is not listed on ${databaseId}/${assetId}`).toBeVisible({
+        await expect(node, `${segment} is not listed in the file tree`).toBeVisible({
             timeout: 60_000,
         });
-        await clickWhenActionable(node, `tree node "${segment}"`);
-        if (segment !== segments[segments.length - 1]) {
+        const isLeaf = segment === segments[segments.length - 1];
+        if (isLeaf && options.modifiers?.length) {
+            await node.scrollIntoViewIfNeeded().catch(() => undefined);
+            await node.click({ modifiers: options.modifiers, timeout: 8_000 });
+        } else {
+            await clickWhenActionable(node, `tree node "${segment}"`);
+        }
+        if (!isLeaf) {
             // Give the tree a moment to render the newly revealed children.
             await page.waitForTimeout(1200);
         }
     }
+}
 
-    const view = page.getByRole("button", { name: /view file/i }).first();
-    await expect(view, "View File is absent — is the asset distributable?").toBeVisible({
-        timeout: 30_000,
-    });
-    await clickWhenActionable(view, "the View File button");
-    await page.waitForLoadState("networkidle").catch(() => undefined);
+/**
+ * The seed fixture the compare-mode specs read, or null when none is configured.
+ *
+ * `E2E_COMPARE_SEED` names the JSON that `tools/VamsCLI/examples/seed_compare_smoke.py` writes, so a
+ * tracked spec never carries a seed id: the ids live in a generated, git-ignored file, and a spec skips
+ * with a reason when the variable is unset or the file is gone.
+ */
+export interface CompareSeed {
+    databases: string[];
+    assets: {
+        a: { databaseId: string; assetId: string; files: string[] };
+        b: { databaseId: string; assetId: string; files: string[] };
+    };
+    textFile: string;
+    jsonFile: string;
+    markdownFile: string;
+    binaryFile: string;
+    versionedFile: string;
+    versionedFileMinVersions: number;
+}
+
+export function compareSeed(): CompareSeed | null {
+    const path = process.env.E2E_COMPARE_SEED;
+    if (!path) return null;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require("fs") as typeof import("fs");
+        return JSON.parse(fs.readFileSync(path, "utf8")) as CompareSeed;
+    } catch {
+        return null;
+    }
 }
 
 /**

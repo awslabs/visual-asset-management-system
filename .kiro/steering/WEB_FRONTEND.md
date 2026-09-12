@@ -900,6 +900,60 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+| `compareMode`                | object?           | Compare-mode opt-in (see 8.5)                        |
+
+### 8.5 Compare Mode (cross-asset / multi-version)
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` accepts
+`mode: "compare"`, which surfaces only viewers declaring `compareMode.enabled` whose
+`[minFiles, maxFiles]` window and shape flags admit the selection. The per-viewer admission predicates
+for both paths are pure and unit-tested in `src/visualizerPlugin/core/viewerSelection.ts`
+(`admitsVisualizeSelection`, `admitsCompareSelection`); the classification is pure and
+unit-tested in `src/visualizerPlugin/core/compareShape.ts` (`deriveCompareContext(files)` →
+`{ fileCount, shape, crossAsset }`); the registry re-exports both. **File identity is database + asset +
+key, never the key alone** — the same key under two assets is `"different-files"` + `crossAsset: true`.
+
+`compareMode` fields: `enabled`, `compareOnly?`, `minFiles`, `maxFiles`,
+`allowSameFileDifferentVersions`, `allowDifferentFiles`, and `allowCrossAsset?` (default: not allowed).
+
+**Compare-only viewers** (`compareMode.compareOnly: true`, e.g. `text-diff-viewer`) render nothing but
+`compareFiles`, so the visualize path never offers them — one file or many, regardless of
+`supportsMultiFile` or extension match — because visualize never passes `compareFiles`. Keep such a
+viewer's `supportsMultiFile: false` (that flag is the visualize `multiFileKeys` capability; compare
+file count is `minFiles`/`maxFiles`). Without `compareOnly`, compare capability is orthogonal to
+visualize.
+
+Contract for `compareFiles` entries (`ViewerPluginProps.compareFiles`, index 0 = left/base):
+
+-   Each entry is a resolved `{ databaseId, assetId, key, versionId? }`. `DynamicViewer` fills a missing
+    per-entry db/asset from its **top-level** props (never from `files[0]`) before classifying and before
+    handing the list to the viewer.
+-   Missing `versionId` = **latest** (search selections arrive this way via `searchRowToFileInfo`).
+-   The viewer fetches every entry under **its own** db/asset via `downloadAsset` — each asset is
+    Casbin-authorized independently — and renders a per-entry 401/403/410/404 as **that entry's** state
+    while the other entry still renders. `downloadAsset` returns `[false, message, status]` on failure.
+-   A viewer opting into `allowCrossAsset` offers a per-entry version picker (`fetchFileVersions`, one
+    list per db+asset+key) and re-fetches only the entry whose version changed.
+
+Reference implementation: `viewers/TextDiffViewerPlugin/TextDiffViewerComponent.tsx` (per-side
+state, per-side error panel, per-side `Select` version picker; diff library dynamically imported;
+compact controls for layout, Line/Word/Character granularity, line numbers, and collapse-unchanged
+with context lines; single-line ellipsis-truncated side labels and library titles).
+Surfaces: search results "Compare Selected" (rows may span assets), the file manager's "Compare
+Selected Files" icon (`FileDetailsPanel.tsx`), and the version-compare actions in
+`AssetVersionComparison.tsx` / `FileVersionsList.tsx`, all hosted by `FileViewerModal`.
+
+**Mode availability — one rule for every entry point.** A viewer is EITHER a compare-differ
+(`compareMode.compareOnly`) OR a regular viewer; never a hybrid (guarded over the shipped
+`viewerConfig.json` by `viewerSelection.test.ts`). A surface offers **Visualize** only when
+`hasVisualizeViewer` / `areFilenamesViewableTogether` says a non-compare viewer admits the selection,
+and **Compare** only when `hasCompareViewer` / `areFilesComparableTogether` says a compare viewer admits
+its file count, shape and types (`isExtensionComparableAsVersions(ext)` for a per-row version Compare).
+`FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle; one → that mode, no
+toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters compare-only
+viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is handed. Never
+gate a Visualize/Compare control with a hand-written extension list; use these predicates behind
+`useViewerRegistryReady()`.
 
 ---
 

@@ -32,6 +32,7 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
 | `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
+| `text-diff-viewer`                 | Text Diff Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc. (same list as `text-viewer`)                                                    | enabled (compare-only: 2 files, cross-asset)        |
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
@@ -44,6 +45,128 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter. The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+
+---
+
+## Compare Mode
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` takes a
+`mode` of `"visualize"` (default, unchanged behavior) or `"compare"`. In compare mode the registry
+surfaces **only** viewers that declare a `compareMode` block with `enabled: true`, whose
+`[minFiles, maxFiles]` window admits the selected file count, and whose shape flags admit the
+selection: N versions of one file requires `allowSameFileDifferentVersions`, N distinct files
+requires `allowDifferentFiles`, and entries spanning assets require `allowCrossAsset`.
+
+The per-viewer admission predicates for both paths live in `core/viewerSelection.ts` (pure,
+unit-tested; the registry re-exports them): `admitsVisualizeSelection(config, exts, isMultiFile)` and
+`admitsCompareSelection(config, exts, compareContext)`. The classification lives in
+`core/compareShape.ts` (pure, unit-tested; the registry re-exports it):
+`deriveCompareContext(files)` returns `{ fileCount, shape, crossAsset }`. **Identity is database +
+asset + key, never the key alone** — `config.json` under assetA and `config.json` under assetB are two
+different files (`shape: "different-files"`, `crossAsset: true`), not two versions of one file.
+
+**Compare-only viewers.** A viewer that renders nothing but `compareFiles` (the Text Diff Viewer)
+declares `compareMode.compareOnly: true`. The visualize path then never offers it — for one file or
+many, whatever `supportsMultiFile` and the extension match say — because visualize never passes
+`compareFiles` and the viewer would fail at once with "needs exactly two files". Keep such a viewer's
+`supportsMultiFile: false`: that flag is the **visualize** multi-file capability (`multiFileKeys`);
+the compare file count is `compareMode.minFiles`/`maxFiles`. Without `compareOnly`, compare capability
+is orthogonal — a viewer may visualize single files and also compare two.
+
+`DynamicViewer` renders compare mode when passed `mode="compare"`; it forwards the ordered files to
+the viewer as `compareFiles` (index 0 = left/base) and sets `compareMode={true}`. Compare-capable
+viewers read `compareFiles` instead of the single-file props.
+
+### Mode availability (what a surface may offer)
+
+**The design rule: a viewer is EITHER a compare-differ (`compareMode.compareOnly: true`) OR a regular
+viewer (single-file, or multi-file via `supportsMultiFile`) — never a hybrid.** The shipped config is
+guarded by `core/viewerSelection.test.ts` ("shipped viewerConfig.json compare contract"): every
+compare-capable viewer is compare-only, and no compare-only viewer is admitted on the visualize path
+for any file count.
+
+Every entry point decides what to offer with the SAME predicates, never with its own extension list:
+
+| Question                                                 | Pure predicate (`core/viewerSelection.ts`)              | Registry-facing lookup (`core/viewableExtensions.ts`)                |
+| -------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
+| Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`        | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
+| Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`       | `areFilesComparableTogether(files)` (derives count + shape)          |
+| Can a differ diff two versions of ONE file of this type? | —                                                       | `isExtensionComparableAsVersions(ext)`                               |
+| Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)` | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
+
+Rules the surfaces follow (and the Playwright spec `e2e/seeded.compare.spec.ts` proves):
+
+-   **`ViewerSelector`** filters its list through `listableViewers(viewers, mode)`: a compare-only
+    viewer is never an option in the Visualize dropdown, whatever list a caller hands it.
+-   **`FileViewerModal`** asks `availableModesForFiles(files)` once the registry is ready. Both modes
+    admitted → the Visualize/Compare toggle; exactly one → that mode is rendered and the toggle is
+    hidden (a requested `initialMode` no viewer admits is replaced); neither → a "No viewer for this
+    selection" empty state (`data-testid="file-viewer-no-viewer"`) instead of mounting `DynamicViewer`.
+-   **Search "View Selected" / "Compare Selected"** (`SearchPageListView`) and the file manager's
+    **"Visualize Selected Files" / "Compare Selected Files"** icons (`FileDetailsPanel`) are gated
+    independently — View by the visualize lookup, Compare by the compare lookup with the selection's
+    real count and shape (two `.txt` rows: Compare only; two `.glb` rows: View only; `.txt` + `.png`:
+    neither).
+-   **Version lists** (`FileVersionsList`, `AssetVersionComparison`) render the per-row **Compare**
+    only when `isExtensionComparableAsVersions(ext)` holds; it opens the differ with the row's version
+    on the left and latest on the right. A `.png` row keeps View/Download but gets no Compare.
+
+All lookups return false until `PluginRegistry.initialize()` has run — gate them behind
+`useViewerRegistryReady()` so the control appears once the registry is ready rather than never.
+
+### Text Diff Viewer controls
+
+`TextDiffViewerPlugin/TextDiffViewerComponent.tsx` exposes the `react-diff-viewer-continued` modes as
+compact controls (`data-testid="text-diff-controls"`): layout (Side-by-side / Inline → `splitView`),
+granularity (Line / Word / Character → `compareMethod` `DiffMethod.LINES` / `WORDS` / `CHARS`), a
+**Line numbers** toggle (`hideLineNumbers`), a **Collapse unchanged** toggle (`showDiffOnly`) with a
+context-lines picker (`extraLinesSurroundingDiff`, `data-testid="text-diff-context-lines"`, shown only
+while collapsing). The per-side labels (`text-diff-side-label-{left,right}`) and the titles handed to
+the library (`text-diff-title-{left,right}`) are single-line, ellipsis-truncated elements with the full
+label as a tooltip — the library's title block is a fixed 2.4em with a wrapping `<pre>`, so a long
+"name @ version · asset" label was otherwise cut off. In inline layout only the left title block
+renders, so it carries both names ("left → right").
+
+### Cross-asset / multi-version contract
+
+Each `compareFiles` entry is a fully resolved `{ databaseId, assetId, key, versionId? }`:
+
+-   `DynamicViewer` fills a missing per-entry `databaseId`/`assetId` from its **top-level** props
+    before classifying and before handing the list to the viewer. The visualize-path
+    `effectiveAssetId` (which falls back to `files[0]`) is never used in compare mode — a second entry
+    must not be re-homed under the first entry's asset.
+-   A missing `versionId` means **latest**. Search-result selections arrive this way
+    (`searchRowToFileInfo`); the version-list surfaces pin the left side to an S3 `versionId`.
+-   A viewer fetches every entry under **its own** database/asset via `downloadAsset` — never a shared
+    pair — and each asset is authorized independently (Casbin, per asset). A per-entry 401/403 (denied),
+    410 (archived) or 404 must be rendered as **that entry's** state while the other entries still
+    render; do not collapse the comparison into one error. `downloadAsset` returns
+    `[false, message, status]` on failure so the status can be classified.
+-   A viewer that opts into `allowCrossAsset` should offer a per-entry **version picker**
+    (`fetchFileVersions` from `AssetVersionService`, one list per db+asset+key) and re-fetch only the
+    entry whose version changed.
+
+Compare mode is reached from four surfaces, all hosted by `FileViewerModal` (which offers a
+Visualize/Compare toggle only when both modes are admitted — see Mode availability): the search
+results multi-select "Compare Selected" action (rows may span assets — each row carries its own
+db/asset), the asset file manager's "Compare Selected Files" icon (`FileDetailsPanel`), and the
+version-comparison "Compare" actions in `AssetVersionComparison.tsx` and `FileVersionsList.tsx`
+(diffing versions of the same file). The first
+compare viewer is `text-diff-viewer` (`TextDiffViewerPlugin`), which diffs two text files via
+`react-diff-viewer-continued` (dynamically imported by its `dependencies.ts` so it stays out of the
+base bundle), declares `allowCrossAsset`, keeps per-side state (content, error, version list), and
+renders a readable side beside a denied/archived one.
+
+### `compareMode` config fields
+
+| Field                            | Type     | Description                                                                             |
+| -------------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `enabled`                        | boolean  | Offer this viewer in compare mode                                                       |
+| `compareOnly`                    | boolean? | Viewer renders only `compareFiles`; never offered on the visualize path (default: no)   |
+| `minFiles` / `maxFiles`          | number   | Inclusive file-count window                                                             |
+| `allowSameFileDifferentVersions` | boolean  | Admit N versions of one file (same db + asset + key)                                    |
+| `allowDifferentFiles`            | boolean  | Admit N distinct files                                                                  |
+| `allowCrossAsset`                | boolean? | Admit entries spanning assets/databases; viewer must handle per-entry 403 (default: no) |
 
 ---
 
@@ -143,6 +266,7 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+| `compareMode`                | object?           | Compare-mode opt-in (see Compare Mode above)         |
 
 ---
 

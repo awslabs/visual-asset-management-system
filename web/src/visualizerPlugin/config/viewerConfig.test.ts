@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 import viewerConfig from "./viewerConfig.json";
 import { OCCT_FORMATS } from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
+import { admitsCompareSelection, admitsVisualizeSelection } from "../core/viewerSelection";
 
 const viewers: any[] = (viewerConfig as any).viewers;
 const byId = (id: string) => {
@@ -46,6 +47,35 @@ describe("viewerConfig vs the loaders", () => {
         expect(columnar.supportedExtensions.sort()).toEqual([".csv", ".fcs"]);
         expect(columnar.supportedExtensions).not.toContain(".rds");
     });
+});
+
+describe("viewerConfig vs the selection paths", () => {
+    // The Text Diff Viewer renders only `compareFiles`, which the visualize path never passes.
+    // Offered there, it fails at once with "needs exactly two files"; it must be compare-only.
+    it("declares the text diff viewer compare-only", () => {
+        const textDiff = byId("text-diff-viewer");
+        expect(textDiff.compareMode.enabled).toBe(true);
+        expect(textDiff.compareMode.compareOnly).toBe(true);
+        // Compare file count is governed by minFiles/maxFiles, not the visualize multi-file flag.
+        expect(textDiff.supportsMultiFile).toBe(false);
+    });
+
+    const compareOnly = viewers.filter((viewer) => viewer.compareMode?.compareOnly);
+
+    it.each(compareOnly.map((viewer) => [viewer.id, viewer]))(
+        "%s is never a visualize option but is offered in compare mode",
+        (_id, config) => {
+            const [ext] = config.supportedExtensions;
+            expect(admitsVisualizeSelection(config, [ext], true)).toBe(false);
+            expect(admitsVisualizeSelection(config, [ext], false)).toBe(false);
+            expect(
+                admitsCompareSelection(config, [ext], {
+                    fileCount: config.compareMode.minFiles,
+                    shape: "different-files",
+                })
+            ).toBe(true);
+        }
+    );
 });
 
 describe("visualizerPlugin/CLAUDE.md catalog", () => {

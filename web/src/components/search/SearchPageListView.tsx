@@ -41,6 +41,7 @@ import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../visualizerPlugin/core/types";
+import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
 import { EYE_ICON_SVG } from "../../visualizerPlugin/components/EyeIconSvg";
 import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 import {
@@ -49,7 +50,10 @@ import {
     reconcileViewerSelection,
 } from "./utils/searchRowToFileInfo";
 import { isFileHitSource } from "./utils/recordType";
-import { areFilenamesViewableTogether } from "../../visualizerPlugin/core/viewableExtensions";
+import {
+    areFilenamesViewableTogether,
+    areFilesComparableTogether,
+} from "../../visualizerPlugin/core/viewableExtensions";
 
 let tagTypes: any;
 
@@ -650,14 +654,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     }>({});
     const [viewerFiles, setViewerFiles] = useState<FileInfo[]>([]);
     const [showViewerModal, setShowViewerModal] = useState(false);
+    // Which mode FileViewerModal opens in. "Compare Selected" opens directly on the compare surface;
+    // "View Selected" opens on visualize. The in-modal toggle lets the user flip either way after.
+    const [viewerInitialMode, setViewerInitialMode] = useState<ViewerMode>("visualize");
 
-    const openViewer = (files: FileInfo[]) => {
+    const openViewer = (files: FileInfo[], initialMode: ViewerMode = "visualize") => {
         const viewable = files.filter((f) => !!f.key);
         if (viewable.length === 0) {
             onShowToast?.("Nothing to preview", "No selected files can be visualized");
             return;
         }
         setViewerFiles(viewable);
+        setViewerInitialMode(initialMode);
         setShowViewerModal(true);
     };
 
@@ -729,10 +737,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     const viewerSelectionFilenames: string[] = (state.viewerSelection || []).map(
         (file: any) => file?.filename || file?.key || ""
     );
+    // "View Selected" asks the VISUALIZE path (never a compare-only viewer); "Compare Selected" asks
+    // the COMPARE path with the selection's real count and shape (cross-asset rows, N versions vs N
+    // distinct files). The two are independent: two .txt rows have a differ but no multi-file
+    // visualizer, two .glb rows the reverse.
     const selectionHasViewer =
         viewerSelectionFilenames.length > 0 &&
         viewerRegistryReady &&
         areFilenamesViewableTogether(viewerSelectionFilenames);
+    const selectionHasCompareViewer =
+        (state.viewerSelection?.length || 0) > 0 &&
+        viewerRegistryReady &&
+        areFilesComparableTogether(state.viewerSelection);
 
     // Determine if unarchive button should be shown (single archived asset selected)
     const showUnarchiveButton =
@@ -1288,6 +1304,30 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                                     {state.viewerSelection?.length || 0})
                                                 </Button>
                                             </span>
+                                            <span
+                                                title={
+                                                    !state.viewerSelection?.length
+                                                        ? undefined
+                                                        : selectionHasCompareViewer
+                                                        ? undefined
+                                                        : (state.viewerSelection?.length || 0) < 2
+                                                        ? "Select at least two files to compare."
+                                                        : "No compare viewer can diff this selection: the file types or the number of files are not supported by any compare viewer."
+                                                }
+                                            >
+                                                <Button
+                                                    disabled={
+                                                        !state.viewerSelection?.length ||
+                                                        !selectionHasCompareViewer
+                                                    }
+                                                    onClick={() =>
+                                                        openViewer(state.viewerSelection, "compare")
+                                                    }
+                                                >
+                                                    Compare Selected (
+                                                    {state.viewerSelection?.length || 0})
+                                                </Button>
+                                            </span>
                                             <Button
                                                 disabled={!state.viewerSelection?.length}
                                                 onClick={() => {
@@ -1399,9 +1439,11 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     files={viewerFiles}
                     databaseId={viewerFiles[0].databaseId || ""}
                     assetId={viewerFiles[0].assetId || ""}
+                    initialMode={viewerInitialMode}
                     onDismiss={() => {
                         setShowViewerModal(false);
                         setViewerFiles([]);
+                        setViewerInitialMode("visualize");
                     }}
                 />
             )}
