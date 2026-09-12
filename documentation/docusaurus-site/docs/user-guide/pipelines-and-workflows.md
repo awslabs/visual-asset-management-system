@@ -447,6 +447,7 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
 -   **Metadata Extraction** -- Extracts metadata from file headers and content.
 -   **GenAI Labeling** -- Uses generative AI to automatically generate labels and descriptions.
+-   **Video SOP/BOM Extraction** -- Transcribes narrated teardown videos and derives a step-by-step procedure, a bill of materials, and a lab summary; select one to four video files of one asset explicitly.
 -   **Gaussian Splatting** -- Generates 3D Gaussian splats from image and video media files.
 -   **Physical AI Inference and Fine-Tuning** -- GPU-accelerated pipelines for NVIDIA world foundation models, vision language models (VLMs), and vision-language-action models (VLAs) including inference, simulation training, and model fine-tuning.
 
