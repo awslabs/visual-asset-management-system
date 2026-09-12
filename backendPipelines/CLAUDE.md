@@ -491,6 +491,9 @@ holding:
 
 -   the pinned-revision checks over each `Dockerfile` (a `--build-arg …_COMMIT=main` still builds green)
 -   the `manifestHelper.py` byte-identity check across every vendored copy
+-   the `customLogging/logger.py` byte-identity check and the emitted-line token redaction checks
+    (`backendPipelines/tests/test_pipeline_logger_identity.py`, `test_pipeline_logger_formatter.py`) — a
+    handler can always be edited back to an f-string event log or a drifting logger copy
 -   the `_run_streaming` no-drift comparison across the four deployable NVIDIA containers
 -   `test_container_file_inventory.py`'s `from .utils` scan — the package is `vams_utils`, so that import
     fails at container **runtime** on a GPU Batch job, invisible to the image build and to CDK synth
@@ -508,6 +511,16 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     - `customLogging/logger.py` (copy from any existing pipeline, e.g., `backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py`)
 
     Without these files, Lambda will fail at import time with `No module named 'customLogging'`. The Lambda layer provides a fallback, but the local `customLogging/` package is required in each pipeline's code asset.
+
+    **All `customLogging/logger.py` copies must stay byte-identical** — verify with
+    `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`,
+    which must print exactly one hash. The logger is where task tokens are redacted from every log line,
+    so a copy that drifts is a pipeline whose CloudWatch stream carries a bearer credential. Edit one
+    copy, then propagate to the rest in the same change, and add the new pipeline's path to the
+    `LOGGER_COPIES` tuple in both `backendPipelines/tests/test_pipeline_logger_identity.py` (which pins
+    the single digest and fails on an unlisted copy) and `test_pipeline_logger_formatter.py`. Log an
+    event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never
+    log a task token on its own.
 
     A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
     byte-identical** — verify with
