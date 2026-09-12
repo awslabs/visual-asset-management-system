@@ -13,7 +13,21 @@
             "type": "enum",
             "required": false,
             "default": "en-US",
-            "enumValues": ["auto", "en-US", "en-GB", "en-AU", "de-DE", "fr-FR", "es-US", "es-ES", "it-IT", "pt-BR", "ja-JP", "ko-KR", "zh-CN"],
+            "enumValues": [
+                "auto",
+                "en-US",
+                "en-GB",
+                "en-AU",
+                "de-DE",
+                "fr-FR",
+                "es-US",
+                "es-ES",
+                "it-IT",
+                "pt-BR",
+                "ja-JP",
+                "ko-KR",
+                "zh-CN"
+            ],
             "label": "Transcription language",
             "description": "The language Amazon Transcribe expects in the narration. auto asks Amazon Transcribe to identify it; set an explicit language when the narration is sparse, since language identification needs enough speech to sample."
         },
