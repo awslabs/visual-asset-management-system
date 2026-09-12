@@ -31,7 +31,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Added:**
 
--   **Video SOP/BOM Extraction pipeline** — A new pipeline transcribes one to four narrated teardown videos (MP4, MOV, M4V, WebM, MKV) selected from one asset with Amazon Transcribe and derives a step-by-step SOP, a bill of materials in the 66-column `LCA-BOM-INPUT` layout, a lab summary, and key frames for visual verification with Amazon Bedrock, running as an AWS Batch Fargate container in the isolated subnets. Input caps (files per run, size per video, total size, total duration) are enforced inside the pipeline and a refused run reports the active limit as a readable execution error; a video set with no detectable speech is rejected rather than producing empty deliverables. Outputs land under `sop-bom/<executionId>/` on the asset with `sopBom_*` asset metadata. Enable via `app.pipelines.useGenAiVideoSopBom`. See [Video SOP/BOM Extraction pipeline](../pipelines/video-sop-bom.md).
+-   **Video SOP/BOM Extraction pipeline** — A new pipeline transcribes one to four narrated teardown videos from one asset with Amazon Transcribe and derives a step-by-step SOP, a bill of materials in the 66-column `LCA-BOM-INPUT` layout, a lab summary, and verification key frames with Amazon Bedrock, running as an AWS Batch Fargate container. Two templates cover full and transcript-only runs; file-count and total-duration caps are deployment configuration, a refused run reports the active limit as a readable execution error, and a video set with no detectable speech is rejected. Enable via `app.pipelines.useGenAiVideoSopBom` (commercial and AWS GovCloud (US) partitions). See [Video SOP/BOM Extraction pipeline](../pipelines/video-sop-bom.md).
 
 ### 2.6.0
 
