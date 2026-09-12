@@ -177,10 +177,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
-        // The containers' stdout/stderr, one group per job. Named vended groups under
-        // /aws/vendedlogs/Pipelines/, which the execution-service Lambdas hold read grants for, so the
-        // execution log viewer can show the container streams; KMS-encrypted and retained for a year,
-        // unlike Batch's default group.
+        // The containers' stdout/stderr, one group per job. Named vended groups under the
+        // /aws/vendedlogs/Pipelines/ prefix the execution-service role is granted to read;
+        // KMS-encrypted and retained for a year, unlike Batch's default group.
         const pdalLogGroup = new logs.LogGroup(this, "PcPotreeViewerPdalBatchJobLogGroup", {
             logGroupName:
                 "/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL" +
