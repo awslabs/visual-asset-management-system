@@ -76,7 +76,7 @@ def abort_external_workflow(error, task_token):
 
 
 def lambda_handler(event, context):
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     try:
         return build_job_config_payload(event)

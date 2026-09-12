@@ -27,7 +27,7 @@ def lambda_handler(event, context):
     Do any final closeouts of the pipeline
     """
 
-    logger.info(f"Event Input: {event}")
+    logger.info("Event Input", event=event)
     logger.info(f"Context Input: {context}")
 
     externalSfnTaskToken = event.get('externalSfnTaskToken', "")
@@ -39,8 +39,6 @@ def lambda_handler(event, context):
         logger.error(event["error"])
 
     if (externalSfnTaskToken != None and externalSfnTaskToken != ""):
-        logger.info(f"External Sfn Task Token: {event['externalSfnTaskToken']}")
-
         if("error" not in event):
             sfn.send_task_success(
                 taskToken=event['externalSfnTaskToken'],

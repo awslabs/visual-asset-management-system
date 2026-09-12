@@ -87,7 +87,7 @@ def abort_external_workflow(error, task_token):
 
 
 def lambda_handler(event, context):
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     external_task_token = None
 

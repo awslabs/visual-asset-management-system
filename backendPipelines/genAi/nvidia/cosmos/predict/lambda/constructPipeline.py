@@ -15,7 +15,7 @@ def lambda_handler(event, context):
     Supports both text2world and video2world model types.
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     model_type = event.get("modelType", "text2world")

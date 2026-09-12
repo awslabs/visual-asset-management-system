@@ -8,12 +8,15 @@ is only a fallback and nothing shared is importable from a per-pipeline asset. A
 bearer credential: whoever holds it can complete or fail the parent workflow's task. It travels
 through these handlers under several spellings -- the workflow body's `TaskToken`, the nested-invoke
 payload's `sfnExternalTaskToken`, the state machine input's `externalSfnTaskToken`, and the Batch
-container environment's `TASK_TOKEN` -- and every handler logs the event it received, so the masker
-has to know every spelling and has to walk lists, where a `containerOverrides.environment` entry
-carries the token as `{"name": ..., "value": ...}` pairs inside a list.
+container environment's `TASK_TOKEN` -- and every handler logs the event it received. The masker
+therefore redacts by key, walks lists, treats a Batch `{"name": <spelling>, "value": ...}`
+environment pair as a keyed value, and scrubs the token out of plain strings (a rendered dict, or
+the token on its own) so a message that already carries the event as text is covered too.
 
 Byte identity across the copies is asserted first, so a fix applied to one pipeline's logger and not
-propagated fails here rather than surfacing as a token in one pipeline's CloudWatch stream.
+propagated fails here rather than surfacing as a token in one pipeline's CloudWatch stream. The
+formatter path -- what Powertools actually serializes -- is exercised in
+`test_pipeline_logger_formatter.py`.
 """
 
 import hashlib
@@ -52,6 +55,8 @@ TOKEN_SPELLINGS = (
     "TASK_TOKEN",
 )
 
+# Deliberately shorter than any real task token, so these assertions hold through the key-based
+# paths alone; the shape-based scrub is exercised in the formatter test with a full-length token.
 _TOKEN = "AQCEAAAAKgAAAAMAAAAAAAAAAexampleTaskTokenValue"
 REDACTED = "<redacted>"
 
@@ -107,17 +112,49 @@ class TestRedaction:
         assert _TOKEN not in json.dumps(out)
 
     def test_every_token_spelling_is_redacted_inside_a_list(self, rel_path):
-        # The shape a Batch containerOverrides.environment list takes, plus a list of nested dicts.
+        # A list of dicts keyed by the spelling, plus a list nested in a list.
         logger = _load(rel_path)
         event = {
-            "environment": [{spelling: _TOKEN} for spelling in TOKEN_SPELLINGS],
+            "entries": [{spelling: _TOKEN} for spelling in TOKEN_SPELLINGS],
             "steps": [[{"TaskToken": _TOKEN}]],
         }
         out = logger.mask_sensitive_data(event)
-        for entry, spelling in zip(out["environment"], TOKEN_SPELLINGS):
+        for entry, spelling in zip(out["entries"], TOKEN_SPELLINGS):
             assert entry[spelling] == REDACTED, f"{spelling} in a list reached the log"
         assert out["steps"][0][0]["TaskToken"] == REDACTED
         assert _TOKEN not in json.dumps(out)
+
+    def test_batch_environment_name_value_pair_is_redacted(self, rel_path):
+        # The shape a Batch containerOverrides.environment list takes: the spelling is the VALUE of
+        # a "name" entry and the token is the sibling "value" entry.
+        logger = _load(rel_path)
+        event = {
+            "containerOverrides": {
+                "environment": [{"name": spelling, "value": _TOKEN} for spelling in TOKEN_SPELLINGS]
+                + [{"name": "ASSET_ID", "value": "asset-1"}]
+            }
+        }
+        out = logger.mask_sensitive_data(event)
+        environment = out["containerOverrides"]["environment"]
+        for entry, spelling in zip(environment, TOKEN_SPELLINGS):
+            assert entry == {"name": spelling, "value": REDACTED}, f"{spelling} env pair reached the log"
+        assert environment[-1] == {"name": "ASSET_ID", "value": "asset-1"}
+        assert _TOKEN not in json.dumps(out)
+
+    def test_token_inside_a_rendered_string_is_redacted(self, rel_path):
+        # The event rendered into text by an f-string, in Python repr and in JSON form.
+        logger = _load(rel_path)
+        event = {
+            "TaskToken": _TOKEN,
+            "containerOverrides": {"environment": [{"name": "TASK_TOKEN", "value": _TOKEN}]},
+            "assetId": "asset-1",
+        }
+        for rendered in (f"Event: {event}", "Event: " + json.dumps(event)):
+            out = logger.mask_sensitive_data(rendered)
+            assert _TOKEN not in out
+            assert REDACTED in out
+            assert "asset-1" in out
+            assert "TaskToken" in out and "TASK_TOKEN" in out
 
     def test_nested_dict_token_is_redacted(self, rel_path):
         logger = _load(rel_path)

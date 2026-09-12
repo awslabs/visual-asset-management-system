@@ -13,7 +13,7 @@ def lambda_handler(event, context):
     Builds pipeline input definition to run the Batch application
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     definition = construct_preview_3d_thumbnail_definition(event)

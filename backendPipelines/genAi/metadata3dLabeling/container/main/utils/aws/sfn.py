@@ -23,7 +23,7 @@ client = boto3.client(
 
 
 def send_task_success(output: PipelineExecutionParams):
-    logger.info(f"Sending Task Success. Token: {task_token}")
+    logger.info("Sending Task Success")
     try:
         return client.send_task_success(
             taskToken=task_token,
@@ -35,7 +35,7 @@ def send_task_success(output: PipelineExecutionParams):
 
 
 def send_task_failure(errorMessage: str = ''):
-    logger.error(f"Sending Task Failure. Token: {task_token}")
+    logger.error("Sending Task Failure")
     try:
         return client.send_task_failure(
             taskToken=task_token,
@@ -49,7 +49,7 @@ def send_task_failure(errorMessage: str = ''):
 def send_external_task_heartbeat(externalSfnTaskToken: str):
     if externalSfnTaskToken:
         try:
-            logger.info(f"Sending External Task Heartbeat. Token: {externalSfnTaskToken}")
+            logger.info("Sending External Task Heartbeat")
             return client.send_task_heartbeat(
                 taskToken=externalSfnTaskToken,
             )
