@@ -441,6 +441,8 @@ This pipeline is built on NVIDIA Cosmos foundation models, which are licensed un
 
 For commercial use, review the NVIDIA Open Model License terms to ensure compliance.
 
+The container image installs the Ubuntu `ffmpeg` package at image build time as the video codec dependency of the framework. Ubuntu builds FFmpeg with GPL components, so the binary is licensed under GPL-2.0-or-later; the package is not version-pinned, and `/usr/share/doc/ffmpeg/copyright` in the image records the build's license text. The GPL terms apply only when this optional pipeline is enabled. See [Notices](../additional/notices.md#nvidia-license-notices).
+
 ## Related pages
 
 -   [NVIDIA Cosmos Predict](nvidia-cosmos-predict.md)

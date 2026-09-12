@@ -211,6 +211,27 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
+        // The container's stdout/stderr. A named vended group under the /aws/vendedlogs/Pipelines/
+        // prefix the execution-service role is granted to read; KMS-encrypted and retained for a
+        // year, unlike Batch's default group.
+        const blenderRendererLogGroup = new logs.LogGroup(
+            this,
+            "Metadata3dLabelingBlenderRendererBatchJobLogGroup",
+            {
+                logGroupName:
+                    "/aws/vendedlogs/Pipelines/Metadata3dLabelingBlenderRenderer" +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "Metadata3dLabelingBlenderRendererBatchJobLogGroup",
+                        10
+                    ),
+                encryptionKey: props.storageResources.encryption.kmsKey,
+                retention: logs.RetentionDays.ONE_YEAR,
+                removalPolicy: cdk.RemovalPolicy.DESTROY,
+            }
+        );
+
         /**
          * AWS Batch Job Definition & Compute Env for Blender Image Renderer
          */
@@ -226,6 +247,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: blenderRendererLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
@@ -406,6 +428,24 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                 },
                 tracingEnabled: true,
             }
+        );
+
+        // Stopping the state machine cancels the .sync Batch task, which requires terminating the
+        // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource
+        // type; job ids are generated at submit time, so TerminateJob is scoped to this account's jobs.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs"],
+                resources: ["*"],
+            })
+        );
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:TerminateJob"],
+                resources: [`arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job/*`],
+            })
         );
 
         /**
@@ -604,11 +644,17 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "PipelineProcessingStateMachine uses default policy that contains wildcard",
+                    reason:
+                        "batch:DescribeJobs supports no resource-level permissions and Batch job ids are " +
+                        "generated at submit time, so cancelling the .sync job on StopExecution needs " +
+                        "DescribeJobs on * and TerminateJob on job/*; BatchSubmitJob grants SubmitJob on " +
+                        "job-definition/* and LambdaInvoke grants the functions' version qualifiers, and " +
+                        "the logging and X-Ray delivery actions have no resource type.",
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
                         `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },

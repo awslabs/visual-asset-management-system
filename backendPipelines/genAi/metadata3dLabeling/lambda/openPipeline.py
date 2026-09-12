@@ -89,7 +89,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for processing 
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     responses = []

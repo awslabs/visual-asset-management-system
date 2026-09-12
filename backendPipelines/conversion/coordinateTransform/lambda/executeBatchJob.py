@@ -70,7 +70,7 @@ def register_batch_job(orchestration_event_prefix, job_id):
 
 
 def lambda_handler(event, context):
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     job_name = event["jobName"]
     definition = event["definition"]

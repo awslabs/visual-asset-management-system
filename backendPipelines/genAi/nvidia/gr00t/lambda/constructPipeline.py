@@ -14,7 +14,7 @@ def lambda_handler(event, context):
     Builds pipeline input definition to run the Batch application for Gr00t Fine-Tuning.
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     input_s3_asset_path = event.get("inputS3AssetPath", "")

@@ -23,7 +23,7 @@ sfn = boto3.client("stepfunctions", config=retry_config)
 
 
 def lambda_handler(event, context):
-    logger.info(f"Handling error event: {event}")
+    logger.info("Handling error event", event=event)
 
     external_task_token = event.get("externalSfnTaskToken")
     job_name = event.get("jobName", "unknown")

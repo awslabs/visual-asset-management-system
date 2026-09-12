@@ -131,7 +131,7 @@ def run_setting_error(event, model_variant, task_mode):
 
 def abort_external_workflow(error, task_token):
     if task_token and task_token != "":
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -200,7 +200,7 @@ def lambda_handler(event, context):
     Starts the StepFunctions State Machine for a Cosmos 3 pipeline.
     Validates input based on task mode (input-file modes require a valid file).
     """
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     model_variant = event.get('modelVariant', 'nano')
     task_mode = event.get('taskMode', '')

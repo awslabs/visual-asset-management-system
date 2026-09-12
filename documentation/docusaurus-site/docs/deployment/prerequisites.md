@@ -130,7 +130,7 @@ If your organization requires Federal Information Processing Standards (FIPS) 14
 export AWS_USE_FIPS_ENDPOINT=true
 ```
 
-You must also set `app.useFips` to `true` in the VAMS configuration file. See the [Configuration Reference](configuration-reference.md) for details.
+The same variable turns on `app.useFips` at synthesis. Setting `app.useFips` to `true` in the VAMS configuration file as well keeps the deployment reproducible when the variable is absent. See the [Configuration Reference](configuration-reference.md) for what the flag changes.
 
 ## Network requirements
 

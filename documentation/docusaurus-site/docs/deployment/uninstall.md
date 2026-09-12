@@ -230,7 +230,7 @@ done
 
 ## Step 4: Delete Amazon CloudWatch log groups
 
-VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, REST API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
+VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, REST API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine and container groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
 
 The key named log groups are:
 
@@ -241,6 +241,7 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
 -   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
 -   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
+-   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}` and `PcPotreeViewerPotree{hash}` (conditional on the matching pipeline flag); the RapidPipeline and ModelOps groups are named for their container
 
 ```bash
 # List VAMS-related log groups
@@ -284,7 +285,7 @@ for LG in $(aws logs describe-log-groups \
     aws logs delete-log-group --log-group-name "${LG}"
 done
 
-# Delete container pipeline log groups (RapidPipeline, ModelOps), if present
+# Delete container pipeline log groups (Fargate jobs, RapidPipeline, ModelOps), if present
 for LG in $(aws logs describe-log-groups \
     --log-group-name-prefix "/aws/vendedlogs/Pipelines/" \
     --query 'logGroups[].logGroupName' --output text); do
