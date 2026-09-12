@@ -24,6 +24,7 @@ import * as Config from "../../config/config";
 import { BatchFargatePipelineConstruct } from "../../lib/nestedStacks/pipelines/constructs/batch-fargate-pipeline";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
+import { SynthResult, synthTemplate } from "../support/templateSynth";
 
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
@@ -129,5 +130,103 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
     test("without logGroup no LogConfiguration is rendered, so Batch keeps its default", () => {
         const jd = jobDefinitionNamed("DefaultedJob_");
         expect(jd.ContainerProperties.LogConfiguration).toBeUndefined();
+    });
+});
+
+/**
+ * Enable the five pipelines that build Fargate Batch jobs.
+ *
+ * Duplicated from `fargateBatchAttemptDuration.test.ts` rather than shared: each suite owns its own
+ * mutation and `mutateKey`, and a shared mutator would couple the synth caches together.
+ */
+function fargatePipelines(c: any) {
+    c.app.useGlobalVpc.enabled = true;
+    c.app.useGlobalVpc.addVpcEndpoints = true;
+    for (const flag of [
+        "useConversionCoordinateTransform",
+        "useGenAiMetadata3dLabeling",
+        "usePreview3dThumbnail",
+        "usePreviewPcPotreeViewer",
+        "useGenAiVideoSopBom",
+    ]) {
+        if (c.app.pipelines[flag]) {
+            c.app.pipelines[flag].enabled = true;
+            if (c.app.pipelines[flag].autoRegisterWithVAMS !== undefined) {
+                c.app.pipelines[flag].autoRegisterWithVAMS = false;
+            }
+        }
+    }
+}
+
+/** Fargate job definitions, identified by the platform capability Batch receives. */
+function fargateJobDefinitions(synth: SynthResult) {
+    return synth.ofType("AWS::Batch::JobDefinition").filter((jd) => {
+        const capabilities = ((jd.properties as any).PlatformCapabilities ?? []) as string[];
+        return capabilities.includes("FARGATE");
+    });
+}
+
+/** The value of one resource requirement (VCPU or MEMORY) as Batch receives it: a string. */
+function requirementOf(jd: any, type: string): string {
+    const requirements = (jd.properties.ContainerProperties?.ResourceRequirements ?? []) as any[];
+    return requirements.find((r) => r.Type === type)?.Value;
+}
+
+describe("Fargate job definition sizing across the five Fargate pipelines", () => {
+    let synth: SynthResult;
+
+    beforeAll(() => {
+        synth = synthTemplate("commercial", {
+            mutate: fargatePipelines,
+            mutateKey: "video-sop-bom-fargate-sizing",
+        });
+    });
+
+    test("[control] six Fargate job definitions are emitted", () => {
+        // Coordinate transform, metadata labeling, 3D thumbnail, PDAL and Potree from the point-cloud
+        // viewer, and the video SOP/BOM job. Exactly six, so "the other five" below is the whole rest.
+        expect(fargateJobDefinitions(synth)).toHaveLength(6);
+    });
+
+    test("exactly one job definition is the video SOP/BOM job, sized 4 vCPU / 16 GiB", () => {
+        const video = fargateJobDefinitions(synth).filter((jd) =>
+            String(jd.properties.JobDefinitionName).startsWith("VideoSopBomJob_")
+        );
+        expect(video).toHaveLength(1);
+        expect(requirementOf(video[0], "VCPU")).toBe("4");
+        expect(requirementOf(video[0], "MEMORY")).toBe("16384");
+    });
+
+    test("the video SOP/BOM job writes its container stream to the Pipelines log group", () => {
+        const [video] = fargateJobDefinitions(synth).filter((jd) =>
+            String(jd.properties.JobDefinitionName).startsWith("VideoSopBomJob_")
+        );
+        const logConfiguration = video.properties.ContainerProperties.LogConfiguration;
+        expect(logConfiguration.LogDriver).toBe("awslogs");
+        // The group is referenced by logical id from the same nested template; resolve it to its name.
+        const groupLogicalId = logConfiguration.Options["awslogs-group"].Ref;
+        const group = synth.resources.find(
+            (r) => r.stack === video.stack && r.logicalId === groupLogicalId
+        );
+        expect(group).toBeDefined();
+        expect(String(group!.properties.LogGroupName)).toMatch(
+            /^\/aws\/vendedlogs\/Pipelines\/VideoSopBom[0-9a-f]{10}$/
+        );
+    });
+
+    test("the other five keep 16 vCPU / 64 GiB and Batch's default logging", () => {
+        const others = fargateJobDefinitions(synth).filter(
+            (jd) => !String(jd.properties.JobDefinitionName).startsWith("VideoSopBomJob_")
+        );
+        expect(others).toHaveLength(5);
+        const resized = others
+            .filter(
+                (jd) =>
+                    requirementOf(jd, "VCPU") !== "16" ||
+                    requirementOf(jd, "MEMORY") !== "65536" ||
+                    jd.properties.ContainerProperties?.LogConfiguration !== undefined
+            )
+            .map((jd) => `${jd.stack}/${jd.logicalId}`);
+        expect(resized).toEqual([]);
     });
 });
