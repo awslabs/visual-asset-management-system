@@ -11,7 +11,7 @@ VAMS documentation is built with **Docusaurus** (React-based static site generat
 
 -   **Docusaurus config**: `documentation/docusaurus-site/docusaurus.config.ts`
 -   **Sidebar config**: `documentation/docusaurus-site/sidebars.ts`
--   **Source pages**: `documentation/docusaurus-site/docs/` (132 Markdown and MDX pages)
+-   **Source pages**: `documentation/docusaurus-site/docs/` (136 Markdown and MDX pages — recompute with `find documentation/docusaurus-site/docs -name "*.md" -o -name "*.mdx" | wc -l`)
 -   **Custom CSS**: `documentation/docusaurus-site/src/css/custom.css`
 -   **Custom React components**: `documentation/docusaurus-site/src/components/` (e.g. `ConfigBuilder/` — the interactive `config.json` builder embedded in `docs/deployment/config-builder.mdx`)
 -   **Static images**: `documentation/docusaurus-site/static/img/`
@@ -32,7 +32,7 @@ docusaurus-site/docs/
 ├── deployment/                 # Prerequisites, deploy, config reference, external S3, update, uninstall
 ├── user-guide/                 # Getting started, web UI, upload tutorial, asset mgmt, search, metadata, permissions
 ├── cli/                        # CLI getting started, installation, command reference, automation
-├── pipelines/                  # Pipeline overview + 15 individual pipeline docs + custom pipeline guide
+├── pipelines/                  # Pipeline overview + 16 individual pipeline docs + custom pipeline guide + v2.5→v2.6 porting guide
 ├── developer/                  # Dev setup, backend, frontend, CDK, viewer plugins, audit logging
 ├── api/                        # API overview, auth, assets, files, metadata, search, pipelines, workflows, tags
 ├── troubleshooting/            # Common issues, known limitations, FAQ
@@ -176,15 +176,17 @@ Home (index.md)
 ├── Core Concepts (10 pages)
 ├── Architecture (6 pages)
 ├── Deployment (8 pages)
-├── User Guide (12 pages)
+├── User Guide (13 pages)
 └── Developer Guide
     ├── Setup, Backend, Frontend, CDK, Viewer Plugins, Audit Logging
     ├── CLI Reference (4+ pages with commands/ subcategory)
-    ├── Pipelines (18 pages)
-    ├── API Reference (15 pages)
+    ├── Pipelines (19 pages)
+    ├── API Reference (16 pages)
     └── Troubleshooting (3 pages)
 Additional (5 pages)
 ```
+
+The per-category counts are the number of doc ids under each `sidebars.ts` category (nested categories included); recompute them with a short Node script that parses `sidebars.ts` and counts string items and `type: "doc"` entries per labelled category, rather than incrementing the numbers above.
 
 When adding new pages, always update `sidebars.ts` to include the page in the correct category.
 

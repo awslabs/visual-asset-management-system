@@ -456,12 +456,14 @@ Pipeline tests run with pytest's defaults — there is no `pytest.ini` anywhere 
 which is why the existing `@pytest.mark.unit` is unregistered and only warns.
 
 **A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.**
-`test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py`
+`test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py`
 handlers by path under per-pipeline module names and asserts each tests EXACT membership of its parsed
 `ALLOWED_INPUT_FILEEXTENSIONS` list. `in` against the joined env string is substring containment, which
 admits any prefix of a listed extension (`.us` passes for `.usd,.usda`), and the loose form spread by
-copying an existing pipeline — which is precisely what a per-pipeline test cannot catch. Two of seven
-were fixed and five were not, and no per-pipeline suite noticed.
+copying an existing pipeline — which is precisely what a per-pipeline test cannot catch. When the test
+was written it covered seven handlers: two had been fixed and five had not, and no per-pipeline suite
+noticed. The handler count is the `PIPELINES` tuple in that file — recompute it with
+`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`.
 
 **Give every test module a suite-private basename.** Pipelines are near-copies of one another, so their
 test files collide: `test_extension_gate.py`, `test_manifest_refactor.py`,
@@ -537,7 +539,7 @@ forbid-forever guardrail also has zero occurrences, and that absence is the guar
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
 
-    Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate).
 
 10. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 11. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).

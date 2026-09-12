@@ -82,7 +82,7 @@ infra/
                                            # securitygroup-gateway-pipeline, vamsSchemaRegistration
         conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/{cosmos,gr00t}}/
+        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,videoSopBom,nvidia/{cosmos,gr00t}}/
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -170,7 +170,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCadMeshMetadataExtraction, useConversionCoordinateTransform, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useGenAiVideoSopBom (bedrockModelId, limits.maxVideoFiles, limits.maxTotalDurationMinutes), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, usePreview3dThumbnail, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t — recompute from the `pipelines: {` block of `ConfigPublic` in `config/config.ts` rather than extending this list
 -   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase)
@@ -614,7 +614,7 @@ Copy-paste scaffolds for new lambda builders, API routes, nested stacks, and con
 
 ## Pipeline Stacks
 
-Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, the three VPC builder condition blocks that new Batch/ECS/Fargate pipelines must be added to, and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
+Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, the VPC builder condition blocks a new Batch/ECS/Fargate pipeline is added to (which ones follows from its subnet placement and from whether its container calls a service without an endpoint), and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
 
 ---
 
