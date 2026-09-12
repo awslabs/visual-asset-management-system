@@ -22,6 +22,11 @@ import { fetchAssetS3Files } from "../../../services/APIService";
 import { AssetVersionContext, AssetVersion, AssetVersionMetadataItem } from "./AssetVersionManager";
 import FileViewerModal from "../../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
+import {
+    extensionOfFilename,
+    isExtensionComparableAsVersions,
+} from "../../../visualizerPlugin/core/viewableExtensions";
+import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 
 // TypeScript interfaces - using imported AssetVersion from AssetVersionManager
 
@@ -186,6 +191,11 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
     const [currentFiles, setCurrentFiles] = useState<any[]>([]);
     // Files handed to the compare host when the user clicks "Compare" on a modified row.
     const [compareFiles, setCompareFiles] = useState<FileInfo[] | null>(null);
+    // "Compare" is offered only for a type some compare viewer diffs (registry must be initialized).
+    const viewerRegistryReady = useViewerRegistryReady();
+    const canCompareRow = (item: FileComparison): boolean =>
+        viewerRegistryReady &&
+        isExtensionComparableAsVersions(extensionOfFilename(item.relativeKey));
 
     // State for table pagination and filtering
     const [comparisonFilterText, setComparisonFilterText] = useState<string>("");
@@ -613,24 +623,27 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                                     : `View v${version2 ? formatVersionLabel(version2) : ""}`}
                             </Button>
                         )}
-                        {item.version1File && item.version2File && item.status === "modified" && (
-                            <Button
-                                iconName="copy"
-                                variant="normal"
-                                onClick={() => {
-                                    const built = buildVersionCompareFiles(
-                                        item,
-                                        assetId,
-                                        databaseId
-                                    );
-                                    if (built) {
-                                        setCompareFiles(built);
-                                    }
-                                }}
-                            >
-                                Compare
-                            </Button>
-                        )}
+                        {item.version1File &&
+                            item.version2File &&
+                            item.status === "modified" &&
+                            canCompareRow(item) && (
+                                <Button
+                                    iconName="copy"
+                                    variant="normal"
+                                    onClick={() => {
+                                        const built = buildVersionCompareFiles(
+                                            item,
+                                            assetId,
+                                            databaseId
+                                        );
+                                        if (built) {
+                                            setCompareFiles(built);
+                                        }
+                                    }}
+                                >
+                                    Compare
+                                </Button>
+                            )}
                     </SpaceBetween>
                 );
             },
@@ -946,6 +959,11 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
     const [metadataComparisons, setMetadataComparisons] = useState<MetadataComparison[]>([]);
     // Files handed to the compare host when the user clicks "Compare" on a modified row.
     const [compareFiles, setCompareFiles] = useState<FileInfo[] | null>(null);
+    // "Compare" is offered only for a type some compare viewer diffs (registry must be initialized).
+    const viewerRegistryReady = useViewerRegistryReady();
+    const canCompareRow = (item: FileComparison): boolean =>
+        viewerRegistryReady &&
+        isExtensionComparableAsVersions(extensionOfFilename(item.relativeKey));
 
     // State for tabs
     const [activeTabId, setActiveTabId] = useState<string>("files");
@@ -1458,24 +1476,27 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                                 View v{selectedVersion?.Version}
                             </Button>
                         )}
-                        {item.version1File && item.version2File && item.status === "modified" && (
-                            <Button
-                                iconName="copy"
-                                variant="normal"
-                                onClick={() => {
-                                    const built = buildVersionCompareFiles(
-                                        item,
-                                        assetId || "",
-                                        databaseId || ""
-                                    );
-                                    if (built) {
-                                        setCompareFiles(built);
-                                    }
-                                }}
-                            >
-                                Compare
-                            </Button>
-                        )}
+                        {item.version1File &&
+                            item.version2File &&
+                            item.status === "modified" &&
+                            canCompareRow(item) && (
+                                <Button
+                                    iconName="copy"
+                                    variant="normal"
+                                    onClick={() => {
+                                        const built = buildVersionCompareFiles(
+                                            item,
+                                            assetId || "",
+                                            databaseId || ""
+                                        );
+                                        if (built) {
+                                            setCompareFiles(built);
+                                        }
+                                    }}
+                                >
+                                    Compare
+                                </Button>
+                            )}
                     </SpaceBetween>
                 );
             },

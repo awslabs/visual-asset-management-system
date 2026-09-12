@@ -7,6 +7,7 @@ import React from "react";
 import Select, { SelectProps } from "@cloudscape-design/components/select";
 import { ViewerPlugin } from "../core/PluginRegistry";
 import { ViewerMode } from "../core/PluginRegistry";
+import { isCompareOnlyViewer } from "../core/viewerSelection";
 
 interface ViewerSelectorProps {
     viewers: ViewerPlugin[];
@@ -17,6 +18,20 @@ interface ViewerSelectorProps {
     mode?: ViewerMode;
 }
 
+/**
+ * The viewers this selector may list for a mode. The registry already excludes compare-only viewers
+ * from the visualize path (`admitsVisualizeSelection`); this is the same rule applied at the control,
+ * so a caller that builds its own list — or a stale one — can never put a differ in the Visualize
+ * dropdown for ANY file count. A compare-only viewer reads `compareFiles`, which visualize never
+ * passes, so listing it would only ever open an immediate "needs N files" error.
+ */
+export function listableViewers(viewers: ViewerPlugin[], mode: ViewerMode): ViewerPlugin[] {
+    if (mode === "compare") {
+        return viewers;
+    }
+    return viewers.filter((viewer) => !isCompareOnlyViewer(viewer.config));
+}
+
 export const ViewerSelector: React.FC<ViewerSelectorProps> = ({
     viewers,
     selectedViewerId,
@@ -25,7 +40,7 @@ export const ViewerSelector: React.FC<ViewerSelectorProps> = ({
     mode = "visualize",
 }) => {
     // Convert viewers to options for Select component with enhanced descriptions
-    const options: SelectProps.Option[] = viewers.map((viewer) => {
+    const options: SelectProps.Option[] = listableViewers(viewers, mode).map((viewer) => {
         const extensions = viewer.config.supportedExtensions.join(", ");
         let capabilityText: string;
         if (mode === "compare" && viewer.config.compareMode) {
@@ -46,8 +61,8 @@ export const ViewerSelector: React.FC<ViewerSelectorProps> = ({
     // Find the selected option
     const selectedOption = options.find((option) => option.value === selectedViewerId) || null;
 
-    // Determine if selection is required (multiple viewers available but none selected)
-    const isSelectionRequired = viewers.length > 1 && !selectedViewerId;
+    // Determine if selection is required (multiple listable viewers but none selected)
+    const isSelectionRequired = options.length > 1 && !selectedViewerId;
 
     const handleChange = (event: any) => {
         const selectedValue = event.detail.selectedOption?.value;

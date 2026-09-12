@@ -28,10 +28,18 @@ import { downloadAsset } from "../../../../services/APIService";
 import Synonyms from "../../../../synonyms";
 import FileViewerModal from "../../../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../../../visualizerPlugin/core/types";
+import {
+    extensionOfFilename,
+    isExtensionComparableAsVersions,
+} from "../../../../visualizerPlugin/core/viewableExtensions";
+import { useViewerRegistryReady } from "../../../../visualizerPlugin/core/useViewerRegistryReady";
 
 export const FileVersionsList: React.FC = () => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
     const navigate = useNavigate();
+    // The per-row "Compare" action is offered only for a type some compare viewer diffs, which needs
+    // the registry initialized — before that every lookup reports "no viewer" and the action is hidden.
+    const viewerRegistryReady = useViewerRegistryReady();
 
     // Get context values
     const context = useContext(AssetVersionContext);
@@ -111,8 +119,15 @@ export const FileVersionsList: React.FC = () => {
     // registry classifies the pair as "same-file-versions").
     const [compareFiles, setCompareFiles] = useState<FileInfo[] | null>(null);
 
+    /** Offer "Compare" only when some compare viewer diffs two versions of this file's type — a
+     *  .png or .glb row gets no Compare action, because no differ would open for it. */
+    const canCompareFile = (file: FileVersion): boolean =>
+        viewerRegistryReady &&
+        !file.isPermanentlyDeleted &&
+        isExtensionComparableAsVersions(extensionOfFilename(file.relativeKey));
+
     const handleCompareFile = (file: FileVersion) => {
-        if (file.isPermanentlyDeleted) {
+        if (!canCompareFile(file)) {
             return;
         }
         const filename = file.relativeKey.split("/").pop() || file.relativeKey;
@@ -552,7 +567,8 @@ export const FileVersionsList: React.FC = () => {
                     );
                 }
 
-                // Default view
+                // Default view. "Compare" sits between View and Download and is present only for a
+                // type some compare viewer handles; it diffs THIS version (left) against latest (right).
                 return (
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button
@@ -561,13 +577,11 @@ export const FileVersionsList: React.FC = () => {
                         >
                             View File
                         </Button>
-                        <Button
-                            onClick={() => handleCompareFile(item)}
-                            iconName="copy"
-                            disabled={item.isPermanentlyDeleted}
-                        >
-                            Compare
-                        </Button>
+                        {canCompareFile(item) && (
+                            <Button onClick={() => handleCompareFile(item)} iconName="copy">
+                                Compare
+                            </Button>
+                        )}
                         <Button
                             onClick={() => handleDownloadFile(item)}
                             iconName="download"

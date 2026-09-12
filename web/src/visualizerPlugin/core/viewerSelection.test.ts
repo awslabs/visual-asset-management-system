@@ -14,10 +14,14 @@
 import {
     admitsCompareSelection,
     admitsVisualizeSelection,
+    availableViewerModes,
+    hasCompareViewer,
+    hasVisualizeViewer,
     isCompareOnlyViewer,
 } from "./viewerSelection";
 import { CompareContext } from "./compareShape";
-import { CompareModeConfig, ViewerPluginConfig } from "./types";
+import { CompareModeConfig, ViewerConfig, ViewerPluginConfig } from "./types";
+import shippedConfig from "../config/viewerConfig.json";
 
 const viewer = (overrides: Partial<ViewerPluginConfig> = {}): ViewerPluginConfig => ({
     id: "test-viewer",
@@ -176,5 +180,170 @@ describe("admitsCompareSelection", () => {
         expect(
             admitsCompareSelection(versionsOnly, [".txt"], { ...twoVersions, crossAsset: true })
         ).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Selection-level helpers: the inputs for the Visualize/Compare toggle and the "View / Compare
+// Selected" gates (FileViewerModal, SearchPageListView, FileDetailsPanel, version lists).
+// ---------------------------------------------------------------------------------------------
+
+/** A regular single-file text viewer, like the shipped text-viewer. */
+const singleTextViewer = viewer({ id: "text-viewer" });
+/** A regular multi-file viewer for point clouds (nothing to do with text). */
+const multiCloudViewer = viewer({
+    id: "potree",
+    supportedExtensions: [".las", ".laz"],
+    supportsMultiFile: true,
+});
+/** The preview viewer is never a candidate on either path. */
+const previewViewer = viewer({
+    id: "preview-viewer",
+    isPreviewViewer: true,
+    supportedExtensions: [".txt", ".png", ".las"],
+    supportsMultiFile: true,
+    compareMode: compare(),
+});
+const registry = [singleTextViewer, multiCloudViewer, compareOnlyViewer, previewViewer];
+
+describe("hasVisualizeViewer / hasCompareViewer", () => {
+    it("counts only regular viewers towards visualize", () => {
+        expect(hasVisualizeViewer(registry, [".txt"], false)).toBe(true);
+        // Two text files: the only multi-file text-capable viewer is the compare-only differ.
+        expect(hasVisualizeViewer(registry, [".txt"], true)).toBe(false);
+        expect(hasVisualizeViewer(registry, [".las", ".laz"], true)).toBe(true);
+        expect(hasVisualizeViewer([compareOnlyViewer], [".txt"], false)).toBe(false);
+    });
+
+    it("counts only compare-capable viewers towards compare", () => {
+        expect(hasCompareViewer(registry, [".txt"], twoDistinctFiles)).toBe(true);
+        expect(hasCompareViewer(registry, [".txt"], twoVersions)).toBe(true);
+        expect(hasCompareViewer(registry, [".las"], twoDistinctFiles)).toBe(false);
+        expect(
+            hasCompareViewer(registry, [".txt"], { fileCount: 1, shape: "same-file-versions" })
+        ).toBe(false);
+        expect(
+            hasCompareViewer(registry, [".txt"], { fileCount: 3, shape: "different-files" })
+        ).toBe(false);
+    });
+
+    it("never lets the preview viewer answer either question", () => {
+        expect(hasVisualizeViewer([previewViewer], [".png"], false)).toBe(false);
+        expect(hasCompareViewer([previewViewer], [".png"], twoDistinctFiles)).toBe(false);
+    });
+});
+
+describe("availableViewerModes", () => {
+    it("offers only Visualize for one text file", () => {
+        expect(availableViewerModes(registry, [".txt"], false)).toEqual({
+            visualize: true,
+            compare: false,
+        });
+    });
+
+    it("offers only Compare for two text files (no multi-file text visualizer)", () => {
+        expect(availableViewerModes(registry, [".txt"], true, twoDistinctFiles)).toEqual({
+            visualize: false,
+            compare: true,
+        });
+        expect(availableViewerModes(registry, [".txt"], true, twoVersions)).toEqual({
+            visualize: false,
+            compare: true,
+        });
+    });
+
+    it("offers only Visualize for two point clouds (no differ for them)", () => {
+        expect(availableViewerModes(registry, [".las", ".laz"], true, twoDistinctFiles)).toEqual({
+            visualize: true,
+            compare: false,
+        });
+    });
+
+    it("offers neither for a type nothing handles, or a mixed selection", () => {
+        expect(availableViewerModes(registry, [".png"], false)).toEqual({
+            visualize: false,
+            compare: false,
+        });
+        expect(availableViewerModes(registry, [".txt", ".las"], true, twoDistinctFiles)).toEqual({
+            visualize: false,
+            compare: false,
+        });
+    });
+
+    it("offers both when a hybrid viewer admits the selection on both paths", () => {
+        const both = [viewer({ id: "dual", supportsMultiFile: true, compareMode: compare() })];
+        expect(availableViewerModes(both, [".txt"], true, twoDistinctFiles)).toEqual({
+            visualize: true,
+            compare: true,
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Config guard over the SHIPPED viewerConfig.json. The design rule is: a viewer is EITHER a
+// compare-differ (compareMode.compareOnly) OR a regular viewer — no hybrid. These assertions fail
+// the build if someone adds a compare block without compareOnly, or a compare-only viewer that the
+// visualize path would offer for any file count.
+// ---------------------------------------------------------------------------------------------
+
+describe("shipped viewerConfig.json compare contract", () => {
+    const shipped = (shippedConfig as ViewerConfig).viewers;
+    const compareCapable = shipped.filter((v) => v.compareMode?.enabled);
+    const compareOnly = shipped.filter(isCompareOnlyViewer);
+
+    it("ships at least one compare-only viewer (the text differ)", () => {
+        expect(compareOnly.map((v) => v.id)).toContain("text-diff-viewer");
+    });
+
+    it("has no hybrid: every compare-capable viewer is compare-only", () => {
+        const hybrids = compareCapable.filter((v) => !isCompareOnlyViewer(v)).map((v) => v.id);
+        expect(hybrids).toEqual([]);
+    });
+
+    it("keeps compare-only viewers off the visualize path for ANY file count", () => {
+        for (const v of compareOnly) {
+            for (const ext of v.supportedExtensions) {
+                expect(admitsVisualizeSelection(v, [ext], false)).toBe(false); // one file
+                expect(admitsVisualizeSelection(v, [ext], true)).toBe(false); // N files
+            }
+            // ... and regardless of the (visualize-only) multi-file flag.
+            expect(v.supportsMultiFile).toBe(false);
+        }
+    });
+
+    it("still offers each compare-only viewer inside its own file-count window", () => {
+        for (const v of compareOnly) {
+            const { minFiles, maxFiles } = v.compareMode!;
+            const ext = v.supportedExtensions[0];
+            expect(
+                admitsCompareSelection(v, [ext], { fileCount: minFiles, shape: "different-files" })
+            ).toBe(true);
+            expect(
+                admitsCompareSelection(v, [ext], {
+                    fileCount: minFiles,
+                    shape: "same-file-versions",
+                })
+            ).toBe(true);
+            expect(
+                admitsCompareSelection(v, [ext], {
+                    fileCount: minFiles - 1,
+                    shape: "different-files",
+                })
+            ).toBe(false);
+            expect(
+                admitsCompareSelection(v, [ext], {
+                    fileCount: maxFiles + 1,
+                    shape: "different-files",
+                })
+            ).toBe(false);
+        }
+    });
+
+    it("offers a differ, and only a differ, for two shipped text files", () => {
+        const modes = availableViewerModes(shipped, [".txt"], true, twoDistinctFiles);
+        expect(modes.compare).toBe(true);
+        expect(modes.visualize).toBe(false);
+        // A binary type no differ handles gets no compare mode.
+        expect(availableViewerModes(shipped, [".png"], true, twoDistinctFiles).compare).toBe(false);
     });
 });

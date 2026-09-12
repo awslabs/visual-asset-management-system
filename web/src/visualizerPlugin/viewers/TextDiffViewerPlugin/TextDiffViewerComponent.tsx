@@ -63,6 +63,20 @@ const SIDES: Side[] = ["left", "right"];
 const LATEST_VERSION = "__latest__";
 
 /**
+ * How finely changed lines are diffed. Maps onto `react-diff-viewer-continued`'s `DiffMethod`:
+ * `lines` → LINES (whole-line changes only), `words` → WORDS, `chars` → CHARS (per-character marks,
+ * useful for a one-letter typo inside a long line).
+ */
+type DiffGranularity = "lines" | "words" | "chars";
+
+/** Unchanged lines kept around each change when unchanged blocks are collapsed. */
+const CONTEXT_LINE_OPTIONS: SelectProps.Option[] = [0, 1, 3, 5, 10].map((n) => ({
+    label: `${n} ${n === 1 ? "line" : "lines"}`,
+    value: String(n),
+}));
+const DEFAULT_CONTEXT_LINES = 3;
+
+/**
  * Why one side could not be loaded. Each compare entry is fetched under its OWN asset and authorized
  * independently (Casbin, per asset), so a failure is a property of that side, not of the comparison.
  */
@@ -266,7 +280,12 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
     const [depsStatus, setDepsStatus] = useState<"loading" | "ready" | "error">("loading");
     const [depsError, setDepsError] = useState<string | null>(null);
     const [splitView, setSplitView] = useState(true); // true = side-by-side; false = inline
-    const [useWordDiff, setUseWordDiff] = useState(false);
+    const [granularity, setGranularity] = useState<DiffGranularity>("lines");
+    const [showLineNumbers, setShowLineNumbers] = useState(true);
+    // Collapse unchanged blocks (the library renders an "Expand N lines" control per block); the
+    // context select picks how many unchanged lines stay visible around each change.
+    const [collapseUnchanged, setCollapseUnchanged] = useState(true);
+    const [contextLines, setContextLines] = useState(DEFAULT_CONTEXT_LINES);
     const [theme, setTheme] = useState<"light" | "dark">(() =>
         document.body.classList.contains("awsui-dark-mode") ? "dark" : "light"
     );
@@ -402,34 +421,61 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
         return { label: shortVersion(pinned), value: pinned };
     };
 
+    /**
+     * The library renders `leftTitle`/`rightTitle` inside a fixed-height (2.4em) title block whose
+     * `<pre>` wraps, so a long "name @ version · asset" label wrapped onto a second line and was cut
+     * off. Handing it a non-wrapping block that truncates with an ellipsis keeps the whole label on
+     * the one line the block has room for; the full text stays available as a tooltip.
+     */
+    const renderDiffTitle = (label: string, side: Side) => (
+        <span
+            data-testid={`text-diff-title-${side}`}
+            title={label}
+            style={{
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+            }}
+        >
+            {label}
+        </span>
+    );
+
     const renderSideHeader = (side: Side, state: SideState) => (
         <div
             key={side}
             data-side={side}
+            data-testid={`text-diff-side-header-${side}`}
             style={{
-                flex: 1,
+                flex: "1 1 280px",
                 minWidth: 0,
                 display: "flex",
                 alignItems: "flex-end",
                 gap: "12px",
-                flexWrap: "wrap",
             }}
         >
-            <Box variant="strong">
-                <span
-                    style={{
-                        display: "inline-block",
-                        maxWidth: "100%",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                    }}
-                    title={state.file.key}
-                >
-                    {sideLabel(state.file, crossAsset)}
-                </span>
-            </Box>
-            <div style={{ minWidth: "220px" }}>
+            {/* The label is the flex item that shrinks: `flex: 1 1 auto` + `minWidth: 0` lets it take
+                whatever the version picker leaves and truncate, instead of keeping its full nowrap
+                width (a flex item's default min-width is its content) and being clipped by the
+                viewer's overflow:hidden. */}
+            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                <Box variant="div" fontWeight="bold">
+                    <span
+                        data-testid={`text-diff-side-label-${side}`}
+                        style={{
+                            display: "block",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}
+                        title={state.file.key}
+                    >
+                        {sideLabel(state.file, crossAsset)}
+                    </span>
+                </Box>
+            </div>
+            <div style={{ flex: "0 0 220px" }}>
                 <FormField label={`${side === "left" ? "Left" : "Right"} version`}>
                     <Select
                         selectedOption={selectedVersionOption(state)}
@@ -581,9 +627,18 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
     const bothReady = SIDES.every((side) => sides[side].status === "ready");
     const DiffViewer = TextDiffDependencyManager.getDiffViewer();
     const DiffMethod = TextDiffDependencyManager.getDiffMethod();
+    const compareMethod =
+        granularity === "chars"
+            ? DiffMethod.CHARS
+            : granularity === "words"
+            ? DiffMethod.WORDS
+            : DiffMethod.LINES;
+    const leftLabel = sideLabel(sides.left.file, crossAsset);
+    const rightLabel = sideLabel(sides.right.file, crossAsset);
 
     return (
         <div
+            data-testid="text-diff-viewer"
             style={{
                 display: "flex",
                 flexDirection: "column",
@@ -591,10 +646,11 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                 backgroundColor: "var(--vams-bg-secondary)",
             }}
         >
-            {/* Controls */}
+            {/* Controls — compact, one row, wrapping on narrow hosts */}
             <div
+                data-testid="text-diff-controls"
                 style={{
-                    padding: "12px 16px",
+                    padding: "8px 16px",
                     borderBottom: "1px solid var(--vams-border-default)",
                     backgroundColor: "var(--vams-bg-primary)",
                     display: "flex",
@@ -612,12 +668,47 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                         { id: "inline", text: "Inline" },
                     ]}
                 />
+                <SegmentedControl
+                    selectedId={granularity}
+                    onChange={({ detail }) => setGranularity(detail.selectedId as DiffGranularity)}
+                    label="Diff granularity"
+                    options={[
+                        { id: "lines", text: "Line" },
+                        { id: "words", text: "Word" },
+                        { id: "chars", text: "Character" },
+                    ]}
+                />
                 <Toggle
-                    checked={useWordDiff}
-                    onChange={({ detail }) => setUseWordDiff(detail.checked)}
+                    checked={showLineNumbers}
+                    onChange={({ detail }) => setShowLineNumbers(detail.checked)}
                 >
-                    Word-level diff
+                    Line numbers
                 </Toggle>
+                <Toggle
+                    checked={collapseUnchanged}
+                    onChange={({ detail }) => setCollapseUnchanged(detail.checked)}
+                >
+                    Collapse unchanged
+                </Toggle>
+                {collapseUnchanged && (
+                    <div style={{ minWidth: "120px" }} data-testid="text-diff-context-lines">
+                        <Select
+                            selectedOption={
+                                CONTEXT_LINE_OPTIONS.find(
+                                    (option) => option.value === String(contextLines)
+                                ) || CONTEXT_LINE_OPTIONS[0]
+                            }
+                            options={CONTEXT_LINE_OPTIONS}
+                            onChange={({ detail }) =>
+                                setContextLines(
+                                    Number(detail.selectedOption.value ?? DEFAULT_CONTEXT_LINES)
+                                )
+                            }
+                            expandToViewport
+                            ariaLabel="Context lines around each change"
+                        />
+                    </div>
+                )}
             </div>
 
             {/* Per-side identity + version pickers */}
@@ -642,9 +733,16 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                         newValue={sides.right.content}
                         splitView={splitView}
                         useDarkTheme={isDark}
-                        leftTitle={sideLabel(sides.left.file, crossAsset)}
-                        rightTitle={sideLabel(sides.right.file, crossAsset)}
-                        compareMethod={useWordDiff ? DiffMethod.WORDS : DiffMethod.LINES}
+                        // Inline view renders only the LEFT title block, so it carries both names.
+                        leftTitle={renderDiffTitle(
+                            splitView ? leftLabel : `${leftLabel}  \u2192  ${rightLabel}`,
+                            "left"
+                        )}
+                        rightTitle={renderDiffTitle(rightLabel, "right")}
+                        compareMethod={compareMethod}
+                        hideLineNumbers={!showLineNumbers}
+                        showDiffOnly={collapseUnchanged}
+                        extraLinesSurroundingDiff={contextLines}
                         renderContent={renderHighlightedContent}
                     />
                 ) : (

@@ -77,6 +77,56 @@ is orthogonal — a viewer may visualize single files and also compare two.
 the viewer as `compareFiles` (index 0 = left/base) and sets `compareMode={true}`. Compare-capable
 viewers read `compareFiles` instead of the single-file props.
 
+### Mode availability (what a surface may offer)
+
+**The design rule: a viewer is EITHER a compare-differ (`compareMode.compareOnly: true`) OR a regular
+viewer (single-file, or multi-file via `supportsMultiFile`) — never a hybrid.** The shipped config is
+guarded by `core/viewerSelection.test.ts` ("shipped viewerConfig.json compare contract"): every
+compare-capable viewer is compare-only, and no compare-only viewer is admitted on the visualize path
+for any file count.
+
+Every entry point decides what to offer with the SAME predicates, never with its own extension list:
+
+| Question                                                 | Pure predicate (`core/viewerSelection.ts`)              | Registry-facing lookup (`core/viewableExtensions.ts`)                |
+| -------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
+| Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`        | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
+| Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`       | `areFilesComparableTogether(files)` (derives count + shape)          |
+| Can a differ diff two versions of ONE file of this type? | —                                                       | `isExtensionComparableAsVersions(ext)`                               |
+| Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)` | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
+
+Rules the surfaces follow (and the Playwright spec `e2e/seeded.compare.spec.ts` proves):
+
+-   **`ViewerSelector`** filters its list through `listableViewers(viewers, mode)`: a compare-only
+    viewer is never an option in the Visualize dropdown, whatever list a caller hands it.
+-   **`FileViewerModal`** asks `availableModesForFiles(files)` once the registry is ready. Both modes
+    admitted → the Visualize/Compare toggle; exactly one → that mode is rendered and the toggle is
+    hidden (a requested `initialMode` no viewer admits is replaced); neither → a "No viewer for this
+    selection" empty state (`data-testid="file-viewer-no-viewer"`) instead of mounting `DynamicViewer`.
+-   **Search "View Selected" / "Compare Selected"** (`SearchPageListView`) and the file manager's
+    **"Visualize Selected Files" / "Compare Selected Files"** icons (`FileDetailsPanel`) are gated
+    independently — View by the visualize lookup, Compare by the compare lookup with the selection's
+    real count and shape (two `.txt` rows: Compare only; two `.glb` rows: View only; `.txt` + `.png`:
+    neither).
+-   **Version lists** (`FileVersionsList`, `AssetVersionComparison`) render the per-row **Compare**
+    only when `isExtensionComparableAsVersions(ext)` holds; it opens the differ with the row's version
+    on the left and latest on the right. A `.png` row keeps View/Download but gets no Compare.
+
+All lookups return false until `PluginRegistry.initialize()` has run — gate them behind
+`useViewerRegistryReady()` so the control appears once the registry is ready rather than never.
+
+### Text Diff Viewer controls
+
+`TextDiffViewerPlugin/TextDiffViewerComponent.tsx` exposes the `react-diff-viewer-continued` modes as
+compact controls (`data-testid="text-diff-controls"`): layout (Side-by-side / Inline → `splitView`),
+granularity (Line / Word / Character → `compareMethod` `DiffMethod.LINES` / `WORDS` / `CHARS`), a
+**Line numbers** toggle (`hideLineNumbers`), a **Collapse unchanged** toggle (`showDiffOnly`) with a
+context-lines picker (`extraLinesSurroundingDiff`, `data-testid="text-diff-context-lines"`, shown only
+while collapsing). The per-side labels (`text-diff-side-label-{left,right}`) and the titles handed to
+the library (`text-diff-title-{left,right}`) are single-line, ellipsis-truncated elements with the full
+label as a tooltip — the library's title block is a fixed 2.4em with a wrapping `<pre>`, so a long
+"name @ version · asset" label was otherwise cut off. In inline layout only the left title block
+renders, so it carries both names ("left → right").
+
 ### Cross-asset / multi-version contract
 
 Each `compareFiles` entry is a fully resolved `{ databaseId, assetId, key, versionId? }`:
@@ -96,10 +146,12 @@ Each `compareFiles` entry is a fully resolved `{ databaseId, assetId, key, versi
     (`fetchFileVersions` from `AssetVersionService`, one list per db+asset+key) and re-fetch only the
     entry whose version changed.
 
-Compare mode is reached from three surfaces, all hosted by `FileViewerModal` (which has a
-Visualize/Compare toggle): the search results multi-select "Compare Selected" action (rows may span
-assets — each row carries its own db/asset), and the version-comparison "Compare" actions in
-`AssetVersionComparison.tsx` and `FileVersionsList.tsx` (diffing versions of the same file). The first
+Compare mode is reached from four surfaces, all hosted by `FileViewerModal` (which offers a
+Visualize/Compare toggle only when both modes are admitted — see Mode availability): the search
+results multi-select "Compare Selected" action (rows may span assets — each row carries its own
+db/asset), the asset file manager's "Compare Selected Files" icon (`FileDetailsPanel`), and the
+version-comparison "Compare" actions in `AssetVersionComparison.tsx` and `FileVersionsList.tsx`
+(diffing versions of the same file). The first
 compare viewer is `text-diff-viewer` (`TextDiffViewerPlugin`), which diffs two text files via
 `react-diff-viewer-continued` (dynamically imported by its `dependencies.ts` so it stays out of the
 base bundle), declares `allowCrossAsset`, keeps per-side state (content, error, version list), and

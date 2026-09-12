@@ -33,12 +33,21 @@ jest.mock("./dependencies", () => ({
         loadDiffViewer: jest.fn().mockResolvedValue(undefined),
         getDiffViewer: () => (props: any) =>
             (
-                <div data-testid="diff">
+                <div
+                    data-testid="diff"
+                    data-compare-method={props.compareMethod}
+                    data-hide-line-numbers={String(props.hideLineNumbers)}
+                    data-show-diff-only={String(props.showDiffOnly)}
+                    data-context-lines={String(props.extraLinesSurroundingDiff)}
+                    data-split-view={String(props.splitView)}
+                >
                     <span data-testid="diff-left">{props.oldValue}</span>
                     <span data-testid="diff-right">{props.newValue}</span>
+                    <div data-testid="diff-left-title">{props.leftTitle}</div>
+                    <div data-testid="diff-right-title">{props.rightTitle}</div>
                 </div>
             ),
-        getDiffMethod: () => ({ WORDS: "words", LINES: "lines" }),
+        getDiffMethod: () => ({ WORDS: "diffWords", LINES: "diffLines", CHARS: "diffChars" }),
     },
 }));
 
@@ -207,5 +216,114 @@ describe("TextDiffViewerComponent", () => {
         );
         // Picking a version does not refetch the version list.
         expect(mockFetchFileVersions).toHaveBeenCalledTimes(2);
+    });
+
+    // ---- Diff options (compact controls) ------------------------------------------------------
+
+    /** Cloudscape wrappers for the controls bar; each control is reached by its label/aria-label. */
+    const controls = (container: HTMLElement) =>
+        createWrapper(container).find('[data-testid="text-diff-controls"]')!;
+
+    it("starts as a line diff with line numbers, collapsing unchanged blocks around 3 lines", async () => {
+        renderDiff();
+        const diff = await screen.findByTestId("diff");
+        expect(diff.dataset.compareMethod).toBe("diffLines");
+        expect(diff.dataset.hideLineNumbers).toBe("false");
+        expect(diff.dataset.showDiffOnly).toBe("true");
+        expect(diff.dataset.contextLines).toBe("3");
+        expect(diff.dataset.splitView).toBe("true");
+    });
+
+    it("switches the compare method to word- and character-level", async () => {
+        const { container } = renderDiff();
+        await screen.findByTestId("diff");
+
+        const granularity = controls(container)
+            .findAllSegmentedControls()
+            .find((c) => c.findSegments().some((s) => s.getElement().textContent === "Character"))!;
+        expect(granularity).toBeTruthy();
+
+        await act(async () => {
+            granularity.findSegmentById("words")!.click();
+        });
+        expect(screen.getByTestId("diff").dataset.compareMethod).toBe("diffWords");
+
+        await act(async () => {
+            granularity.findSegmentById("chars")!.click();
+        });
+        expect(screen.getByTestId("diff").dataset.compareMethod).toBe("diffChars");
+    });
+
+    it("hides line numbers and expands unchanged lines from the toggles", async () => {
+        const { container } = renderDiff();
+        await screen.findByTestId("diff");
+        const toggles = controls(container).findAllToggles();
+        const lineNumbers = toggles.find((t) => /Line numbers/.test(t.getElement().textContent!))!;
+        const collapse = toggles.find((t) =>
+            /Collapse unchanged/.test(t.getElement().textContent!)
+        )!;
+
+        await act(async () => {
+            lineNumbers.findNativeInput().click();
+        });
+        expect(screen.getByTestId("diff").dataset.hideLineNumbers).toBe("true");
+
+        // The context picker only makes sense while collapsing; it leaves with the toggle.
+        expect(screen.getByLabelText("Context lines around each change")).toBeInTheDocument();
+        await act(async () => {
+            collapse.findNativeInput().click();
+        });
+        expect(screen.getByTestId("diff").dataset.showDiffOnly).toBe("false");
+        expect(screen.queryByLabelText("Context lines around each change")).toBeNull();
+    });
+
+    it("passes the chosen context-line count through", async () => {
+        const { container } = renderDiff();
+        await screen.findByTestId("diff");
+        // SegmentedControl embeds a narrow-viewport fallback Select, so reach ours via its wrapper.
+        const contextPicker = createWrapper(container)
+            .find('[data-testid="text-diff-context-lines"]')!
+            .findSelect()!;
+        expect(contextPicker).toBeTruthy();
+        await act(async () => {
+            contextPicker.openDropdown();
+        });
+        await act(async () => {
+            contextPicker.selectOptionByValue("10", { expandToViewport: true });
+        });
+        expect(screen.getByTestId("diff").dataset.contextLines).toBe("10");
+    });
+
+    it("hands the library single-line, ellipsis-truncating titles so long labels are not clipped", async () => {
+        renderDiff();
+        await screen.findByTestId("diff");
+        const left = screen.getByTestId("text-diff-title-left");
+        const right = screen.getByTestId("text-diff-title-right");
+        for (const title of [left, right]) {
+            expect(title.style.whiteSpace).toBe("nowrap");
+            expect(title.style.textOverflow).toBe("ellipsis");
+            expect(title.style.overflow).toBe("hidden");
+            expect(title.getAttribute("title")).toBe(title.textContent);
+        }
+        // Cross-asset: each label names its asset, and the full label is the tooltip.
+        expect(left.textContent).toMatch(/config\.json \(latest\) · asset-A/);
+        expect(right.textContent).toMatch(/config\.json \(latest\) · asset-B/);
+        // The in-viewer side headers truncate the same way.
+        expect(screen.getByTestId("text-diff-side-label-left").style.textOverflow).toBe("ellipsis");
+    });
+
+    it("carries both names in the single title block the inline layout renders", async () => {
+        const { container } = renderDiff();
+        await screen.findByTestId("diff");
+        const layout = controls(container)
+            .findAllSegmentedControls()
+            .find((c) => c.findSegmentById("inline"))!;
+        await act(async () => {
+            layout.findSegmentById("inline")!.click();
+        });
+        expect(screen.getByTestId("diff").dataset.splitView).toBe("false");
+        expect(screen.getByTestId("text-diff-title-left").textContent).toMatch(
+            /asset-A\s+→\s+config\.json \(latest\) · asset-B/
+        );
     });
 });

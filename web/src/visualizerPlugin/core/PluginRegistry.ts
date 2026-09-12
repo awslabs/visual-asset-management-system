@@ -6,7 +6,12 @@
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
 import { CompareContext } from "./compareShape";
-import { admitsCompareSelection, admitsVisualizeSelection } from "./viewerSelection";
+import {
+    admitsCompareSelection,
+    admitsVisualizeSelection,
+    availableViewerModes,
+    ViewerModeAvailability,
+} from "./viewerSelection";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
@@ -26,7 +31,11 @@ export {
     admitsCompareSelection,
     admitsVisualizeSelection,
     isCompareOnlyViewer,
+    hasVisualizeViewer,
+    hasCompareViewer,
+    availableViewerModes,
 } from "./viewerSelection";
+export type { ViewerModeAvailability } from "./viewerSelection";
 
 export interface ViewerPlugin {
     config: ViewerPluginConfig;
@@ -369,6 +378,24 @@ export class PluginRegistry {
 
     getViewer(id: string): ViewerPlugin | undefined {
         return this.plugins.get(id);
+    }
+
+    /**
+     * Which of the two host surfaces can open a selection, over the REGISTERED (enabled, feature-
+     * gated) viewers. This is what a Visualize/Compare toggle and the "View/Compare Selected"
+     * actions consult; it never offers a mode for which `getCompatibleViewers` would return nothing.
+     * Reports both modes unavailable until `initialize()` has run.
+     */
+    getAvailableModes(
+        fileExtensions: string[],
+        isMultiFile: boolean,
+        compareContext?: CompareContext
+    ): ViewerModeAvailability {
+        if (!this.initialized) {
+            return { visualize: false, compare: false };
+        }
+        const configs = Array.from(this.pluginMetadata.values()).map((m) => m.config);
+        return availableViewerModes(configs, fileExtensions, isMultiFile, compareContext);
     }
 
     getViewerMetadata(id: string): ViewerPluginMetadata | undefined {

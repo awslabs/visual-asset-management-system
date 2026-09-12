@@ -50,7 +50,10 @@ import {
     reconcileViewerSelection,
 } from "./utils/searchRowToFileInfo";
 import { isFileHitSource } from "./utils/recordType";
-import { areFilenamesViewableTogether } from "../../visualizerPlugin/core/viewableExtensions";
+import {
+    areFilenamesViewableTogether,
+    areFilesComparableTogether,
+} from "../../visualizerPlugin/core/viewableExtensions";
 
 let tagTypes: any;
 
@@ -734,10 +737,18 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     const viewerSelectionFilenames: string[] = (state.viewerSelection || []).map(
         (file: any) => file?.filename || file?.key || ""
     );
+    // "View Selected" asks the VISUALIZE path (never a compare-only viewer); "Compare Selected" asks
+    // the COMPARE path with the selection's real count and shape (cross-asset rows, N versions vs N
+    // distinct files). The two are independent: two .txt rows have a differ but no multi-file
+    // visualizer, two .glb rows the reverse.
     const selectionHasViewer =
         viewerSelectionFilenames.length > 0 &&
         viewerRegistryReady &&
         areFilenamesViewableTogether(viewerSelectionFilenames);
+    const selectionHasCompareViewer =
+        (state.viewerSelection?.length || 0) > 0 &&
+        viewerRegistryReady &&
+        areFilesComparableTogether(state.viewerSelection);
 
     // Determine if unarchive button should be shown (single archived asset selected)
     const showUnarchiveButton =
@@ -1295,17 +1306,19 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                             </span>
                                             <span
                                                 title={
-                                                    (state.viewerSelection?.length || 0) < 2
-                                                        ? "Select at least two files to compare."
-                                                        : selectionHasViewer
+                                                    !state.viewerSelection?.length
                                                         ? undefined
-                                                        : "No compare viewer can display this combination of file types together."
+                                                        : selectionHasCompareViewer
+                                                        ? undefined
+                                                        : (state.viewerSelection?.length || 0) < 2
+                                                        ? "Select at least two files to compare."
+                                                        : "No compare viewer can diff this selection: the file types or the number of files are not supported by any compare viewer."
                                                 }
                                             >
                                                 <Button
                                                     disabled={
-                                                        (state.viewerSelection?.length || 0) < 2 ||
-                                                        !selectionHasViewer
+                                                        !state.viewerSelection?.length ||
+                                                        !selectionHasCompareViewer
                                                     }
                                                     onClick={() =>
                                                         openViewer(state.viewerSelection, "compare")

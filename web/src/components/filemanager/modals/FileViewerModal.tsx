@@ -3,12 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
 import { Modal, Box, Button, SegmentedControl, SpaceBetween } from "@cloudscape-design/components";
 import { DynamicViewer } from "../../../visualizerPlugin/components/DynamicViewer";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
+import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
+import {
+    availableModesForFiles,
+    extensionOfFilename,
+} from "../../../visualizerPlugin/core/viewableExtensions";
 
 interface FileViewerModalProps {
     visible: boolean;
@@ -19,12 +24,15 @@ interface FileViewerModalProps {
     assetVersionId?: string;
     /** Initial mode. "compare" opens the modal on the Compare tab (compare-capable viewers only).
      *  Defaults to "visualize". The user can still flip modes with the in-modal toggle unless
-     *  `allowModeToggle` is false. */
+     *  `allowModeToggle` is false. A requested mode no registered viewer admits for this selection is
+     *  replaced by the one that is admitted (see `availableModesForFiles`). */
     initialMode?: ViewerMode;
     /** When false, hides the Visualize/Compare toggle and locks the modal to `initialMode`.
      *  Used by callers (e.g. version compare) that only ever want the compare surface. */
     allowModeToggle?: boolean;
 }
+
+const otherMode = (mode: ViewerMode): ViewerMode => (mode === "compare" ? "visualize" : "compare");
 
 export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     visible,
@@ -38,6 +46,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
 }) => {
     const [viewerMode, setViewerMode] = useState("collapse");
     const [mode, setMode] = useState<ViewerMode>(initialMode);
+    const registryReady = useViewerRegistryReady();
 
     // Reset viewer mode when modal is opened/closed or files change
     React.useEffect(() => {
@@ -46,6 +55,26 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
             setMode(initialMode);
         }
     }, [visible, files, initialMode]);
+
+    // Which modes at least one registered viewer admits for THIS selection. Offering a mode with no
+    // viewer only ever produced "No compatible viewers found" inside the modal, so the toggle lists
+    // only the admitted modes, a lone admitted mode is forced, and none at all is its own empty state.
+    // Unknown (null) until the registry has initialized; the toggle stays hidden meanwhile.
+    const availability = useMemo(
+        () => (registryReady && files.length > 0 ? availableModesForFiles(files) : null),
+        [registryReady, files]
+    );
+    const noViewer = availability !== null && !availability.visualize && !availability.compare;
+    // The mode actually rendered: the requested one, unless only the other is admitted.
+    const effectiveMode: ViewerMode =
+        availability && !availability[mode] && availability[otherMode(mode)]
+            ? otherMode(mode)
+            : mode;
+    const showModeToggle =
+        allowModeToggle && !!availability && availability.visualize && availability.compare;
+    const selectionExtensions = Array.from(
+        new Set(files.map((file) => extensionOfFilename(file.filename || file.key) || "(none)"))
+    );
 
     const handleViewerModeChange = (mode: string) => {
         // In modal context, we don't support fullscreen mode
@@ -58,7 +87,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     };
 
     const getModalTitle = () => {
-        const prefix = mode === "compare" ? "Compare Files" : "File Viewer";
+        const prefix = effectiveMode === "compare" ? "Compare Files" : "File Viewer";
         if (files.length === 1) {
             return `${prefix} - ${files[0].filename}`;
         }
@@ -74,10 +103,12 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     const getViewerKey = () => {
         if (files.length === 0) return "empty";
         if (files.length === 1) {
-            return `${mode}-single-${fileIdentity(files[0])}-${files[0].versionId || "no-version"}`;
+            return `${effectiveMode}-single-${fileIdentity(files[0])}-${
+                files[0].versionId || "no-version"
+            }`;
         }
         const sortedIdentities = files.map(fileIdentity).sort().join("|");
-        return `${mode}-multi-${sortedIdentities}`;
+        return `${effectiveMode}-multi-${sortedIdentities}`;
     };
 
     return (
@@ -94,12 +125,21 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                 </Box>
             }
         >
-            {files.length > 0 ? (
+            {files.length > 0 && noViewer ? (
+                <Box textAlign="center" padding="xl" data-testid="file-viewer-no-viewer">
+                    <Box variant="h3">No viewer for this selection</Box>
+                    <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
+                        No visualize or compare viewer can open {files.length}{" "}
+                        {files.length === 1 ? "file" : "files"} of type{" "}
+                        {selectionExtensions.join(", ")}.
+                    </Box>
+                </Box>
+            ) : files.length > 0 ? (
                 <SpaceBetween size="s">
-                    {allowModeToggle && (
+                    {showModeToggle && (
                         <Box>
                             <SegmentedControl
-                                selectedId={mode}
+                                selectedId={effectiveMode}
                                 onChange={({ detail }) => setMode(detail.selectedId as ViewerMode)}
                                 label="Viewer mode"
                                 options={[
@@ -126,7 +166,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                             showViewerSelector={true}
                             isPreviewMode={false}
                             hideFullscreenControls={true}
-                            mode={mode}
+                            mode={effectiveMode}
                         />
                     </div>
                 </SpaceBetween>

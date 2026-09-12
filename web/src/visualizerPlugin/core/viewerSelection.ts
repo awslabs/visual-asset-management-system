@@ -87,3 +87,57 @@ export function admitsCompareSelection(
 
     return true;
 }
+
+/**
+ * Which host surfaces a selection can be opened on. A surface is "available" when at least one
+ * registered viewer of that kind admits the selection; a compare-only viewer never counts towards
+ * `visualize`, and a viewer without an enabled `compareMode` never counts towards `compare`.
+ */
+export interface ViewerModeAvailability {
+    visualize: boolean;
+    compare: boolean;
+}
+
+/** Preview viewers serve the preview surface only and are never candidates for either path. */
+const isCandidate = (config: ViewerPluginConfig): boolean => !config.isPreviewViewer;
+
+/** True when at least one (non-compare-only, non-preview) viewer can visualize the selection. */
+export function hasVisualizeViewer(
+    configs: ViewerPluginConfig[],
+    fileExtensions: string[],
+    isMultiFile: boolean
+): boolean {
+    return configs.some(
+        (config) =>
+            isCandidate(config) && admitsVisualizeSelection(config, fileExtensions, isMultiFile)
+    );
+}
+
+/** True when at least one compare-capable (non-preview) viewer admits the selection. */
+export function hasCompareViewer(
+    configs: ViewerPluginConfig[],
+    fileExtensions: string[],
+    compareContext?: CompareContext
+): boolean {
+    return configs.some(
+        (config) =>
+            isCandidate(config) && admitsCompareSelection(config, fileExtensions, compareContext)
+    );
+}
+
+/**
+ * Mode availability for a selection: the input for a Visualize/Compare toggle. Callers show only the
+ * available modes, force the single one when exactly one is available, and show an empty state when
+ * neither is. `isMultiFile` gates the visualize path; `compareContext` (count + shape) gates compare.
+ */
+export function availableViewerModes(
+    configs: ViewerPluginConfig[],
+    fileExtensions: string[],
+    isMultiFile: boolean,
+    compareContext?: CompareContext
+): ViewerModeAvailability {
+    return {
+        visualize: hasVisualizeViewer(configs, fileExtensions, isMultiFile),
+        compare: hasCompareViewer(configs, fileExtensions, compareContext),
+    };
+}

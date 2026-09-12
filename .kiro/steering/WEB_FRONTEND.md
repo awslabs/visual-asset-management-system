@@ -936,9 +936,24 @@ Contract for `compareFiles` entries (`ViewerPluginProps.compareFiles`, index 0 =
     list per db+asset+key) and re-fetches only the entry whose version changed.
 
 Reference implementation: `viewers/TextDiffViewerPlugin/TextDiffViewerComponent.tsx` (per-side
-state, per-side error panel, per-side `Select` version picker; diff library dynamically imported).
-Surfaces: search results "Compare Selected" (rows may span assets), and the version-compare actions in
+state, per-side error panel, per-side `Select` version picker; diff library dynamically imported;
+compact controls for layout, Line/Word/Character granularity, line numbers, and collapse-unchanged
+with context lines; single-line ellipsis-truncated side labels and library titles).
+Surfaces: search results "Compare Selected" (rows may span assets), the file manager's "Compare
+Selected Files" icon (`FileDetailsPanel.tsx`), and the version-compare actions in
 `AssetVersionComparison.tsx` / `FileVersionsList.tsx`, all hosted by `FileViewerModal`.
+
+**Mode availability — one rule for every entry point.** A viewer is EITHER a compare-differ
+(`compareMode.compareOnly`) OR a regular viewer; never a hybrid (guarded over the shipped
+`viewerConfig.json` by `viewerSelection.test.ts`). A surface offers **Visualize** only when
+`hasVisualizeViewer` / `areFilenamesViewableTogether` says a non-compare viewer admits the selection,
+and **Compare** only when `hasCompareViewer` / `areFilesComparableTogether` says a compare viewer admits
+its file count, shape and types (`isExtensionComparableAsVersions(ext)` for a per-row version Compare).
+`FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle; one → that mode, no
+toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters compare-only
+viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is handed. Never
+gate a Visualize/Compare control with a hand-written extension list; use these predicates behind
+`useViewerRegistryReady()`.
 
 ---
 
