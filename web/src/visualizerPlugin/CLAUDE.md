@@ -32,7 +32,7 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
 | `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `text-diff-viewer`                 | Text Diff Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc. (same list as `text-viewer`)                                                    | enabled (compare mode: 2 files, cross-asset)        |
+| `text-diff-viewer`                 | Text Diff Viewer               | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc. (same list as `text-viewer`)                                                    | enabled (compare-only: 2 files, cross-asset)        |
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
@@ -57,10 +57,21 @@ surfaces **only** viewers that declare a `compareMode` block with `enabled: true
 selection: N versions of one file requires `allowSameFileDifferentVersions`, N distinct files
 requires `allowDifferentFiles`, and entries spanning assets require `allowCrossAsset`.
 
-The classification lives in `core/compareShape.ts` (pure, unit-tested; the registry re-exports it):
+The per-viewer admission predicates for both paths live in `core/viewerSelection.ts` (pure,
+unit-tested; the registry re-exports them): `admitsVisualizeSelection(config, exts, isMultiFile)` and
+`admitsCompareSelection(config, exts, compareContext)`. The classification lives in
+`core/compareShape.ts` (pure, unit-tested; the registry re-exports it):
 `deriveCompareContext(files)` returns `{ fileCount, shape, crossAsset }`. **Identity is database +
 asset + key, never the key alone** — `config.json` under assetA and `config.json` under assetB are two
 different files (`shape: "different-files"`, `crossAsset: true`), not two versions of one file.
+
+**Compare-only viewers.** A viewer that renders nothing but `compareFiles` (the Text Diff Viewer)
+declares `compareMode.compareOnly: true`. The visualize path then never offers it — for one file or
+many, whatever `supportsMultiFile` and the extension match say — because visualize never passes
+`compareFiles` and the viewer would fail at once with "needs exactly two files". Keep such a viewer's
+`supportsMultiFile: false`: that flag is the **visualize** multi-file capability (`multiFileKeys`);
+the compare file count is `compareMode.minFiles`/`maxFiles`. Without `compareOnly`, compare capability
+is orthogonal — a viewer may visualize single files and also compare two.
 
 `DynamicViewer` renders compare mode when passed `mode="compare"`; it forwards the ordered files to
 the viewer as `compareFiles` (index 0 = left/base) and sets `compareMode={true}`. Compare-capable
@@ -99,6 +110,7 @@ renders a readable side beside a denied/archived one.
 | Field                            | Type     | Description                                                                             |
 | -------------------------------- | -------- | --------------------------------------------------------------------------------------- |
 | `enabled`                        | boolean  | Offer this viewer in compare mode                                                       |
+| `compareOnly`                    | boolean? | Viewer renders only `compareFiles`; never offered on the visualize path (default: no)   |
 | `minFiles` / `maxFiles`          | number   | Inclusive file-count window                                                             |
 | `allowSameFileDifferentVersions` | boolean  | Admit N versions of one file (same db + asset + key)                                    |
 | `allowDifferentFiles`            | boolean  | Admit N distinct files                                                                  |

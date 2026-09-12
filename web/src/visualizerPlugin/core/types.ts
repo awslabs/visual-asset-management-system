@@ -29,7 +29,8 @@ export interface ViewerPluginConfig {
     /**
      * Optional compare-mode capability. When present and `enabled`, this viewer is offered in
      * compare mode ("mode" === "compare" in PluginRegistry.getCompatibleViewers). A viewer without
-     * this block is never surfaced in compare mode; the visualize path ignores it entirely.
+     * this block is never surfaced in compare mode; the visualize path ignores it entirely unless
+     * `compareOnly` is set, which removes the viewer from the visualize path altogether.
      */
     compareMode?: CompareModeConfig;
 }
@@ -37,6 +38,14 @@ export interface ViewerPluginConfig {
 export interface CompareModeConfig {
     /** Whether this viewer participates in compare mode at all. */
     enabled: boolean;
+    /**
+     * The viewer can ONLY compare: it reads `compareFiles` and has no single- or multi-file visualize
+     * rendering. When true the visualize path never offers it (regardless of `supportsMultiFile` or
+     * extension match), so a selection of N matching files does not surface a viewer that would
+     * immediately fail with "needs exactly N files". Off when absent: compare capability is then
+     * orthogonal to the viewer's visualize capability.
+     */
+    compareOnly?: boolean;
     /** Minimum number of files the compare view accepts (inclusive). */
     minFiles: number;
     /** Maximum number of files the compare view accepts (inclusive). */

@@ -5,15 +5,16 @@
 
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
-import { supportsAllExtensions } from "./extensionMatching";
-import { CompareContext, admitsCompareShape } from "./compareShape";
+import { CompareContext } from "./compareShape";
+import { admitsCompareSelection, admitsVisualizeSelection } from "./viewerSelection";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
 
-// Compare classification lives in ./compareShape (pure, unit-testable); re-exported here so existing
-// callers keep importing it from the registry.
+// Compare classification lives in ./compareShape and the per-viewer admission predicates for both
+// selection paths in ./viewerSelection (pure, unit-testable); re-exported here so existing callers
+// keep importing them from the registry.
 export {
     deriveCompareShape,
     deriveCrossAsset,
@@ -21,6 +22,11 @@ export {
     admitsCompareShape,
 } from "./compareShape";
 export type { CompareShape, CompareContext } from "./compareShape";
+export {
+    admitsCompareSelection,
+    admitsVisualizeSelection,
+    isCompareOnlyViewer,
+} from "./viewerSelection";
 
 export interface ViewerPlugin {
     config: ViewerPluginConfig;
@@ -342,12 +348,13 @@ export class PluginRegistry {
                     if (metadata.config.isPreviewViewer) {
                         return false;
                     }
-                    return this.canCompare(metadata.config, fileExtensions, compareContext);
+                    return admitsCompareSelection(metadata.config, fileExtensions, compareContext);
                 })
                 .sort((a, b) => a.config.priority - b.config.priority);
         }
 
-        // For non-preview mode, return all compatible viewer metadata EXCEPT preview viewers
+        // For non-preview mode, return all compatible viewer metadata EXCEPT preview viewers and
+        // compare-only viewers (see admitsVisualizeSelection).
         return Array.from(this.pluginMetadata.values())
             .filter((metadata) => {
                 // Skip preview viewer for non-preview files
@@ -355,65 +362,9 @@ export class PluginRegistry {
                     return false;
                 }
 
-                return this.canHandle(metadata.config, fileExtensions, isMultiFile);
+                return admitsVisualizeSelection(metadata.config, fileExtensions, isMultiFile);
             })
             .sort((a, b) => a.config.priority - b.config.priority);
-    }
-
-    private canHandle(
-        config: ViewerPluginConfig,
-        fileExtensions: string[],
-        isMultiFile: boolean
-    ): boolean {
-        // Check if viewer supports multi-file when needed
-        const multiFileSupport = !isMultiFile || config.supportsMultiFile;
-        if (!multiFileSupport) {
-            return false;
-        }
-
-        // Every selected file must be renderable by this viewer — see supportsAllExtensions.
-        return supportsAllExtensions(config.supportedExtensions, fileExtensions);
-    }
-
-    /**
-     * Compare-mode compatibility gate. A viewer is offered in compare mode only when ALL hold:
-     *  - it declares `compareMode.enabled`
-     *  - the selected file count is within [minFiles, maxFiles]
-     *  - it can render every selected extension (supportsAllExtensions)
-     *  - the selection SHAPE is allowed (see admitsCompareShape): N versions of one file requires
-     *    `allowSameFileDifferentVersions`, N distinct files requires `allowDifferentFiles`, and
-     *    entries spanning assets require `allowCrossAsset`.
-     *
-     * `compareContext` describes the selection shape. When absent, only the count/extension checks
-     * apply (the caller has not resolved the shape yet).
-     */
-    private canCompare(
-        config: ViewerPluginConfig,
-        fileExtensions: string[],
-        compareContext?: CompareContext
-    ): boolean {
-        const compare = config.compareMode;
-        if (!compare || !compare.enabled) {
-            return false;
-        }
-
-        // File-count window.
-        const count = compareContext?.fileCount ?? fileExtensions.length;
-        if (count < compare.minFiles || count > compare.maxFiles) {
-            return false;
-        }
-
-        // Extension support: every selected extension must be renderable.
-        if (!supportsAllExtensions(config.supportedExtensions, fileExtensions)) {
-            return false;
-        }
-
-        // Selection-shape gating (same-file-versions / different-files / cross-asset).
-        if (compareContext && !admitsCompareShape(compare, compareContext)) {
-            return false;
-        }
-
-        return true;
     }
 
     getViewer(id: string): ViewerPlugin | undefined {

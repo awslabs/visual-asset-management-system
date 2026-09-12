@@ -906,13 +906,22 @@ export const VIEWER_COMPONENTS = {
 
 `PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` accepts
 `mode: "compare"`, which surfaces only viewers declaring `compareMode.enabled` whose
-`[minFiles, maxFiles]` window and shape flags admit the selection. The classification is pure and
+`[minFiles, maxFiles]` window and shape flags admit the selection. The per-viewer admission predicates
+for both paths are pure and unit-tested in `src/visualizerPlugin/core/viewerSelection.ts`
+(`admitsVisualizeSelection`, `admitsCompareSelection`); the classification is pure and
 unit-tested in `src/visualizerPlugin/core/compareShape.ts` (`deriveCompareContext(files)` →
-`{ fileCount, shape, crossAsset }`); the registry re-exports it. **File identity is database + asset +
+`{ fileCount, shape, crossAsset }`); the registry re-exports both. **File identity is database + asset +
 key, never the key alone** — the same key under two assets is `"different-files"` + `crossAsset: true`.
 
-`compareMode` fields: `enabled`, `minFiles`, `maxFiles`, `allowSameFileDifferentVersions`,
-`allowDifferentFiles`, and `allowCrossAsset?` (default: not allowed).
+`compareMode` fields: `enabled`, `compareOnly?`, `minFiles`, `maxFiles`,
+`allowSameFileDifferentVersions`, `allowDifferentFiles`, and `allowCrossAsset?` (default: not allowed).
+
+**Compare-only viewers** (`compareMode.compareOnly: true`, e.g. `text-diff-viewer`) render nothing but
+`compareFiles`, so the visualize path never offers them — one file or many, regardless of
+`supportsMultiFile` or extension match — because visualize never passes `compareFiles`. Keep such a
+viewer's `supportsMultiFile: false` (that flag is the visualize `multiFileKeys` capability; compare
+file count is `minFiles`/`maxFiles`). Without `compareOnly`, compare capability is orthogonal to
+visualize.
 
 Contract for `compareFiles` entries (`ViewerPluginProps.compareFiles`, index 0 = left/base):
 

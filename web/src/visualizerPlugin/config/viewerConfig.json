@@ -219,7 +219,7 @@
                 ".sql",
                 ".ps1"
             ],
-            "supportsMultiFile": true,
+            "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 1,
             "dependencies": ["react-diff-viewer-continued", "react-syntax-highlighter"],
@@ -228,6 +228,7 @@
             "enabled": true,
             "compareMode": {
                 "enabled": true,
+                "compareOnly": true,
                 "minFiles": 2,
                 "maxFiles": 2,
                 "allowSameFileDifferentVersions": true,
