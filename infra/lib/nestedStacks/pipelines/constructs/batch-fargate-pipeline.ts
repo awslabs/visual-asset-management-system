@@ -7,6 +7,7 @@ import * as batch from "aws-cdk-lib/aws-batch";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../../config/config";
 import { Construct } from "constructs";
@@ -29,6 +30,20 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      * Fargate supports 21-200 GiB. Default is 60 GiB.
      */
     ephemeralStorageGiB?: number;
+    /**
+     * vCPU reserved for the container. Default 16, the sizing the point-cloud and rendering pipelines
+     * were built against; a caller that names a smaller figure must pair it with a Fargate-valid
+     * `memoryMiB`.
+     */
+    cpu?: number;
+    /** Memory reserved for the container, in MiB. Default 65536. */
+    memoryMiB?: number;
+    /**
+     * Log group the container's stdout and stderr are written to through the `awslogs` driver. When
+     * absent, AWS Batch writes to its default `aws/batch/job` group, which carries neither a KMS key
+     * nor a retention policy.
+     */
+    logGroup?: logs.ILogGroup;
     /**
      * Hard limit on a single job attempt, after which AWS Batch terminates the job itself.
      *
@@ -105,8 +120,8 @@ export class BatchFargatePipelineConstruct extends Construct {
             retryAttempts: 1,
             timeout: props.attemptDuration,
             container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
-                cpu: 16,
-                memory: cdk.Size.mebibytes(65536),
+                cpu: props.cpu ?? 16,
+                memory: cdk.Size.mebibytes(props.memoryMiB ?? 65536),
                 ephemeralStorageSize: cdk.Size.gibibytes(props.ephemeralStorageGiB ?? 60),
                 image: containerImage,
                 environment: {
@@ -115,6 +130,12 @@ export class BatchFargatePipelineConstruct extends Construct {
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,
+                logging: props.logGroup
+                    ? ecs.LogDrivers.awsLogs({
+                          logGroup: props.logGroup,
+                          streamPrefix: props.batchJobDefinitionName,
+                      })
+                    : undefined,
                 // No `user` override: the job runs as whatever the image's own USER declares. An
                 // override here replaces it, so a container that drops privileges in its Dockerfile
                 // would still run as uid 0.
