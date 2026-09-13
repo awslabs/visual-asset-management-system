@@ -10,6 +10,7 @@ import {
     Header,
     Table,
     Button,
+    Link,
     Pagination,
     StatusIndicator,
     Alert,
@@ -19,6 +20,12 @@ import Popover from "@cloudscape-design/components/popover";
 import { downloadAsset, revertFileVersion } from "../../../services/APIService";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
+import {
+    EXECUTION_DETAILS_API_ROUTE,
+    executionDetailPath,
+    linkedExecutionId,
+} from "../utils/executionLinks";
+import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { useNavigate } from "react-router";
 import Synonyms from "../../../synonyms";
 
@@ -53,6 +60,7 @@ interface FileVersionsTableProps {
     displayMode?: "modal" | "container"; // Display context
     visible?: boolean; // For modal context
     assetVersionId?: string; // Current asset version context for highlighting
+    onNavigateAway?: () => void; // Called before a row link leaves the page (closes a hosting modal)
 }
 
 interface RevertConfirmationModalProps {
@@ -139,8 +147,13 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     displayMode = "container",
     visible = true,
     assetVersionId,
+    onNavigateAway,
 }) => {
     const navigate = useNavigate();
+    // The "View execution" row link is hidden when the caller may not read execution details,
+    // the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
 
     // State management
     const [versions, setVersions] = useState<FileVersion[]>([]);
@@ -245,6 +258,15 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 isArchived: version?.isArchived,
             },
         });
+    };
+
+    // Handle view execution: leaves the page for the execution detail route, so a hosting
+    // modal is dismissed first rather than left open behind the new page.
+    const handleViewExecution = (executionId: string) => {
+        if (onNavigateAway) {
+            onNavigateAway();
+        }
+        navigate(executionDetailPath(executionId));
     };
 
     // Handle revert version
@@ -426,6 +448,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 const showUserSecondary =
                     Boolean(item.changeUserId) && primaryText !== item.changeUserId;
 
+                // A version written by a workflow execution links to that run's detail page.
+                const executionId = canViewExecution ? linkedExecutionId(item) : undefined;
+
                 const primaryContent = hasExtraDetail ? (
                     <Popover
                         dismissButton={false}
@@ -466,6 +491,14 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                             <Box fontSize="body-s" color="text-status-inactive">
                                 {item.changeUserId}
                             </Box>
+                        )}
+                        {executionId && (
+                            <Link
+                                onFollow={() => handleViewExecution(executionId)}
+                                fontSize="body-s"
+                            >
+                                View execution
+                            </Link>
                         )}
                     </SpaceBetween>
                 );

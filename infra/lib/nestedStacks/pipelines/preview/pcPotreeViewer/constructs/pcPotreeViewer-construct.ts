@@ -437,6 +437,10 @@ export class PcPotreeViewerConstruct extends NestedStack {
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            {
+                pdalJobDefinitionName: pdalBatchPipeline.batchJobDefinition.jobDefinitionName,
+                potreeJobDefinitionName: potreeBatchPipeline.batchJobDefinition.jobDefinitionName,
+            },
             props.storageResources.encryption.kmsKey
         );
 

@@ -587,6 +587,22 @@ export function fileManagerReducer(
             };
         }
 
+        case "SET_TREE_NAME": {
+            // Renames the root node only. Selection, expansion and loading state are untouched so the
+            // details toolbar (and anything open from it) survives the asset name arriving late.
+            const rename = (tree: FileTree): FileTree =>
+                tree.name === action.payload
+                    ? tree
+                    : { ...tree, name: action.payload, displayName: action.payload };
+            const renamedTree = rename(state.fileTree);
+            return {
+                ...state,
+                fileTree: renamedTree,
+                unfilteredFileTree: rename(state.unfilteredFileTree),
+                flattenedItems: flattenFileTree(renamedTree),
+            };
+        }
+
         case "SET_READ_ONLY":
             return {
                 ...state,

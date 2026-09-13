@@ -151,19 +151,37 @@ events_client.put_events(Entries=[{
         "pipelineExecutionId": pipeline_execution_id,
         "subExecution": {"resourceType": "stepFunctionsExecution",
                          "stateMachineArn": state_machine_arn,
-                         "executionArn": sub_execution_arn},
-        "logs": [{"logGroupArn": log_group_arn, "logGroupName": log_group_name}],
+                         "executionArn": sub_execution_arn,
+                         "label": "Thumbnail processing"},
+        "logs": [
+            {"logGroupArn": log_group_arn, "logGroupName": log_group_name,
+             "sourceType": "stateMachine", "label": "Thumbnail state machine"},
+            {"logGroupArn": batch_log_group_arn, "logGroupName": "/aws/batch/job",
+             "logStreamPrefix": f"{job_definition_name}/default/",
+             "stageName": "ThumbnailBatchJob", "sourceType": "batch",
+             "label": "ThumbnailBatchJob container"},
+        ],
     }),
 }])
 ```
 
 ### What to register
 
-| Register this                          | So that                                                                                                 |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| A nested Step Functions execution      | Aborting the VAMS execution stops your sub-workflow, and its history appears in the execution's logs.   |
-| A log group your process writes to     | Its events appear under the step's logs, without the operator needing to know where your pipeline logs. |
-| A long-running compute job (see below) | Aborting the VAMS execution terminates the job instead of leaving it running — and billing.             |
+| Register this                          | So that                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A nested Step Functions execution      | Aborting the VAMS execution stops your sub-workflow, its history appears in the execution's logs, and the execution view reports each of its stages with a status. |
+| A log group your process writes to     | It is listed as a log source of the step — labelled, tied to its stage, readable alone — without the operator needing to know where your pipeline logs.            |
+| A long-running compute job (see below) | Aborting the VAMS execution terminates the job instead of leaving it running — and billing, and its container log stream is resolved from the job.                 |
+
+The optional `stageName` (the exact ASL state name, 1–80 printable characters), `label` (1–128 characters), and
+`sourceType` (`stateMachine`, `lambda`, `batch`, `ecs`, `container`, or `custom`) on a `logs[]` entry — and
+`stageName` / `label` on `subExecution` — are what let the execution view label each source and tie it to a
+stage; an entry without them is still read, labelled by its log group's name. Register an AWS Batch
+container log as the default group `/aws/batch/job` with `logStreamPrefix` set to
+`<jobDefinitionName>/default/`. The event's `Source` must end in `.pipeline.<pipelineExecutionId>` for the
+pipeline execution it names (the prefix on the payload already does). See
+[Registering sub-processes and logs](custom-pipelines.md#registering-sub-processes-and-logs) for the full
+contract.
 
 The `resourceType` field is what makes this extensible: the registration path validates and stores
 whichever locator keys you report (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`,

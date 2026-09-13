@@ -640,21 +640,81 @@ events_client.put_events(Entries=[{
         "pipelineExecutionId": pipeline_execution_id,
         "subExecution": {"resourceType": "stepFunctionsExecution",
                          "stateMachineArn": state_machine_arn,
-                         "executionArn": sub_execution_arn},
-        "logs": [{"logGroupArn": log_group_arn, "logGroupName": log_group_name}],
+                         "executionArn": sub_execution_arn,
+                         "label": "Thumbnail processing"},
+        "logs": [
+            {"logGroupArn": log_group_arn, "logGroupName": log_group_name,
+             "sourceType": "stateMachine", "label": "Thumbnail state machine"},
+            {"logGroupArn": batch_log_group_arn, "logGroupName": "/aws/batch/job",
+             "logStreamPrefix": f"{job_definition_name}/default/",
+             "stageName": "ThumbnailBatchJob", "sourceType": "batch",
+             "label": "ThumbnailBatchJob container"},
+        ],
     }),
 }])
 ```
 
 Registration is **best-effort by design**: wrap it so a registration failure is logged and ignored rather
-than failing a pipeline whose real work already started. Re-reporting the same locator is safe — an
-already-registered resource is skipped, so an at-least-once event delivery does not duplicate it.
+than failing a pipeline whose real work already started. Re-reporting the same location is safe — a log
+entry is identified by its group and stream (or prefix), so an at-least-once event delivery does not
+duplicate it, and a redelivery that adds a `stageName`, `label`, or `sourceType` the stored entry lacks
+fills them in. At most 50 log entries and 50 sub-processes are kept per pipeline execution.
 
-| Register                                  | So that                                                                                              |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| A nested Step Functions execution         | Aborting the VAMS execution stops it, and its state history appears in the execution's logs.         |
-| A log group the pipeline writes to        | Its events appear under the step's logs without an operator needing to know where the pipeline logs. |
-| A compute job the pipeline submits itself | Aborting terminates the job rather than leaving it running and billing.                              |
+The `Source` must end in `.pipeline.<pipelineExecutionId>` for the pipeline execution the detail names —
+the prefix on the payload already has that form — and an event whose source names another pipeline
+execution is ignored. Each `logs[]` entry takes a location (`logGroupArn` or `logGroupName`, and optionally
+`logStreamName` or `logStreamPrefix`) plus three optional descriptors: `stageName`, the state of your nested
+state machine the log belongs to (1–80 printable characters, matching the ASL state name exactly); `label`,
+a display name (1–128 characters); and `sourceType`, one of `stateMachine`, `lambda`, `batch`, `ecs`,
+`container`, `custom` (anything else is stored as `custom`). `subExecution` takes the same `stageName` and
+`label`. The descriptors are what let the execution view label each log source and tie it to a stage; an
+entry without them is still read, with the log group's name as its label. For an AWS Batch job, the
+container log is the AWS Batch default group `/aws/batch/job` with streams named
+`<jobDefinitionName>/default/<ecs-task-id>`, so register the group with `logStreamPrefix` set to
+`<jobDefinitionName>/default/` — a prefix registered on the pipeline execution is what allows VAMS to read
+the container stream, which does not print the execution id, without the execution-scope filter.
+
+For a pipeline deployed by the VAMS CDK, the builder of the lambda that publishes the event — the
+`openPipeline`-equivalent, not the `vamsExecute` entry point — supplies these values. It sets
+`ORCHESTRATION_BUS_NAME` from `storageResources.eventBridge.orchestrationBus.eventBusName`, grants the
+function `events:PutEvents` with `orchestrationBus.grantPutEventsTo(fn)`, and passes the name and ARN of
+the Amazon CloudWatch Logs group the construct created for the nested state machine. For an AWS Batch
+pipeline it spreads `batchJobLogGroupEnvironment()` from `infra/lib/helper/batchJobLogGroup.ts`, which sets
+`BATCH_JOB_LOG_GROUP_NAME` (`/aws/batch/job`) and `BATCH_JOB_LOG_GROUP_ARN` in the form the
+`CLOUDWATCH_LOG_GROUP_ARN` validator accepts, and sets `BATCH_JOB_DEFINITION_NAME` to the job definition's
+**name**: a Fargate `EcsJobDefinition`'s `.jobDefinitionName`, the `jobDefinitionName` prop of a named
+`CfnJobDefinition`, or `jobDefinitionNameFromRef(jobDefinition.ref)` for an unnamed one. The Ref is an ARN
+with a revision, and a `:` in the prefix fails the `LOG_STREAM_NAME` validator, which leaves the container
+source permanently unscoped.
+
+```typescript
+import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
+
+const fun = new lambda.Function(scope, "openPipeline", {
+    // code, handler, runtime, layers, timeout, memorySize, vpc as in the other builders
+    environment: {
+        STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
+        ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+        STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+        STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+        ...batchJobLogGroupEnvironment(),
+        BATCH_JOB_DEFINITION_NAME: batchPipeline.batchJobDefinition.jobDefinitionName,
+    },
+});
+
+pipelineStateMachine.grantStartExecution(fun);
+orchestrationBus.grantPutEventsTo(fun);
+```
+
+`stageName` is the state's name in the nested state machine's definition; with the CDK that is the construct
+id of the task, since no construct sets `stateName`. A pipeline deployed outside the VAMS CDK sets the same
+environment values itself and needs `events:PutEvents` on the orchestration bus.
+
+| Register                                  | So that                                                                                                                                                                             |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A nested Step Functions execution         | Aborting the VAMS execution stops it, its state history appears in the execution's logs, and the execution view reports each of its stages with a status derived from that history. |
+| A log group the pipeline writes to        | It is listed as a log source of the step, labelled and tied to its stage, and its events appear under the step's logs without an operator needing to know where the pipeline logs.  |
+| A compute job the pipeline submits itself | Aborting terminates the job rather than leaving it running and billing, and its status and container log stream are resolved from the job itself.                                   |
 
 `resourceType` is what keeps this open-ended: the registration path validates and stores whichever locator
 keys are reported (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`, `queueId`, or a
@@ -666,22 +726,27 @@ instead of silently forgetting it.
 A registration is a durable record on the pipeline-execution row, and three separate capabilities read it.
 Registering once is what turns each of them on:
 
-| Capability             | Reads                              | Behavior without registration                                                                                 |
-| ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Abort**              | `registeredSubExecutions`          | Aborting the VAMS execution stops the workflow but leaves the pipeline's own work running — and billing.      |
-| **Logs**               | `registeredLogs`                   | The step's log viewer has no source, so it renders empty even though the pipeline is writing logs somewhere.  |
-| **Sub-process status** | `registeredSubExecutions` locators | The execution view cannot report what the sub-process is doing, because it does not know the resource exists. |
+| Capability             | Reads                                                                                                        | Behavior without registration                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Abort**              | `registeredSubExecutions`                                                                                    | Aborting the VAMS execution stops the workflow but leaves the pipeline's own work running — and billing.                                   |
+| **Logs**               | `registeredLogs` — listed as the step's `availableLogs` / `logSources`, each readable alone by `logId`       | The step's log viewer has only the invocation log, so a container's output is unreachable even though the pipeline is writing it.          |
+| **Sub-process status** | `registeredSubExecutions` locators, plus the sub-state-machine definition and execution history at read time | The execution view cannot report what the sub-process is doing, or which stage of it failed, because it does not know the resource exists. |
 
-The logs a step shows come from all three sources merged and sorted together — the pipeline's own Lambda log
-group, any group reported through `registeredLogs`, and the sub-process history. See
-[`GET /workflows/executions/{executionId}/logs`](../api/workflows.md) for the `subProcessEvents` and
-`sfnHistoryEvents` shape a client receives.
+The logs a step shows come from all three sources merged and sorted by timestamp — the pipeline's own Lambda
+log group, any group reported through `registeredLogs`, and the sub-process history — and every registered
+source is listed with a `logId` so a client can read it alone. Stage status is never stored: the execution
+details route derives it, when asked, from the registered sub-state-machine's definition and history. See
+[`GET /workflows/executions/{executionId}/details`](../api/workflows.md#get-execution-details) for the
+`availableLogs` and `subExecutions` shape and
+[`GET /workflows/executions/{executionId}/logs`](../api/workflows.md#get-execution-logs) for `logSources`,
+`subProcessEvents`, and `sfnHistoryEvents`.
 
 :::info[Stopping is type-aware; recording is not]
 Registration accepts any `resourceType`, but only the types VAMS has a stop API for are actually stopped
 today: a Step Functions execution (`stepFunctionsExecution`), an AWS Batch job (`batchJob`), and an AWS
-Deadline Cloud farm job (`deadlineCloudJob`). Any other type is stored and reported back as left running
-rather than dropped.
+Deadline Cloud farm job (`deadlineCloudJob`). A registered Deadline Cloud job is also reported with its live
+job status in the execution details, and its session logs appear as one of the step's log sources. Any
+other type is stored and reported back as left running rather than dropped.
 
 Stopping runs on both of the routes that end a run early. An abort names what it could not stop in the API
 response; a workflow failure stops each in-flight pipeline's sub-processes before stamping its row terminal,

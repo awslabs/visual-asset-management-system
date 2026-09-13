@@ -41,10 +41,36 @@ for k, v in {
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/CosmosReason",
     "STATE_MACHINE_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/CosmosReason:*",
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/batch/job",
+    "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+    "BATCH_JOB_DEFINITION_NAME": "CosmosReasonJobDef-reason2B",
+    "COSMOS_BATCH_STATE_NAME": "CosmosBatchJob-reason2B",
 }.items():
     os.environ.setdefault(k, v)
 
 import manifestHelper as mh  # noqa: E402
+
+
+def _repo_root():
+    """Walk up to the repo root rather than counting `..` segments — pipeline directories sit at
+    differing depths, and a miscounted relative path fails as a missing file."""
+    path = _LAMBDA_DIR
+    while path != os.path.dirname(path):
+        if os.path.isdir(os.path.join(path, "infra")) and os.path.isdir(
+                os.path.join(path, "backend", "backend", "common")):
+            return path
+        path = os.path.dirname(path)
+    raise RuntimeError("repo root not found from " + _LAMBDA_DIR)
+
+
+def _backend_validators():
+    """The backend's real validators module, so registered values are checked against the regexes
+    registerPipelineExecution applies rather than a copy of them. Appended to the END of sys.path so
+    nothing under backend/backend shadows this pipeline's own modules."""
+    backend_pkg = os.path.join(_repo_root(), "backend", "backend")
+    if backend_pkg not in sys.path:
+        sys.path.append(backend_pkg)
+    return importlib.import_module("common.validators")
 
 
 # ============================ vamsExecute (vamsExecuteCosmosReasonPipeline) ============================
@@ -308,6 +334,47 @@ class TestOpenPipeline:
             resp = mod.lambda_handler(self._event(), MagicMock())
         # Registration raised, but the pipeline start still succeeds.
         assert resp["statusCode"] == 200
+
+    def test_registers_the_batch_container_log_source_for_the_models_stage(self):
+        mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Cosmos Reason processing"
+        sfn_log, batch_log = detail["logs"]
+        assert sfn_log["sourceType"] == "stateMachine"
+        assert sfn_log["label"] == "Cosmos Reason state machine"
+        assert batch_log == {
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+            "logGroupName": "/aws/batch/job",
+            "logStreamName": "",
+            "logStreamPrefix": "CosmosReasonJobDef-reason2B/default/",
+            "stageName": "CosmosBatchJob-reason2B",
+            "sourceType": "batch",
+            "label": "CosmosBatchJob-reason2B container",
+        }
+        validators = _backend_validators()
+        assert validators.validate_cloudwatch_log_group_arn("logGroupArn", batch_log["logGroupArn"])[0]
+        assert validators.validate_log_stream_name("logStreamPrefix", batch_log["logStreamPrefix"])[0]
+        assert not validators.validate_cloudwatch_log_group_arn(
+            "logGroupArn", "arn:aws:logs:us-east-1:123456789012:log-group//aws/batch/job")[0]
+
+    def test_container_log_source_is_skipped_without_a_batch_state_name(self):
+        # One openPipeline function exists per model; without the model's state name the entry
+        # could not be attributed to a stage, so it is not sent.
+        with patch.dict(os.environ):
+            os.environ.pop("COSMOS_BATCH_STATE_NAME", None)
+            mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert [log["sourceType"] for log in detail["logs"]] == ["stateMachine"]
 
 
 # ============================ constructPipeline ============================

@@ -17,6 +17,8 @@ interface DynamicTagFormProps {
     formData?: any;
     onChange?: (data: any) => void;
     onSubmit?: (data: any) => void;
+    /** Reaches the templates (module constants): `{ layout: "grid" }` lays fields on two columns. */
+    formContext?: Record<string, unknown>;
 }
 
 /**
@@ -108,9 +110,31 @@ const TagFormSubmitButton: React.FC<SubmitButtonProps> = ({ uiSchema }) => {
  * dark mode still read because its fill differs from the panel. The widget classes below supply the
  * border explicitly.
  */
+/** The `{{tagKey}}` placeholder a field fills in the config body, shown beside its label so the
+ *  input and the placeholder it stands for read as one thing. */
+const TagPlaceholder: React.FC<{ tagKey?: string }> = ({ tagKey }) =>
+    tagKey ? (
+        <code
+            data-testid="tag-placeholder"
+            className="ml-2 rounded bg-surface px-1 py-0.5 font-mono text-[11px] font-normal text-text-secondary"
+        >
+            {`{{${tagKey}}}`}
+        </code>
+    ) : null;
+
 const TagFieldTemplate = (props: any) => {
-    const { id, label, required, description, errors, children, hidden, schema, displayLabel } =
-        props;
+    const {
+        id,
+        label,
+        required,
+        description,
+        errors,
+        children,
+        hidden,
+        schema,
+        displayLabel,
+        uiSchema,
+    } = props;
     if (hidden) return <div className="hidden">{children}</div>;
 
     // The object wrapper and array items carry no label of their own; rendering the chrome for them
@@ -125,20 +149,29 @@ const TagFieldTemplate = (props: any) => {
         );
     }
 
+    // A checkbox carries its own title, so its guidance reads below the box rather than above an
+    // unnamed control.
+    const controlFirst = schema?.type === "boolean";
+    // Instructions read as guidance, distinct from the label above and the control below.
+    const guidance = description && (
+        <div className={`text-xs text-text-secondary ${controlFirst ? "mt-1" : "mb-2"}`}>
+            {description}
+        </div>
+    );
     return (
         <div className="orch-outline rounded-md border border-border-default bg-surface-secondary p-3">
             {displayLabel !== false && label && (
-                <label
-                    htmlFor={id}
-                    className="block text-sm font-semibold text-text-primary mb-0.5"
-                >
-                    {label}
-                    {required && <span className="ml-1 text-vams-error">*</span>}
-                </label>
+                <div className="mb-0.5 flex items-center">
+                    <label htmlFor={id} className="text-sm font-semibold text-text-primary">
+                        {label}
+                        {required && <span className="ml-1 text-vams-error">*</span>}
+                    </label>
+                    <TagPlaceholder tagKey={uiSchema?.["ui:tagKey"]} />
+                </div>
             )}
-            {/* Instructions read as guidance, distinct from the label above and the control below. */}
-            {description && <div className="text-xs text-text-secondary mb-2">{description}</div>}
+            {!controlFirst && guidance}
             {children}
+            {controlFirst && guidance}
             {errors}
         </div>
     );
@@ -153,14 +186,44 @@ const TagDescriptionFieldTemplate = (props: any) => {
     return <div className="text-xs text-text-secondary mb-2">{text}</div>;
 };
 
-/** The object wrapper: tags stacked with real separation instead of running together. */
-const TagObjectFieldTemplate = (props: any) => (
-    <div className="space-y-3">
-        {props.properties.map((element: any) => (
-            <div key={element.name}>{element.content}</div>
-        ))}
-    </div>
-);
+/** Whether a tag takes the full width of the two-column grid: lists, long descriptions, textareas,
+ *  or a field whose uiSchema asks for it. */
+export function spansFullRow(name: string, schema: any, uiSchema: any): boolean {
+    const prop = schema?.properties?.[name] || {};
+    const ui = uiSchema?.[name] || {};
+    return (
+        prop.type === "array" ||
+        (typeof prop.description === "string" && prop.description.length > 120) ||
+        ui["ui:widget"] === "textarea" ||
+        ui["ui:colSpan"] === 2
+    );
+}
+
+/** The object wrapper: tags stacked with real separation, or on a two-column grid when the form
+ *  context asks for one. */
+const TagObjectFieldTemplate = (props: any) => {
+    const grid = props.formContext?.layout === "grid";
+    return (
+        <div
+            data-testid="tag-form-fields"
+            className={grid ? "grid grid-cols-1 gap-3 md:grid-cols-2" : "space-y-3"}
+        >
+            {props.properties.map((element: any) => (
+                <div
+                    key={element.name}
+                    data-tag-field={element.name}
+                    className={
+                        grid && spansFullRow(element.name, props.schema, props.uiSchema)
+                            ? "md:col-span-2"
+                            : undefined
+                    }
+                >
+                    {element.content}
+                </div>
+            ))}
+        </div>
+    );
+};
 
 /** Shared control chrome. `orch-outline` is what opts a control into a painted border. */
 const widgetClass =
@@ -218,17 +281,42 @@ const TagSelectWidget = (props: any) => {
     );
 };
 
-const TagCheckboxWidget = (props: any) => (
-    <label className="inline-flex items-center gap-2 text-sm text-text-primary">
-        <input
-            id={props.id}
-            type="checkbox"
-            checked={!!props.value}
-            disabled={props.disabled || props.readonly}
-            onChange={(e) => props.onChange(e.target.checked)}
-        />
-        <span>{props.value ? "Enabled" : "Disabled"}</span>
-    </label>
+/** RJSF hands a boolean's title to its widget rather than to the field template (displayLabel is false
+ *  for a checkbox), so the tag's name is rendered here beside the box, with its state after it. */
+const TagCheckboxWidget = (props: any) => {
+    const title = props.label || props.schema?.title;
+    return (
+        <label className="inline-flex items-start gap-2 text-sm text-text-primary">
+            <input
+                id={props.id}
+                type="checkbox"
+                className="mt-0.5"
+                checked={!!props.value}
+                disabled={props.disabled || props.readonly}
+                onChange={(e) => props.onChange(e.target.checked)}
+            />
+            <span>
+                {title && (
+                    <span className="font-semibold">
+                        {title}
+                        {props.required && <span className="ml-1 text-vams-error">*</span>}
+                    </span>
+                )}
+                <span className={title ? "ml-2 text-text-secondary" : ""}>
+                    {props.value ? "Enabled" : "Disabled"}
+                </span>
+            </span>
+        </label>
+    );
+};
+
+/** The checkbox widget with its placeholder chip beside the label rather than inside it, so the box's
+ *  accessible name stays the tag's title. */
+const TagCheckboxWidgetWithPlaceholder = (props: any) => (
+    <div className="flex items-start">
+        <TagCheckboxWidget {...props} />
+        <TagPlaceholder tagKey={props.uiSchema?.["ui:tagKey"]} />
+    </div>
 );
 
 const TagTextareaWidget = (props: any) => (
@@ -246,7 +334,7 @@ const TagTextareaWidget = (props: any) => (
 const tagFormWidgets = {
     TextWidget: TagTextWidget,
     SelectWidget: TagSelectWidget,
-    CheckboxWidget: TagCheckboxWidget,
+    CheckboxWidget: TagCheckboxWidgetWithPlaceholder,
     TextareaWidget: TagTextareaWidget,
 };
 
@@ -316,6 +404,8 @@ export function tagSchemaToJsonSchema(fields: TagSchemaField[]): { schema: any; 
         }
 
         schema.properties[field.tagKey] = prop;
+        // The placeholder the field fills, for the field chrome to display.
+        uiSchema[field.tagKey] = { "ui:tagKey": field.tagKey };
 
         // Add to required array if required
         if (field.required) {
@@ -336,15 +426,26 @@ const DynamicTagForm: React.FC<DynamicTagFormProps> = ({
     formData,
     onChange,
     onSubmit,
+    formContext,
 }) => {
     const { schema, uiSchema } = tagSchemaToJsonSchema(tagSchema);
     // Hide RJSF's built-in Submit button when this is a read-only preview (no onSubmit handler) —
     // the preview only shows the fields, not a submittable form.
-    const finalUiSchema = {
-        ...uiSchema,
-        ...externalUiSchema,
-        ...(onSubmit ? {} : { "ui:submitButtonOptions": { norender: true } }),
-    };
+    // Per-field entries merge rather than replace, so an external "ui:widget" keeps the field's
+    // placeholder chip.
+    const finalUiSchema: any = { ...uiSchema };
+    Object.entries(externalUiSchema || {}).forEach(([key, value]) => {
+        const mine = finalUiSchema[key];
+        finalUiSchema[key] =
+            mine &&
+            typeof mine === "object" &&
+            value &&
+            typeof value === "object" &&
+            !Array.isArray(value)
+                ? { ...mine, ...(value as object) }
+                : value;
+    });
+    if (!onSubmit) finalUiSchema["ui:submitButtonOptions"] = { norender: true };
 
     const handleSubmit = (data: any) => {
         if (onSubmit) {
@@ -366,6 +467,7 @@ const DynamicTagForm: React.FC<DynamicTagFormProps> = ({
             validator={validator}
             templates={tagFormTemplates}
             widgets={tagFormWidgets}
+            formContext={formContext}
             onChange={handleChange}
             onSubmit={handleSubmit}
         />

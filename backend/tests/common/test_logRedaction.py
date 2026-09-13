@@ -136,6 +136,31 @@ class TestTaskTokenRedaction:
         assert TASK_TOKEN not in out[0]["message"]
         assert REDACTED in out[0]["message"]
 
+    @pytest.mark.parametrize("slashes", ["", "\\", "\\\\"])
+    def test_deadline_parameter_envelope_task_token_redacted(self, slashes):
+        # Deadline Cloud CreateJob wraps every parameter value in a single-key type object, so the
+        # reserved VamsTaskToken parameter reaches the workflow log group as
+        # `"VamsTaskToken":{"String":"<token>"}` — inside the escaped state input the same shape
+        # carries a backslash before each quote. The direct key:"value" rule stops at the `{`, so
+        # without an envelope-aware rule the token survives redaction.
+        q = slashes + '"'
+        text = ('{%sparameters%s:{%sVamsWorkflowId%s:{%sString%s:%swf1%s},'
+                '%sVamsTaskToken%s:{%sString%s:%s%s%s},'
+                '%sVamsPipelineExecutionId%s:{%sString%s:%spe1%s}}}') % (
+            q, q, q, q, q, q, q, q,
+            q, q, q, q, q, TASK_TOKEN, q,
+            q, q, q, q, q, q)
+        out = redact_log_text(text)
+        assert TASK_TOKEN not in out, "task token leaked through the Deadline parameter envelope"
+        assert REDACTED in out
+        assert "wf1" in out and "pe1" in out
+
+    def test_non_sensitive_wrapped_value_unchanged(self):
+        # The envelope rule fires only for a sensitive key: an ordinary parameter wrapped in the
+        # same {"String": ...} object is returned byte-identical.
+        text = '{"VamsWorkflowId": {"String": "wf-keep-me-123"}}'
+        assert redact_log_text(text) == text
+
     def test_deeply_escaped_task_token_redacted(self):
         # Re-encoded payloads carry more backslashes per quote the deeper they were nested.
         for depth in (1, 2, 3):

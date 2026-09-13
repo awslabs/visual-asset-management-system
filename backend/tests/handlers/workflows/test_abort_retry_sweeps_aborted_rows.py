@@ -182,7 +182,8 @@ class TestTheOrdinaryAbortPathIsUnchanged:
 
 
 def _register_event(detail):
-    return {"detail-type": reg.REGISTER_DETAIL_TYPE, "detail": detail}
+    return {"detail-type": reg.REGISTER_DETAIL_TYPE, "detail": detail,
+            "source": f"vams.prod.execution.{EXEC_ID}.pipeline.{detail.get('pipelineExecutionId', 'P1')}"}
 
 
 def _register(row_status, sub=None):

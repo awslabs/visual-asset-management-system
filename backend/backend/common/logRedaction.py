@@ -46,9 +46,15 @@ _KEYS_ALT = "|".join(re.escape(k) for k in SENSITIVE_KEYS)
 # three levels of re-encoding, well beyond anything the orchestration emits.
 _Q = r'''(?:\\{0,8}["'])'''
 
+# Deadline Cloud CreateJob wraps every parameter value in a single-key type object —
+# `"VamsTaskToken": {"String": "<token>"}` — so the reserved task-token parameter reaches the
+# workflow log group behind a `{"String":` (or `{"Int":`, …) envelope rather than a bare quote. This
+# OPTIONAL wrapper, matched as part of group 1, steps over that envelope so the value-capture below
+# still reaches the token; a plain `"key": "value"` skips the wrapper and matches unchanged.
+_WRAP = r'(?:' + _Q + r'?\{\s*' + _Q + r'[A-Za-z]+' + _Q + r'\s*:\s*)?'
 # "key": "value"  /  "key": value  — JSON-style, value up to the next quote or delimiter.
 _JSON_KV = re.compile(
-    r'(?i)(' + _Q + r'?(?:' + _KEYS_ALT + r')' + _Q + r'?\s*[:=]\s*)('
+    r'(?i)(' + _Q + r'?(?:' + _KEYS_ALT + r')' + _Q + r'?\s*[:=]\s*' + _WRAP + r')('
     + _Q + r')([^"\']*?)(' + _Q + r')'
 )
 # key=value / key: value — bare (unquoted) value up to whitespace, comma, or delimiter.

@@ -42,10 +42,34 @@ for _k, _v in {
     "BATCH_JOB_QUEUE": "coord-transform-queue",
     "BATCH_JOB_DEFINITION": "coord-transform-jobdef",
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/batch/job",
+    "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
 }.items():
     os.environ.setdefault(_k, _v)
 
 PREFIX = "vams.prod-us-east-1.execution.exec-abc.pipeline.pexec-123"
+
+
+def _repo_root():
+    """Walk up to the repo root rather than counting `..` segments — pipeline directories sit at
+    differing depths, and a miscounted relative path fails as a missing file."""
+    path = _LAMBDA_DIR
+    while path != os.path.dirname(path):
+        if os.path.isdir(os.path.join(path, "infra")) and os.path.isdir(
+                os.path.join(path, "backend", "backend", "common")):
+            return path
+        path = os.path.dirname(path)
+    raise RuntimeError("repo root not found from " + _LAMBDA_DIR)
+
+
+def _backend_validators():
+    """The backend's real validators module, so registered values are checked against the regexes
+    registerPipelineExecution applies rather than a copy of them. Appended to the END of sys.path so
+    nothing under backend/backend shadows this pipeline's own modules."""
+    backend_pkg = os.path.join(_repo_root(), "backend", "backend")
+    if backend_pkg not in sys.path:
+        sys.path.append(backend_pkg)
+    return importlib.import_module("common.validators")
 
 
 def _load_execute_batch_job():
@@ -78,7 +102,10 @@ class TestBatchJobRegistration:
         detail = json.loads(entry["Detail"])
         # The abort path routes on pipelineExecutionId and terminates on jobId; both are required.
         assert detail["pipelineExecutionId"] == "pexec-123"
-        assert detail["subExecution"] == {"resourceType": "batchJob", "jobId": "job-xyz"}
+        assert detail["subExecution"] == {
+            "resourceType": "batchJob", "jobId": "job-xyz",
+            "stageName": "CoordTransformBatchJob", "label": "Coordinate transform job",
+        }
 
     def test_registration_happens_after_the_job_exists(self):
         # Registering a job id that was never submitted would leave the abort path terminating
@@ -125,6 +152,44 @@ class TestBatchJobRegistration:
             MagicMock())
         mod.events_client.put_events.assert_not_called()
 
+    def test_registers_the_container_log_source_under_the_job_definition_prefix(self):
+        # The job runs under WAIT_FOR_TASK_TOKEN, so no `.sync` history event ever carries its log
+        # stream; the registered prefix + DescribeJobs is the only way a reader finds the stream.
+        mod = _load_execute_batch_job()
+        mod.lambda_handler(
+            {"jobName": "CoordXform_1", "definition": ["{}"], "taskToken": "tok",
+             "orchestrationEventPrefix": PREFIX},
+            MagicMock())
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["logs"] == [{
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+            "logGroupName": "/aws/batch/job",
+            "logStreamName": "",
+            "logStreamPrefix": "coord-transform-jobdef/default/",
+            "stageName": "CoordTransformBatchJob",
+            "sourceType": "batch",
+            "label": "CoordTransformBatchJob container",
+        }]
+        validators = _backend_validators()
+        entry = detail["logs"][0]
+        assert validators.validate_cloudwatch_log_group_arn("logGroupArn", entry["logGroupArn"])[0]
+        assert validators.validate_log_stream_name("logStreamPrefix", entry["logStreamPrefix"])[0]
+        assert not validators.validate_cloudwatch_log_group_arn(
+            "logGroupArn", "arn:aws:logs:us-east-1:123456789012:log-group//aws/batch/job")[0]
+
+    def test_the_container_log_source_is_skipped_when_the_group_is_not_configured(self):
+        with patch.dict(os.environ):
+            os.environ.pop("BATCH_JOB_LOG_GROUP_NAME", None)
+            os.environ.pop("BATCH_JOB_LOG_GROUP_ARN", None)
+            mod = _load_execute_batch_job()
+        mod.lambda_handler(
+            {"jobName": "CoordXform_1", "definition": ["{}"], "taskToken": "tok",
+             "orchestrationEventPrefix": PREFIX},
+            MagicMock())
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert "logs" not in detail
+        assert detail["subExecution"]["stageName"] == "CoordTransformBatchJob"
+
 
 @pytest.mark.unit
 class TestPrefixReachesTheBatchLambda:
@@ -165,3 +230,12 @@ class TestPrefixReachesTheBatchLambda:
         batch_builder = source.split("export function buildExecuteBatchJobFunction")[1]
         assert "ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName" in batch_builder
         assert "orchestrationBus.grantPutEventsTo(fun)" in batch_builder
+
+    def test_the_lambda_builder_wires_the_batch_log_group(self):
+        builder = os.path.normpath(os.path.join(
+            _LAMBDA_DIR, "..", "..", "..", "..", "infra", "lib", "nestedStacks", "pipelines",
+            "conversion", "coordinateTransform", "lambdaBuilder",
+            "coordinateTransformFunctions.ts"))
+        source = open(builder, encoding="utf-8").read()
+        batch_builder = source.split("export function buildExecuteBatchJobFunction")[1]
+        assert "...batchJobLogGroupEnvironment()" in batch_builder

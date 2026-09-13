@@ -1,6 +1,6 @@
 # CLAUDE.md -- VAMS Pipeline Nested Stacks
 
-Auto-loaded when Claude Code operates within `infra/lib/nestedStacks/pipelines/`. Covers pipeline stack layout, required Lambda package layout in `backendPipelines/`, VPC builder wiring, and S3 output path conventions. See `infra/CLAUDE.md` for cross-stack patterns (lambda builder, service helper, security helpers).
+Auto-loaded when Claude Code operates within `infra/lib/nestedStacks/pipelines/`. Covers pipeline stack layout, required Lambda package layout in `backendPipelines/`, VPC builder wiring, sub-process and log registration wiring, and S3 output path conventions. See `infra/CLAUDE.md` for cross-stack patterns (lambda builder, service helper, security helpers).
 
 ---
 
@@ -48,6 +48,17 @@ Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on
 -   **Block 3 for a private-subnet pipeline only.** This is the ECS **control-plane** endpoint, which the ECS agent on an EC2-launch-type container instance needs. **Fargate tasks do not use it** — they need ECR, Amazon S3 and CloudWatch Logs, which block 2 supplies. Each endpoint adds one ENI per AZ (~$15/month).
 
 Six pipelines run in isolated subnets today (3dBasic, CAD/mesh metadata extraction, Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in block 2 only. Four run in private subnets (Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T, Isaac Lab training) and appear in all three. Regression coverage: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`, which asserts both directions — no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one.
+
+### Sub-Process and Log Registration Wiring
+
+The lambda that starts the pipeline's state machine (or submits a Batch job itself) registers its sub-process and log sources on the orchestration bus (`backendPipelines/CLAUDE.md` "Registering Sub-Processes and Logs"). Its builder supplies:
+
+-   `ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName` and `orchestrationBus.grantPutEventsTo(fun)`.
+-   `...batchJobLogGroupEnvironment()` from `lib/helper/batchJobLogGroup.ts` — `BATCH_JOB_LOG_GROUP_NAME = "/aws/batch/job"` (AWS Batch's default group; no VAMS job definition sets a log configuration) and `BATCH_JOB_LOG_GROUP_ARN` in the colon-separated `log-group:` form the backend's `CLOUDWATCH_LOG_GROUP_ARN` validator accepts. Never `formatArn(..., ArnFormat.SLASH_RESOURCE_NAME)`, which renders `log-group//aws/batch/job`.
+-   `BATCH_JOB_DEFINITION_NAME` — the job definition **name**, passed from the construct as `{ jobDefinitionName }` (`OpenPipelineBatchLogProps`): Fargate `EcsJobDefinition` → `.jobDefinitionName`; a GPU `CfnJobDefinition` with a `jobDefinitionName` prop → the same string the prop was given; an unnamed `CfnJobDefinition` → `jobDefinitionNameFromRef(jobDef.ref)` (the Ref is the ARN with revision; the helper keeps `<name>` from `job-definition/<name>:<rev>`). A `:` in the value fails `LOG_STREAM_NAME` and leaves the container log source permanently `unscoped`.
+-   A `lambda` log entry uses `` `/aws/lambda/${fn.functionName}` `` with `IAMArn(name).loggroup`; never `fn.logGroup` (synthesizes `Custom::LogRetention`).
+
+The producer's `stageName` must equal the ASL state name, which is the CDK construct id of the Batch task (no construct sets `stateName`). Add the pipeline to `infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts`, `batchLogRegistrationEnvGpu.test.ts` or `containerLogRegistrationEnvEcs.test.ts`: they synthesize one construct through `infra/test/support/pipelineConstructHarness.ts`, parse its ASL with `infra/test/support/asl.ts`, and assert the env is present and every module-level `*_STATE_NAME = "…"` literal in the producer (`declaredStageNames`; for cosmos the `COSMOS_BATCH_STATE_NAME` env value) is a key of `States`. Renaming a Batch construct without the producer fails those tests instead of silently breaking the stage ⇄ history join. The executionService role's read on `/aws/batch/job` and `batch:DescribeJobs` is granted once in `lib/lambdaBuilder/workflowFunctions.ts`; a pipeline logging to another group needs a `/aws/vendedlogs/*` name that the existing allow-list covers (see `infra/CLAUDE.md` rule 8).
 
 ### Pipeline S3 Output Path Conventions
 

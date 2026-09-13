@@ -25,6 +25,27 @@ EXECUTION_SERVICE = (
 SOURCE = EXECUTION_SERVICE.read_text(encoding="utf-8")
 
 
+def _call_texts(source, opener):
+    """The full text of every call whose callee spelling is `opener` (ending in the open parenthesis),
+    closing parenthesis included, so an assertion can look at ONE call's arguments."""
+    texts, start = [], 0
+    while True:
+        index = source.find(opener, start)
+        if index < 0:
+            return texts
+        depth, end = 0, index + len(opener) - 1
+        while end < len(source):
+            if source[end] == "(":
+                depth += 1
+            elif source[end] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            end += 1
+        texts.append(source[index:end + 1])
+        start = end + 1
+
+
 def _load_module_pieces():
     """Compile just the helper under test.
 
@@ -103,7 +124,18 @@ class TestSearchUsesTheWindow:
         assert re.search(r"kwargs\['startTime'\] = int\(default_start_time\)", SOURCE)
 
     def test_every_live_read_in_full_mode_is_bounded(self):
-        """The registered/sub-process reads hit shared log groups too, so they need the same bound."""
-        assert SOURCE.count("default_start_time=window_start") >= 3, (
-            "a registered sub-process log read is still unbounded")
-        assert "window_start = _log_search_window_start(main_item)" in SOURCE
+        """The registered/sub-process reads hit shared log groups too, so they need the same bound: every
+        call of the registered-log reader inside get_execution_logs passes the execution's window, and
+        every shared-group search there passes a default. Each call is checked on its own arguments, so
+        a bound dropped from one read cannot be covered by the bound another read still carries."""
+        body = SOURCE[SOURCE.index("def get_execution_logs("):SOURCE.index("def handle_details_request(")]
+        assert "window_start = _log_search_window_start(main_item)" in body
+        reads = _call_texts(body, "_fetch_registered_log_events(")
+        assert reads, "get_execution_logs no longer reads registered logs through the shared helper"
+        for call in reads:
+            assert "default_start_time=window_start" in call, (
+                "a registered sub-process log read is unbounded:\n" + call)
+        searches = _call_texts(body, "_full_log_search(")
+        assert searches, "get_execution_logs no longer searches the execution's log group"
+        for call in searches:
+            assert "default_start_time=" in call, "a shared-group search is unbounded:\n" + call

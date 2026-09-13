@@ -24,6 +24,8 @@ from common.dynamodb import validate_pagination_info
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import subExecutionStages as ses
+from common.workflows import availableLogs as al
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -63,6 +65,25 @@ ARCHIVED_DATABASE_SUFFIX = "#deleted"
 # execution list authorizes every row against its input/output assets; many executions reference the
 # same few assets, so caching collapses the repeated get_asset_details reads within one list request.
 _asset_details_cache = {}
+
+# Per-request memo of DescribeStateMachine results keyed by state machine ARN, reset at each
+# invocation like the asset memo. The details and logs views ask each registered sub-state-machine for
+# its log destination and its definition, and a multi-step workflow registers the same machine several
+# times; a machine that cannot be described is asked about once per request, not once per step.
+_state_machine_describe_cache = {}
+
+# Per-request memo of DescribeJobs results keyed by Batch job id, reset with the memo above. The
+# pipeline state machines discard the SubmitJob result, so a Batch stage's container log stream is
+# resolved through DescribeJobs on the job id its TaskSubmitted event recorded; one step's details and
+# logs views may ask about the same job several times within a request.
+_batch_job_describe_cache = {}
+
+# Per-request memos of Deadline Cloud GetJob and ListSessions results keyed by (farmId, queueId,
+# jobId), reset with the memos above. The details view summarises a registered farm job from GetJob;
+# the logs view reads its session log streams, named by ListSessions; a job registered twice or read
+# under two views is asked about once per request.
+_deadline_job_cache = {}
+_deadline_sessions_cache = {}
 
 # Memo of Casbin decisions, held per ENFORCER rather than in one module-level dict. A list request
 # evaluates the same rule over the same few entities once per ROW, so the memo collapses that to one
@@ -145,11 +166,12 @@ logs_client = boto3.client('logs', config=retry_config)
 # Used only to terminate a registered Batch job on abort (_terminate_batch_job_reporting).
 batch_client = boto3.client('batch', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-# Used only to cancel a registered Deadline Cloud farm job on abort
-# (_cancel_deadline_job_reporting). Built inside try/except and left None on failure: the execution
-# type is accepted only in the commercial partition, so a partition where the service does not resolve
-# must not lose the whole execution API to a client it never calls. A None client reports the job as
-# left running rather than silently doing nothing.
+# Used to cancel a registered Deadline Cloud farm job on abort (_cancel_deadline_job_reporting) and
+# to describe a registered job and list its sessions for the details and logs views. Built inside
+# try/except and left None on failure: the execution type is accepted only in the commercial
+# partition, so a partition where the service does not resolve must not lose the whole execution API
+# to a client it never calls. A None client reports the job as left running, or its status and logs
+# as unavailable, rather than silently doing nothing.
 try:
     deadline_client = boto3.client('deadline', config=retry_config)
 except Exception as e:
@@ -1903,6 +1925,10 @@ def abort_execution(event, execution_id):
 LOG_MODE_TRUNCATED = "truncated"
 LOG_MODE_FULL = "full"
 
+# Rule the logId / stageName log parameters are bound by: they select from the pipeline's source list,
+# which only the full-mode, pipeline-scoped view builds.
+LOG_SOURCE_PARAMS_RULE = "logId and stageName are accepted only with mode 'full' and a pipelineExecutionId"
+
 # Upper bound on CloudWatch events returned by a single full-search logs call.
 MAX_LOG_EVENTS_PER_CALL = 1000
 
@@ -1915,6 +1941,31 @@ LOG_SEARCH_WINDOW_MARGIN_MS = 5 * 60 * 1000
 # must not fan out without limit. Excess entries are skipped and flagged in the response warnings.
 MAX_REGISTERED_LOGS_INSPECTED = 20
 MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED = 20
+
+# Bounds on deriving a registered sub-state-machine's per-stage status at read time. The definition is
+# parsed only when it fits the byte cap (ASL can approach 1 MB); the stage frame stops at the stage and
+# depth caps; the history is paged at most MAX_SUB_STAGE_HISTORY_PAGES times per sub-execution and
+# MAX_SUB_STAGE_HISTORY_PAGES_PER_REQUEST times per details request, terminal sub-executions first, so
+# a polling client cannot turn one details GET into an unbounded GetExecutionHistory burst. A stopped
+# page walk is flagged historyTruncated rather than reported as complete; a failure cause is shortened
+# to MAX_SUB_STAGE_ERROR_CHARS after anything structured has been read from it.
+MAX_SUB_STATE_MACHINE_DEFINITION_BYTES = 256 * 1024
+MAX_SUB_STAGES_REPORTED = 50
+MAX_SUB_STAGE_DEPTH = 3
+MAX_SUB_STAGE_HISTORY_PAGES = 5
+MAX_SUB_STAGE_HISTORY_PAGES_PER_REQUEST = 20
+MAX_SUB_STAGE_ERROR_CHARS = 256
+SUB_STAGE_HISTORY_PAGE_SIZE = 1000
+
+# Bounds on reading a registered Deadline Cloud job's session logs. The queue's log group is shared by
+# every job of the queue and its lines carry no VAMS id, so the read names the job's own session
+# streams exactly (FilterLogEvents takes at most 100 names): ListSessions is paged at most
+# MAX_DEADLINE_SESSION_PAGES times and the MAX_DEADLINE_SESSIONS_READ most recently started sessions
+# are read.
+MAX_DEADLINE_SESSIONS_READ = 10
+MAX_DEADLINE_SESSION_PAGES = 5
+DEADLINE_SESSIONS_PAGE_SIZE = 100
+DEADLINE_CLIENT_UNAVAILABLE = "Deadline Cloud client unavailable"
 
 # Upper bound on rows collected per sub-collection (output files/metadata/results, input files/metadata)
 # in the execution-details view, so an output-heavy execution does not read without limit. This bounds
@@ -2609,7 +2660,7 @@ def _enrich_output_files_with_asset_versions(output_files, execution_id, config_
     return output_files
 
 
-def assemble_execution_details(execution_id, main_item, config_row=None):
+def assemble_execution_details(execution_id, main_item, config_row=None, include_sub_executions=False):
     """Assemble the full, traceability-focused detail view for an execution.
 
     Cross-fetches workflow + per-pipeline definitions for human-readable names/descriptions,
@@ -2647,7 +2698,12 @@ def assemble_execution_details(execution_id, main_item, config_row=None):
     would read as that step having read no metadata.
 
     `config_row` supplies an already-read configuration row (the authorization pass reads the same one)
-    so assembling the view does not repeat that read."""
+    so assembling the view does not repeat that read.
+
+    Every step lists its availableLogs — the log sources the logs route can read for it, by name. With
+    `include_sub_executions` each step also reports its registered sub-processes with live status and,
+    for a Step Functions sub-execution, the per-stage status derived from the state machine definition
+    and the execution history; that view pages Step Functions history, so it is opt-in."""
     workflow_def = get_workflow_definition(
         main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''))
 
@@ -2718,6 +2774,13 @@ def assemble_execution_details(execution_id, main_item, config_row=None):
     pipeline_def_cache.update(get_pipeline_definitions(
         (prow.get('pipelineDatabaseId', ''), prow.get('pipelineId', '')) for prow in pipeline_rows))
 
+    # Log-group ARNs are derived in the partition/region/account of the execution's own log group.
+    reference_log_group_arn = main_item.get('executionLogGroupArn', '') or ''
+    # One history-page budget for the whole request; stages are derived after every step's summary is
+    # known so the finished sub-executions draw on it first.
+    history_page_budget = [MAX_SUB_STAGE_HISTORY_PAGES_PER_REQUEST]
+    pending_sub_executions = []
+
     for prow in pipeline_rows:
         pexec_id = prow.get('pipelineExecutionId', '')
         pkey = (prow.get('pipelineDatabaseId', ''), prow.get('pipelineId', ''))
@@ -2746,9 +2809,19 @@ def assemble_execution_details(execution_id, main_item, config_row=None):
                     "inputConfigurationTruncated": pipeline_config_truncated,
                 })
 
-        pipelines.append(_scrub_pipeline_detail(
+        detail = _scrub_pipeline_detail(
             prow, pipeline_def_cache[pkey], pipeline_config, pipeline_config_truncated,
-            config_snapshot))
+            config_snapshot)
+        detail["availableLogs"] = [
+            al.public_entry(entry)
+            for entry in _available_logs_for_pipeline(prow, reference_log_group_arn)]
+        if include_sub_executions:
+            pending, subs_truncated, sub_warnings = _pipeline_sub_executions(prow)
+            detail["subExecutions"] = [summary for summary, _sub in pending]
+            detail["subExecutionsTruncated"] = subs_truncated
+            detail["subExecutionWarnings"] = sub_warnings
+            pending_sub_executions.extend((summary, sub, sub_warnings) for summary, sub in pending)
+        pipelines.append(detail)
 
         if not pexec_id:
             continue
@@ -2771,6 +2844,9 @@ def assemble_execution_details(execution_id, main_item, config_row=None):
                  _scrub_output_metadata, "outputs.metadata", _pid)
         _collect(output_results, pipeline_execution_output_results_table, pexec_id,
                  _scrub_output_result, "outputs.results", _pid)
+
+    if pending_sub_executions:
+        _fill_sub_execution_stages(pending_sub_executions, history_page_budget)
 
     # Input files are tracked at the workflow-execution level (not per-pipeline).
     _input_rows, _input_trunc = _query_capped(
@@ -2834,6 +2910,20 @@ def assemble_execution_details(execution_id, main_item, config_row=None):
     # section alone, before a collection is allocated a byte and with nothing named as partial.
     _fixed_bytes = (_rows_serialized_bytes(pipelines)
                     + _rows_serialized_bytes(input_configurations))
+    # Stage lists are the first part of the section to yield: each sub-execution keeps its summary and
+    # loses its stages, and the collection is named. The configuration bodies below are shortened only
+    # if the section is still over; they keep renderedConfigLocation as a route to the full object,
+    # whereas a stage list has no pointer and is re-derived on the next read.
+    if _fixed_bytes > MAX_DETAIL_FIXED_SECTION_BYTES and any(
+            sub.get("stages") for p in pipelines for sub in (p.get("subExecutions") or [])):
+        for _pipeline in pipelines:
+            for _sub in _pipeline.get("subExecutions") or []:
+                if _sub.get("stages"):
+                    _sub["stages"] = []
+                    _sub["stagesTruncated"] = True
+        truncated.add("pipelines.subExecutions")
+        _fixed_bytes = (_rows_serialized_bytes(pipelines)
+                        + _rows_serialized_bytes(input_configurations))
     if _fixed_bytes > MAX_DETAIL_FIXED_SECTION_BYTES:
         _config_shortened_pipelines = set()
 
@@ -2973,12 +3063,13 @@ def assemble_execution_details(execution_id, main_item, config_row=None):
         # MAX_DETAIL_ROWS_PER_COLLECTION read cap, or trimmed to MAX_DETAIL_INPUT_ROWS_RETURNED for the
         # input collections. Names are "inputFiles", "inputMetadata", "inputDatabaseMetadata",
         # "outputs.files", "outputs.metadata", "outputs.results", plus "pipelines" and
-        # "inputConfigurations" when the step section's configuration bodies were bounded.
+        # "inputConfigurations" when the step section's configuration bodies were bounded, and
+        # "pipelines.subExecutions" when its sub-execution stage lists were dropped.
         "truncatedCollections": sorted(truncated),
     }
 
 
-def get_execution_details(event, execution_id):
+def get_execution_details(event, execution_id, include_sub_executions=False):
     """Return the full detail/traceability view for an execution (404 if unknown).
 
     Authorization mirrors list-executions reads: workflow GET, GET on a captured metadata-source
@@ -2999,7 +3090,8 @@ def get_execution_details(event, execution_id):
     # common path skips the poll) so an out-of-band abort never shows RUNNING forever.
     _reconcile_main_status(execution_id, main_item)
 
-    details = assemble_execution_details(execution_id, main_item, config_row=config_row)
+    details = assemble_execution_details(execution_id, main_item, config_row=config_row,
+                                         include_sub_executions=include_sub_executions)
     # The assembly's budgets are per-collection estimates; this measures the payload that will actually
     # be sent and trims until it fits, so a response cannot exceed the Lambda limit (a 502 with no body,
     # and none of the truncation flags) on structure no collection was charged for.
@@ -3412,8 +3504,9 @@ def step_invocation_log_group_arn(pipeline_row, reference_log_group_arn=""):
       SQS           -> none. A queue has no invocation log; the CONSUMER's log is a separate resource
                        VAMS does not own, and a pipeline that wants it can register it explicitly.
       EventBridge   -> none, for the same reason: the bus does not log deliveries by default.
-      DeadlineCloud -> none here. Its job logs live in Deadline Cloud's own session logs, reachable
-                       through the job, not through a CloudWatch group derivable from the pipeline.
+      DeadlineCloud -> none here. Its job logs are the queue's session logs, offered from the
+                       REGISTERED job (_available_logs_for_pipeline), not from a CloudWatch group
+                       derivable from the pipeline.
     Returning "" for those is deliberate: an empty section labelled "no log" is worse than no section.
     """
     row = pipeline_row or {}
@@ -3445,19 +3538,23 @@ def step_invocation_log_group_arn(pipeline_row, reference_log_group_arn=""):
 
 
 def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix="",
-                                 scope_terms=None, default_start_time=None):
+                                 scope_terms=None, default_start_time=None, next_token=None,
+                                 log_stream_names=None):
     """Best-effort fetch of events from a registered sub-process log location. Returns
-    (ok, events) on success or (False, reason) on a real failure (e.g. AccessDenied), never
-    raising; the caller surfaces a failure as a warning.
+    (True, events, nextToken) on success or (False, reason, None) on a real failure (e.g.
+    AccessDenied), never raising; the caller surfaces a failure as a warning and classifies it.
 
-    Scoping precedence within the log group: an exact logStreamName (one stream) takes priority;
-    otherwise a logStreamPrefix narrows to streams under that prefix (e.g. an AWS Batch/ECS task
-    family); with neither, the whole group is read. `scope_terms` (e.g. an execution id) are AND-ed
-    into the filter pattern as required literal terms so a group SHARED across executions (a nested
-    state machine's own log group) returns only this execution's events, not every execution's."""
+    Scoping precedence within the log group: an explicit list of exact stream names
+    (`log_stream_names`, e.g. a Deadline Cloud job's sessions) or an exact logStreamName (one stream)
+    takes priority; otherwise a logStreamPrefix narrows to streams under that prefix (e.g. an AWS
+    Batch/ECS task family); with neither, the whole group is read. `scope_terms` (e.g. an execution
+    id) are AND-ed into the filter pattern as required literal terms so a group SHARED across
+    executions (a nested state machine's own log group) returns only this execution's events, not
+    every execution's; the caller passes none for a stream it registered itself. `next_token`
+    continues an earlier page of this same read."""
     parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
-        return False, "unparseable log group ARN"
+        return False, "unparseable log group ARN", None
     log_group_name = parts[1]
     if log_group_name.endswith(":*"):
         log_group_name = log_group_name[:-2]
@@ -3465,8 +3562,10 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
         'logGroupName': log_group_name,
         'limit': min(int(query_params.get('limit', 100) or 100), MAX_LOG_EVENTS_PER_CALL),
     }
-    # Scope to an exact stream when reported; else to a stream prefix; else read the whole group.
-    if log_stream_name:
+    # Scope to the exact streams when named; else to a stream prefix; else read the whole group.
+    if log_stream_names:
+        kwargs['logStreamNames'] = [str(n) for n in log_stream_names if n]
+    elif log_stream_name:
         kwargs['logStreamNames'] = [log_stream_name]
     elif log_stream_prefix:
         kwargs['logStreamNamePrefix'] = log_stream_prefix
@@ -3481,20 +3580,23 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
         kwargs['startTime'] = int(default_start_time)
     if query_params.get('endTime'):
         kwargs['endTime'] = int(query_params['endTime'])
+    if next_token:
+        kwargs['nextToken'] = next_token
     try:
         resp = logs_client.filter_log_events(**kwargs)
     except botocore.exceptions.ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
         logger.warning(f"Could not read registered log {log_group_arn}: {e}")
-        return False, code or str(e)
+        return False, code or str(e), None
     except Exception as e:
         logger.warning(f"Could not read registered log {log_group_arn}: {e}")
-        return False, str(e)
-    return True, [
+        return False, str(e), None
+    events = [
         {"timestamp": e.get('timestamp'), "message": e.get('message', ''),
-         "logGroupArn": log_group_arn}
+         "logGroupName": log_group_name}
         for e in resp.get('events', [])
     ]
+    return True, events, resp.get('nextToken')
 
 
 # A small set of Step Functions history event types that summarize what an execution did, kept
@@ -3542,11 +3644,13 @@ def _sfn_history_event_line(ev):
     return ev_type
 
 
-def _sfn_execution_history_events(execution_arn, query_params):
+def _sfn_execution_history_events(execution_arn, query_params, stage_name=""):
     """The Step Functions execution history as a formatted, chronological event list — the
     authoritative record of what the whole workflow execution did, available immediately (no
     CloudWatch ingestion lag). Returns {"events": [{timestamp, message}], "nextToken": ...}; empty
-    on any failure (best-effort, never raises). Only summary-worthy event types are kept."""
+    on any failure (best-effort, never raises). Only summary-worthy event types are kept, and with
+    `stage_name` only the events between that state's Entered and Exited. The caller's nextToken is a
+    CloudWatch token and is never forwarded here."""
     if not execution_arn:
         return {"events": [], "nextToken": None}
     kwargs = {
@@ -3554,15 +3658,16 @@ def _sfn_execution_history_events(execution_arn, query_params):
         "maxResults": min(int(query_params.get("limit", 100) or 100), MAX_LOG_EVENTS_PER_CALL),
         "includeExecutionData": False,
     }
-    if query_params.get("nextToken"):
-        kwargs["nextToken"] = query_params["nextToken"]
     try:
         resp = sfn.get_execution_history(**kwargs)
     except Exception as e:
         logger.info(f"SFN get_execution_history failed (non-critical): {e}")
         return {"events": [], "nextToken": None}
+    raw = resp.get("events", []) or []
+    if stage_name:
+        raw = ses.history_events_for_stage(raw, stage_name)
     events = []
-    for ev in resp.get("events", []):
+    for ev in raw:
         if ev.get("type", "") not in _SFN_HISTORY_SUMMARY_TYPES:
             continue
         line = _sfn_history_event_line(ev)
@@ -3575,23 +3680,463 @@ def _sfn_execution_history_events(execution_arn, query_params):
     return {"events": events, "nextToken": resp.get("nextToken")}
 
 
-def _resolve_sfn_log_group_arn(state_machine_arn):
-    """Resolve a Step Functions state machine's CloudWatch log group ARN from its logging
-    configuration, so a registered sub-SFN's logs can be read even when the pipeline reported only
-    the state-machine/execution ARN (no explicit logGroupArn). Returns "" when the state machine has
-    no CloudWatch logging destination or on any failure (best-effort, never raises)."""
-    if not state_machine_arn:
-        return ""
+def _error_code(error):
+    """The AWS error code of a botocore ClientError, else the exception class name."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code", "")
+        if code:
+            return code
+    return error.__class__.__name__
+
+
+def _describe_state_machine_cached(state_machine_arn):
+    """DescribeStateMachine for a sub-state-machine, once per invocation per ARN: {"definition": the
+    parsed ASL dict or None, "logGroupArn": its CloudWatch logging destination or "", "name": the state
+    machine name}. Best-effort: a failure yields an empty result, memoised too, so a machine that
+    cannot be described is asked about once per request. The definition is parsed only when it fits
+    MAX_SUB_STATE_MACHINE_DEFINITION_BYTES."""
+    empty = {"definition": None, "logGroupArn": "", "name": ""}
+    if not state_machine_arn or not isinstance(state_machine_arn, str):
+        return dict(empty)
+    cached = _state_machine_describe_cache.get(state_machine_arn)
+    if cached is not None:
+        return cached
+    result = dict(empty)
+    result["name"] = state_machine_arn.split(":")[-1]
     try:
         desc = sfn.describe_state_machine(stateMachineArn=state_machine_arn)
     except Exception as e:
         logger.info(f"describe_state_machine failed for {state_machine_arn} (non-critical): {e}")
-        return ""
-    for dest in (desc.get("loggingConfiguration", {}) or {}).get("destinations", []) or []:
-        arn = (dest.get("cloudWatchLogsLogGroup", {}) or {}).get("logGroupArn", "")
-        if arn:
-            return arn
-    return ""
+        _state_machine_describe_cache[state_machine_arn] = result
+        return result
+    if isinstance(desc, dict):
+        name = desc.get("name")
+        if isinstance(name, str) and name:
+            result["name"] = name
+        for dest in (desc.get("loggingConfiguration") or {}).get("destinations", []) or []:
+            arn = ((dest or {}).get("cloudWatchLogsLogGroup") or {}).get("logGroupArn", "")
+            if isinstance(arn, str) and arn:
+                result["logGroupArn"] = arn
+                break
+        raw = desc.get("definition")
+        if isinstance(raw, str) and 0 < len(raw.encode("utf-8")) <= MAX_SUB_STATE_MACHINE_DEFINITION_BYTES:
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                result["definition"] = parsed
+    _state_machine_describe_cache[state_machine_arn] = result
+    return result
+
+
+def _describe_batch_job_cached(job_id):
+    """batch:DescribeJobs for one job, once per invocation per job id: (job, errorCode). `job` is the
+    described job dict, or None when Batch no longer lists it (an empty `jobs` — terminal jobs are kept
+    for about seven days) or when the call failed, in which case `errorCode` names the failure and is
+    "" otherwise. Best-effort: never raises; a failure is memoised too, so an unreachable job is asked
+    about once per request. The pipeline state machines discard the SubmitJob result, so this is how a
+    Batch stage's container log stream is resolved."""
+    if not job_id or not isinstance(job_id, str):
+        return None, ""
+    cached = _batch_job_describe_cache.get(job_id)
+    if cached is not None:
+        return cached
+    try:
+        resp = batch_client.describe_jobs(jobs=[job_id])
+    except Exception as e:
+        logger.info(f"describe_jobs failed for {job_id} (non-critical): {e}")
+        result = (None, _error_code(e))
+        _batch_job_describe_cache[job_id] = result
+        return result
+    jobs = resp.get("jobs") if isinstance(resp, dict) else None
+    job = jobs[0] if isinstance(jobs, list) and jobs and isinstance(jobs[0], dict) else None
+    result = (job, "")
+    _batch_job_describe_cache[job_id] = result
+    return result
+
+
+# The GetJob fields the sub-process summary reads. The memo keeps only these: the response also carries
+# the job parameters, which include the task token, and nothing downstream may ever see them.
+_DEADLINE_JOB_SUMMARY_FIELDS = ("name", "taskRunStatus", "lifecycleStatus", "lifecycleStatusMessage",
+                                "startedAt", "endedAt")
+
+
+def _get_deadline_job_cached(farm_id, queue_id, job_id):
+    """deadline:GetJob for one farm job, once per invocation per (farm, queue, job): (job, errorCode).
+    `job` is the described job's summary fields (never its parameters), or None when the call failed or
+    the client is unavailable in this partition, in which case `errorCode` names the failure and is ""
+    otherwise. Best-effort: never raises; a failure is memoised too."""
+    if not (farm_id and queue_id and job_id):
+        return None, ""
+    key = (farm_id, queue_id, job_id)
+    cached = _deadline_job_cache.get(key)
+    if cached is not None:
+        return cached
+    if deadline_client is None:
+        result = (None, DEADLINE_CLIENT_UNAVAILABLE)
+        _deadline_job_cache[key] = result
+        return result
+    try:
+        resp = deadline_client.get_job(farmId=farm_id, queueId=queue_id, jobId=job_id)
+    except Exception as e:
+        logger.info(f"get_job failed for Deadline job {job_id} (non-critical): {e}")
+        result = (None, _error_code(e))
+        _deadline_job_cache[key] = result
+        return result
+    resp = resp if isinstance(resp, dict) else {}
+    result = ({field: resp.get(field) for field in _DEADLINE_JOB_SUMMARY_FIELDS}, "")
+    _deadline_job_cache[key] = result
+    return result
+
+
+def _list_deadline_sessions_cached(farm_id, queue_id, job_id):
+    """deadline:ListSessions for one farm job, once per invocation per (farm, queue, job):
+    (sessions, errorCode). Each session is {sessionId, startedAt, endedAt, lifecycleStatus}; pages are
+    followed up to MAX_DEADLINE_SESSION_PAGES. A failure or an unavailable client yields ([], code),
+    memoised too. Best-effort: never raises."""
+    if not (farm_id and queue_id and job_id):
+        return [], ""
+    key = (farm_id, queue_id, job_id)
+    cached = _deadline_sessions_cache.get(key)
+    if cached is not None:
+        return cached
+    if deadline_client is None:
+        result = ([], DEADLINE_CLIENT_UNAVAILABLE)
+        _deadline_sessions_cache[key] = result
+        return result
+    sessions, token, pages = [], None, 0
+    try:
+        while pages < MAX_DEADLINE_SESSION_PAGES:
+            kwargs = {"farmId": farm_id, "queueId": queue_id, "jobId": job_id,
+                      "maxResults": DEADLINE_SESSIONS_PAGE_SIZE}
+            if token:
+                kwargs["nextToken"] = token
+            resp = deadline_client.list_sessions(**kwargs)
+            pages += 1
+            for session in (resp.get("sessions") if isinstance(resp, dict) else None) or []:
+                if isinstance(session, dict) and session.get("sessionId"):
+                    sessions.append({"sessionId": str(session["sessionId"]),
+                                     "startedAt": session.get("startedAt"),
+                                     "endedAt": session.get("endedAt"),
+                                     "lifecycleStatus": session.get("lifecycleStatus", "") or ""})
+            token = resp.get("nextToken") if isinstance(resp, dict) else None
+            if not token:
+                break
+    except Exception as e:
+        logger.info(f"list_sessions failed for Deadline job {job_id} (non-critical): {e}")
+        result = ([], _error_code(e))
+        _deadline_sessions_cache[key] = result
+        return result
+    result = (sessions, "")
+    _deadline_sessions_cache[key] = result
+    return result
+
+
+def _resolve_sfn_log_group_arn(state_machine_arn):
+    """Resolve a Step Functions state machine's CloudWatch log group ARN from its logging
+    configuration, so a registered sub-SFN's logs can be read even when the pipeline reported only
+    the state-machine/execution ARN (no explicit logGroupArn). Returns "" when the state machine has
+    no CloudWatch logging destination or cannot be described (best-effort, never raises). Reads the
+    per-invocation description memo."""
+    return _describe_state_machine_cached(state_machine_arn)["logGroupArn"]
+
+
+# The DescribeExecution statuses the sub-execution vocabulary carries; any other value
+# (PENDING_REDRIVE) is reported UNKNOWN.
+_SFN_EXECUTION_STATUSES = frozenset((ses.STATUS_RUNNING, ses.STATUS_SUCCEEDED, ses.STATUS_FAILED,
+                                     ses.STATUS_ABORTED, ses.STATUS_TIMED_OUT))
+
+
+def _sub_execution_summary(sub):
+    """Live status of one registered sub-process: (summary, warnings).
+
+    A Step Functions execution is described (status, dates, error); a Batch job is described through
+    the per-request batch:DescribeJobs memo, its status folded onto the execution vocabulary and its
+    container log stream kept; a Deadline Cloud job is described through the per-request
+    deadline:GetJob memo, its task-run and lifecycle statuses folded onto the vocabulary and its farm,
+    queue and job ids kept (ids only — never the job's parameters, which carry the task token); any
+    other type is reported UNKNOWN. Dates are ISO strings at capture — the detail view's byte budget
+    serialises this block before the response encoder runs, and that encoder handles only Decimal.
+    Every AWS failure becomes a warning string; nothing here raises. `stages` and the stage
+    bookkeeping start empty; _sub_execution_stages fills them for Step Functions executions."""
+    sub = sub or {}
+    resource_type = sub.get("resourceType") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
+    summary = {
+        "resourceType": resource_type,
+        "label": sub.get("label", "") or "",
+        "stageName": sub.get("stageName", "") or "",
+        "resourceName": "",
+        "status": ses.STATUS_UNKNOWN,
+        "startDate": "",
+        "stopDate": "",
+        "error": "",
+        "cause": "",
+        "stageSource": "none",
+        "stagesTruncated": False,
+        "historyTruncated": False,
+        "stages": [],
+    }
+    warnings = []
+    if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
+        execution_arn = sub.get("executionArn", "") or ""
+        state_machine_arn = (sub.get("stateMachineArn", "")
+                             or ses.state_machine_arn_from_execution_arn(execution_arn))
+        summary["resourceName"] = state_machine_arn.split(":")[-1] if state_machine_arn else ""
+        if not execution_arn:
+            return summary, warnings
+        try:
+            described = sfn.describe_execution(executionArn=execution_arn)
+        except Exception as e:
+            warnings.append(f"Sub-execution status unavailable for "
+                            f"{summary['resourceName'] or 'sub-execution'}: {_error_code(e)}")
+            return summary, warnings
+        raw_status = described.get("status", "") or ""
+        summary["status"] = raw_status if raw_status in _SFN_EXECUTION_STATUSES else ses.STATUS_UNKNOWN
+        summary["startDate"] = ses.iso_utc(described.get("startDate"))
+        summary["stopDate"] = ses.iso_utc(described.get("stopDate"))
+        summary["error"] = described.get("error", "") or ""
+        summary["cause"] = (described.get("cause", "") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        return summary, warnings
+    if resource_type == RESOURCE_TYPE_BATCH_JOB:
+        job_id = sub.get("jobId", "") or ""
+        summary["resourceName"] = job_id
+        if not job_id:
+            return summary, warnings
+        job, error_code = _describe_batch_job_cached(job_id)
+        if error_code:
+            warnings.append(f"Batch job status unavailable for {job_id}: {error_code}")
+            return summary, warnings
+        if job is None:
+            # Batch describes terminal jobs for about seven days; an older job is simply absent.
+            warnings.append(f"Batch job {job_id} is no longer described by AWS Batch")
+            return summary, warnings
+        summary["status"] = ses.map_batch_status(job.get("status", ""))
+        summary["resourceName"] = job.get("jobName") or job_id
+        summary["startDate"] = ses.iso_utc(job.get("startedAt"))
+        summary["stopDate"] = ses.iso_utc(job.get("stoppedAt"))
+        summary["cause"] = (job.get("statusReason", "") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        summary["batch"] = {"jobId": job_id, "logStreamName": ses.batch_log_stream_from_job(job)}
+        return summary, warnings
+    if resource_type == RESOURCE_TYPE_DEADLINE_CLOUD_JOB:
+        farm_id = str(sub.get("farmId", "") or "")
+        queue_id = str(sub.get("queueId", "") or "")
+        job_id = str(sub.get("jobId", "") or "")
+        summary["resourceName"] = job_id
+        if not job_id:
+            return summary, warnings
+        summary["deadline"] = {"farmId": farm_id, "queueId": queue_id, "jobId": job_id}
+        if not (farm_id and queue_id):
+            warnings.append(f"Deadline Cloud job status unavailable for {job_id}: its registration "
+                            f"names no farm or queue")
+            return summary, warnings
+        job, error_code = _get_deadline_job_cached(farm_id, queue_id, job_id)
+        if error_code or job is None:
+            warnings.append(f"Deadline Cloud job status unavailable for {job_id}: "
+                            f"{error_code or 'no job described'}")
+            return summary, warnings
+        summary["status"] = ses.map_deadline_status(job.get("taskRunStatus", ""),
+                                                    job.get("lifecycleStatus", ""))
+        summary["resourceName"] = job.get("name") or job_id
+        summary["startDate"] = ses.iso_utc(job.get("startedAt"))
+        summary["stopDate"] = ses.iso_utc(job.get("endedAt"))
+        summary["cause"] = (job.get("lifecycleStatusMessage") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        return summary, warnings
+    return summary, warnings
+
+
+def _sfn_history_pages(execution_arn, page_budget):
+    """Raw GetExecutionHistory events of a sub-execution, oldest first with execution data, paged
+    under MAX_SUB_STAGE_HISTORY_PAGES and the request's shared budget. Returns (events, truncated,
+    ok): `truncated` when pages remained unread, `ok` False when a call failed (events read so far are
+    kept). `page_budget` is a one-element list the request decrements across its sub-executions. The
+    caller's CloudWatch nextToken never reaches this call."""
+    events, token, pages = [], None, 0
+    while pages < MAX_SUB_STAGE_HISTORY_PAGES and page_budget[0] > 0:
+        kwargs = {"executionArn": execution_arn, "maxResults": SUB_STAGE_HISTORY_PAGE_SIZE,
+                  "includeExecutionData": True, "reverseOrder": False}
+        if token:
+            kwargs["nextToken"] = token
+        try:
+            resp = sfn.get_execution_history(**kwargs)
+        except Exception as e:
+            logger.info(f"get_execution_history failed for {execution_arn} (non-critical): {e}")
+            return events, True, False
+        pages += 1
+        page_budget[0] -= 1
+        events.extend(resp.get("events") or [])
+        token = resp.get("nextToken")
+        if not token:
+            return events, False, True
+    return events, True, True
+
+
+def _sub_execution_stages(summary, sub, page_budget, warnings):
+    """Fill a Step Functions sub-execution summary with its stages: the state machine's definition
+    (memoised describe) is the frame, the execution history supplies each stage's status, and a Batch
+    stage's container log stream is then resolved through DescribeJobs on the job id the history
+    submitted. Other resource types have no stages. Mutates `summary`; a failed history read is named
+    in `warnings` and leaves the frame's stages NOT_STARTED with historyTruncated set."""
+    if summary.get("resourceType") != RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
+        return
+    execution_arn = sub.get("executionArn", "") or ""
+    state_machine_arn = (sub.get("stateMachineArn", "")
+                         or ses.state_machine_arn_from_execution_arn(execution_arn))
+    described = _describe_state_machine_cached(state_machine_arn)
+    frame, frame_truncated = [], False
+    if described["definition"] is not None:
+        frame, frame_truncated = ses.stages_from_definition(
+            described["definition"], max_stages=MAX_SUB_STAGES_REPORTED, max_depth=MAX_SUB_STAGE_DEPTH)
+    events, history_truncated = [], False
+    if execution_arn:
+        events, history_truncated, ok = _sfn_history_pages(execution_arn, page_budget)
+        if not ok:
+            warnings.append(f"Execution history unavailable for "
+                            f"{summary.get('resourceName') or execution_arn.split(':')[-1]}")
+    summary["historyTruncated"] = bool(history_truncated)
+    if not frame and not events:
+        summary["stageSource"] = "none"
+        return
+    folded = ses.fold_history(events, frame, max_stages=MAX_SUB_STAGES_REPORTED,
+                              max_error_chars=MAX_SUB_STAGE_ERROR_CHARS)
+    summary["stages"] = folded["stages"]
+    summary["stageSource"] = "definition" if frame else "history"
+    summary["stagesTruncated"] = bool(frame_truncated or folded["stagesTruncated"])
+    _resolve_batch_stage_streams(summary, warnings)
+
+
+def _resolve_batch_stage_streams(summary, warnings):
+    """Fill the container log stream of every Batch stage that recorded a job id but no stream. The
+    pipeline state machines discard the SubmitJob result, so the history carries the job id
+    (TaskSubmitted) and nothing else; DescribeJobs on that id, memoised per request, supplies
+    container.logStreamName (else the last attempt's). A job Batch no longer lists leaves the stream
+    empty with no warning — the logs view then reads the prefix-only source as `unscoped`; a failed
+    call is named in `warnings` and leaves the stream empty too. Mutates the stages in place."""
+    for stage in summary.get("stages") or []:
+        batch = stage.get("batch") if isinstance(stage, dict) else None
+        if not isinstance(batch, dict):
+            continue
+        job_id = batch.get("jobId") or ""
+        if not job_id or batch.get("logStreamName"):
+            continue
+        job, error_code = _describe_batch_job_cached(job_id)
+        if error_code:
+            warnings.append(f"Batch job log stream unavailable for {job_id}: {error_code}")
+            continue
+        if job is None:
+            continue
+        stream = ses.batch_log_stream_from_job(job)
+        if stream:
+            stage["batch"] = {"jobId": job_id, "logStreamName": stream}
+
+
+def _pipeline_sub_executions(pipeline_row):
+    """Phase one of one step's sub-execution view: a summary per registered sub-process (one describe
+    each) up to MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED. Returns (pending, truncated, warnings), where
+    `pending` pairs each summary with its registered entry for the stage pass."""
+    registered = [s for s in ((pipeline_row or {}).get("registeredSubExecutions") or [])
+                  if isinstance(s, dict)]
+    pending, warnings = [], []
+    for sub in registered[:MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED]:
+        summary, sub_warnings = _sub_execution_summary(sub)
+        pending.append((summary, sub))
+        warnings.extend(sub_warnings)
+    return pending, len(registered) > MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED, warnings
+
+
+def _fill_sub_execution_stages(pending, page_budget):
+    """Phase two across the whole request: derive stages for every (summary, sub, warnings) triple,
+    terminal sub-executions first, so a long-running one cannot spend the shared history budget
+    before the finished ones are reported."""
+    order = sorted(range(len(pending)),
+                   key=lambda i: 0 if pending[i][0].get("status") in TERMINAL_STATUSES else 1)
+    for i in order:
+        summary, sub, warnings = pending[i]
+        _sub_execution_stages(summary, sub, page_budget, warnings)
+
+
+def _available_logs_for_pipeline(pipeline_row, reference_log_group_arn):
+    """Every log source of one step, deduplicated by location: the step's invocation log, each
+    registered log location (a name-only entry gets its ARN from the reference ARN's partition, region
+    and account), each registered Step Functions sub-execution's state machine log destination
+    (memoised describe), and each registered Deadline Cloud job's queue session log group. Entries carry
+    the private _logGroupArn/_executionArns/_deadline* keys the read path needs;
+    availableLogs.public_entry projects them for a response."""
+    row = pipeline_row or {}
+    invocation_arn = step_invocation_log_group_arn(row, reference_log_group_arn)
+    registered_logs = [log for log in (row.get("registeredLogs") or []) if isinstance(log, dict)]
+    registered_subs = [
+        s for s in (row.get("registeredSubExecutions") or [])
+        if isinstance(s, dict) and s.get("resourceType") == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION]
+    sub_machine_logs = []
+    for sub in registered_subs[:MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED]:
+        execution_arn = sub.get("executionArn", "") or ""
+        state_machine_arn = (sub.get("stateMachineArn", "")
+                             or ses.state_machine_arn_from_execution_arn(execution_arn))
+        resolved = _resolve_sfn_log_group_arn(state_machine_arn)
+        if resolved:
+            sub_machine_logs.append({"logGroupArn": resolved, "stageName": sub.get("stageName", "") or "",
+                                     "label": "", "executionArn": execution_arn})
+    deadline_jobs = [
+        {"farmId": s.get("farmId", ""), "queueId": s.get("queueId", ""), "jobId": s.get("jobId", "")}
+        for s in (row.get("registeredSubExecutions") or [])
+        if isinstance(s, dict) and s.get("resourceType") == RESOURCE_TYPE_DEADLINE_CLOUD_JOB
+    ][:MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED]
+    return al.build_available_logs(invocation_arn, registered_logs, sub_machine_logs,
+                                   reference_log_group_arn, deadline_jobs=deadline_jobs)
+
+
+# Warning prefix per log-source kind, interpolated into the logs view's retrieval-failure warnings;
+# the texts are the source names the workflows API reference documents.
+_SOURCE_WARNING_PREFIX = {
+    al.KIND_INVOCATION: "Step invocation log",
+    al.KIND_REGISTERED: "Sub-process log",
+    al.KIND_SUB_STATE_MACHINE: "Sub-SFN log",
+    al.KIND_DEADLINE_CLOUD_JOB: "Deadline Cloud session log",
+}
+
+
+def _deadline_session_streams(source):
+    """The session log streams of a Deadline Cloud job source: (streamNames, errorCode). Sessions of
+    every job the source carries are listed through the per-request memo and the
+    MAX_DEADLINE_SESSIONS_READ most recently started are named (a stream is named by its session id).
+    A listing failure yields ([], code); a job with no session yet yields ([], "")."""
+    sessions = []
+    for job in source.get("_deadlineJobs") or ([source["_deadline"]] if source.get("_deadline") else []):
+        listed, error_code = _list_deadline_sessions_cached(
+            job.get("farmId", ""), job.get("queueId", ""), job.get("jobId", ""))
+        if error_code:
+            return [], error_code
+        sessions.extend(listed)
+    sessions.sort(key=lambda s: ses.iso_utc(s.get("startedAt")), reverse=True)
+    return [s["sessionId"] for s in sessions[:MAX_DEADLINE_SESSIONS_READ]], ""
+
+
+def _log_source_status(source, status, event_count):
+    """One logSources entry: the public projection of a source plus how its read went."""
+    entry = al.public_entry(source)
+    entry["status"] = status
+    entry["eventCount"] = event_count
+    return entry
+
+
+def _batch_stream_summaries(pipeline_row, sources):
+    """Sub-execution summaries with stages, derived only when a Batch source registered with a stream
+    prefix needs its exact container stream: the registration carries a prefix, the sub-state-machine
+    history carries the submitted job id, and DescribeJobs on that id names the stream (the pipeline
+    machines discard the SubmitJob result, so the history alone never has it); [] otherwise, so the
+    common logs call pays nothing."""
+    needs_stream = any(
+        s["kind"] == al.KIND_REGISTERED and s["sourceType"] == al.SOURCE_TYPE_BATCH
+        and s["logStreamPrefix"] and not s["logStreamName"]
+        for s in sources)
+    if not needs_stream:
+        return []
+    pending, _truncated, _warnings = _pipeline_sub_executions(pipeline_row)
+    _fill_sub_execution_stages([(summary, sub, []) for summary, sub in pending],
+                               [MAX_SUB_STAGE_HISTORY_PAGES_PER_REQUEST])
+    return [summary for summary, _sub in pending]
 
 
 def get_execution_logs(event, execution_id, query_params):
@@ -3601,6 +4146,9 @@ def get_execution_logs(event, execution_id, query_params):
         is supplied, the stored per-pipeline log record for that pipeline instead.
       - full: a live CloudWatch FilterLogEvents search scoped to this execution (and, when
         pipelineExecutionId is supplied, scoped strictly to that one pipeline execution).
+        With pipelineExecutionId the full view also lists every log source of that step (logSources)
+        with how its read went, stamps each sub-process event with its source's logId, and accepts
+        logId (one source, paged with nextToken) and stageName (one sub-state-machine stage).
 
     Authorization mirrors list-executions reads: workflow GET, GET on a captured metadata-source
     database, and GET on every asset the run read and on the asset it wrote to."""
@@ -3633,6 +4181,13 @@ def get_execution_logs(event, execution_id, query_params):
             return validation_error(
                 status_code=404,
                 body={'message': "Pipeline execution not found for this execution"}, event=event)
+
+    # logId / stageName select one log source, or one stage, out of the pipeline's full-mode source
+    # list; outside that view there is no list to select from.
+    log_id = (query_params.get('logId') or '').strip()
+    stage_name = (query_params.get('stageName') or '').strip()
+    if (log_id or stage_name) and (mode != LOG_MODE_FULL or pipeline_row is None):
+        return validation_error(body={'message': LOG_SOURCE_PARAMS_RULE}, event=event)
 
     if mode == LOG_MODE_TRUNCATED:
         if pipeline_execution_id:
@@ -3698,85 +4253,116 @@ def get_execution_logs(event, execution_id, query_params):
     scope_terms = [execution_id]
     if pipeline_execution_id:
         scope_terms.append(pipeline_execution_id)
-    search = _full_log_search(log_group_arn, scope_terms, query_params,
-                              default_start_time=_log_search_window_start(main_item))
+    # With a logId the caller asked for one source; the shared-group search is that source's read.
+    search = {"events": [], "nextToken": None}
+    if not log_id:
+        search = _full_log_search(log_group_arn, scope_terms, query_params,
+                                  default_start_time=window_start)
 
-    # When scoped to a pipeline, also pull from any sub-process logs that pipeline registered
-    # (best-effort; a failure on any registered log is surfaced as a non-fatal warning).
+    # When scoped to a pipeline, read every log source that pipeline offers (its invocation log, what
+    # it registered, and each sub-state-machine's own group) and report how each read went.
+    # Best-effort throughout: a failure on any source is a named warning and a status, never an error.
     sub_process_events = []
     warnings = []
+    log_sources = []
+    selected_events, selected_token, selected_history = [], None, []
     if pipeline_row is not None:
-        # Log-group ARNs already read this request, so a group reported in registeredLogs is not
-        # re-read when it is also resolved from a sub-execution's state machine (avoids duplicates).
-        read_log_group_arns = set()
-        # The step's SECONDARY log: the log of the resource the top-level state machine invoked for
-        # this step. Derived from what the execute path already recorded (pipelineExecutionType +
-        # pipelineResourceArn), so it needs no registration by the pipeline — which is why a
-        # vamsExecute lambda's own log was previously unreachable. Empty for SQS / EventBridge /
-        # DeadlineCloud, which have no invocation log to read.
-        invocation_log_arn = step_invocation_log_group_arn(pipeline_row, log_group_arn)
-        if invocation_log_arn:
-            read_log_group_arns.add(invocation_log_arn)
-            ok, events_or_err = _fetch_registered_log_events(
-                invocation_log_arn, "", query_params, scope_terms=scope_terms,
-                default_start_time=window_start)
-            if ok:
-                sub_process_events.extend(events_or_err)
-            else:
+        all_sources = _available_logs_for_pipeline(pipeline_row, log_group_arn)
+        sources = all_sources
+        if log_id:
+            sources = [s for s in sources if s["logId"] == log_id]
+            if not sources:
+                return validation_error(
+                    status_code=404,
+                    body={'message': "Log source not found for this pipeline execution"}, event=event)
+        if stage_name:
+            sources = [s for s in sources if s["stageName"] == stage_name]
+        registered_logs = pipeline_row.get('registeredLogs', []) or []
+        prefixes = al.registered_prefixes(registered_logs)
+        # A Batch source registered with only a stream prefix is read as the exact stream resolved for
+        # its stage — DescribeJobs on the job id the sub-state-machine history submitted — when there
+        # is one; a job Batch no longer lists leaves the prefix read, reported unscoped.
+        sub_summaries = _batch_stream_summaries(pipeline_row, sources)
+        registered_seen = 0
+        for source in sources:
+            if source["kind"] == al.KIND_REGISTERED:
+                registered_seen += 1
+                if registered_seen > MAX_REGISTERED_LOGS_INSPECTED:
+                    # Capped so an unbounded registration list cannot turn one logs GET into an
+                    # unbounded CloudWatch burst; the source is still listed, as skipped.
+                    log_sources.append(_log_source_status(source, al.STATUS_SKIPPED, 0))
+                    continue
+            resolved_stream = ""
+            if (source["kind"] == al.KIND_REGISTERED and source["sourceType"] == al.SOURCE_TYPE_BATCH
+                    and source["logStreamPrefix"] and not source["logStreamName"]):
+                resolved_stream = al.resolve_batch_stream(source, sub_summaries)
+            session_streams = None
+            if source["kind"] == al.KIND_DEADLINE_CLOUD_JOB:
+                # The queue group is shared by every job of the queue and its lines carry no VAMS id,
+                # so the only correct read is by the job's own session streams. No session yet is a
+                # source not found, not a group read; a listing failure is named like a read failure.
+                session_streams, session_error = _deadline_session_streams(source)
+                if session_error or not session_streams:
+                    status = al.classify_read(False, session_error, None) if session_error \
+                        else al.STATUS_NOT_FOUND
+                    if session_error:
+                        warnings.append(f"{_SOURCE_WARNING_PREFIX[source['kind']]} retrieval failed for "
+                                        f"{source['logGroupName']}: {session_error}")
+                    log_sources.append(_log_source_status(source, status, 0))
+                    continue
+            plan = al.plan_source_read(source, prefixes, resolved_stream, stream_names=session_streams)
+            # A registered group may be shared across executions of the same pipeline, so the read is
+            # scoped to this execution unless the plan says the stream is this run's own. The invocation
+            # log is the step's own resource: its lines carry the invoke body's workflow execution id but
+            # never the pipeline execution id, so that read is scoped to the execution alone.
+            source_terms = [execution_id] if source["kind"] == al.KIND_INVOCATION else scope_terms
+            ok, payload, token = _fetch_registered_log_events(
+                source["_logGroupArn"], plan["logStreamName"], query_params,
+                log_stream_prefix=plan["logStreamPrefix"],
+                scope_terms=source_terms if plan["scoped"] else None,
+                default_start_time=window_start,
+                next_token=(query_params.get('nextToken') if log_id else None),
+                log_stream_names=plan.get("logStreamNames"))
+            status = al.classify_read(ok, payload, token, unscoped=plan["unscoped"])
+            events = [dict(e, logId=source["logId"]) for e in payload] if ok else []
+            if not ok:
                 # Non-fatal and named: a missing IAM grant on this group must not fail the logs GET,
                 # but it should say which log could not be read rather than silently omitting it.
-                warnings.append(
-                    f"Step invocation log retrieval failed for {invocation_log_arn}: {events_or_err}")
-
-        # Explicitly-registered log locations (logGroupArn reported by the pipeline). Capped so an
-        # unbounded registration list cannot turn one logs GET into an unbounded CloudWatch burst,
-        # and scoped to this execution: a registered group may be shared across executions of the
-        # same pipeline, and an exact stream/prefix narrows streams independently of the terms.
-        registered_logs = pipeline_row.get('registeredLogs', []) or []
-        for log in registered_logs[:MAX_REGISTERED_LOGS_INSPECTED]:
-            log_arn = (log or {}).get('logGroupArn', '')
-            stream = (log or {}).get('logStreamName', '')
-            stream_prefix = (log or {}).get('logStreamPrefix', '')
-            if not log_arn:
-                continue
-            read_log_group_arns.add(log_arn)
-            ok, events_or_err = _fetch_registered_log_events(
-                log_arn, stream, query_params, log_stream_prefix=stream_prefix,
-                scope_terms=scope_terms, default_start_time=window_start)
-            if ok:
-                sub_process_events.extend(events_or_err)
+                warnings.append(f"{_SOURCE_WARNING_PREFIX[source['kind']]} retrieval failed for "
+                                f"{source['logGroupName']}: {payload}")
+            log_sources.append(_log_source_status(source, status, len(events)))
+            if log_id:
+                selected_events, selected_token = events, token
             else:
-                warnings.append(f"Sub-process log retrieval failed for {log_arn}: {events_or_err}")
-        if len(registered_logs) > MAX_REGISTERED_LOGS_INSPECTED:
+                sub_process_events.extend(events)
+        # The cap is counted over the sources this call iterated, so a logId or stageName selection
+        # that skipped nothing is not warned about the length of the whole registration list.
+        if registered_seen > MAX_REGISTERED_LOGS_INSPECTED:
             warnings.append(
-                f"Only the first {MAX_REGISTERED_LOGS_INSPECTED} of {len(registered_logs)} "
+                f"Only the first {MAX_REGISTERED_LOGS_INSPECTED} of {registered_seen} "
                 f"registered logs were read.")
 
-        # A registered Step Functions sub-execution: surface ITS execution history (the sub-SFN's
-        # own state timeline) and, when the sub state machine has a CloudWatch logging destination
-        # that was not already read above, its resolved log group too — scoped to THIS execution so
-        # a group shared across executions does not leak other runs' events. Capped as above.
+        # Every registered Step Functions sub-execution surfaces ITS execution history (the sub-SFN's
+        # own state timeline), stamped with the logId of the source its state machine logs to (empty
+        # when it has no logging destination). With a logId only that source's sub-executions are read.
+        log_id_by_execution_arn = {
+            arn: s["logId"] for s in all_sources for arn in (s.get("_executionArns") or [])}
         registered_subs = [
             s for s in (pipeline_row.get('registeredSubExecutions', []) or [])
             if (s or {}).get('resourceType') == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION]
         for sub in registered_subs[:MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED]:
             sub_exec_arn = sub.get('executionArn', '')
-            if sub_exec_arn:
-                sub_hist = _sfn_execution_history_events(sub_exec_arn, query_params)
-                sub_process_events.extend(sub_hist["events"])
-            resolved_arn = _resolve_sfn_log_group_arn(sub.get('stateMachineArn', ''))
-            if resolved_arn and resolved_arn not in read_log_group_arns:
-                read_log_group_arns.add(resolved_arn)
-                # The nested state machine's log group is shared across all of its executions; scope
-                # the read to this execution (and pipeline) so only this run's events are returned.
-                ok, events_or_err = _fetch_registered_log_events(
-                    resolved_arn, "", query_params, scope_terms=scope_terms,
-                    default_start_time=window_start)
-                if ok:
-                    sub_process_events.extend(events_or_err)
-                else:
-                    warnings.append(
-                        f"Sub-SFN log retrieval failed for {resolved_arn}: {events_or_err}")
+            if not sub_exec_arn:
+                continue
+            source_log_id = log_id_by_execution_arn.get(sub_exec_arn, "")
+            if log_id and source_log_id != log_id:
+                continue
+            sub_hist = _sfn_execution_history_events(sub_exec_arn, query_params, stage_name=stage_name)
+            lines = [dict(e, logId=source_log_id) for e in sub_hist["events"]]
+            if log_id:
+                selected_history.extend(lines)
+            else:
+                sub_process_events.extend(lines)
         if len(registered_subs) > MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED:
             warnings.append(
                 f"Only the first {MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED} of "
@@ -3787,26 +4373,44 @@ def get_execution_logs(event, execution_id, query_params):
     message = {
         "mode": LOG_MODE_FULL,
         "pipelineExecutionId": pipeline_execution_id,
-        "events": redact_log_events(search["events"]),
-        "nextToken": search["nextToken"],
+        "events": redact_log_events(selected_events if log_id else search["events"]),
+        "nextToken": selected_token if log_id else search["nextToken"],
     }
     # For the WHOLE execution (no single pipeline in scope), include the Step Functions execution
     # history — the authoritative timeline of the run's state transitions, present even when the
-    # CloudWatch text search returns nothing.
+    # CloudWatch text search returns nothing. For one selected source, its sub-execution's history.
     if not pipeline_execution_id:
         history = _sfn_execution_history_events(
             main_item.get('workflow_execution_arn', ''), query_params)
         if history["events"]:
             message["sfnHistoryEvents"] = redact_log_events(history["events"])
+    elif log_id and selected_history:
+        message["sfnHistoryEvents"] = redact_log_events(al.sort_events(selected_history))
     if sub_process_events:
-        message["subProcessEvents"] = redact_log_events(sub_process_events)
+        message["subProcessEvents"] = redact_log_events(al.sort_events(sub_process_events))
+    if pipeline_row is not None:
+        message["logSources"] = log_sources
     if warnings:
         message["warnings"] = warnings
     return success(body={'message': message})
 
 
+def _parse_include_sub_executions(query_params):
+    """(flag, message) for the details route's includeSubExecutions parameter: absent or empty is
+    false, 'true'/'false' are themselves, anything else is the message a 400 carries."""
+    raw = (query_params or {}).get('includeSubExecutions')
+    if raw is None or str(raw).strip() == "":
+        return False, ""
+    value = str(raw).strip()
+    if value == "true":
+        return True, ""
+    if value == "false":
+        return False, ""
+    return False, "includeSubExecutions must be 'true' or 'false'"
+
+
 def handle_details_request(event):
-    """Validate the executionId path param, enforce API authorization, return details."""
+    """Validate the executionId path param and the includeSubExecutions flag, enforce API authorization, return details."""
     pathParams = event.get('pathParameters', {}) or {}
     execution_id = pathParams.get('executionId', '')
     if not execution_id:
@@ -3820,11 +4424,17 @@ def handle_details_request(event):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
 
+    include_sub_executions, message = _parse_include_sub_executions(
+        event.get('queryStringParameters', {}) or {})
+    if message:
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+
     if not _enforce_api(event):
         return authorization_error()
 
     logger.info(f"Getting execution details {execution_id}")
-    return get_execution_details(event, execution_id)
+    return get_execution_details(event, execution_id, include_sub_executions)
 
 
 def handle_details_metadata_request(event):
@@ -3885,6 +4495,20 @@ def handle_logs_request(event):
     if message:
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
+
+    # logId / stageName are echoed into lookups and a history filter; a malformed value is refused as
+    # caller input here, ahead of authorization, like the numeric parameters above.
+    log_source_params = {}
+    if (queryParameters.get('logId') or '').strip():
+        log_source_params['logId'] = {'value': queryParameters['logId'].strip(), 'validator': 'ID'}
+    if (queryParameters.get('stageName') or '').strip():
+        log_source_params['stageName'] = {'value': queryParameters['stageName'].strip(),
+                                          'validator': 'SFN_STATE_NAME'}
+    if log_source_params:
+        (valid, message) = validate(log_source_params)
+        if not valid:
+            logger.error(message)
+            return validation_error(body={'message': message}, event=event)
 
     if not _enforce_api(event):
         return authorization_error()
@@ -4863,6 +5487,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     # enforcer. The entity budget starts disarmed; the list page arms it.
     _asset_details_cache.clear()
     _authz_decision_cache.clear()
+    _state_machine_describe_cache.clear()
+    _batch_job_describe_cache.clear()
+    _deadline_job_cache.clear()
+    _deadline_sessions_cache.clear()
     _disarm_authz_entity_budget()
 
     try:
