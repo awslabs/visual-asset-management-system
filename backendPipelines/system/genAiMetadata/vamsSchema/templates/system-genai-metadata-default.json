@@ -1,0 +1,76 @@
+{
+    "templateId": "system-genai-metadata-default",
+    "templateName": "Default GenAI metadata",
+    "description": "Describe and classify the file with the configured Bedrock analysis model: writes the file's extracted attributes, promotes them to typed ext_* metadata and a GeoJSON location, seeds the prompt with the existing file, asset and database metadata and file attributes when enabled, renders up to eight views of 3D files, classifies against the classificationVocabulary carried in this configuration, and embeds the result for natural-language search when vector search is enabled.",
+    "configFormat": "json",
+    "configBody": "{\"seedWithExistingMetadata\":{{SEED_WITH_EXISTING_METADATA}},\"includeSiblingFiles\":{{INCLUDE_SIBLING_FILES}},\"renderViews\":{{RENDER_VIEWS}},\"maxTextChars\":{{MAX_TEXT_CHARS}},\"writeAssetKeywords\":{{WRITE_ASSET_KEYWORDS}},\"embeddingIncludeTextExcerpt\":{{EMBEDDING_INCLUDE_TEXT_EXCERPT}},\"writeExtractedMetadata\":{{WRITE_EXTRACTED_METADATA}},\"extractGeoLocation\":{{EXTRACT_GEO_LOCATION}},\"classificationVocabulary\":{\"categories\":{\"Vehicle\":{\"description\":\"Land, sea, air and space vehicles and their major assemblies\",\"subcategories\":[\"Car\",\"Truck\",\"Motorcycle\",\"Aircraft\",\"Watercraft\",\"Spacecraft\",\"Rail\",\"Vehicle Part\"]},\"Industrial Equipment\":{\"description\":\"Machinery, tools and plant equipment used in production or maintenance\",\"subcategories\":[\"Machine\",\"Pump\",\"Valve\",\"Robot\",\"Tool\",\"Conveyor\",\"Engine\",\"Fixture\"]},\"Architecture\":{\"description\":\"Buildings, structures and building elements\",\"subcategories\":[\"Residential\",\"Commercial\",\"Industrial\",\"Historic\",\"Structural Element\",\"Facade\",\"Roof\",\"Site Plan\"]},\"Interior & Furniture\":{\"description\":\"Furnishings, fixtures and interior decor\",\"subcategories\":[\"Seating\",\"Table\",\"Storage\",\"Bed\",\"Lighting\",\"Kitchen\",\"Bathroom\",\"Decor\"]},\"Terrain & Environment\":{\"description\":\"Landscapes, terrain, vegetation and outdoor scenes\",\"subcategories\":[\"Terrain\",\"Vegetation\",\"Water Body\",\"Urban Scene\",\"Rural Scene\",\"Survey Scan\",\"Geological\"]},\"Character & Creature\":{\"description\":\"Humans, animals and fictional beings\",\"subcategories\":[\"Human\",\"Animal\",\"Fantasy Creature\",\"Robot Character\",\"Mannequin\",\"Anatomy\"]},\"Prop & Object\":{\"description\":\"Everyday objects, containers, weapons and small items\",\"subcategories\":[\"Household Item\",\"Container\",\"Weapon\",\"Sports Equipment\",\"Toy\",\"Food\",\"Musical Instrument\",\"Sign\"]},\"Infrastructure & Utility\":{\"description\":\"Roads, bridges, pipelines, power and communication networks\",\"subcategories\":[\"Road\",\"Bridge\",\"Tunnel\",\"Pipeline\",\"Power\",\"Telecom\",\"Rail Infrastructure\",\"Street Furniture\"]},\"Medical & Scientific\":{\"description\":\"Medical devices, anatomy, laboratory and scientific instruments\",\"subcategories\":[\"Medical Device\",\"Anatomical Model\",\"Laboratory Equipment\",\"Molecular\",\"Scientific Instrument\",\"Prosthetic\"]},\"Electronics\":{\"description\":\"Consumer and industrial electronic devices and components\",\"subcategories\":[\"Computer\",\"Phone\",\"Camera\",\"Display\",\"Circuit Board\",\"Sensor\",\"Appliance\",\"Cable & Connector\"]},\"Document\":{\"description\":\"Written documents, drawings and presentations\",\"subcategories\":[\"Report\",\"Specification\",\"Drawing\",\"Manual\",\"Presentation\",\"Form\",\"Correspondence\",\"Source Code\"]},\"Media\":{\"description\":\"Photographs, video and audio recordings\",\"subcategories\":[\"Photograph\",\"Render\",\"Video Recording\",\"Animation\",\"Audio Recording\",\"Music\",\"Screenshot\",\"Icon\"]},\"Data\":{\"description\":\"Tabular, geospatial and structured data files\",\"subcategories\":[\"Tabular\",\"Geospatial\",\"Time Series\",\"Configuration\",\"Log\",\"Simulation Output\",\"Schema\"]},\"Other\":{\"description\":\"Content that fits none of the other categories\",\"subcategories\":[\"Abstract\",\"Test Asset\",\"Unknown\"]}},\"styles\":[\"realistic\",\"stylized\",\"low-poly\",\"technical/CAD\",\"scanned\",\"schematic\",\"other\"],\"materials\":[\"metal\",\"steel\",\"aluminium\",\"plastic\",\"wood\",\"glass\",\"concrete\",\"stone\",\"brick\",\"fabric\",\"leather\",\"rubber\",\"ceramic\",\"composite\",\"paper\",\"other\"],\"colors\":[\"black\",\"white\",\"gray\",\"silver\",\"red\",\"orange\",\"yellow\",\"green\",\"blue\",\"purple\",\"pink\",\"brown\",\"beige\",\"gold\",\"transparent\",\"multicolor\"],\"allowUnlisted\":true}}",
+    "allowCustomEdit": true,
+    "inputInstructions": "seedWithExistingMetadata feeds the file's, asset's and database's existing metadata and the file's attributes into the analysis prompt; the embedding always carries them, whatever this switch says. includeSiblingFiles downloads the files beside the input (textures, .mtl, .bin) so a multi-file model renders with its materials. renderViews is the number of views rendered for a 3D file (six orthographic first, then perspective). maxTextChars caps the text excerpt sent to the model for text, data and document files. writeAssetKeywords additionally merges the file's keywords and category into the asset-level genai_asset_keywords and genai_asset_categories metadata. embeddingIncludeTextExcerpt includes the file's text excerpt in the text that is embedded for natural-language search. writeExtractedMetadata promotes the file's extracted attributes to typed ext_* metadata. extractGeoLocation writes a GeoJSON location when the file carries a position and has no location yet. classificationVocabulary is the category, subcategory, style, material and color vocabulary the model chooses from; edit it with 'vamscli pipeline template update --config-body-file' (allowUnlisted false restricts the model to the listed values). A deploy restores the shipped default.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "SEED_WITH_EXISTING_METADATA",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Seed the analysis prompt with existing metadata",
+            "description": "Feed the file's, asset's and database's existing metadata and the file's attributes into the analysis prompt. The embedding always carries them, whatever this switch says."
+        },
+        {
+            "tagKey": "INCLUDE_SIBLING_FILES",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Include sibling files",
+            "description": "Download the files beside the input file (textures, .mtl, .bin) so a multi-file 3D model renders with its materials."
+        },
+        {
+            "tagKey": "RENDER_VIEWS",
+            "type": "integer",
+            "required": false,
+            "default": 8,
+            "label": "Render views",
+            "description": "Number of views rendered for a 3D file and sent to the analysis model (at most eight are sent)."
+        },
+        {
+            "tagKey": "MAX_TEXT_CHARS",
+            "type": "integer",
+            "required": false,
+            "default": 12000,
+            "label": "Maximum text characters",
+            "description": "Cap on the text excerpt of a text, data or document file sent to the analysis model."
+        },
+        {
+            "tagKey": "WRITE_ASSET_KEYWORDS",
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "label": "Write asset keywords",
+            "description": "Also merge the file's keywords and category into the asset-level genai_asset_keywords and genai_asset_categories metadata."
+        },
+        {
+            "tagKey": "EMBEDDING_INCLUDE_TEXT_EXCERPT",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Embed the text excerpt",
+            "description": "Include the file's text excerpt in the text embedded for natural-language search."
+        },
+        {
+            "tagKey": "WRITE_EXTRACTED_METADATA",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Write extracted metadata",
+            "description": "Promote the file's extracted attributes to typed ext_* metadata: dimensions, units, size category, counts, camera, codecs, resolution, page and word counts, and more, per file class."
+        },
+        {
+            "tagKey": "EXTRACT_GEO_LOCATION",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Extract geo location",
+            "description": "Write a GeoJSON location from EXIF GPS, an IFC site, geographic point-cloud bounds, a 3D Tiles region or a GeoJSON footprint when the file has no location metadata yet."
+        }
+    ]
+}
