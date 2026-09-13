@@ -125,7 +125,7 @@ class TestDeleteRemovesTriggersBeforeArchiving:
         _archive(services)
         list_calls = [c for c in services.calls if c[0] == "GET"]
         assert [c[3].get("startingToken") for c in list_calls] == [None, "tok-2"]
-        assert all(c[3]["maxItems"] == "500" and c[3]["pageSize"] == "500" for c in list_calls)
+        assert {(c[3]["maxItems"], c[3]["pageSize"]) for c in list_calls} == {("500", "500")}
         assert services.deletes()[:2] == [TRIGGERS_PATH + "/fileUpload", TRIGGERS_PATH + "/fileUpload%23second"]
 
     def test_a_missing_workflow_lists_no_triggers_and_still_archives(self):

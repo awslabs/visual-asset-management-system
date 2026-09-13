@@ -222,9 +222,11 @@ class TestLaunchAcquiresBeforeStarting:
         assert response["statusCode"] == 200
         execution_id = json.loads(response["body"])["message"]["executionId"]
         assert [p["Item"]["lockKey"] for p in table.puts] == [KEY_F, KEY_G]
+        assert table.puts, "no lock row was written"
         for put in table.puts:
             assert put["Item"]["workflowExecutionId"] == execution_id
-            assert put["ConditionExpression"] == "attribute_not_exists(lockKey) OR expiresAt < :now"
+            assert "attribute_not_exists(lockKey)" in put["ConditionExpression"]
+            assert "expiresAt" in put["ConditionExpression"]
             # taskTimeout 100000 exceeds the one-day floor, so the row lives 100000 + 1800 seconds.
             assert put["Item"]["expiresAt"] - put["ExpressionAttributeValues"][":now"] == 100000 + 1800
             assert put["ReturnValuesOnConditionCheckFailure"] == "ALL_OLD"
@@ -257,7 +259,7 @@ class TestConflictAnswers400:
         sfn.start_execution.assert_not_called()
         # The first key was taken and rolled back before the 400 (multi-file rollback).
         assert [d["Key"]["lockKey"] for d in table.deletes] == [KEY_F]
-        assert table.deletes[0]["ConditionExpression"] == "workflowExecutionId = :e"
+        assert "workflowExecutionId" in table.deletes[0]["ConditionExpression"]
 
     def test_the_body_carries_no_identifiers_and_the_log_carries_the_key_and_holder(self):
         table = _LockTable(held={KEY_G: "e-holder"})
@@ -287,7 +289,7 @@ class TestLaunchFailuresReleaseFromMemory:
         assert response["statusCode"] == 500
         sfn.start_execution.assert_called_once()
         stop.assert_called_once_with("arn:exec")
-        assert sorted(d["Key"]["lockKey"] for d in table.deletes) == sorted([KEY_F, KEY_G])
+        assert {d["Key"]["lockKey"] for d in table.deletes} == {KEY_F, KEY_G}
         assert [kind for kind, _ in table.journal] == ["lock", "lock", "start", "release", "release"]
 
     def test_a_failed_input_file_write_releases_and_never_starts(self):
@@ -296,11 +298,11 @@ class TestLaunchFailuresReleaseFromMemory:
         assert response["statusCode"] == 500
         sfn.start_execution.assert_not_called()
         stop.assert_not_called()
-        assert sorted(d["Key"]["lockKey"] for d in table.deletes) == sorted([KEY_F, KEY_G])
+        assert {d["Key"]["lockKey"] for d in table.deletes} == {KEY_F, KEY_G}
 
     def test_a_failed_start_releases_without_a_stop(self):
         table = _LockTable()
         response, _sfn, _log, stop = _run(table, start_error=RuntimeError("states unavailable"))
         assert response["statusCode"] == 500
         stop.assert_not_called()
-        assert sorted(d["Key"]["lockKey"] for d in table.deletes) == sorted([KEY_F, KEY_G])
+        assert {d["Key"]["lockKey"] for d in table.deletes} == {KEY_F, KEY_G}

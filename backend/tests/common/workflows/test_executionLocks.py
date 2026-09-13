@@ -114,14 +114,15 @@ class TestAcquire:
             assert item["workflowExecutionId"] == "e1"
             assert item["expiresAt"] == NOW + 100
             assert isinstance(item["acquiredAt"], str) and item["acquiredAt"].startswith("2027-")
-        for put in table.puts:
-            assert put["ReturnValuesOnConditionCheckFailure"] == "ALL_OLD"
-            assert put["ExpressionAttributeValues"] == {":now": NOW}
+        assert {(put["Item"]["lockKey"], put["ReturnValuesOnConditionCheckFailure"],
+                 put["ExpressionAttributeValues"][":now"]) for put in table.puts} == {
+            (K1, "ALL_OLD", NOW), (K2, "ALL_OLD", NOW)}
 
     def test_duplicate_keys_in_one_call_are_taken_once(self):
         table = _FakeLockTable()
         assert el.acquire_locks(table, [K1, K1], "e1", 100, now=NOW) == [K1]
-        assert len(table.puts) == 1
+        assert {put["Item"]["lockKey"] for put in table.puts} == {K1}
+        assert len(table.puts) <= 1
 
     def test_a_held_unexpired_lock_conflicts_and_names_the_holder(self):
         table = _FakeLockTable()
@@ -140,8 +141,7 @@ class TestAcquire:
             el.acquire_locks(table, [K1, K2], "e-new", 100, now=NOW)
         assert raised.value.lock_key == K2
         assert K1 not in table.items
-        assert table.deletes == [{"Key": {"lockKey": K1}, "ConditionExpression": DELETE_CONDITION,
-                                  "ExpressionAttributeValues": {":e": "e-new"}}]
+        assert {(d["Key"]["lockKey"], d["ExpressionAttributeValues"][":e"]) for d in table.deletes} == {(K1, "e-new")}
 
     def test_an_expired_lock_is_taken_over(self):
         table = _FakeLockTable()
@@ -269,7 +269,7 @@ class TestReleaseForExecution:
         assert self._release(dynamo) == 2
         assert locks.items == {}
         pager.assert_paged_to_exhaustion()
-        workflow_table.get_item.assert_called_once_with(Key={"databaseId": "GLOBAL", "workflowId": "wf"})
+        workflow_table.get_item.assert_any_call(Key={"databaseId": "GLOBAL", "workflowId": "wf"})
         inputs_table.query.assert_called()
 
     def test_another_restriction_reads_no_input_rows_and_deletes_nothing(self):

@@ -107,8 +107,8 @@ class TestErrorHandlerReleasesLocks:
         finalize, _inputs, locks_table = _reconcile()
         finalize.assert_called_once()
         assert _released_keys(locks_table) == KEYS
-        for call in locks_table.delete_item.call_args_list:
-            assert call.kwargs["ExpressionAttributeValues"] == {":e": EXEC}
+        assert {c.kwargs["ExpressionAttributeValues"][":e"]
+                for c in locks_table.delete_item.call_args_list} == {EXEC}
 
     def test_another_restriction_reads_no_input_rows_and_deletes_nothing(self):
         for restriction in ("none", "perAsset", "perInputFile"):
@@ -164,8 +164,8 @@ class TestAbortReleasesLocks:
         assert response["statusCode"] == 200
         persist.assert_called_once()
         assert _released_keys(locks_table) == KEYS
-        for call in locks_table.delete_item.call_args_list:
-            assert call.kwargs["ExpressionAttributeValues"] == {":e": EXEC}
+        assert {c.kwargs["ExpressionAttributeValues"][":e"]
+                for c in locks_table.delete_item.call_args_list} == {EXEC}
 
     def test_another_restriction_reads_no_input_rows_and_deletes_nothing(self):
         for restriction in ("none", "perAsset", "perInputFile"):

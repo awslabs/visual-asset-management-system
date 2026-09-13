@@ -108,8 +108,8 @@ class TestArchiveDeletesTriggers:
         resp, _wf, triggers, _audit, order = _archive(WF, _single_page())
         assert resp["statusCode"] == 200
         assert _deleted(order) == ["fileUpload", "fileUpload#nightly"]
-        for call in triggers.delete_item.call_args_list:
-            assert call.kwargs["Key"]["workflowDatabaseId:workflowId"] == COMPOSITE
+        assert {c.kwargs["Key"]["workflowDatabaseId:workflowId"]
+                for c in triggers.delete_item.call_args_list} == {COMPOSITE}
 
     def test_trigger_rows_are_deleted_only_after_the_archive_write(self):
         _resp, _wf, _triggers, _audit, order = _archive(WF, _single_page())
