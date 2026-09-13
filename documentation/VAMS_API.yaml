@@ -8521,6 +8521,49 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
             security:
                 - DefaultCognitoAuthorizer: []
+    /search/nlp:
+        post:
+            summary: "Natural-language search over vector embeddings."
+            description: "Embed a natural-language query with the deployment's embedding model and match it against the latest, non-archived vector items of every database the caller may read. The route exists only when app.vectorSearch.enabled is set. The answer is one page: size is the whole window and there is no pagination or cursor. Segment items (video windows, text chunks) collapse to one hit per file; the hit's _vector carries segmentHits and the best matching segment. hits.total.relation is gte when a result window filled or the accessible database list was cut (nlp.truncated is true), else eq. OpenSearch-only constraints (filters, metadataQuery, metadataSearchMode, geoSearch, tags) are applied and hits enriched from the file index only when an OpenSearch mode is enabled; otherwise they are ignored with an opensearch:fields_ignored warning. File-type words in the query (for example 'video', 'point cloud', 'pdf') order hits of those file classes first; the detected classes are reported in nlp.classIntent."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/nlpSearchRequest"
+            responses:
+                "200":
+                    description: Search executed successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/nlpSearchResponse"
+                "400":
+                    description: Invalid search parameters, or the query could not be embedded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access search.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "Vector index is being built; retry later."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
     /auth/api-keys:
         get:
             summary: "List all API keys (administrative)."
@@ -14184,6 +14227,205 @@ components:
             required:
                 - str_rectype
         
+        nlpSearchRequest:
+            type: object
+            required: [query]
+            properties:
+                query:
+                    type: string
+                    minLength: 1
+                    maxLength: 1000
+                    description: "Natural-language query; embedded with the deployment's embedding model."
+                entityTypes:
+                    type: array
+                    items:
+                        type: string
+                        enum: [file, asset]
+                    minItems: 1
+                    maxItems: 1
+                    default: [file]
+                    description: "Exactly one record kind. asset collapses the file hits to one hit per asset."
+                databaseIds:
+                    type: array
+                    items:
+                        type: string
+                    maxItems: 100
+                    default: []
+                    description: "Databases to search; intersected with the caller's accessible databases. Empty searches every accessible database."
+                includeArchived:
+                    type: boolean
+                    default: false
+                includeSegments:
+                    type: boolean
+                    default: true
+                    description: "Also match video windows and text chunks; a file found through a segment reports it in _vector.bestSegment."
+                fileClasses:
+                    type: array
+                    items:
+                        type: string
+                    default: []
+                    description: "fileClass ids to keep (lower-cased, de-duplicated). One value is pushed into the index filter; several are applied after the merge."
+                fileExtensions:
+                    type: array
+                    items:
+                        type: string
+                    default: []
+                    description: "Extensions to keep, without the leading dot (lower-cased, de-duplicated)."
+                size:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 25
+                    description: "Hits returned. There is no pagination; the result window is min(100, 2 * size) candidates per SearchVectors call."
+                filters:
+                    type: array
+                    items:
+                        type: object
+                    description: "OpenSearch-only: query_string filter clauses as on /search."
+                metadataQuery:
+                    type: string
+                    maxLength: 1000
+                    description: "OpenSearch-only: metadata search text as on /search."
+                metadataSearchMode:
+                    type: string
+                    enum: [key, value, both]
+                    description: "OpenSearch-only."
+                geoSearch:
+                    type: object
+                    description: "OpenSearch-only: geospatial filter as on /search."
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "OpenSearch-only: keep hits carrying any of these tags."
+                enrich:
+                    type: boolean
+                    default: true
+                    description: "When an OpenSearch mode is enabled, merge the file index document into _source."
+        nlpSegmentRef:
+            type: object
+            nullable: true
+            properties:
+                segmentKey:
+                    type: string
+                segmentKind:
+                    type: string
+                    description: "videoTime or textChunk"
+                segmentLabel:
+                    type: string
+                segmentStartMs:
+                    type: integer
+                    nullable: true
+                segmentEndMs:
+                    type: integer
+                    nullable: true
+        nlpSearchHit:
+            type: object
+            properties:
+                _index:
+                    type: string
+                    enum: [vams-vectors]
+                _id:
+                    type: string
+                    description: "databaseId#assetId#filePath#versionId for a file hit; databaseId#assetId for an asset hit."
+                _score:
+                    type: number
+                    description: "1 - cosine distance, clipped to [0, 1]."
+                _index_type:
+                    type: string
+                    enum: [file, asset]
+                _source:
+                    $ref: "#/components/schemas/searchHitSource"
+                _vector:
+                    type: object
+                    properties:
+                        distance:
+                            type: number
+                        embeddingModelId:
+                            type: string
+                        sourceModalities:
+                            type: array
+                            items:
+                                type: string
+                        indexedAt:
+                            type: string
+                        fileClass:
+                            type: string
+                        segmentHits:
+                            type: integer
+                            description: "How many of the file's segment items were candidates."
+                        bestSegment:
+                            $ref: "#/components/schemas/nlpSegmentRef"
+        nlpSearchResponse:
+            type: object
+            properties:
+                took:
+                    type: integer
+                timed_out:
+                    type: boolean
+                _shards:
+                    type: object
+                hits:
+                    type: object
+                    properties:
+                        total:
+                            type: object
+                            properties:
+                                value:
+                                    type: integer
+                                    description: "Authorized hits before the size cut."
+                                relation:
+                                    type: string
+                                    enum: [eq, gte]
+                        max_score:
+                            type: number
+                            nullable: true
+                        hits:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/nlpSearchHit"
+                aggregations:
+                    type: object
+                aggregationTotal:
+                    type: integer
+                nlp:
+                    type: object
+                    properties:
+                        query:
+                            type: string
+                        embeddingModelId:
+                            type: string
+                        databasesSearched:
+                            type: integer
+                        candidatesEvaluated:
+                            type: integer
+                            description: "Distinct vector items after the merge, before the collapse."
+                        itemsCollapsed:
+                            type: integer
+                            description: "Items folded into another hit of the same file."
+                        classIntent:
+                            type: array
+                            items:
+                                type: string
+                        truncated:
+                            type: boolean
+                warnings:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            code:
+                                type: string
+                                enum:
+                                    - "truncated:window"
+                                    - "truncated:targets"
+                                    - "databases:none_accessible"
+                                    - "opensearch:fields_ignored"
+                                    - "opensearch:enrichment_failed"
+                                    - "segments:window_full"
+                            message:
+                                type: string
+
         searchHitExplanation:
             type: object
             properties:

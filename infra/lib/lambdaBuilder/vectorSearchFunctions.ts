@@ -14,6 +14,7 @@ import { SYSTEM_WORKFLOW_DATABASE_ID } from "../../common/systemPipelines";
 import * as Config from "../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import { searchLambdasInVpc } from "../helper/searchPlacement";
+import { Partition, Service } from "../helper/service-helper";
 import {
     globalLambdaEnvironmentsAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
@@ -184,6 +185,89 @@ export function buildSystemWorkflowLauncherFunction(
     });
     // The system workflow's fileUpload trigger row supplies the default template a reindex run uses.
     storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
+    applyVectorLambdaSecurity(fun, storageResources, config);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
+}
+
+/**
+ * The search-domain Lambda behind POST /search/nlp: query embedding through Bedrock and similarity
+ * search on the vector embeddings table. Its own IAM statements name exact resources: the vector
+ * table and its one index for SearchVectors, the one foundation model for InvokeModel, and, only when
+ * an OpenSearch mode is on, the three aos/* parameters the lazily imported /search code reads.
+ */
+export function buildVectorSearchFunction(
+    scope: Construct,
+    storageResources: storageResources,
+    config: Config.Config,
+    lambdaCommonBaseLayer: LayerVersion,
+    vpc?: ec2.IVpc,
+    subnets?: ec2.ISubnet[],
+    extraEnv?: Record<string, string>
+): lambda.Function {
+    const name = "vectorSearchService";
+    const openSearchEnabled =
+        config.app.openSearch.useProvisioned.enabled || config.app.openSearch.useServerless.enabled;
+    const fun = new lambda.Function(scope, name, {
+        code: backendCode(),
+        handler: `handlers.vectorsearch.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(2),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        ...vectorLambdaPlacement(config, vpc, subnets),
+        environment: {
+            ...vectorIndexEnvironment(config),
+            OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
+            OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
+            OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
+                ? "provisioned"
+                : "serverless",
+            OPENSEARCH_DISABLED: openSearchEnabled ? "false" : "true",
+            ...(extraEnv ?? {}),
+        },
+    });
+
+    const vectorTable = storageResources.dynamo.vectorEmbeddingsStorageTable;
+    const partition = Partition();
+    // Similarity search on the one vector index; the statement names the table and that index only.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:SearchVectors"],
+            resources: [
+                vectorTable.tableArn,
+                `${vectorTable.tableArn}/index/${config.vectorIndexName}`,
+            ],
+        })
+    );
+    // Query embeddings come from the configured foundation model and no other; a foundation-model ARN
+    // carries no account, so it is spelled here rather than through the account-scoped service helper.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["bedrock:InvokeModel"],
+            resources: [
+                `arn:${partition}:bedrock:${config.env.region}::foundation-model/${config.app.vectorSearch.embeddingModelId}`,
+            ],
+        })
+    );
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    if (openSearchEnabled) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["ssm:GetParameter"],
+                resources: [
+                    config.openSearchDomainEndpointSSMParam,
+                    config.openSearchAssetIndexNameSSMParam,
+                    config.openSearchFileIndexNameSSMParam,
+                ].map((param) => Service("SSM").ARN("parameter", param.replace(/^\//, ""))),
+            })
+        );
+    }
     applyVectorLambdaSecurity(fun, storageResources, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;

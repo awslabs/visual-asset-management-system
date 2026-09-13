@@ -192,6 +192,8 @@ export function buildConfig(name: TemplateName, mutate?: (c: any) => void): Conf
     internal.openSearchFileIndexName = "files";
     internal.resourceNamesSSMParamPrefix = `/${stackName}/resourceNames`;
     internal.openSearchDomainEndpointSSMParam = `/${stackName}/aos/endPoint`;
+    internal.openSearchAssetIndexNameSSMParam = `/${stackName}/aos/assetIndexName`;
+    internal.openSearchFileIndexNameSSMParam = `/${stackName}/aos/fileIndexName`;
     internal.locationServiceApiKeyArnSSMParam = `/${stackName}/location/apiKeyArn`;
     internal.webUrlDeploymentSSMParam = `/${stackName}/web/deployedUrl`;
 
