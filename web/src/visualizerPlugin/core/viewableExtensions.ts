@@ -17,7 +17,7 @@
 
 import { PluginRegistry } from "./PluginRegistry";
 import { CompareContext, CompareEntry, deriveCompareContext } from "./compareShape";
-import { ViewerModeAvailability } from "./viewerSelection";
+import { LONE_FILE_COMPARE_CONTEXT, ViewerModeAvailability } from "./viewerSelection";
 
 /** Search rows carry "ply"; the registry stores ".ply". */
 function normalizeExtension(ext: string): string {
@@ -141,20 +141,22 @@ export function areFilesComparableTogether(files: CompareCandidate[]): boolean {
 /**
  * True when some compare viewer can diff two versions of ONE file with this extension (same asset).
  * This is the gate for a per-row "Compare" action in a version list — the action is offered only for
- * a type a differ handles, and never for a `.png` or `.glb` no compare viewer accepts.
+ * a type a differ handles, and never for a `.png` or `.glb` no compare viewer accepts. It is the same
+ * question `availableModesForFiles` asks for a lone file, so a version row's Compare and the
+ * single-file modal's toggle are always offered together.
  */
 export function isExtensionComparableAsVersions(ext?: string): boolean {
     if (!ext) return false;
-    return hasCompareViewerForExtensions([ext], {
-        fileCount: 2,
-        shape: "same-file-versions",
-        crossAsset: false,
-    });
+    return hasCompareViewerForExtensions([ext], LONE_FILE_COMPARE_CONTEXT);
 }
 
 /**
  * Which modes the file viewer modal may offer for a selection. Not memoized: it is asked once per
  * modal open, not per table cell. Both modes read false until the registry has initialized.
+ *
+ * A LONE file reports `compare` when a differ diffs two versions of its type (the registry judges it
+ * by `LONE_FILE_COMPARE_CONTEXT`): the host then seeds the pair with `seedCompareFromSingleFile`.
+ * A lone `.png`/`.glb` gets Visualize only — this is compare-viewer admission, not an extension list.
  */
 export function availableModesForFiles(files: CompareCandidate[]): ViewerModeAvailability {
     const exts = files.map((f) => extensionOfFilename(candidateName(f)));

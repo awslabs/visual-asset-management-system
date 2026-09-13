@@ -87,21 +87,33 @@ for any file count.
 
 Every entry point decides what to offer with the SAME predicates, never with its own extension list:
 
-| Question                                                 | Pure predicate (`core/viewerSelection.ts`)              | Registry-facing lookup (`core/viewableExtensions.ts`)                |
-| -------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
-| Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`        | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
-| Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`       | `areFilesComparableTogether(files)` (derives count + shape)          |
-| Can a differ diff two versions of ONE file of this type? | —                                                       | `isExtensionComparableAsVersions(ext)`                               |
-| Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)` | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
+| Question                                                 | Pure predicate (`core/viewerSelection.ts`)                 | Registry-facing lookup (`core/viewableExtensions.ts`)                |
+| -------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`           | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
+| Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`          | `areFilesComparableTogether(files)` (derives count + shape)          |
+| Can a differ diff two versions of ONE file of this type? | `LONE_FILE_COMPARE_CONTEXT` (the context it is asked with) | `isExtensionComparableAsVersions(ext)`                               |
+| Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)`    | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
+| What pair does a lone file enter Compare with?           | `seedCompareFromSingleFile(file)` (`core/compareShape.ts`) | — (hosts call it directly)                                           |
 
 Rules the surfaces follow (and the Playwright spec `e2e/seeded.compare.spec.ts` proves):
 
 -   **`ViewerSelector`** filters its list through `listableViewers(viewers, mode)`: a compare-only
     viewer is never an option in the Visualize dropdown, whatever list a caller hands it.
 -   **`FileViewerModal`** asks `availableModesForFiles(files)` once the registry is ready. Both modes
-    admitted → the Visualize/Compare toggle; exactly one → that mode is rendered and the toggle is
-    hidden (a requested `initialMode` no viewer admits is replaced); neither → a "No viewer for this
-    selection" empty state (`data-testid="file-viewer-no-viewer"`) instead of mounting `DynamicViewer`.
+    admitted → the Visualize/Compare toggle (top-right of the body); exactly one → that mode is
+    rendered and the toggle is hidden (a requested `initialMode` no viewer admits is replaced);
+    neither → a "No viewer for this selection" empty state (`data-testid="file-viewer-no-viewer"`)
+    instead of mounting `DynamicViewer`.
+-   **A lone file admits Compare as two versions of itself.** `availableViewerModes` judges a
+    one-file selection by `LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`, pure) — the same
+    question as `isExtensionComparableAsVersions` — so one `.txt` offers BOTH modes and one `.png`/`.glb`
+    (no differ admits it) offers Visualize only. In Compare the host hands the viewer
+    `seedCompareFromSingleFile(file)` = `[the viewed entry (pinned versionId, else latest), the same
+file at latest]`; the differ's per-side picker takes it from there, and toggling back shows the one
+    file. The visualize answer is untouched: a compare-only viewer is never offered there for one file.
+    Hosts: `FileViewerModal` (single-file view from `FileDetailsPanel`) and the `ViewFile` page (where
+    `FileVersionsList` / `AssetVersionComparison` "View File" land; toggle beside the File/Preview
+    control, File tab only).
 -   **Search "View Selected" / "Compare Selected"** (`SearchPageListView`) and the file manager's
     **"Visualize Selected Files" / "Compare Selected Files"** icons (`FileDetailsPanel`) are gated
     independently — View by the visualize lookup, Compare by the compare lookup with the selection's
@@ -129,6 +141,26 @@ label as a tooltip — the library's title block is a fixed 2.4em with a wrappin
 "name @ version · asset" label was otherwise cut off. In inline layout only the left title block
 renders, so it carries both names ("left → right").
 
+When both sides hold identical text the viewer shows an info notice
+(`data-testid="text-diff-identical-notice"`, "No differences to show — the selected versions are
+identical") above the diff: with **Collapse unchanged** on, the library folds an identical file into a
+single `@@ -0,N +0,N @@` expander and the pane otherwise reads as empty. This is the state a lone
+file's Compare seed (latest vs latest) starts in; the fold row stays so the content can be expanded.
+
+**Layout contract (host + library).** `DynamicViewer` mounts every plugin inside
+`.visualizer-container-canvases`, which `web/src/styles/index.scss` styles with `text-align: center`
+and `line-height: 100%` for the 3D canvases; inherited, they centered every diff line in its cell and
+stopped long lines wrapping. The differ resets both at its root (`textAlign: left`, `lineHeight:
+normal`), as `TextViewerPlugin` does on its highlighter. The library's `pre { margin: 0 }` reset covers
+only the diff table, so the `<pre>` inside each fixed-height (2.4em, overflow hidden) title block kept
+the browser's `1em` top margin and the labels — the first row of the surface — sat a line too low and
+were clipped; `styles={{ titleBlock: { pre: { margin: 0 } } }}` (hoisted, the library memoizes on the
+reference) zeroes it. `renderContent` highlights each line with react-syntax-highlighter's `Light` build
+as an INLINE run: `PreTag`/`CodeTag` spans, `display: inline`, every metric (font, size, line-height,
+colour, wrapping) inherited from the cell, the code tag's `white-space: pre` overridden to `inherit`
+so long lines wrap with the row, and the hljs theme passed explicitly (`Light` ships none — without it
+the tokens carry no colour). Do not give the per-line highlighter block metrics of its own.
+
 ### Cross-asset / multi-version contract
 
 Each `compareFiles` entry is a fully resolved `{ databaseId, assetId, key, versionId? }`:
@@ -153,7 +185,8 @@ Visualize/Compare toggle only when both modes are admitted — see Mode availabi
 results multi-select "Compare Selected" action (rows may span assets — each row carries its own
 db/asset), the asset file manager's "Compare Selected Files" icon (`FileDetailsPanel`), and the
 version-comparison "Compare" actions in `AssetVersionComparison.tsx` and `FileVersionsList.tsx`
-(diffing versions of the same file). The first
+(diffing versions of the same file). A SINGLE viewed file reaches it too, through the same toggle, from
+`FileViewerModal` (file manager single-file view) and from the `ViewFile` page. The first
 compare viewer is `text-diff-viewer` (`TextDiffViewerPlugin`), which diffs two text files via
 `react-diff-viewer-continued` (dynamically imported by its `dependencies.ts` so it stays out of the
 base bundle), declares `allowCrossAsset`, keeps per-side state (content, error, version list), and

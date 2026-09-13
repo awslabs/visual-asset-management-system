@@ -43,6 +43,9 @@ jest.mock("./PluginRegistry", () => {
             return [];
         }
     );
+    // Mirrors the real registry: `getAvailableModes` judges the selection through the pure
+    // `availableViewerModes`, which maps a lone file onto the two-versions compare question.
+    const { compareContextForSelection } = jest.requireActual("./viewerSelection");
     const getAvailableModes = jest.fn(
         (
             exts: string[],
@@ -50,7 +53,14 @@ jest.mock("./PluginRegistry", () => {
             context?: { fileCount: number; shape: string; crossAsset?: boolean }
         ) => ({
             visualize: getCompatibleViewers(exts, isMultiFile, false).length > 0,
-            compare: getCompatibleViewers(exts, isMultiFile, false, "compare", context).length > 0,
+            compare:
+                getCompatibleViewers(
+                    exts,
+                    isMultiFile,
+                    false,
+                    "compare",
+                    compareContextForSelection(exts, isMultiFile, context)
+                ).length > 0,
         })
     );
     return {
@@ -234,10 +244,33 @@ describe("isExtensionComparableAsVersions", () => {
 });
 
 describe("availableModesForFiles", () => {
-    beforeEach(() => clearViewableExtensionCache());
+    beforeEach(() => {
+        clearViewableExtensionCache();
+        registrySpy().mockClear();
+    });
 
-    it("reports Visualize only for one text file", () => {
+    it("reports BOTH modes for one text file — judged as two versions of itself", () => {
         expect(availableModesForFiles([inAsset("a.txt")])).toEqual({
+            visualize: true,
+            compare: true,
+        });
+        // The compare question put to the registry was the two-versions one, same-asset.
+        const compareCall = registrySpy().mock.calls.find(([, , , mode]) => mode === "compare")!;
+        expect(compareCall[4]).toEqual({
+            fileCount: 2,
+            shape: "same-file-versions",
+            crossAsset: false,
+        });
+        // ...and it is exactly the gate a version list's per-row Compare uses.
+        expect(isExtensionComparableAsVersions(".txt")).toBe(true);
+    });
+
+    it("reports Visualize only for one file no differ handles", () => {
+        expect(availableModesForFiles([inAsset("a.png")])).toEqual({
+            visualize: true,
+            compare: false,
+        });
+        expect(availableModesForFiles([inAsset("a.glb")])).toEqual({
             visualize: true,
             compare: false,
         });

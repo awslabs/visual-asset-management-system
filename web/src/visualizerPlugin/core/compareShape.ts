@@ -66,6 +66,17 @@ export function deriveCompareContext(files: CompareEntry[]): CompareContext {
 }
 
 /**
+ * The pair a LONE file enters compare with: the file as it is being viewed (its pinned `versionId`,
+ * or latest when none is pinned) on the left, and the same file at latest on the right. Both entries
+ * share database + asset + key, so the pair classifies as `same-file-versions`. When the viewed side
+ * is itself latest both sides start at latest — an identical diff — and the user picks the other
+ * version in the differ's per-side picker. Generic so a host's richer entry type passes through.
+ */
+export function seedCompareFromSingleFile<T extends CompareEntry>(file: T): [T, T] {
+    return [file, { ...file, versionId: undefined }];
+}
+
+/**
  * Selection-shape gating for a viewer's `compareMode` block. Returns false when the context describes
  * a selection the viewer has not opted into:
  *  - N versions of one file requires `allowSameFileDifferentVersions`

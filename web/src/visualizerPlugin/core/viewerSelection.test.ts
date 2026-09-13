@@ -15,9 +15,11 @@ import {
     admitsCompareSelection,
     admitsVisualizeSelection,
     availableViewerModes,
+    compareContextForSelection,
     hasCompareViewer,
     hasVisualizeViewer,
     isCompareOnlyViewer,
+    LONE_FILE_COMPARE_CONTEXT,
 } from "./viewerSelection";
 import { CompareContext } from "./compareShape";
 import { CompareModeConfig, ViewerConfig, ViewerPluginConfig } from "./types";
@@ -233,11 +235,70 @@ describe("hasVisualizeViewer / hasCompareViewer", () => {
     });
 });
 
+describe("compareContextForSelection", () => {
+    it("judges a lone file as two versions of itself", () => {
+        expect(compareContextForSelection([".txt"], false)).toEqual(LONE_FILE_COMPARE_CONTEXT);
+        expect(
+            compareContextForSelection([".txt"], false, {
+                fileCount: 1,
+                shape: "same-file-versions",
+                crossAsset: false,
+            })
+        ).toEqual(LONE_FILE_COMPARE_CONTEXT);
+        expect(LONE_FILE_COMPARE_CONTEXT).toEqual({
+            fileCount: 2,
+            shape: "same-file-versions",
+            crossAsset: false,
+        });
+    });
+
+    it("passes a multi-file selection through untouched", () => {
+        expect(compareContextForSelection([".txt"], true, twoDistinctFiles)).toBe(twoDistinctFiles);
+        expect(compareContextForSelection([".txt", ".md"], true)).toBeUndefined();
+        // One extension but flagged multi-file (two files of one type): not a lone file.
+        expect(compareContextForSelection([".txt"], true, twoVersions)).toBe(twoVersions);
+    });
+});
+
 describe("availableViewerModes", () => {
-    it("offers only Visualize for one text file", () => {
+    it("offers BOTH modes for one text file: a differ diffs it against another version of itself", () => {
+        // The single-file Visualize ↔ Compare toggle. The host seeds [this version, latest].
         expect(availableViewerModes(registry, [".txt"], false)).toEqual({
             visualize: true,
+            compare: true,
+        });
+        // The same answer whether or not the caller resolved the (one-file) context.
+        expect(
+            availableViewerModes(registry, [".txt"], false, {
+                fileCount: 1,
+                shape: "same-file-versions",
+            })
+        ).toEqual({ visualize: true, compare: true });
+    });
+
+    it("offers Visualize only for one file no differ handles — admission, not an extension list", () => {
+        expect(availableViewerModes(registry, [".las"], false)).toEqual({
+            visualize: true,
             compare: false,
+        });
+        // A differ that only diffs DISTINCT files cannot diff one file against its own versions.
+        const distinctOnly = [
+            singleTextViewer,
+            viewer({
+                id: "distinct-differ",
+                compareMode: compare({ compareOnly: true, allowSameFileDifferentVersions: false }),
+            }),
+        ];
+        expect(availableViewerModes(distinctOnly, [".txt"], false)).toEqual({
+            visualize: true,
+            compare: false,
+        });
+    });
+
+    it("never lets the lone-file rule put a compare-only viewer on the visualize path", () => {
+        expect(availableViewerModes([compareOnlyViewer], [".txt"], false)).toEqual({
+            visualize: false,
+            compare: true,
         });
     });
 
@@ -345,5 +406,19 @@ describe("shipped viewerConfig.json compare contract", () => {
         expect(modes.visualize).toBe(false);
         // A binary type no differ handles gets no compare mode.
         expect(availableViewerModes(shipped, [".png"], true, twoDistinctFiles).compare).toBe(false);
+    });
+
+    it("offers the single-file Visualize/Compare toggle for a shipped text type only", () => {
+        expect(availableViewerModes(shipped, [".txt"], false)).toEqual({
+            visualize: true,
+            compare: true,
+        });
+        expect(availableViewerModes(shipped, [".json"], false).compare).toBe(true);
+        // A lone image or mesh keeps Visualize only: no shipped differ admits its type.
+        expect(availableViewerModes(shipped, [".png"], false)).toEqual({
+            visualize: true,
+            compare: false,
+        });
+        expect(availableViewerModes(shipped, [".glb"], false).compare).toBe(false);
     });
 });

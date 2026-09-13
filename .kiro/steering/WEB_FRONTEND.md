@@ -949,11 +949,32 @@ Selected Files" icon (`FileDetailsPanel.tsx`), and the version-compare actions i
 `hasVisualizeViewer` / `areFilenamesViewableTogether` says a non-compare viewer admits the selection,
 and **Compare** only when `hasCompareViewer` / `areFilesComparableTogether` says a compare viewer admits
 its file count, shape and types (`isExtensionComparableAsVersions(ext)` for a per-row version Compare).
-`FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle; one → that mode, no
-toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters compare-only
-viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is handed. Never
-gate a Visualize/Compare control with a hand-written extension list; use these predicates behind
-`useViewerRegistryReady()`.
+`FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle (top-right); one →
+that mode, no toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters
+compare-only viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is
+handed. Never gate a Visualize/Compare control with a hand-written extension list; use these
+predicates behind `useViewerRegistryReady()`.
+
+**Single-file compare.** A LONE file is judged for compare as two versions of itself:
+`availableViewerModes` (pure, `viewerSelection.ts`) maps a one-file selection onto
+`LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`), the same question
+`isExtensionComparableAsVersions` asks, so a single `.txt` admits BOTH modes while a single `.png`/`.glb`
+stays Visualize-only — admission, never an extension list. The host seeds the pair with
+`seedCompareFromSingleFile(file)` (`compareShape.ts`): `[the viewed entry (its pinned `versionId`, or
+latest), the same file at latest]`; when the viewed side is latest both start at latest and the differ
+shows its identical-versions notice while the user picks the other version in the per-side picker.
+Toggling back to Visualize shows the one file again. Hosts: `FileViewerModal` (single-file view from
+`FileDetailsPanel`) and the `ViewFile` page (where "View File" from `FileVersionsList` /
+`AssetVersionComparison` lands; its toggle sits beside the File/Preview control and only on the File
+tab). The version lists' per-row Compare keeps seeding `[snapshot@version, latest]`.
+
+**Differ inside `DynamicViewer`.** Every plugin mounts inside `.visualizer-container-canvases`, which
+`src/styles/index.scss` gives `text-align: center` and `line-height: 100%` for the 3D canvases. A
+text-rendering viewer must reset both (`TextViewerPlugin` on its highlighter, `TextDiffViewerComponent`
+at its root) or its lines render centered and stop wrapping. The differ also passes
+`styles={{ titleBlock: { pre: { margin: 0 } } }}` to `react-diff-viewer-continued`: the library's
+`pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
+labels down and clipped them inside the fixed-height title block.
 
 ---
 

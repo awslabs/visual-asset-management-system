@@ -28,7 +28,9 @@ import {
  *  1. A compare-only viewer (the text differ) is never listed in the VISUALIZE picker, even for one
  *     text file that matches its extensions.
  *  2. The viewer modal offers only the modes some viewer admits: two text files open straight on
- *     Compare with no Visualize/Compare toggle; one text file opens on Visualize with no toggle.
+ *     Compare with no Visualize/Compare toggle; one text file opens on Visualize WITH the toggle
+ *     (a differ diffs it against another version of itself) and Compare seeds it against latest;
+ *     one PNG opens on Visualize with no toggle.
  *  3. The version file list offers a per-row "Compare" for a text file and none for the PNG, and the
  *     action diffs the snapshot's version (left) against latest (right).
  *  4. The text differ's controls — Line/Word/Character granularity, line numbers, collapse unchanged
@@ -120,7 +122,7 @@ test.describe("compare mode", () => {
         await page.keyboard.press("Escape");
     });
 
-    test("modal offers only the admitted mode: one text file opens on Visualize, no toggle", async ({
+    test("modal offers the toggle for one text file: Visualize first, Compare seeds it vs latest", async ({
         page,
     }) => {
         await openFileManager(page, A!.databaseId, A!.assetId);
@@ -132,9 +134,38 @@ test.describe("compare mode", () => {
         const modal = dialog(page);
         await expect(modal).toBeVisible({ timeout: 30_000 });
         await expect(modal.getByText(new RegExp(`File Viewer - ${TEXT}`))).toBeVisible();
-        await expect(modal.getByLabel("Viewer mode")).toHaveCount(0);
-        // The visualize surface rendered a viewer (the text viewer), not the differ.
+        // A lone text file admits both modes (a differ diffs it against another version of itself),
+        // so the toggle is offered — top-right — and Visualize is what renders first.
+        const toggle = modal.getByTestId("file-viewer-mode-toggle");
+        await expect(toggle).toBeVisible();
         await expect(modal.getByTestId("text-diff-viewer")).toHaveCount(0);
+
+        // Compare seeds [this file (latest), same file at latest]: an identical pair, said so.
+        await toggle.getByRole("button", { name: "Compare" }).click();
+        await expect(modal.getByText(new RegExp(`Compare Files - ${TEXT}`))).toBeVisible();
+        await expectDifferRendered(modal);
+        await expect(modal.getByTestId("text-diff-identical-notice")).toBeVisible();
+        await expect(modal.getByTestId("text-diff-side-label-left")).toHaveText(/\(latest\)/);
+        await expect(modal.getByTestId("text-diff-side-label-right")).toHaveText(/\(latest\)/);
+
+        // Back to Visualize: the single file again, no differ.
+        await toggle.getByRole("button", { name: "Visualize" }).click();
+        await expect(modal.getByText(new RegExp(`File Viewer - ${TEXT}`))).toBeVisible();
+        await expect(modal.getByTestId("text-diff-viewer")).toHaveCount(0);
+        await page.keyboard.press("Escape");
+    });
+
+    test("modal offers no toggle for one PNG: no differ admits its type", async ({ page }) => {
+        await openFileManager(page, A!.databaseId, A!.assetId);
+        await selectTreePath(page, PNG);
+
+        const eye = page.getByRole("button", { name: `Visualize File ${PNG}` });
+        await expect(eye).toBeVisible({ timeout: 30_000 });
+        await eye.click();
+        const modal = dialog(page);
+        await expect(modal).toBeVisible({ timeout: 30_000 });
+        await expect(modal.getByText(new RegExp(`File Viewer - ${PNG}`))).toBeVisible();
+        await expect(modal.getByLabel("Viewer mode")).toHaveCount(0);
         await page.keyboard.press("Escape");
     });
 

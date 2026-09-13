@@ -9,6 +9,7 @@ import { Modal, Box, Button, SegmentedControl, SpaceBetween } from "@cloudscape-
 import { DynamicViewer } from "../../../visualizerPlugin/components/DynamicViewer";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
+import { seedCompareFromSingleFile } from "../../../visualizerPlugin/core/compareShape";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 import {
     availableModesForFiles,
@@ -59,6 +60,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     // Which modes at least one registered viewer admits for THIS selection. Offering a mode with no
     // viewer only ever produced "No compatible viewers found" inside the modal, so the toggle lists
     // only the admitted modes, a lone admitted mode is forced, and none at all is its own empty state.
+    // A lone file whose type a differ diffs as versions admits both (see `viewerFiles` below).
     // Unknown (null) until the registry has initialized; the toggle stays hidden meanwhile.
     const availability = useMemo(
         () => (registryReady && files.length > 0 ? availableModesForFiles(files) : null),
@@ -74,6 +76,18 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         allowModeToggle && !!availability && availability.visualize && availability.compare;
     const selectionExtensions = Array.from(
         new Set(files.map((file) => extensionOfFilename(file.filename || file.key) || "(none)"))
+    );
+
+    // A LONE file enters Compare as itself against another version of itself: the viewed entry (its
+    // pinned versionId, or latest) on the left and the same file at latest on the right — the differ's
+    // per-side picker takes it from there. Visualize gets the single file back unchanged, so the
+    // toggle is symmetric. A multi-file selection is handed over as-is in either mode.
+    const viewerFiles = useMemo<FileInfo[]>(
+        () =>
+            files.length === 1 && effectiveMode === "compare"
+                ? seedCompareFromSingleFile(files[0])
+                : files,
+        [files, effectiveMode]
     );
 
     const handleViewerModeChange = (mode: string) => {
@@ -137,7 +151,11 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
             ) : files.length > 0 ? (
                 <SpaceBetween size="s">
                     {showModeToggle && (
-                        <Box>
+                        // Top-right of the modal body, above the viewer's own header row.
+                        <div
+                            data-testid="file-viewer-mode-toggle"
+                            style={{ display: "flex", justifyContent: "flex-end" }}
+                        >
                             <SegmentedControl
                                 selectedId={effectiveMode}
                                 onChange={({ detail }) => setMode(detail.selectedId as ViewerMode)}
@@ -147,7 +165,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                                     { id: "compare", text: "Compare" },
                                 ]}
                             />
-                        </Box>
+                        </div>
                     )}
                     <div
                         key={getViewerKey()}
@@ -157,7 +175,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                         }}
                     >
                         <DynamicViewer
-                            files={files}
+                            files={viewerFiles}
                             assetId={assetId}
                             databaseId={databaseId}
                             assetVersionId={assetVersionId}

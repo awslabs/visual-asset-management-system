@@ -78,6 +78,26 @@ const CONTEXT_LINE_OPTIONS: SelectProps.Option[] = [0, 1, 3, 5, 10].map((n) => (
 const DEFAULT_CONTEXT_LINES = 3;
 
 /**
+ * Style overrides handed to `react-diff-viewer-continued` (`styles` prop). The library's `pre { margin:
+ * 0 }` reset lives on the diff TABLE, so the `<pre>` it renders inside each fixed-height (2.4em,
+ * overflow hidden) title block still carries the browser's default `1em 0` margin: the label was pushed
+ * a line down and its lower half clipped — the "first row" of the diff surface sat too low and was cut
+ * off. Neutralize the margin there. Hoisted to one object: the library memoizes `computeStyles` on the
+ * `styles` reference, so a fresh literal per render would rebuild the emotion classes every time.
+ */
+const DIFF_STYLE_OVERRIDES = { titleBlock: { pre: { margin: 0 } } };
+
+/**
+ * Text alignment / line metrics reset for the whole viewer. `DynamicViewer` mounts every plugin inside
+ * `.visualizer-container-canvases`, which `web/src/styles/index.scss` styles with `text-align: center`
+ * and `line-height: 100%` for the 3D canvases. Left to inherit, the diff rows rendered centered in
+ * their cells and long lines were clipped instead of wrapping. TextViewerPlugin resets the same two
+ * properties on its highlighter; the diff resets them once at its root so the library's own metrics
+ * (gutter `pre` 1.6em, content `div` normal) apply as designed.
+ */
+const HOST_TEXT_RESET: React.CSSProperties = { textAlign: "left", lineHeight: "normal" };
+
+/**
  * Why one side could not be loaded. Each compare entry is fetched under its OWN asset and authorized
  * independently (Casbin, per asset), so a failure is a property of that side, not of the comparison.
  */
@@ -370,19 +390,44 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
 
     // Syntax highlighting hook for the diff viewer: each line's text is highlighted with
     // react-syntax-highlighter (already a project dependency), keeping the highlighter out of the
-    // base bundle via the same Light build TextViewerPlugin uses.
+    // base bundle via the same Light build TextViewerPlugin uses. The library lays each line out as
+    // `<td overflow:hidden><div flex baseline><span line-body>{content}</span></div></td>`, so the
+    // highlighter must flatten to an inline run that takes the row's metrics rather than bring its
+    // own: PreTag/CodeTag as spans, `display: inline`, and every metric (font, size, line-height,
+    // colour, wrapping) inherited from the cell. The `Light` build ships no default theme, so the
+    // hljs theme is passed explicitly or the tokens carry no colour at all.
     const renderHighlightedContent = (source: string): React.ReactNode => (
         <SyntaxHighlighter
             language={language}
+            style={isDark ? vs2015 : docco}
             // PreTag/CodeTag as spans so the diff viewer's own line layout is preserved.
             PreTag="span"
             CodeTag="span"
             customStyle={{
                 display: "inline",
                 background: "transparent",
+                // The theme's `hljs` rule sets a text colour and `overflow-x: auto`; the row's
+                // added/removed colour and the cell's clipping must stay in charge.
+                color: "inherit",
+                overflow: "visible",
                 padding: 0,
                 margin: 0,
-                fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+                fontFamily: "inherit",
+                fontSize: "inherit",
+                lineHeight: "inherit",
+                verticalAlign: "baseline",
+            }}
+            // The highlighter pins `white-space: pre` on its code tag, which stopped long lines from
+            // wrapping with the row (`pre-wrap` + `line-break: anywhere`) and clipped them instead.
+            codeTagProps={{
+                style: {
+                    display: "inline",
+                    whiteSpace: "inherit",
+                    background: "transparent",
+                    fontFamily: "inherit",
+                    fontSize: "inherit",
+                    lineHeight: "inherit",
+                },
             }}
         >
             {source}
@@ -626,6 +671,10 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
     }
 
     const bothReady = SIDES.every((side) => sides[side].status === "ready");
+    // Identical text on both sides. With "Collapse unchanged" on, the library folds the whole file
+    // into one "@@ -0,N +0,N @@" expander and the pane reads as empty; this is the seed a lone file
+    // starts from (latest vs latest), so say so instead of leaving a blank diff.
+    const identical = bothReady && sides.left.content === sides.right.content;
     const DiffViewer = TextDiffDependencyManager.getDiffViewer();
     const DiffMethod = TextDiffDependencyManager.getDiffMethod();
     const compareMethod =
@@ -645,6 +694,7 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                 flexDirection: "column",
                 height: "100%",
                 backgroundColor: "var(--vams-bg-secondary)",
+                ...HOST_TEXT_RESET,
             }}
         >
             {/* Controls — compact, one row, wrapping on narrow hosts */}
@@ -728,12 +778,21 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {/* Diff, or per-side panes when a side cannot be shown */}
             <div style={{ flex: 1, overflow: "auto" }}>
+                {identical && (
+                    <Box padding={{ horizontal: "m", top: "s" }}>
+                        <Alert type="info" data-testid="text-diff-identical-notice">
+                            No differences to show — the selected versions are identical. Pick
+                            another version for one side to compare.
+                        </Alert>
+                    </Box>
+                )}
                 {bothReady ? (
                     <DiffViewer
                         oldValue={sides.left.content}
                         newValue={sides.right.content}
                         splitView={splitView}
                         useDarkTheme={isDark}
+                        styles={DIFF_STYLE_OVERRIDES}
                         // Inline view renders only the LEFT title block, so it carries both names.
                         leftTitle={renderDiffTitle(
                             splitView ? leftLabel : `${leftLabel}  \u2192  ${rightLabel}`,

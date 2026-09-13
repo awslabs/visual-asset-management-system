@@ -25,6 +25,7 @@ export {
     deriveCrossAsset,
     deriveCompareContext,
     admitsCompareShape,
+    seedCompareFromSingleFile,
 } from "./compareShape";
 export type { CompareShape, CompareContext } from "./compareShape";
 export {
@@ -34,6 +35,8 @@ export {
     hasVisualizeViewer,
     hasCompareViewer,
     availableViewerModes,
+    compareContextForSelection,
+    LONE_FILE_COMPARE_CONTEXT,
 } from "./viewerSelection";
 export type { ViewerModeAvailability } from "./viewerSelection";
 
@@ -384,6 +387,8 @@ export class PluginRegistry {
      * Which of the two host surfaces can open a selection, over the REGISTERED (enabled, feature-
      * gated) viewers. This is what a Visualize/Compare toggle and the "View/Compare Selected"
      * actions consult; it never offers a mode for which `getCompatibleViewers` would return nothing.
+     * A lone file is judged for compare as two versions of itself (see `availableViewerModes`), so
+     * a single text file offers both modes and the host seeds the pair.
      * Reports both modes unavailable until `initialize()` has run.
      */
     getAvailableModes(

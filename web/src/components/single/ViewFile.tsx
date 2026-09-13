@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { archiveFile } from "../../services/FileOperationsService";
 import {
     Alert,
@@ -27,6 +27,10 @@ import { fetchAsset, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
+import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
+import { seedCompareFromSingleFile } from "../../visualizerPlugin/core/compareShape";
+import { availableModesForFiles } from "../../visualizerPlugin/core/viewableExtensions";
+import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
@@ -236,6 +240,61 @@ export default function ViewFile() {
     const [viewerMode, setViewerMode] = useState("collapse");
     const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
     const [isPreviewDeleting, setIsPreviewDeleting] = useState(false);
+
+    // Visualize ↔ Compare for the single file on this page. Compare is offered only when a differ
+    // diffs two versions of this file's type (registry admission, never an extension list) and the
+    // File tab is showing; it opens the differ on [this version, latest] — the same seed the version
+    // lists' per-row Compare uses — and the differ's per-side picker takes it from there.
+    const [fileViewMode, setFileViewMode] = useState<ViewerMode>("visualize");
+    const viewerRegistryReady = useViewerRegistryReady();
+
+    // The single-file entry exactly as the visualize path hands it to the viewer: the preview tab
+    // swaps in the preview key, and a file viewed through an ASSET version is fetched by that version
+    // rather than pinned to an S3 versionId.
+    const singleViewerEntry = useMemo(
+        () =>
+            !isMultiFileMode && singleFileInfo
+                ? {
+                      ...singleFileInfo,
+                      versionId: effectiveAssetVersionId ? undefined : singleFileInfo.versionId,
+                      key:
+                          viewType === "preview"
+                              ? singleFileInfo.previewFile || singleFileInfo.key
+                              : singleFileInfo.key,
+                  }
+                : null,
+        // `singleFileInfo` is rebuilt every render, so the memo keys on its fields instead.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [
+            isMultiFileMode,
+            singleFileInfo?.key,
+            singleFileInfo?.versionId,
+            singleFileInfo?.previewFile,
+            singleFileInfo?.filename,
+            singleFileInfo?.isDirectory,
+            singleFileInfo?.isArchived,
+            singleFileInfo?.primaryType,
+            singleFileInfo?.size,
+            singleFileInfo?.dateCreatedCurrentVersion,
+            effectiveAssetVersionId,
+            viewType,
+        ]
+    );
+    const canCompareSingleFile =
+        viewerRegistryReady &&
+        viewType === "file" &&
+        !!singleViewerEntry &&
+        !singleViewerEntry.isDirectory &&
+        availableModesForFiles([singleViewerEntry]).compare;
+    const effectiveFileViewMode: ViewerMode = canCompareSingleFile ? fileViewMode : "visualize";
+    const multiFiles = state?.files;
+    const viewerFiles = useMemo(() => {
+        if (isMultiFileMode || viewType === "files") return multiFiles ?? [];
+        if (!singleViewerEntry) return [];
+        return effectiveFileViewMode === "compare"
+            ? seedCompareFromSingleFile(singleViewerEntry)
+            : [singleViewerEntry];
+    }, [isMultiFileMode, viewType, multiFiles, singleViewerEntry, effectiveFileViewMode]);
 
     const changeViewerMode = (mode: string) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -749,8 +808,27 @@ export default function ViewFile() {
                                                 display: "flex",
                                                 alignItems: "center",
                                                 justifyContent: "flex-end",
+                                                gap: "12px",
+                                                flexWrap: "wrap",
                                             }}
                                         >
+                                            {canCompareSingleFile && !isNotDistributable && (
+                                                <div data-testid="file-viewer-mode-toggle">
+                                                    <SegmentedControl
+                                                        label="Viewer mode"
+                                                        selectedId={effectiveFileViewMode}
+                                                        onChange={({ detail }) =>
+                                                            setFileViewMode(
+                                                                detail.selectedId as ViewerMode
+                                                            )
+                                                        }
+                                                        options={[
+                                                            { id: "visualize", text: "Visualize" },
+                                                            { id: "compare", text: "Compare" },
+                                                        ]}
+                                                    />
+                                                </div>
+                                            )}
                                             {viewerOptions.length > 0 && !isNotDistributable && (
                                                 <SegmentedControl
                                                     label="Visualizer Control"
@@ -810,31 +888,13 @@ export default function ViewFile() {
                                                     }}
                                                 >
                                                     <DynamicViewer
-                                                        key={`${viewType}-${assetId}-${
+                                                        key={`${viewType}-${effectiveFileViewMode}-${assetId}-${
                                                             effectiveAssetVersionId ||
                                                             singleFileInfo?.versionId ||
                                                             "no-version"
                                                         }`}
-                                                        files={
-                                                            isMultiFileMode || viewType === "files"
-                                                                ? currentFiles
-                                                                : singleFileInfo
-                                                                ? [
-                                                                      {
-                                                                          ...singleFileInfo,
-                                                                          versionId:
-                                                                              effectiveAssetVersionId
-                                                                                  ? undefined
-                                                                                  : singleFileInfo.versionId,
-                                                                          key:
-                                                                              viewType === "preview"
-                                                                                  ? singleFileInfo.previewFile ||
-                                                                                    singleFileInfo.key
-                                                                                  : singleFileInfo.key,
-                                                                      },
-                                                                  ]
-                                                                : []
-                                                        }
+                                                        files={viewerFiles}
+                                                        mode={effectiveFileViewMode}
                                                         assetId={assetId!}
                                                         databaseId={databaseId!}
                                                         assetVersionId={effectiveAssetVersionId}

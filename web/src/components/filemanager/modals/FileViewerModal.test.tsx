@@ -6,13 +6,14 @@
 /**
  * The Visualize/Compare toggle offers a mode only when at least one registered viewer admits the
  * selection on that path. Two text files have a differ but no multi-file visualizer, so the modal
- * opens straight on Compare with no toggle; one text file is the reverse; a selection neither path
- * can open shows an empty state instead of an inner "No compatible viewers" error. Before this, the
- * toggle always showed both modes and the unavailable one dead-ended inside the viewer.
+ * opens straight on Compare with no toggle; one text file admits both (a differ diffs it against
+ * another version of itself) and gets the toggle; a selection neither path can open shows an empty
+ * state instead of an inner "No compatible viewers" error. Before this, the toggle always showed both
+ * modes and the unavailable one dead-ended inside the viewer.
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import FileViewerModal from "./FileViewerModal";
 
 const mockAvailableModes = jest.fn();
@@ -29,9 +30,18 @@ jest.mock("../../../visualizerPlugin/core/useViewerRegistryReady", () => ({
 }));
 // The registry pulls in Vite's import.meta.glob; only the ViewerMode type is used here.
 jest.mock("../../../visualizerPlugin/core/PluginRegistry", () => ({}));
-// Stand in for the viewer: it prints the mode it was rendered in.
+// Stand in for the viewer: it prints the mode it was rendered in and the files it was handed.
 jest.mock("../../../visualizerPlugin/components/DynamicViewer", () => ({
-    DynamicViewer: ({ mode }: any) => <div data-testid="dynamic-viewer">mode:{mode}</div>,
+    DynamicViewer: ({ mode, files }: any) => (
+        <div
+            data-testid="dynamic-viewer"
+            data-files={JSON.stringify(
+                files.map((f: any) => `${f.filename}@${f.versionId ?? "latest"}`)
+            )}
+        >
+            mode:{mode}
+        </div>
+    ),
 }));
 
 const file = (filename: string) => ({
@@ -102,5 +112,75 @@ describe("FileViewerModal mode availability", () => {
         renderModal(files);
         expect(mockAvailableModes).toHaveBeenCalledTimes(1);
         expect(mockAvailableModes).toHaveBeenCalledWith(files);
+    });
+});
+
+/**
+ * A SINGLE file whose type a differ diffs as versions admits both modes, so the modal offers the
+ * toggle for it. Compare seeds [the viewed entry, the same file at latest]; Visualize shows the one
+ * file again. The differ's per-side picker handles picking the other version from there.
+ */
+describe("FileViewerModal single-file Visualize/Compare toggle", () => {
+    beforeEach(() => mockAvailableModes.mockReset());
+
+    const viewerFiles = () => JSON.parse(screen.getByTestId("dynamic-viewer").dataset.files!);
+    const clickSegment = async (text: "Visualize" | "Compare") => {
+        await act(async () => {
+            screen.getByRole("button", { name: text }).click();
+        });
+    };
+
+    it("offers the toggle, top-right, for one comparable file and starts in Visualize", () => {
+        mockAvailableModes.mockReturnValue({ visualize: true, compare: true });
+        renderModal([{ ...file("notes.txt"), versionId: "v-old" }]);
+        expect(modeToggle()).toBeInTheDocument();
+        expect(screen.getByTestId("file-viewer-mode-toggle").style.justifyContent).toBe("flex-end");
+        expect(screen.getByTestId("dynamic-viewer").textContent).toBe("mode:visualize");
+        expect(viewerFiles()).toEqual(["notes.txt@v-old"]);
+        expect(screen.getByText(/File Viewer - notes\.txt/)).toBeInTheDocument();
+    });
+
+    it("seeds Compare with [the viewed version, latest] and Visualize with the one file again", async () => {
+        mockAvailableModes.mockReturnValue({ visualize: true, compare: true });
+        renderModal([{ ...file("notes.txt"), versionId: "v-old" }]);
+
+        await clickSegment("Compare");
+        expect(screen.getByTestId("dynamic-viewer").textContent).toBe("mode:compare");
+        expect(viewerFiles()).toEqual(["notes.txt@v-old", "notes.txt@latest"]);
+        expect(screen.getByText(/Compare Files - notes\.txt/)).toBeInTheDocument();
+
+        await clickSegment("Visualize");
+        expect(screen.getByTestId("dynamic-viewer").textContent).toBe("mode:visualize");
+        expect(viewerFiles()).toEqual(["notes.txt@v-old"]);
+    });
+
+    it("seeds latest against latest when the viewed file is already latest", async () => {
+        mockAvailableModes.mockReturnValue({ visualize: true, compare: true });
+        renderModal([file("notes.txt")]);
+        await clickSegment("Compare");
+        expect(viewerFiles()).toEqual(["notes.txt@latest", "notes.txt@latest"]);
+    });
+
+    it("opens straight on the seeded pair when asked for Compare initially", () => {
+        mockAvailableModes.mockReturnValue({ visualize: true, compare: true });
+        renderModal([{ ...file("notes.txt"), versionId: "v-old" }], "compare");
+        expect(screen.getByTestId("dynamic-viewer").textContent).toBe("mode:compare");
+        expect(viewerFiles()).toEqual(["notes.txt@v-old", "notes.txt@latest"]);
+    });
+
+    it("offers no toggle for a lone file no differ handles", () => {
+        // The registry answered from compare-viewer admission; a lone image is Visualize only.
+        mockAvailableModes.mockReturnValue({ visualize: true, compare: false });
+        renderModal([file("photo.png")]);
+        expect(modeToggle()).toBeNull();
+        expect(viewerFiles()).toEqual(["photo.png@latest"]);
+    });
+
+    it("hands a multi-file selection over as-is in either mode", async () => {
+        mockAvailableModes.mockReturnValue({ visualize: true, compare: true });
+        renderModal([file("a.txt"), file("b.txt")]);
+        expect(viewerFiles()).toEqual(["a.txt@latest", "b.txt@latest"]);
+        await clickSegment("Compare");
+        expect(viewerFiles()).toEqual(["a.txt@latest", "b.txt@latest"]);
     });
 });

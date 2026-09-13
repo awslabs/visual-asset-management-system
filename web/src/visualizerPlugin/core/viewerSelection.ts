@@ -126,9 +126,42 @@ export function hasCompareViewer(
 }
 
 /**
+ * The compare selection a LONE file stands for: itself against another version of itself (same
+ * database + asset + key). A single file can only ever enter compare this way, so its compare
+ * question is "does a differ diff two versions of one file of this type?" — never the one-file
+ * question, which no differ's `minFiles` window admits. This is also the gate behind a version
+ * list's per-row Compare (`isExtensionComparableAsVersions`), so the two stay in step.
+ */
+export const LONE_FILE_COMPARE_CONTEXT: Readonly<CompareContext> = {
+    fileCount: 2,
+    shape: "same-file-versions",
+    crossAsset: false,
+};
+
+/**
+ * The compare context a selection is judged by. A multi-file selection is judged as it is; a lone
+ * file (one extension, not multi-file) is judged as two versions of itself — see
+ * {@link LONE_FILE_COMPARE_CONTEXT}. Pure, so the toggle rule is unit-tested here rather than
+ * re-derived by each surface.
+ */
+export function compareContextForSelection(
+    fileExtensions: string[],
+    isMultiFile: boolean,
+    compareContext?: CompareContext
+): CompareContext | undefined {
+    const count = compareContext?.fileCount ?? fileExtensions.length;
+    return !isMultiFile && count === 1 ? LONE_FILE_COMPARE_CONTEXT : compareContext;
+}
+
+/**
  * Mode availability for a selection: the input for a Visualize/Compare toggle. Callers show only the
  * available modes, force the single one when exactly one is available, and show an empty state when
  * neither is. `isMultiFile` gates the visualize path; `compareContext` (count + shape) gates compare.
+ *
+ * A lone file is judged for compare as two versions of itself ({@link compareContextForSelection}),
+ * so a single `.txt` offers BOTH modes — the host seeds the pair — while a single `.png` or `.glb`
+ * that no differ handles still offers Visualize only. The visualize answer is untouched: a
+ * compare-only viewer never counts towards it, for one file or many.
  */
 export function availableViewerModes(
     configs: ViewerPluginConfig[],
@@ -138,6 +171,10 @@ export function availableViewerModes(
 ): ViewerModeAvailability {
     return {
         visualize: hasVisualizeViewer(configs, fileExtensions, isMultiFile),
-        compare: hasCompareViewer(configs, fileExtensions, compareContext),
+        compare: hasCompareViewer(
+            configs,
+            fileExtensions,
+            compareContextForSelection(fileExtensions, isMultiFile, compareContext)
+        ),
     };
 }

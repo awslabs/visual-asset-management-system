@@ -27,7 +27,9 @@ jest.mock("../../../services/AssetVersionService", () => ({
 }));
 
 // The diff library is code-split; stand in a component that prints both sides so the rendered diff
-// is observable without pulling the real library into the unit run.
+// is observable without pulling the real library into the unit run. It also runs `renderContent` on
+// one line and echoes the `styles` overrides, so the per-line highlighter and the library style
+// overrides can be asserted on.
 jest.mock("./dependencies", () => ({
     TextDiffDependencyManager: {
         loadDiffViewer: jest.fn().mockResolvedValue(undefined),
@@ -41,24 +43,45 @@ jest.mock("./dependencies", () => ({
                     data-show-diff-only={String(props.showDiffOnly)}
                     data-context-lines={String(props.extraLinesSurroundingDiff)}
                     data-split-view={String(props.splitView)}
+                    data-dark={String(props.useDarkTheme)}
+                    data-styles={JSON.stringify(props.styles ?? null)}
                 >
                     <span data-testid="diff-left">{props.oldValue}</span>
                     <span data-testid="diff-right">{props.newValue}</span>
                     <div data-testid="diff-left-title">{props.leftTitle}</div>
                     <div data-testid="diff-right-title">{props.rightTitle}</div>
+                    <div data-testid="diff-rendered-line">
+                        {props.renderContent ? props.renderContent('"a": 1') : null}
+                    </div>
                 </div>
             ),
         getDiffMethod: () => ({ WORDS: "diffWords", LINES: "diffLines", CHARS: "diffChars" }),
     },
 }));
 
-// react-syntax-highlighter is only used for presentation; render the text so it can be asserted on.
+// react-syntax-highlighter is only used for presentation; render the text so it can be asserted on,
+// and echo the layout props the diff's per-line highlighter must hand it.
 jest.mock("react-syntax-highlighter", () => ({
-    Light: Object.assign(({ children }: any) => <pre data-testid="highlighted">{children}</pre>, {
-        registerLanguage: jest.fn(),
-    }),
+    Light: Object.assign(
+        ({ children, PreTag, CodeTag, style, customStyle, codeTagProps }: any) => (
+            <pre
+                data-testid="highlighted"
+                data-pre-tag={PreTag ?? "pre"}
+                data-code-tag={CodeTag ?? "code"}
+                data-theme={style === undefined ? "none" : style.__name}
+                data-custom-style={JSON.stringify(customStyle ?? null)}
+                data-code-style={JSON.stringify(codeTagProps?.style ?? null)}
+            >
+                {children}
+            </pre>
+        ),
+        { registerLanguage: jest.fn() }
+    ),
 }));
-jest.mock("react-syntax-highlighter/dist/esm/styles/hljs", () => ({ docco: {}, vs2015: {} }));
+jest.mock("react-syntax-highlighter/dist/esm/styles/hljs", () => ({
+    docco: { __name: "docco" },
+    vs2015: { __name: "vs2015" },
+}));
 jest.mock("react-syntax-highlighter/dist/esm/languages/hljs/json", () => ({}));
 jest.mock("react-syntax-highlighter/dist/esm/languages/hljs/xml", () => ({}));
 jest.mock("react-syntax-highlighter/dist/esm/languages/hljs/plaintext", () => ({}));
@@ -338,5 +361,124 @@ describe("TextDiffViewerComponent", () => {
         expect(screen.getByTestId("text-diff-title-left").textContent).toMatch(
             /asset-A\s+→\s+config\.json \(latest\) · asset-B/
         );
+    });
+
+    // ---- Layout: the first row / title clipping and the host container's text styles --------
+
+    /**
+     * DynamicViewer mounts the plugin inside `.visualizer-container-canvases`, which the global
+     * stylesheet gives `text-align: center` and `line-height: 100%` for the 3D canvases. Inherited,
+     * they centered every diff line in its cell and stopped long lines wrapping; the viewer resets
+     * both at its root so the library's own metrics apply.
+     */
+    it("resets the host container's text alignment and line metrics at the viewer root", async () => {
+        renderDiff();
+        await screen.findByTestId("diff");
+        const root = screen.getByTestId("text-diff-viewer");
+        expect(root.style.textAlign).toBe("left");
+        expect(root.style.lineHeight).toBe("normal");
+    });
+
+    /**
+     * The library's `pre { margin: 0 }` reset covers only the diff table; the `<pre>` inside each
+     * fixed-height, overflow-hidden title block kept the browser's `1em` top margin, so the label sat a
+     * line too low and its lower half was clipped. The override zeroes it there.
+     */
+    it("zeroes the title block's pre margin so the first (title) row is not clipped", async () => {
+        renderDiff();
+        const diff = await screen.findByTestId("diff");
+        expect(JSON.parse(diff.dataset.styles!)).toEqual({ titleBlock: { pre: { margin: 0 } } });
+    });
+
+    it("highlights each line inline, inheriting the row's metrics and wrapping with it", async () => {
+        renderDiff();
+        await screen.findByTestId("diff");
+        const line = screen
+            .getByTestId("diff-rendered-line")
+            .querySelector('[data-testid="highlighted"]') as HTMLElement;
+        expect(line.textContent).toBe('"a": 1');
+        // Spans, not pre/code: the library owns the block layout of a line.
+        expect(line.dataset.preTag).toBe("span");
+        expect(line.dataset.codeTag).toBe("span");
+        expect(JSON.parse(line.dataset.customStyle!)).toEqual(
+            expect.objectContaining({
+                display: "inline",
+                lineHeight: "inherit",
+                fontSize: "inherit",
+                fontFamily: "inherit",
+                verticalAlign: "baseline",
+                color: "inherit",
+                overflow: "visible",
+                margin: 0,
+                padding: 0,
+                background: "transparent",
+            })
+        );
+        // The highlighter's own `white-space: pre` on the code tag is what clipped long lines; the
+        // row's `pre-wrap` must win.
+        expect(JSON.parse(line.dataset.codeStyle!)).toEqual(
+            expect.objectContaining({ display: "inline", whiteSpace: "inherit" })
+        );
+        // The Light build has no default theme; without one the tokens carry no colour.
+        expect(line.dataset.theme).toBe("docco");
+    });
+
+    it("hands the per-line highlighter the dark theme under the dark UI theme", async () => {
+        document.body.classList.add("awsui-dark-mode");
+        try {
+            renderDiff();
+            const diff = await screen.findByTestId("diff");
+            expect(diff.dataset.dark).toBe("true");
+            const line = screen
+                .getByTestId("diff-rendered-line")
+                .querySelector('[data-testid="highlighted"]') as HTMLElement;
+            expect(line.dataset.theme).toBe("vs2015");
+        } finally {
+            await act(async () => {
+                document.body.classList.remove("awsui-dark-mode");
+            });
+        }
+    });
+
+    // ---- Identical sides ----------------------------------------------------------------------
+
+    /**
+     * With "Collapse unchanged" on, identical sides fold into a single "@@ -0,N +0,N @@" expander and
+     * the pane reads as empty — this is exactly what a lone file seeds (latest vs latest). The viewer
+     * says so instead of showing a blank diff; the fold row stays so the content can be expanded.
+     */
+    it("shows an identical-versions notice when both sides have the same text", async () => {
+        bodies[urlFor("asset-B")] = bodies[urlFor("asset-A")];
+        renderDiff();
+        await screen.findByTestId("diff");
+        expect(screen.getByTestId("text-diff-identical-notice")).toBeInTheDocument();
+        expect(
+            screen.getByText(/No differences to show — the selected versions are identical/)
+        ).toBeInTheDocument();
+        // The diff (and its expander) is still rendered underneath, collapsed as before.
+        expect(screen.getByTestId("diff").dataset.showDiffOnly).toBe("true");
+    });
+
+    it("shows no identical-versions notice while the sides differ", async () => {
+        renderDiff();
+        await screen.findByTestId("diff");
+        expect(screen.queryByTestId("text-diff-identical-notice")).toBeNull();
+    });
+
+    it("drops the notice once a side is switched to a version that differs", async () => {
+        bodies[urlFor("asset-B")] = bodies[urlFor("asset-A")];
+        const { container } = renderDiff();
+        await screen.findByTestId("diff");
+        expect(screen.getByTestId("text-diff-identical-notice")).toBeInTheDocument();
+
+        const rightPicker = createWrapper(container).find('[data-side="right"]')?.findSelect();
+        await act(async () => {
+            rightPicker?.openDropdown();
+        });
+        await act(async () => {
+            rightPicker?.selectOptionByValue("v-old", { expandToViewport: true });
+        });
+        await waitFor(() => expect(screen.getByTestId("diff-right").textContent).toBe('{"a": 0}'));
+        expect(screen.queryByTestId("text-diff-identical-notice")).toBeNull();
     });
 });
