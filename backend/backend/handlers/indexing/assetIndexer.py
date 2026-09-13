@@ -27,6 +27,7 @@ from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.indexing import AssetDocumentModel, AssetIndexRequest, IndexOperationResponse
 from common.indexing.geoLocation import build_geo_location
+from common.indexing.documentIds import build_asset_document_id
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 
 # Configure AWS clients with retry configuration
@@ -608,13 +609,10 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
 
         client = opensearch_manager.get_client()
 
-        # Normalize databaseId for storage (addition of #deleted suffix if archived)
-        normalized_database_id = document.str_databaseid
-        if(document.bool_archived and "#deleted" not in normalized_database_id):
-            normalized_database_id = f"{normalized_database_id}#deleted"
-
-        # Create document ID from key components
-        doc_id = f"{normalized_database_id}#{document.str_assetid}"
+        # Document id: {databaseId}#{assetId}, the database id carrying #deleted for an archived asset
+        doc_id = build_asset_document_id(
+            document.str_databaseid, document.str_assetid, document.bool_archived
+        )
 
         # Convert document to dict for indexing
         doc_dict = document.dict(exclude_unset=True)
@@ -662,7 +660,7 @@ def delete_asset_document(database_id: str, asset_id: str) -> bool:
         client = opensearch_manager.get_client()
         
         # Create document ID
-        doc_id = f"{database_id}#{asset_id}"
+        doc_id = build_asset_document_id(database_id, asset_id, False)
         
         # Delete the document with retry logic
         response = opensearch_operation_with_retry(
@@ -738,7 +736,7 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
                 return IndexOperationResponse(
                     success=success,
                     message="Asset document deleted" if success else "Failed to delete asset document",
-                    documentId=f"{request.databaseId}#{request.assetId}",
+                    documentId=build_asset_document_id(request.databaseId, request.assetId, False),
                     indexName=opensearch_asset_index,
                     operation="delete"
                 )
@@ -800,7 +798,7 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
             # Index the document
             success = index_asset_document(document)
             
-            doc_id = f"{request.databaseId}#{request.assetId}"
+            doc_id = build_asset_document_id(request.databaseId, request.assetId, False)
             
             return IndexOperationResponse(
                 success=success,

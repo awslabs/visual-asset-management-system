@@ -19,6 +19,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.resourceNames import get_table_name, ResourceKeys
+from common.databaseAccess import DatabaseAccessManager  # noqa: F401 -- the search routes' pre-filter, also addressed as handlers.search.search.DatabaseAccessManager
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
@@ -40,7 +41,6 @@ retry_config = Config(
 )
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-dynamodb_client = boto3.client('dynamodb', config=retry_config)
 logger = safeLogger(service_name="DualIndexSearch")
 
 # Global variables for claims and roles
@@ -57,7 +57,6 @@ OPENSEARCH_MAX_RESULT_WINDOW = 10000
 # Load environment variables with error handling
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
@@ -84,7 +83,6 @@ opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
-database_storage_table = dynamodb.Table(database_storage_table_name)
 
 #######################
 # OpenSearch Client Management
@@ -355,112 +353,6 @@ class DualIndexSearchManager:
         except Exception as e:
             logger.exception(f"Error executing dual-index search: {e}")
             raise VAMSGeneralErrorResponse("Error executing search query")
-
-#######################
-# Authorization Management
-#######################
-
-class DatabaseAccessManager:
-    """Manages database access permissions with enhanced performance for large datasets"""
-    
-    @staticmethod
-    def get_accessible_database(database_id: str, claims_and_roles: Dict[str, Any]) -> Optional[str]:
-        """Check if user has access to a specific database"""
-        try:
-            db_response = database_storage_table.get_item(
-                Key={'databaseId': database_id}
-            )
-            
-            database = db_response.get("Item", {})
-            if not database:
-                return None
-            
-            # Casbin enforcement of the database record against database constraints; asset
-            # constraints are enforced per search hit in DualIndexResponseProcessor
-            database.update({"object__type": "database"})
-            if len(claims_and_roles.get("tokens", [])) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if casbin_enforcer.enforce(database, "GET"):
-                    return database_id
-            
-            return None
-        except Exception as e:
-            logger.exception(f"Error checking database access: {e}")
-            return None
-    
-    @staticmethod
-    def get_accessible_databases(claims_and_roles: Dict[str, Any], show_deleted: bool = False, max_databases: int = 10000) -> List[str]:
-        """Get list of databases accessible to the user with enhanced pagination for large datasets"""
-        try:
-            from boto3.dynamodb.types import TypeDeserializer
-            deserializer = TypeDeserializer()
-            
-            # Build scan filter for deleted databases
-            operator = "NOT_CONTAINS" if not show_deleted else "CONTAINS"
-            db_filter = {
-                "databaseId": {
-                    "AttributeValueList": [{"S": "#deleted"}],
-                    "ComparisonOperator": operator
-                }
-            }
-            
-            accessible_databases = []
-            processed_count = 0
-            
-            # Use paginator for efficient scanning of large database tables
-            paginator = dynamodb_client.get_paginator('scan')
-            
-            # Process databases in chunks to handle large numbers efficiently
-            for page in paginator.paginate(
-                TableName=database_storage_table_name,
-                ScanFilter=db_filter,
-                PaginationConfig={
-                    'PageSize': 100,  # Smaller page size for better memory management
-                    'MaxItems': max_databases  # Configurable limit
-                }
-            ):
-                items = page.get('Items', [])
-                if not items:
-                    break
-                
-                # Process items in current page
-                for item in items:
-                    try:
-                        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-                        
-                        # Casbin enforcement of the database record against database constraints;
-                        # asset constraints are enforced per search hit in DualIndexResponseProcessor
-                        deserialized_document.update({"object__type": "database"})
-                        if len(claims_and_roles.get("tokens", [])) > 0:
-                            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                            if casbin_enforcer.enforce(deserialized_document, "GET"):
-                                accessible_databases.append(deserialized_document['databaseId'])
-                        
-                        processed_count += 1
-                        
-                        # Log progress for large datasets
-                        if processed_count % 1000 == 0:
-                            logger.info(f"Processed {processed_count} databases, found {len(accessible_databases)} accessible")
-                        
-                        # Safety check to prevent excessive processing
-                        if len(accessible_databases) >= max_databases:
-                            logger.warning(f"Reached maximum database limit of {max_databases}, stopping scan")
-                            break
-                            
-                    except Exception as item_error:
-                        logger.warning(f"Error processing database item: {item_error}")
-                        continue
-                
-                # Break if we've reached the limit
-                if len(accessible_databases) >= max_databases:
-                    break
-            
-            logger.info(f"Database access scan complete: processed {processed_count} databases, found {len(accessible_databases)} accessible")
-            return accessible_databases
-            
-        except Exception as e:
-            logger.exception(f"Error getting accessible databases: {e}")
-            return []
 
 #######################
 # Field Classification
