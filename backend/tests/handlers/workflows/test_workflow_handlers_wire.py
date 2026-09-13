@@ -9,6 +9,7 @@ import os
 import sys
 import types
 import json
+import botocore
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -324,7 +325,8 @@ class TestExecutionDetailsHandler:
              patch.object(le, "get_workflow_definition", return_value={"description": "wf desc"}), \
              patch.object(le, "get_pipeline_definition", return_value={"pipelineId": "convert", "description": "Converts", "pipelineType": "standardFile"}), \
              patch.object(le, "_query_all", side_effect=_query_all), \
-             patch.object(le, "_query_capped", side_effect=_query_capped):
+             patch.object(le, "_query_capped", side_effect=_query_capped), \
+             patch.object(le.sfn, "describe_state_machine", side_effect=botocore.exceptions.ClientError({"Error": {"Code": "AccessDeniedException"}}, "DescribeStateMachine")):
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.return_value = True
             resp = le.lambda_handler(self._event_details(), MagicMock())
@@ -366,6 +368,191 @@ class TestExecutionDetailsHandler:
                 lambda obj, act: obj.get("object__type") == "workflow"
             resp = le.lambda_handler(self._event_details(), MagicMock())
         assert resp["statusCode"] == 403
+
+    def _sub_row(self):
+        return {
+            "pipelineExecutionId": "P1", "pipelineId": "thumb", "pipelineDatabaseId": "GLOBAL",
+            "executionStatus": "FAILED", "executionStartDate": "s", "executionStopDate": "e",
+            "endStatePipeline": "true", "pipelineExecutionType": "Lambda",
+            "pipelineResourceArn": "arn:aws:lambda:us-east-1:123456789012:function:vams-vamsExecuteThumb",
+            "registeredSubExecutions": [
+                {"resourceType": "stepFunctionsExecution", "label": "thumb processing",
+                 "stateMachineArn": "arn:aws:states:us-east-1:123456789012:stateMachine:VAMSstateMachine-leak",
+                 "executionArn": "arn:aws:states:us-east-1:123456789012:execution:VAMSstateMachine-leak:run-leak"}],
+            "registeredLogs": [
+                {"logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+                 "logGroupName": "/aws/batch/job", "logStreamName": "", "logStreamPrefix": "thumb-jd/default/",
+                 "stageName": "Preview3dThumbnailBatchJob", "label": "Preview3dThumbnailBatchJob container",
+                 "sourceType": "batch"}],
+        }
+
+    def _describe_state_machine(self):
+        return {
+            "name": "VAMSstateMachine-leak",
+            "definition": json.dumps({"StartAt": "Preview3dThumbnailBatchJob", "States": {
+                "Preview3dThumbnailBatchJob": {"Type": "Task", "Resource": "arn:aws:states:::batch:submitJob.sync",
+                                               "Next": "PipelineEndTask"},
+                "PipelineEndTask": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "End": True}}}),
+            "loggingConfiguration": {"destinations": [{"cloudWatchLogsLogGroup": {
+                "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/VAMSstateMachine-leak:*"}}]},
+        }
+
+    def _history(self):
+        import datetime
+        t = datetime.datetime(2026, 9, 11, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        return {"events": [
+            {"id": 1, "previousEventId": 0, "type": "TaskStateEntered", "timestamp": t,
+             "stateEnteredEventDetails": {"name": "Preview3dThumbnailBatchJob"}},
+            {"id": 2, "previousEventId": 1, "type": "TaskScheduled", "timestamp": t,
+             "taskScheduledEventDetails": {"resource": "submitJob.sync", "resourceType": "batch"}},
+            {"id": 3, "previousEventId": 2, "type": "TaskSubmitted", "timestamp": t,
+             "taskSubmittedEventDetails": {"resource": "submitJob.sync", "resourceType": "batch",
+                                           "output": json.dumps({
+                                               "JobArn": "arn:aws:batch:us-east-1:123456789012:job/job-1",
+                                               "JobId": "job-1", "JobName": "Preview3dThumbnailJob"})}},
+            # The shape verified live on prod5: the cause is the container's plain string sent through
+            # SendTaskFailure, not a DescribeJobs object, so the stream is not in the history.
+            {"id": 4, "previousEventId": 3, "type": "TaskFailed", "timestamp": t,
+             "taskFailedEventDetails": {"resource": "submitJob.sync", "resourceType": "batch",
+                                        "error": "Pipeline Failure: Failed to load 3D file (.glb): incorrect header on GLB file",
+                                        "cause": "See AWS cloudwatch logs for full error log and cause."}},
+            {"id": 5, "previousEventId": 4, "type": "TaskStateExited", "timestamp": t,
+             "stateExitedEventDetails": {"name": "Preview3dThumbnailBatchJob"}},
+            {"id": 6, "previousEventId": 5, "type": "ExecutionFailed", "timestamp": t,
+             "executionFailedEventDetails": {"error": "PipelineFailed", "cause": "x"}},
+        ]}
+
+    def _run_details(self, query, prow, history=None, describe_jobs=None):
+        """The details route end to end with every AWS read stubbed. `history` / `describe_jobs` are
+        mock kwargs (a `return_value` or a `side_effect`) overriding the healthy defaults."""
+        import datetime
+        t = datetime.datetime(2026, 9, 11, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        history = history or {"return_value": self._history()}
+        describe_jobs = describe_jobs or {"return_value": {"jobs": [{
+            "jobId": "job-1", "jobName": "Preview3dThumbnailJob", "status": "FAILED",
+            "container": {"logStreamName": "thumb-jd/default/abc", "exitCode": 1}}]}}
+        ev = self._event_details()
+        ev["queryStringParameters"] = query
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()), \
+             patch.object(le, "get_execution_input_assets", return_value=[("dbx", "a1")]), \
+             patch.object(le, "get_asset_details", return_value={"assetId": "a1", "databaseId": "dbx"}), \
+             patch.object(le, "get_pipeline_execution_rows", return_value=[prow]), \
+             patch.object(le, "get_workflow_definition", return_value={}), \
+             patch.object(le, "get_pipeline_definition", return_value={"pipelineId": "thumb"}), \
+             patch.object(le, "_query_all", return_value=[]), \
+             patch.object(le, "_query_capped", return_value=([], False)), \
+             patch.object(le.sfn, "describe_state_machine", return_value=self._describe_state_machine()) as describe, \
+             patch.object(le.sfn, "describe_execution", return_value={
+                 "status": "FAILED", "startDate": t, "stopDate": t, "error": "PipelineFailed", "cause": "x"}), \
+             patch.object(le.sfn, "get_execution_history", **history) as history_mock, \
+             patch.object(le.batch_client, "describe_jobs", **describe_jobs) as describe_jobs_mock:
+            MockEnf.return_value.enforceAPI.return_value = True
+            MockEnf.return_value.enforce.return_value = True
+            resp = le.lambda_handler(ev, MagicMock())
+            return resp, MockEnf, describe, history_mock, describe_jobs_mock
+
+    def test_details_rejects_a_malformed_include_sub_executions_before_authorization(self):
+        ev = self._event_details()
+        ev["queryStringParameters"] = {"includeSubExecutions": "maybe"}
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()):
+            resp = le.lambda_handler(ev, MagicMock())
+        assert resp["statusCode"] == 400
+        assert _body(resp)["message"] == "includeSubExecutions must be 'true' or 'false'"
+        MockEnf.return_value.enforceAPI.assert_not_called()
+
+    def test_details_default_lists_available_logs_and_omits_sub_executions(self):
+        resp, _enf, describe, history, describe_jobs = self._run_details({}, self._sub_row())
+        assert resp["statusCode"] == 200
+        pipeline = _body(resp)["message"]["pipelines"][0]
+        kinds = [(e["kind"], e["sourceType"]) for e in pipeline["availableLogs"]]
+        assert kinds == [("invocation", "lambda"), ("registered", "batch"), ("subStateMachine", "stateMachine")]
+        assert pipeline["availableLogs"][1]["stageName"] == "Preview3dThumbnailBatchJob"
+        assert pipeline["availableLogs"][1]["logStreamPrefix"] == "thumb-jd/default/"
+        assert all(len(e["logId"]) == 16 for e in pipeline["availableLogs"])
+        assert "subExecutions" not in pipeline
+        assert "subExecutionsTruncated" not in pipeline and "subExecutionWarnings" not in pipeline
+        # The default view pays only the memoised describe, never the history or DescribeJobs.
+        assert describe.call_count == 1
+        history.assert_not_called()
+        describe_jobs.assert_not_called()
+
+    def test_details_with_the_flag_reports_sub_executions_with_stages_and_iso_dates(self):
+        resp, _enf, describe, history, describe_jobs = self._run_details({"includeSubExecutions": "true"},
+                                                                         self._sub_row())
+        assert resp["statusCode"] == 200
+        pipeline = _body(resp)["message"]["pipelines"][0]
+        assert pipeline["subExecutionsTruncated"] is False
+        assert pipeline["subExecutionWarnings"] == []
+        sub = pipeline["subExecutions"][0]
+        assert sub["status"] == "FAILED" and sub["label"] == "thumb processing"
+        assert sub["resourceName"] == "VAMSstateMachine-leak"
+        assert sub["startDate"] == "2026-09-11T10:00:00Z" and sub["stopDate"] == "2026-09-11T10:00:00Z"
+        assert sub["stageSource"] == "definition"
+        stages = {s["stageName"]: s for s in sub["stages"]}
+        stage = stages["Preview3dThumbnailBatchJob"]
+        assert stage["status"] == "FAILED" and stage["caught"] is True
+        assert stage["error"] == "Pipeline Failure: Failed to load 3D file (.glb): incorrect header on GLB file"
+        assert stage["cause"] == "See AWS cloudwatch logs for full error log and cause."
+        # The history carried only the submitted jobId; the stream came from DescribeJobs on it.
+        assert stage["batch"] == {"jobId": "job-1", "logStreamName": "thumb-jd/default/abc"}
+        describe_jobs.assert_called_once_with(jobs=["job-1"])
+        assert stages["PipelineEndTask"]["status"] == "NOT_STARTED"
+        assert describe.call_count == 1 and history.call_count == 1
+        assert "includeExecutionData" in history.call_args.kwargs and "nextToken" not in history.call_args.kwargs
+        # Names and identifiers only — no ARN of any kind reaches the caller.
+        assert "arn:" not in json.dumps(_body(resp)["message"])
+        assert "VAMSstateMachine-leak:run-leak" not in json.dumps(_body(resp)["message"])
+
+    def test_details_names_an_unavailable_sub_execution_history_in_the_warnings(self):
+        # A stage-pass warning reaches the response: assemble_execution_details stores the warnings
+        # list on the pipeline entry and _fill_sub_execution_stages appends to that same list after,
+        # so a copy taken in between would silently drop every history and DescribeJobs warning.
+        resp, _enf, _describe, history, describe_jobs = self._run_details(
+            {"includeSubExecutions": "true"}, self._sub_row(),
+            history={"side_effect": botocore.exceptions.ClientError(
+                {"Error": {"Code": "ThrottlingException"}}, "GetExecutionHistory")})
+        assert resp["statusCode"] == 200
+        pipeline = _body(resp)["message"]["pipelines"][0]
+        assert any("VAMSstateMachine-leak" in w and "history" in w.lower()
+                   for w in pipeline["subExecutionWarnings"])
+        sub = pipeline["subExecutions"][0]
+        assert sub["historyTruncated"] is True and sub["stageSource"] == "definition"
+        assert sub["stages"] and all(s["status"] == "NOT_STARTED" for s in sub["stages"])
+        assert history.call_count == 1
+        describe_jobs.assert_not_called()
+
+    def test_details_names_a_failed_describe_jobs_in_the_warnings(self):
+        # The other stage-pass warning: the history supplied the job id, DescribeJobs on it was denied,
+        # and the stage keeps the id with an empty stream while the response names the failure.
+        resp, _enf, _describe, _history, describe_jobs = self._run_details(
+            {"includeSubExecutions": "true"}, self._sub_row(),
+            describe_jobs={"side_effect": botocore.exceptions.ClientError(
+                {"Error": {"Code": "AccessDeniedException"}}, "DescribeJobs")})
+        assert resp["statusCode"] == 200
+        pipeline = _body(resp)["message"]["pipelines"][0]
+        assert any("job-1" in w and "AccessDeniedException" in w for w in pipeline["subExecutionWarnings"])
+        stages = {s["stageName"]: s for s in pipeline["subExecutions"][0]["stages"]}
+        assert stages["Preview3dThumbnailBatchJob"]["batch"] == {"jobId": "job-1", "logStreamName": ""}
+        describe_jobs.assert_called_once_with(jobs=["job-1"])
+
+    def test_details_with_the_flag_false_is_the_default_view(self):
+        resp, _enf, _describe, history, describe_jobs = self._run_details({"includeSubExecutions": "false"},
+                                                                          self._sub_row())
+        assert "subExecutions" not in _body(resp)["message"]["pipelines"][0]
+        history.assert_not_called()
+        describe_jobs.assert_not_called()
+
+    def test_details_treats_an_empty_flag_as_false(self):
+        resp, _enf, _describe, history, describe_jobs = self._run_details({"includeSubExecutions": ""},
+                                                                          self._sub_row())
+        assert resp["statusCode"] == 200
+        assert "subExecutions" not in _body(resp)["message"]["pipelines"][0]
+        history.assert_not_called()
+        describe_jobs.assert_not_called()
 
 
 # ===================== executionService (logs) =====================
@@ -480,5 +667,76 @@ class TestExecutionLogsHandler:
             resp = le.lambda_handler(
                 self._event_logs(query={"mode": "full", "pipelineExecutionId": "nope"}), MagicMock())
         assert resp["statusCode"] == 404
+
+    @pytest.mark.parametrize("query", [
+        {"mode": "full", "pipelineExecutionId": "P1", "logId": "not valid!"},
+        {"mode": "full", "pipelineExecutionId": "P1", "stageName": "x" * 81},
+        {"mode": "full", "pipelineExecutionId": "P1", "stageName": "tab\tname"},
+    ])
+    def test_logs_malformed_log_source_params_are_400_before_authorization(self, query):
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()):
+            resp = le.lambda_handler(self._event_logs(query=query), MagicMock())
+        assert resp["statusCode"] == 400
+        MockEnf.return_value.enforceAPI.assert_not_called()
+
+    def test_logs_log_id_in_truncated_mode_is_400_naming_the_rule(self):
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()), \
+             patch.object(le, "get_execution_input_assets", return_value=[]), \
+             patch.object(le, "get_pipeline_execution_rows", return_value=[
+                 {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001"}]):
+            MockEnf.return_value.enforceAPI.return_value = True
+            MockEnf.return_value.enforce.return_value = True
+            resp = le.lambda_handler(self._event_logs(
+                query={"mode": "truncated", "pipelineExecutionId": "P1", "logId": "0123456789abcdef"}), MagicMock())
+        assert resp["statusCode"] == 400
+        assert _body(resp)["message"] == le.LOG_SOURCE_PARAMS_RULE
+
+    def test_logs_unknown_log_id_is_404(self):
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001",
+                "registeredLogs": [], "registeredSubExecutions": []}
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()), \
+             patch.object(le, "get_execution_input_assets", return_value=[]), \
+             patch.object(le, "get_pipeline_execution_rows", return_value=[prow]):
+            MockEnf.return_value.enforceAPI.return_value = True
+            MockEnf.return_value.enforce.return_value = True
+            resp = le.lambda_handler(self._event_logs(
+                query={"mode": "full", "pipelineExecutionId": "P1", "logId": "0123456789abcdef"}), MagicMock())
+        assert resp["statusCode"] == 404
+        assert _body(resp)["message"] == "Log source not found for this pipeline execution"
+
+    def test_logs_full_pipeline_scope_lists_log_sources_with_names_not_arns(self):
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001",
+                "pipelineExecutionType": "Lambda",
+                "pipelineResourceArn": "arn:aws:lambda:us-east-1:1:function:vams-vamsExecuteX",
+                "registeredLogs": [{"logGroupArn": "arn:aws:logs:us-east-1:1:log-group:/aws/batch/job",
+                                    "logGroupName": "/aws/batch/job", "logStreamName": "",
+                                    "logStreamPrefix": "jd/default/", "stageName": "B", "label": "B container",
+                                    "sourceType": "batch"}],
+                "registeredSubExecutions": []}
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()), \
+             patch.object(le, "get_execution_input_assets", return_value=[]), \
+             patch.object(le, "get_pipeline_execution_rows", return_value=[prow]), \
+             patch.object(le.logs_client, "filter_log_events",
+                          return_value={"events": [{"timestamp": 1, "message": "m"}], "nextToken": None}):
+            MockEnf.return_value.enforceAPI.return_value = True
+            MockEnf.return_value.enforce.return_value = True
+            resp = le.lambda_handler(
+                self._event_logs(query={"mode": "full", "pipelineExecutionId": "P1"}), MagicMock())
+        assert resp["statusCode"] == 200
+        msg = _body(resp)["message"]
+        assert [(s["kind"], s["status"]) for s in msg["logSources"]] == [
+            ("invocation", "read"), ("registered", "unscoped")]
+        assert msg["logSources"][1]["label"] == "B container" and msg["logSources"][1]["stageName"] == "B"
+        # The whole body, not only logSources: an event or a warning naming an ARN is the same leak.
+        assert "arn:" not in json.dumps(msg)
+        assert all("logId" in e for e in msg["subProcessEvents"])
 
 

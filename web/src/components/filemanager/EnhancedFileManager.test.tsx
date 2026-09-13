@@ -100,6 +100,16 @@ function Harness() {
     return (
         <AssetDetailContext.Provider value={{ state: {} as any, dispatch: jest.fn() }}>
             <div data-testid="search-probe">{location.search}</div>
+            {/* A second deep link arriving while the page is mounted (a link opened in place). */}
+            <button
+                type="button"
+                data-testid="deep-link-b"
+                onClick={() =>
+                    navigate({ search: "?filePath=%2Fb.txt" }, { state: location.state })
+                }
+            >
+                deep link b
+            </button>
             <EnhancedFileManager
                 assetName="TestAsset"
                 filePathToNavigate={filePathToNavigate}
@@ -109,9 +119,9 @@ function Harness() {
     );
 }
 
-function renderFileManager() {
+function renderFileManager(initialEntry = "/databases/db1/assets/asset1") {
     return render(
-        <MemoryRouter initialEntries={["/databases/db1/assets/asset1"]}>
+        <MemoryRouter initialEntries={[initialEntry]}>
             <Routes>
                 <Route path="/databases/:databaseId/assets/:assetId" element={<Harness />} />
             </Routes>
@@ -128,6 +138,11 @@ async function flushEffects() {
 function getFilePathParam() {
     const search = screen.getByTestId("search-probe").textContent || "";
     return new URLSearchParams(search).get("filePath");
+}
+
+function getSingleSelectedName(container: HTMLElement): string | null {
+    const el = container.querySelector(".tree-item-content.selected .tree-item-name");
+    return el?.textContent?.trim() || null;
 }
 
 function getMultiSelectedNames(container: HTMLElement): string[] {
@@ -220,5 +235,17 @@ describe("EnhancedFileManager multi-selection with URL filePath sync", () => {
 
         expect(getFilePathParam()).toBe("/c.txt");
         expect(getMultiSelectedNames(container)).toEqual([]);
+    });
+
+    it("selects the target of a new deep link once the listing is already loaded", async () => {
+        const { container } = renderFileManager("/databases/db1/assets/asset1?filePath=%2Fa.txt");
+
+        await waitFor(() => expect(getSingleSelectedName(container)).toBe("a.txt"));
+
+        fireEvent.click(screen.getByTestId("deep-link-b"));
+        await flushEffects();
+
+        await waitFor(() => expect(getSingleSelectedName(container)).toBe("b.txt"));
+        expect(getFilePathParam()).toBe("/b.txt");
     });
 });

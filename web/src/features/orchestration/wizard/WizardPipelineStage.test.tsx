@@ -281,15 +281,19 @@ describe("WizardPipelineStage template instructions", () => {
         expect(screen.getByText("Select the source model as the input file.")).toBeInTheDocument();
     });
 
-    it("collapses long instructions so they do not bury the form", () => {
-        // A metadata-documenting template runs to ~20 lines; inline would push the tag fields and the
-        // configuration section off screen.
+    it("folds long instructions inline so they do not bury the form", async () => {
+        // A metadata-documenting template runs to ~20 lines; open inline it would push the tag fields
+        // and the configuration section off screen, and a hover tooltip hides it one step away.
         const long = Array.from({ length: 18 }, (_, i) => `COSMOS3_KEY_${i}  what it does`).join(
             "\n"
         );
         renderWith(template({ inputInstructions: long }));
-        expect(screen.getByTestId("instructions-tooltip-trigger")).toBeInTheDocument();
+        expect(screen.getByTestId("instructions-collapsible")).toBeInTheDocument();
         expect(screen.queryByTestId("instructions-inline")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("instructions-tooltip-trigger")).not.toBeInTheDocument();
+        expect(screen.queryByText(/COSMOS3_KEY_0/)).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+        expect(screen.getByText(/COSMOS3_KEY_0/)).toBeInTheDocument();
     });
 
     it("shows the template description alongside the instructions", () => {
@@ -449,11 +453,118 @@ describe("WizardPipelineStage template tag help", () => {
         expect(screen.getByText(/Output locations/i)).toBeInTheDocument();
     });
 
+    it("explains the icon on hover and lists the template's own tags first when clicked", async () => {
+        const withTags = {
+            ...TEMPLATE,
+            allowCustomEdit: false,
+            tagSchema: [{ tagKey: "PROMPT", type: "string", label: "Prompt", required: false }],
+        };
+        render_({ allowCustomTemplateOverride: false }, withTags);
+        await openConfigSection();
+        const icon = await screen.findByLabelText("Show available template tags");
+        await userEvent.hover(icon);
+        // Radix renders the visible bubble plus a visually hidden role="tooltip" copy; the role is the
+        // accessible surface to assert on.
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(
+            /Click to list every .* placeholder this configuration can use/i
+        );
+        await userEvent.click(icon);
+        const own = await screen.findByTestId("template-own-tags");
+        expect(own).toHaveTextContent("{{PROMPT}}");
+        expect(own).toHaveTextContent("Prompt (string)");
+    });
+
     it("does not offer the icon when the config cannot be customized", async () => {
         // Nothing to write, so a list of writable placeholders would be misleading.
         render_({ allowCustomTemplateOverride: false }, { ...TEMPLATE, allowCustomEdit: false });
         await openConfigSection();
         await screen.findByText(/resolved per pipeline task at launch/i);
         expect(screen.queryByLabelText("Show available template tags")).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * The step header says what the step reads, so the operator does not have to go back to the
+ * Inputs step to remember why a file was or was not offered.
+ */
+describe("WizardPipelineStage header", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        // Hook implementations survive clearAllMocks, so the list is emptied explicitly rather than
+        // inherited from whichever describe ran last.
+        const { useTemplates, useTemplate } = require("../api/queries");
+        useTemplates.mockReturnValue({ data: [], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({ data: undefined, isLoading: false, isSuccess: false });
+    });
+
+    it("names the pipeline once as the step heading, with its category and description", () => {
+        render(
+            <WizardPipelineStage
+                workflow={workflow}
+                pipeline={{
+                    ...makePipeline({
+                        inputFileArity: "one",
+                        inputFileFilters: { allow: ["*.glb"] },
+                    }),
+                    category: "Conversion",
+                    description: "Converts models.",
+                }}
+                pipelineRef={pipelineRef}
+                onChange={jest.fn()}
+            />
+        );
+        expect(
+            screen.getByRole("heading", { level: 3, name: "Test Pipeline" })
+        ).toBeInTheDocument();
+        expect(screen.getByText("Conversion")).toBeInTheDocument();
+        expect(screen.getByText("Converts models.")).toBeInTheDocument();
+        expect(screen.getByText(/This step reads one input file/)).toBeInTheDocument();
+        expect(screen.getByText("*.glb")).toBeInTheDocument();
+    });
+
+    it("puts validation errors directly under the header, above the template controls", () => {
+        render(
+            <WizardPipelineStage
+                workflow={workflow}
+                pipeline={makePipeline({ requireTemplate: true })}
+                pipelineRef={pipelineRef}
+                onChange={jest.fn()}
+            />
+        );
+        const errors = screen.getByText(/Validation Errors/i);
+        const heading = screen.getByRole("heading", { level: 3 });
+        // DOCUMENT_POSITION_FOLLOWING (4): the errors come after the heading and before the rest.
+        expect(
+            heading.compareDocumentPosition(errors) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        const noConfig = screen.getByText(/takes no run-time configuration/i);
+        expect(
+            errors.compareDocumentPosition(noConfig) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+    });
+
+    it("reports the chosen template's name alongside its id", () => {
+        const onChange = jest.fn();
+        const { useTemplates, useTemplate } = require("../api/queries");
+        const tpl = {
+            templateId: "t1",
+            templateName: "Template One",
+            configFormat: "json",
+            configBody: "{}",
+            isDefault: true,
+        };
+        useTemplates.mockReturnValue({ data: [tpl], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({ data: tpl, isLoading: false, isSuccess: true });
+        render(
+            <WizardPipelineStage
+                workflow={workflow}
+                pipeline={makePipeline({ requireTemplate: false })}
+                pipelineRef={pipelineRef}
+                onChange={onChange}
+            />
+        );
+        const reported = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+        expect(reported.templateId).toBe("t1");
+        expect(reported.templateName).toBe("Template One");
     });
 });

@@ -18,6 +18,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import * as Config from "../../../../../../config/config";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     globalLambdaEnvironmentsAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
@@ -302,6 +303,9 @@ export function buildExecuteBatchJobFunction(
             BATCH_JOB_DEFINITION: batchJobDefinition.jobDefinitionName,
             // Orchestration bus for registering the submitted Batch job as an abortable sub-process
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            // Batch default container log group, registered with the job as the
+            // CoordTransformBatchJob log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...batchJobLogGroupEnvironment(),
         },
     });
 

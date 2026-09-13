@@ -120,17 +120,18 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
 locators — the app's markup is not always guessable, and these were established empirically.
 
-| Helper                                          | Use for                                                |
-| ----------------------------------------------- | ------------------------------------------------------ |
-| `gotoOrchestration(page, route, heading)`       | Navigate + wait for first load (no data dependency)    |
-| `searchBox(page)`                               | The orchestration filter-bar search input              |
-| `facet(page, label)`                            | A native `<select>` filter                             |
-| `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty |
-| `openCardMenu(page, id)`                        | Filter to a card and open its actions menu             |
-| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion   |
-| `menuSurface(items)`                            | The open menu's own floating surface, from an item     |
-| `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel  |
-| `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions  |
+| Helper                                          | Use for                                                         |
+| ----------------------------------------------- | --------------------------------------------------------------- |
+| `gotoOrchestration(page, route, heading)`       | Navigate + wait for first load (no data dependency)             |
+| `searchBox(page)`                               | The orchestration filter-bar search input                       |
+| `facet(page, label)`                            | A native `<select>` filter                                      |
+| `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty          |
+| `openCardMenu(page, id)`                        | Filter to a card and open its actions menu                      |
+| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion            |
+| `menuSurface(items)`                            | The open menu's own floating surface, from an item              |
+| `wizardRail(page)`                              | The execute dialog's step rail (`navigation` "Execution steps") |
+| `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel           |
+| `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions           |
 
 **Selector facts worth not rediscovering:**
 
@@ -146,8 +147,13 @@ locators — the app's markup is not always guessable, and these were establishe
     Basic. Fields on a later step do not exist in the DOM until you advance with the form's own `Next`
     button. Do **not** locate a step by name: `getByRole("button", { name: /Settings/ })` matches the
     global navigation's Settings button, not the step. The metadata-input toggles are on Settings.
--   The **execute wizard's `Launch` button exists only on the final step**. An assertion about the input
-    stage must target `Next`; looking for `Launch` there finds nothing.
+-   The **execute flow is one dialog**: from the Executions board's `Execute workflow` button and the
+    file manager's Automation menu its first step is the workflow picker — rows are `role=option` in a
+    `role=listbox`, the search input is labelled `Workflow` — and `Continue` swaps in the wizard steps
+    inside the same `role=dialog`. From a workflow card's Execute action the picker step is skipped.
+    Every step shows the rail (`wizardRail(page)`); visited rows are buttons. The **`Launch` button
+    exists only on the final step**: an assertion about the Inputs step must target `Next`; looking for
+    `Launch` there finds nothing.
 -   The executions board names the workflow's database `Workflow Database` (there is also an Output
     Type / Output Database / Output Asset ID group) and has **no** `Group` column.
 -   **`[role="menu"]` is ambiguous on every page.** Each closed Cloudscape Select / ButtonDropdown keeps

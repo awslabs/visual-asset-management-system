@@ -26,6 +26,7 @@ import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
@@ -88,6 +89,12 @@ export function buildVamsExecutePcPotreeViewerPipelineFunction(
     return fun;
 }
 
+/** The two Fargate job definitions whose container log stream prefixes openPipeline registers. */
+export interface OpenPipelineBatchLogProps {
+    pdalJobDefinitionName: string;
+    potreeJobDefinitionName: string;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -99,6 +106,7 @@ export function buildOpenPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    batchLogs: OpenPipelineBatchLogProps,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -132,6 +140,11 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // Batch default container log group + the PDAL and Potree job definition names, one
+            // registered log source per Batch state (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...batchJobLogGroupEnvironment(),
+            PDAL_JOB_DEFINITION_NAME: batchLogs.pdalJobDefinitionName,
+            POTREE_JOB_DEFINITION_NAME: batchLogs.potreeJobDefinitionName,
         },
     });
 

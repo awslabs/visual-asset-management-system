@@ -35,7 +35,14 @@ s3_client = boto3.client("s3", config=retry_config)
 events_client = boto3.client("events", config=retry_config)
 
 
-def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
+def run_mode(training_config):
+    """'evaluation' when the rendered trainingConfig asks for it, else 'training'. The training and
+    evaluation pipelines share this function, so the mode is what names their sub-processes."""
+    mode = training_config.get("mode") if isinstance(training_config, dict) else ""
+    return "evaluation" if str(mode or "").strip().lower().startswith("eval") else "training"
+
+
+def register_sub_execution(orchestration_event_prefix, sub_execution_arn, mode="training"):
     """Best-effort: report the internal SFN execution + log group to the orchestration bus."""
     if not ORCHESTRATION_BUS_NAME or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
@@ -50,6 +57,7 @@ def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
         "subExecution": {
             "stateMachineArn": STATE_MACHINE_ARN,
             "executionArn": sub_execution_arn or "",
+            "label": f"Isaac Lab {mode} processing",
         },
     }
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
@@ -57,6 +65,8 @@ def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": f"Isaac Lab {mode} state machine",
         }]
     try:
         events_client.put_events(Entries=[{
@@ -185,7 +195,8 @@ def lambda_handler(event, context):
         logger.info(f"SFN execution started: {sfn_response['executionArn']}")
 
         # Best-effort: register this internal SFN execution with the VAMS execution
-        register_sub_execution(resolved["orchestrationEventPrefix"], sfn_response["executionArn"])
+        register_sub_execution(resolved["orchestrationEventPrefix"], sfn_response["executionArn"],
+                               run_mode(sfn_input.get("trainingConfig")))
 
         return {
             "statusCode": 200,

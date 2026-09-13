@@ -418,6 +418,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            { jobDefinitionName: batchPipeline.batchJobDefinition.jobDefinitionName },
             props.storageResources.encryption.kmsKey
         );
 

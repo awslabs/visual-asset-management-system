@@ -815,6 +815,10 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                         lines.append(f"      Storage Class: {item.get('storageClass')}")
                     if item.get('previewFile'):
                         lines.append(f"      Preview File: {item.get('previewFile')}")
+                    if item.get('changeWorkflowId'):
+                        lines.append(f"      Change Workflow: {item.get('changeWorkflowId')}")
+                    if item.get('changeWorkflowExecutionId'):
+                        lines.append(f"      Change Execution: {item.get('changeWorkflowExecutionId')}")
                     if item.get('currentAssetVersionFileVersionMismatch'):
                         lines.append("      Version Mismatch: file version does not match the current asset version")
                     if item.get('isPermanentlyDeleted'):
@@ -1224,7 +1228,16 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
             
             if data.get('previewFile'):
                 lines.append(f"Preview File: {data.get('previewFile')}")
-            
+
+            if data.get('changeSource'):
+                lines.append(f"Change Source: {data.get('changeSource')}")
+            if data.get('changeUserId'):
+                lines.append(f"Changed By: {data.get('changeUserId')}")
+            if data.get('changeWorkflowId'):
+                lines.append(f"Change Workflow: {data.get('changeWorkflowId')}")
+            if data.get('changeWorkflowExecutionId'):
+                lines.append(f"Change Execution: {data.get('changeWorkflowExecutionId')}")
+
             if include_versions and data.get('versions'):
                 lines.append(f"\nVersions ({len(data['versions'])}):")
                 for version in data['versions']:

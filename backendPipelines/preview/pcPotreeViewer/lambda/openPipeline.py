@@ -35,6 +35,15 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# AWS Batch's default container log group + the two converter job definition names; a container log
+# source is registered only when the group and that job definition are configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+PDAL_JOB_DEFINITION_NAME = os.environ.get("PDAL_JOB_DEFINITION_NAME", "")
+POTREE_JOB_DEFINITION_NAME = os.environ.get("POTREE_JOB_DEFINITION_NAME", "")
+# The two Batch states of this pipeline's state machine (their CDK construct ids).
+PDAL_BATCH_STATE_NAME = "PdalConverterBatchJob"
+POTREE_BATCH_STATE_NAME = "PotreeConverterBatchJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
@@ -47,9 +56,25 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for one Batch state's container: AWS Batch's default group, streamed under
+    `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort: register this sub-SFN execution with the orchestration bus; failures are swallowed."""
+    """Best-effort: register this sub-SFN execution + its log sources with the orchestration bus; failures are swallowed."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -63,14 +88,26 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "Potree viewer processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "Potree viewer state machine",
+        })
+    for job_definition_name, state_name in (
+            (PDAL_JOB_DEFINITION_NAME, PDAL_BATCH_STATE_NAME),
+            (POTREE_JOB_DEFINITION_NAME, POTREE_BATCH_STATE_NAME)):
+        container_log = batch_container_log_entry(job_definition_name, state_name)
+        if container_log:
+            logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,

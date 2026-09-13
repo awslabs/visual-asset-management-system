@@ -94,6 +94,15 @@ cloudwatch_log_group_arn_pattern = (r'^arn:(' + aws_partition_group +
 cloudwatch_log_group_name_pattern = r'^[a-zA-Z0-9\-\._/#]{1,512}$'
 # CloudWatch log stream name / prefix: 1-512 chars; ':' and '*' are not allowed by CloudWatch.
 log_stream_name_pattern = r'^[^:*]{1,512}$'
+# Step Functions state name: 1-80 printable characters. ASL bounds state names at 80 and allows
+# spaces and punctuation (a Choice state in this repository is named 'Job Complete?'), so only
+# control characters are refused.
+sfn_state_name_pattern = r'^[^\x00-\x1f\x7f]{1,80}$'
+# Display label a pipeline attaches to a registered sub-process or log location: same class, 1-128.
+display_label_pattern = r'^[^\x00-\x1f\x7f]{1,128}$'
+# Kind of resource a registered log location belongs to. Closed set; the registration lambda stores
+# an unrecognised value as 'custom'.
+LOG_SOURCE_TYPES = ("stateMachine", "lambda", "batch", "ecs", "container", "custom")
 
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
@@ -125,6 +134,8 @@ arn_regex = re.compile(arn_pattern)
 cloudwatch_log_group_arn_regex = re.compile(cloudwatch_log_group_arn_pattern)
 cloudwatch_log_group_name_regex = re.compile(cloudwatch_log_group_name_pattern)
 log_stream_name_regex = re.compile(log_stream_name_pattern)
+sfn_state_name_regex = re.compile(sfn_state_name_pattern)
+display_label_regex = re.compile(display_label_pattern)
 
 
 def validate_id(name, value):
@@ -690,6 +701,21 @@ def validate_log_stream_name(name, value):
         return (False, name + " is invalid. Must be 1-512 characters and may not contain ':' or '*'.")
     return (True, '')
 
+def validate_sfn_state_name(name, value):
+    if not sfn_state_name_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be 1-80 characters with no control characters.")
+    return (True, '')
+
+def validate_display_label(name, value):
+    if not display_label_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be 1-128 characters with no control characters.")
+    return (True, '')
+
+def validate_log_source_type(name, value):
+    if value not in LOG_SOURCE_TYPES:
+        return (False, name + " is invalid. Must be one of " + ", ".join(LOG_SOURCE_TYPES) + ".")
+    return (True, '')
+
 def validate_s3_bucket_name(name, value):
     if not s3_bucket_name_regex.fullmatch(value):
         return (False, name + " is invalid. Must be a valid S3 bucket name (3-63 lowercase letters, digits, hyphens or dots, starting and ending with a letter or digit).")
@@ -743,6 +769,9 @@ _VALIDATOR_DISPATCH = {
     'CLOUDWATCH_LOG_GROUP_ARN': lambda k, v: validate_cloudwatch_log_group_arn(k, v['value']),
     'CLOUDWATCH_LOG_GROUP_NAME': lambda k, v: validate_cloudwatch_log_group_name(k, v['value']),
     'LOG_STREAM_NAME': lambda k, v: validate_log_stream_name(k, v['value']),
+    'SFN_STATE_NAME': lambda k, v: validate_sfn_state_name(k, v['value']),
+    'DISPLAY_LABEL': lambda k, v: validate_display_label(k, v['value']),
+    'LOG_SOURCE_TYPE': lambda k, v: validate_log_source_type(k, v['value']),
     'S3_BUCKET_NAME': lambda k, v: validate_s3_bucket_name(k, v['value']),
     'ASSET_PATH': lambda k, v: validate_asset_path(k, v['value'],
                                                    _spec_bool_flag(v, 'isFolder', k)),

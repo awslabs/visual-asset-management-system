@@ -132,6 +132,43 @@ class TestVamsExecute:
             resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
         assert resp["statusCode"] == 200
 
+    def test_registration_labels_the_state_machine_log_source(self):
+        # The module-level env in this file leaves the log group unset; set it for this reload.
+        with patch.dict(os.environ, {
+                "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/VAMSstateMachine-IsaacLab",
+                "STATE_MACHINE_LOG_GROUP_ARN":
+                    "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/VAMSstateMachine-IsaacLab:*"}):
+            mod = self._load()
+        s3 = self._s3_for(self._manifest(), {"trainingConfig": {}})
+        start = MagicMock(return_value={"executionArn": "arn:ex"})
+        put_events = MagicMock()
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.sfn_client, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Isaac Lab training processing"
+        assert detail["logs"] == [{
+            "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/VAMSstateMachine-IsaacLab:*",
+            "logGroupName": "/aws/vendedlogs/VAMSstateMachine-IsaacLab",
+            "logStreamName": "",
+            "sourceType": "stateMachine",
+            "label": "Isaac Lab training state machine",
+        }]
+
+    def test_registration_labels_follow_the_evaluation_mode(self):
+        mod = self._load()
+        s3 = self._s3_for(self._manifest(), {"trainingConfig": {"mode": "evaluation"}})
+        start = MagicMock(return_value={"executionArn": "arn:ex"})
+        put_events = MagicMock()
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.sfn_client, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Isaac Lab evaluation processing"
+        assert all("evaluation" in log["label"] for log in detail.get("logs", []))
+
     def test_missing_task_token_errors(self):
         mod = self._load()
         s3 = self._s3_for(self._manifest(), {})

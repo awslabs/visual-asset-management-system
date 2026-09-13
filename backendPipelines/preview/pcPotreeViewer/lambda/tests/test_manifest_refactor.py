@@ -37,10 +37,36 @@ for k, v in {
     "ORCHESTRATION_BUS_NAME": "vams-orchestration",
     "STATE_MACHINE_LOG_GROUP_NAME": "/aws/vendedlogs/PcPotree",
     "STATE_MACHINE_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:1:log-group:/aws/vendedlogs/PcPotree:*",
+    "BATCH_JOB_LOG_GROUP_NAME": "/aws/batch/job",
+    "BATCH_JOB_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+    "PDAL_JOB_DEFINITION_NAME": "PcPotreePdalJobDefabc1234567",
+    "POTREE_JOB_DEFINITION_NAME": "PcPotreePotreeJobDefabc1234567",
 }.items():
     os.environ.setdefault(k, v)
 
 import manifestHelper as mh  # noqa: E402
+
+
+def _repo_root():
+    """Walk up to the repo root rather than counting `..` segments — pipeline directories sit at
+    differing depths, and a miscounted relative path fails as a missing file."""
+    path = _LAMBDA_DIR
+    while path != os.path.dirname(path):
+        if os.path.isdir(os.path.join(path, "infra")) and os.path.isdir(
+                os.path.join(path, "backend", "backend", "common")):
+            return path
+        path = os.path.dirname(path)
+    raise RuntimeError("repo root not found from " + _LAMBDA_DIR)
+
+
+def _backend_validators():
+    """The backend's real validators module, so registered values are checked against the regexes
+    registerPipelineExecution applies rather than a copy of them. Appended to the END of sys.path so
+    nothing under backend/backend shadows this pipeline's own modules."""
+    backend_pkg = os.path.join(_repo_root(), "backend", "backend")
+    if backend_pkg not in sys.path:
+        sys.path.append(backend_pkg)
+    return importlib.import_module("common.validators")
 
 
 @pytest.mark.unit
@@ -221,6 +247,46 @@ class TestOpenPipeline:
                 patch.object(mod.events_client, "put_events", MagicMock(side_effect=Exception("denied"))):
             resp = mod.lambda_handler(self._event(), MagicMock())
         assert resp["statusCode"] == 200
+
+    def test_registers_one_container_log_source_per_batch_stage(self):
+        mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["subExecution"]["label"] == "Potree viewer processing"
+        sfn_log, pdal_log, potree_log = detail["logs"]
+        assert sfn_log["sourceType"] == "stateMachine"
+        assert sfn_log["label"] == "Potree viewer state machine"
+        assert pdal_log["stageName"] == "PdalConverterBatchJob"
+        assert pdal_log["logStreamPrefix"] == "PcPotreePdalJobDefabc1234567/default/"
+        assert pdal_log["label"] == "PdalConverterBatchJob container"
+        assert potree_log["stageName"] == "PotreeConverterBatchJob"
+        assert potree_log["logStreamPrefix"] == "PcPotreePotreeJobDefabc1234567/default/"
+        for entry in (pdal_log, potree_log):
+            assert entry["sourceType"] == "batch"
+            assert entry["logGroupName"] == "/aws/batch/job"
+            assert entry["logStreamName"] == ""
+        validators = _backend_validators()
+        for entry in (pdal_log, potree_log):
+            assert validators.validate_cloudwatch_log_group_arn("logGroupArn", entry["logGroupArn"])[0]
+            assert validators.validate_log_stream_name("logStreamPrefix", entry["logStreamPrefix"])[0]
+        assert not validators.validate_cloudwatch_log_group_arn(
+            "logGroupArn", "arn:aws:logs:us-east-1:123456789012:log-group//aws/batch/job")[0]
+
+    def test_only_the_configured_converter_gets_a_container_log_source(self):
+        with patch.dict(os.environ):
+            os.environ.pop("POTREE_JOB_DEFINITION_NAME", None)
+            mod = self._load()
+        start = self._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            mod.lambda_handler(self._event(), MagicMock())
+        detail = json.loads(put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert [log.get("stageName") for log in detail["logs"]] == [None, "PdalConverterBatchJob"]
 
 
 @pytest.mark.unit
