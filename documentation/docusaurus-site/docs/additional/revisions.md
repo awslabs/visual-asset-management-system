@@ -42,6 +42,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   Asset file manager: an asset name arriving after the listing was already interactive cleared the file selection, which closed an open Automation menu or execute dialog on large assets.
 -   Execute-dialog asset and file pickers return results in name / key order, so the capped first page is deterministic and a file is not hidden behind its derived outputs.
 -   Execution-log redaction covers a Step Functions task token wrapped in an AWS Deadline Cloud job-parameter envelope.
+-   Execution-log and sub-execution redaction covers a Step Functions task token carried as an AWS environment variable (`{"Name": "TASK_TOKEN", "Value": "…"}`, the shape a failed AWS Batch task reports in its Cause), and every sub-execution and stage cause is redacted before it is capped.
 -   Asset file manager: a `?filePath=` deep link opened on an already loaded asset page now moves the selection.
 -   Asset edit form: tag types and tags are read for the asset's own database plus GLOBAL only, so required tag types from other databases no longer block the form.
 -   The database picker for a new pipeline or workflow marks the GLOBAL scope with the same globe glyph as tag management.

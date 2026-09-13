@@ -13,6 +13,8 @@ vocabulary. Dates are rendered as ISO-8601 strings at capture so the result is J
 import json
 from datetime import datetime, timezone
 
+from common.logRedaction import redact_log_text
+
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 STATUS_RUNNING = "RUNNING"
@@ -448,7 +450,10 @@ def fold_history(events, frame, max_stages=MAX_SUB_STAGES_REPORTED_DEFAULT,
                     job_id = batch_job_id_from_output(cause)
                     if job_id:
                         instance["batch"]["jobId"] = job_id
-                instance["cause"] = cause[:max_error_chars]
+                # Redact AFTER the parse above (it needs the raw JSON) and BEFORE the slice: that same
+                # DescribeJobs object carries the task token as a container environment
+                # {"Name","Value"} pair, and a cut mid-value would keep whatever fits.
+                instance["cause"] = redact_log_text(cause)[:max_error_chars]
             continue
 
         if etype.startswith("MapIteration"):
@@ -470,7 +475,7 @@ def fold_history(events, frame, max_stages=MAX_SUB_STAGES_REPORTED_DEFAULT,
             elif etype == "MapRunFailed":
                 instance["failed"] = True
                 instance["error"] = details.get("error", "") or ""
-                instance["cause"] = (details.get("cause", "") or "")[:max_error_chars]
+                instance["cause"] = redact_log_text(details.get("cause", "") or "")[:max_error_chars]
             elif etype == "MapRunAborted":
                 close(instance, STATUS_ABORTED, timestamp)
             continue
@@ -495,13 +500,13 @@ def fold_history(events, frame, max_stages=MAX_SUB_STAGES_REPORTED_DEFAULT,
                     source = branch_state
             if source is not None:
                 instance["error"] = source.get("error", "") or ""
-                instance["cause"] = (source.get("cause", "") or "")[:max_error_chars]
+                instance["cause"] = redact_log_text(source.get("cause", "") or "")[:max_error_chars]
             continue
 
         if etype in _EXECUTION_CLOSERS:
             status = _EXECUTION_CLOSERS[etype]
             error = details.get("error", "") or ""
-            cause = (details.get("cause", "") or "")[:max_error_chars]
+            cause = redact_log_text(details.get("cause", "") or "")[:max_error_chars]
             if error or cause:
                 # A Fail state closes on entry with no error of its own; the ExecutionFailed that
                 # follows it is where its Error/Cause appear.

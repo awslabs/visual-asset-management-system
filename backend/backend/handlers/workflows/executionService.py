@@ -3897,7 +3897,9 @@ def _sub_execution_summary(sub):
         summary["startDate"] = ses.iso_utc(described.get("startDate"))
         summary["stopDate"] = ses.iso_utc(described.get("stopDate"))
         summary["error"] = described.get("error", "") or ""
-        summary["cause"] = (described.get("cause", "") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        # Redact BEFORE the slice: a cause that carries a DescribeJobs object holds the task token in
+        # an environment {"Name","Value"} pair, and a cut mid-value would keep whatever fits.
+        summary["cause"] = redact_log_text(described.get("cause", "") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
         return summary, warnings
     if resource_type == RESOURCE_TYPE_BATCH_JOB:
         job_id = sub.get("jobId", "") or ""
@@ -3916,7 +3918,7 @@ def _sub_execution_summary(sub):
         summary["resourceName"] = job.get("jobName") or job_id
         summary["startDate"] = ses.iso_utc(job.get("startedAt"))
         summary["stopDate"] = ses.iso_utc(job.get("stoppedAt"))
-        summary["cause"] = (job.get("statusReason", "") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        summary["cause"] = redact_log_text(job.get("statusReason", "") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
         summary["batch"] = {"jobId": job_id, "logStreamName": ses.batch_log_stream_from_job(job)}
         return summary, warnings
     if resource_type == RESOURCE_TYPE_DEADLINE_CLOUD_JOB:
@@ -3941,7 +3943,7 @@ def _sub_execution_summary(sub):
         summary["resourceName"] = job.get("name") or job_id
         summary["startDate"] = ses.iso_utc(job.get("startedAt"))
         summary["stopDate"] = ses.iso_utc(job.get("endedAt"))
-        summary["cause"] = (job.get("lifecycleStatusMessage") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        summary["cause"] = redact_log_text(job.get("lifecycleStatusMessage") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
         return summary, warnings
     return summary, warnings
 

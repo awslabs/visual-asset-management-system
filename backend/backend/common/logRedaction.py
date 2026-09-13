@@ -61,6 +61,33 @@ _JSON_KV = re.compile(
 _BARE_KV = re.compile(
     r'(?i)\b((?:' + _KEYS_ALT + r')\s*[:=]\s*)([^\s,;&"\']+)'
 )
+
+
+def _env_name_pattern(key):
+    """The environment-variable spelling of a sensitive key, as a pattern: the key is split at its
+    camelCase and hyphen boundaries and the parts rejoined with an optional `_`/`-`, so `TaskToken`
+    becomes `Task[_-]?Token`, which (case-insensitively) matches `TASK_TOKEN` and `TaskToken` alike."""
+    parts = [p for p in re.split(r'(?<=[a-z0-9])(?=[A-Z])|[-_]', key) if p]
+    return r'[_-]?'.join(re.escape(p) for p in parts)
+
+
+_ENV_NAMES_ALT = "|".join(_env_name_pattern(k) for k in SENSITIVE_KEYS)
+
+# {"Name": "TASK_TOKEN", "Value": "<token>"} — the AWS environment-variable shape. A Batch
+# DescribeJobs object (container.environment) or a Deadline/ECS override carries the task token as the
+# VALUE of a "Name" entry, so the key-driven rules above cannot see it: the label they need is a
+# value, and the sensitive value sits under a "Value" key. Such an object reaches a caller inline
+# when a Step Functions integration fails the task with the DescribeJobs result as the Cause (the
+# `batch:submitJob.sync` failure shape, VAMS #319/#307). The Name value is matched by its TAIL, like
+# _JSON_KV's unanchored key, so the prefixed spellings (`VAMS_TASK_TOKEN`, `EXTERNAL_SFN_TASK_TOKEN`)
+# redact too, while a Name that merely CONTAINS a sensitive word (`TASK_TOKEN_TTL`) or a Value that
+# happens to mention one (an S3 key) passes through. Same bounded escaped-quote delimiter as the
+# other JSON rules, so the escaped re-encoding in history and CloudWatch lines matches as well.
+# Per ARCC BSC4 "Log Every Security Event", Anti-Patterns → Logging Sensitive Data.
+_NAME_VALUE = re.compile(
+    r'(?i)(' + _Q + r'Name' + _Q + r'\s*:\s*' + _Q + r'[^"\']*?(?:' + _ENV_NAMES_ALT + r')' + _Q
+    + r'\s*,\s*' + _Q + r'Value' + _Q + r'\s*:\s*)(' + _Q + r')([^"\']*?)(' + _Q + r')'
+)
 # Authorization bearer scheme.
 _BEARER = re.compile(r'(?i)(bearer\s+)([A-Za-z0-9\-._~+/]+=*)')
 # AWS access key id (AKIA/ASIA/AIDA/AROA/ANPA/AIPA + 16 uppercase alnum).
@@ -78,6 +105,7 @@ def redact_log_text(text):
     # TOKEN, not just the word "Bearer" (the bare rule would otherwise stop at the first space).
     redacted = _BEARER.sub(lambda m: f"{m.group(1)}{REDACTED}", text)
     redacted = _JSON_KV.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}{m.group(4)}", redacted)
+    redacted = _NAME_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}{m.group(4)}", redacted)
     redacted = _BARE_KV.sub(lambda m: f"{m.group(1)}{REDACTED}", redacted)
     redacted = _AWS_KEY_ID.sub(REDACTED, redacted)
     redacted = _JWT.sub(REDACTED, redacted)

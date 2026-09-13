@@ -190,6 +190,95 @@ class TestTaskTokenRedaction:
         assert redact_log_text(text) == text
 
 
+def _describe_jobs_cause(env_name="TASK_TOKEN", token=TASK_TOKEN, escaped=False):
+    """A `batch:submitJob.sync` failure Cause: the DescribeJobs object, whose container environment
+    carries the task token as a {"Name","Value"} pair alongside ordinary variables."""
+    cause = json.dumps({
+        "JobId": "0f1e2d3c-job", "JobName": "isaac-train", "Status": "FAILED",
+        "StatusReason": "Essential container in task exited",
+        "Container": {
+            "Environment": [
+                {"Name": "S3_INPUT_KEY", "Value": "assets/TASK_TOKEN/model.glb"},
+                {"Name": env_name, "Value": token},
+                {"Name": "OUTPUT_BUCKET", "Value": "vams-assets-bucket"},
+            ],
+            "LogStreamName": "isaac-jd/default/abc",
+            "ExitCode": 1,
+        },
+    }, separators=(",", ":"))
+    return json.dumps(cause)[1:-1] if escaped else cause
+
+
+@pytest.mark.unit
+class TestEnvironmentNameValueRedaction:
+    """{"Name": "TASK_TOKEN", "Value": "<token>"} — the environment-variable shape a Batch DescribeJobs
+    object carries. The sensitive label is the VALUE of "Name", so the key-driven rules cannot see it;
+    a dedicated rule reads the Name and masks the Value that follows. (ARCC BSC4 "Log Every Security
+    Event", Anti-Patterns → Logging Sensitive Data; VAMS #319/#307.)"""
+
+    @pytest.mark.parametrize("env_name", [
+        "TASK_TOKEN", "VAMS_TASK_TOKEN", "EXTERNAL_SFN_TASK_TOKEN", "SFN_EXTERNAL_TASK_TOKEN",
+        "AWS_SESSION_TOKEN", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "X_AMZ_SECURITY_TOKEN",
+        "TaskToken", "task-token",
+    ])
+    def test_describe_jobs_environment_token_redacted_by_env_name(self, env_name):
+        out = redact_log_text(_describe_jobs_cause(env_name))
+        assert TASK_TOKEN not in out, f"token leaked behind Name {env_name}"
+        assert REDACTED in out
+        # The rest of the object is untouched, and it is still JSON.
+        parsed = json.loads(out)
+        env = {e["Name"]: e["Value"] for e in parsed["Container"]["Environment"]}
+        assert env[env_name] == REDACTED
+        assert env["S3_INPUT_KEY"] == "assets/TASK_TOKEN/model.glb"
+        assert env["OUTPUT_BUCKET"] == "vams-assets-bucket"
+        assert parsed["Container"]["LogStreamName"] == "isaac-jd/default/abc"
+        assert parsed["JobId"] == "0f1e2d3c-job"
+
+    def test_escaped_describe_jobs_environment_token_redacted(self):
+        # The same object re-encoded inside a history or CloudWatch line carries a backslash before
+        # every quote.
+        out = redact_log_text(_describe_jobs_cause(escaped=True))
+        assert TASK_TOKEN not in out
+        assert REDACTED in out
+        assert "isaac-jd/default/abc" in out and "assets/TASK_TOKEN/model.glb" in out
+
+    def test_boto3_lower_case_shape_redacted(self):
+        # boto3's DescribeJobs response spells the pair `name`/`value`.
+        text = '{"container":{"environment":[{"name":"TASK_TOKEN","value":"%s"}]}}' % TASK_TOKEN
+        out = redact_log_text(text)
+        assert TASK_TOKEN not in out and REDACTED in out
+
+    def test_whitespace_between_the_pair_is_tolerated(self):
+        text = '{ "Name" : "TASK_TOKEN" , "Value" : "%s" }' % TASK_TOKEN
+        out = redact_log_text(text)
+        assert TASK_TOKEN not in out and REDACTED in out
+
+    @pytest.mark.parametrize("text", [
+        # The Name is matched by its tail: a Name that merely contains a sensitive word is ordinary.
+        '{"Name":"TASK_TOKEN_TTL","Value":"3600"}',
+        '{"Name":"TOKENIZER","Value":"bert-base"}',
+        # A Value that mentions a sensitive word is content, not a credential.
+        '{"Name":"S3_INPUT_KEY","Value":"assets/TASK_TOKEN/model.glb"}',
+        '{"Name":"OUTPUT_PREFIX","Value":"runs/SessionToken/out"}',
+        # An ordinary Name/Value pair.
+        '{"Name":"OUTPUT_BUCKET","Value":"vams-assets-bucket"}',
+        # "Name" must be the whole key.
+        '{"JobName":"TASK_TOKEN","Value":"not-a-token"}',
+        # A plain Batch failure Cause with no environment block.
+        '{"JobId":"j1","Status":"FAILED","StatusReason":"Essential container in task exited"}',
+        "Essential container in task exited",
+    ])
+    def test_ordinary_name_value_pairs_and_causes_unchanged(self, text):
+        assert redact_log_text(text) == text
+
+    def test_only_the_sensitive_entry_of_an_environment_list_is_masked(self):
+        text = ('[{"Name":"A","Value":"1"},{"Name":"VAMS_TASK_TOKEN","Value":"%s"},'
+                '{"Name":"Z","Value":"26"}]') % TASK_TOKEN
+        assert redact_log_text(text) == (
+            '[{"Name":"A","Value":"1"},{"Name":"VAMS_TASK_TOKEN","Value":"%s"},'
+            '{"Name":"Z","Value":"26"}]') % REDACTED
+
+
 @pytest.mark.unit
 class TestRedactLogEvents:
     def test_non_list_passthrough(self):

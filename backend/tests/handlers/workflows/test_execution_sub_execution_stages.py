@@ -246,6 +246,23 @@ def _by_name(folded):
     return {s["stageName"]: s for s in folded["stages"]}
 
 
+# A Step Functions task token is a bearer capability to complete or fail the pending pipeline task.
+# When a `batch:submitJob.sync` task fails, its Cause is the DescribeJobs object, whose container
+# environment carries the token as a {"Name","Value"} pair — so the Cause must be redacted before it
+# is capped, or the cap keeps whatever of the token fits (VAMS #319/#307).
+TASK_TOKEN = "AAAAKgAAAAIAAAAAAAAAA" + "b" * 680
+REDACTED = "<redacted>"
+S3_KEY_CAUSE = '{"Name":"S3_INPUT_KEY","Value":"assets/TASK_TOKEN/model.glb"}'
+
+
+def _token_cause(env_name="TASK_TOKEN", job_id="j1", stream="isaac-jd/default/abc"):
+    """A DescribeJobs-shaped failure Cause carrying the task token in the container environment."""
+    return json.dumps({
+        "JobId": job_id, "Status": "FAILED",
+        "Container": {"Environment": [{"Name": env_name, "Value": TASK_TOKEN}], "LogStreamName": stream},
+    }, separators=(",", ":"))
+
+
 @pytest.mark.unit
 class TestFoldHistoryCore:
     def test_a_succeeded_task_reports_dates_and_one_attempt(self):
@@ -472,6 +489,55 @@ class TestFoldHistoryCore:
         h.add("TaskFailed", 2, taskFailedEventDetails={"error": "E", "cause": "x" * 1000})
         stage = _by_name(ses.fold_history(h.events, _frame("T"), max_error_chars=256))["T"]
         assert len(stage["cause"]) == 256
+
+    @pytest.mark.parametrize("env_name", ["TASK_TOKEN", "VAMS_TASK_TOKEN", "EXTERNAL_SFN_TASK_TOKEN"])
+    def test_a_batch_failure_cause_is_parsed_for_its_stream_then_redacted_before_the_cap(self, env_name):
+        # The raw Cause is what yields the job id and log stream; the redacted Cause is what a caller
+        # sees. Redacting before the cap is what makes the tail of the object survive at all: capped
+        # first, the 700-character token would fill the budget and its opening quote would never close.
+        h = _History()
+        h.entered("Task", "B", 1, prev=0)
+        h.add("TaskScheduled", 2, taskScheduledEventDetails={"resource": "submitJob.sync", "resourceType": "batch"})
+        h.add("TaskFailed", 3, taskFailedEventDetails={"resource": "submitJob.sync", "resourceType": "batch",
+                                                       "error": "States.TaskFailed",
+                                                       "cause": _token_cause(env_name)})
+        stage = _by_name(ses.fold_history(h.events, _frame("B"), max_error_chars=256))["B"]
+        assert stage["batch"] == {"jobId": "j1", "logStreamName": "isaac-jd/default/abc"}
+        assert TASK_TOKEN[:32] not in stage["cause"], f"task token leaked behind Name {env_name}"
+        assert REDACTED in stage["cause"] and "isaac-jd/default/abc" in stage["cause"]
+        assert len(stage["cause"]) <= 256
+
+    def test_an_execution_failed_cause_carrying_a_task_token_is_redacted_for_every_stage_it_closes(self):
+        # The closer's Cause is copied onto the raising Fail state and onto each still-open stage.
+        h = _History()
+        h.entered("Task", "T", 1, prev=0)
+        h.entered("Fail", "F", 2)
+        h.add("ExecutionFailed", 3, executionFailedEventDetails={"error": "PipelineFailed",
+                                                                 "cause": _token_cause()})
+        stages = _by_name(ses.fold_history(h.events, _frame("T", "F", types={"F": "Fail"}), max_error_chars=256))
+        for name in ("T", "F"):
+            assert TASK_TOKEN[:32] not in stages[name]["cause"], f"task token leaked on {name}"
+            assert REDACTED in stages[name]["cause"]
+
+    def test_a_map_run_failed_cause_carrying_a_task_token_is_redacted(self):
+        h = _History()
+        h.entered("Map", "M", 1, prev=0)
+        h.add("MapRunStarted", 2, mapRunStartedEventDetails={"mapRunArn": "arn:aws:states:r:a:mapRun:M/x"})
+        h.add("MapRunFailed", 3, mapRunFailedEventDetails={"error": "States.ExceedToleratedFailureThreshold",
+                                                           "cause": _token_cause()})
+        stage = _by_name(ses.fold_history(h.events, _frame("M", types={"M": "Map"}), max_error_chars=256))["M"]
+        assert TASK_TOKEN[:32] not in stage["cause"] and REDACTED in stage["cause"]
+
+    @pytest.mark.parametrize("cause", ["exit 1", "Essential container in task exited", S3_KEY_CAUSE])
+    def test_an_ordinary_cause_is_kept_verbatim(self, cause):
+        # Redaction is key-driven: a plain container message, and an environment pair whose Name is
+        # not sensitive (even when its Value mentions a token), pass through byte-identical.
+        h = _History()
+        h.entered("Task", "B", 1, prev=0)
+        h.add("TaskFailed", 2, taskFailedEventDetails={"resource": "submitJob.sync", "resourceType": "batch",
+                                                       "error": "States.TaskFailed", "cause": cause})
+        stage = _by_name(ses.fold_history(h.events, _frame("B"), max_error_chars=256))["B"]
+        assert stage["cause"] == cause
 
     def test_the_stage_cap_truncates_history_only_names(self):
         h = _History()
@@ -913,6 +979,57 @@ class TestSubExecutionSummary:
         m_batch.describe_jobs.assert_not_called()
         m_deadline.get_job.assert_not_called()
         assert summary["status"] == "UNKNOWN" and summary["label"] == "render" and warnings == []
+
+    def test_a_step_functions_cause_carrying_a_describe_jobs_task_token_is_redacted_before_the_cap(self):
+        # A sub-execution that failed on a `batch:submitJob.sync` task reports the DescribeJobs object
+        # as its Cause, task token included. Redacting before the cap is what lets the object's tail
+        # survive: capped first, the 700-character token would fill the budget unclosed.
+        with patch.object(le, "sfn") as m_sfn:
+            m_sfn.describe_execution.return_value = {
+                "status": "FAILED", "startDate": _ts(0), "stopDate": _ts(9),
+                "error": "States.TaskFailed", "cause": _token_cause("VAMS_TASK_TOKEN")}
+            summary, warnings = le._sub_execution_summary(
+                {"resourceType": "stepFunctionsExecution", "stateMachineArn": self.SM, "executionArn": self.EX})
+        assert warnings == []
+        assert TASK_TOKEN[:32] not in summary["cause"], "task token leaked through the sub-execution cause"
+        assert REDACTED in summary["cause"] and "isaac-jd/default/abc" in summary["cause"]
+        assert len(summary["cause"]) <= le.MAX_SUB_STAGE_ERROR_CHARS
+
+    def test_a_batch_status_reason_carrying_a_task_token_is_redacted_before_the_cap(self):
+        with patch.object(le, "batch_client") as m_batch:
+            m_batch.describe_jobs.return_value = {"jobs": [{
+                "jobId": "job-1", "jobName": "isaac-train", "status": "FAILED",
+                "statusReason": _token_cause(), "container": {"logStreamName": "isaac-jd/default/abc"}}]}
+            summary, warnings = le._sub_execution_summary({"resourceType": "batchJob", "jobId": "job-1"})
+        assert warnings == []
+        assert TASK_TOKEN[:32] not in summary["cause"] and REDACTED in summary["cause"]
+        assert len(summary["cause"]) <= le.MAX_SUB_STAGE_ERROR_CHARS
+        # The stream is still read from the job object itself.
+        assert summary["batch"] == {"jobId": "job-1", "logStreamName": "isaac-jd/default/abc"}
+
+    def test_a_deadline_lifecycle_message_carrying_a_task_token_is_redacted_before_the_cap(self):
+        le._deadline_job_cache.clear()
+        with patch.object(le, "deadline_client") as m_deadline:
+            m_deadline.get_job.return_value = {
+                "jobId": "job-d", "name": "render", "lifecycleStatus": "CREATE_FAILED",
+                "lifecycleStatusMessage": _token_cause(), "taskRunStatus": "PENDING", "createdAt": _ts(0)}
+            summary, warnings = le._sub_execution_summary(
+                {"resourceType": "deadlineCloudJob", "farmId": "farm-1", "queueId": "queue-1", "jobId": "job-d"})
+        assert warnings == []
+        assert summary["status"] == "FAILED"
+        assert TASK_TOKEN[:32] not in summary["cause"] and REDACTED in summary["cause"]
+        assert len(summary["cause"]) <= le.MAX_SUB_STAGE_ERROR_CHARS
+
+    @pytest.mark.parametrize("cause", ["exit 1", "Essential container in task exited", S3_KEY_CAUSE])
+    def test_an_ordinary_sub_execution_cause_is_kept_verbatim(self, cause):
+        # Key-driven: a plain message, or a Name/Value pair whose Name is not sensitive even though its
+        # Value mentions a token, is reported byte-identical.
+        with patch.object(le, "sfn") as m_sfn:
+            m_sfn.describe_execution.return_value = {"status": "FAILED", "startDate": _ts(0), "stopDate": _ts(1),
+                                                     "error": "PipelineFailed", "cause": cause}
+            summary, _ = le._sub_execution_summary(
+                {"resourceType": "stepFunctionsExecution", "stateMachineArn": self.SM, "executionArn": self.EX})
+        assert summary["cause"] == cause
 
 
 def _page(events, token=None):
