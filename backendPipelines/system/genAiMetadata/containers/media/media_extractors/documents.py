@@ -10,6 +10,8 @@ from typing import Dict, List, Optional
 
 import pypdfium2 as pdfium
 
+from contentChunks import CONTENT_TEXT_MAX_CHARS
+
 from .common import (
     CLASS_DOCUMENT,
     PDF_RASTER_PAGES,
@@ -26,6 +28,8 @@ from .imaging import normalise_for_vision, write_png
 # legible and large ones are not rasterised far beyond what the model receives.
 _RASTER_SCALE_MAX = 2.0
 _INFO_VALUE_MAX_CHARS = 500
+# Pages of the captured full text are joined with a blank line; page offsets point at each page's first character.
+_PAGE_SEPARATOR = "\n\n"
 # PDF 1.7 §7.9.4: D:YYYYMMDDHHmmSS with every field after the year optional and a zone of Z or ±HH'mm'.
 _PDF_DATE = re.compile(
     r"^D:(?P<year>\d{4})(?P<month>\d{2})?(?P<day>\d{2})?(?P<hour>\d{2})?(?P<minute>\d{2})?(?P<second>\d{2})?"
@@ -117,20 +121,42 @@ def extract_pdf(path: str, ctx: ExtractContext) -> BranchResult:
             width, height = pdf.get_page_size(0)
             sys_document["pageWidthPt"], sys_document["pageHeightPt"] = round(width, 1), round(height, 1)
         excerpt_parts: List[str] = []
+        full_parts: List[str] = []
+        page_offsets: List[dict] = []
+        full_length = 0
+        full_truncated = False
         collected = pages_with_text = pages_scanned = 0
         for index in range(page_count):
-            if collected >= ctx.max_text_chars:
+            want_excerpt = collected < ctx.max_text_chars
+            want_full = ctx.capture_full_text and not full_truncated
+            if not want_excerpt and not want_full:
                 break
             text = _page_text(pdf, index)
             pages_scanned += 1
             if text:
                 pages_with_text += 1
+            if want_excerpt and text:
                 excerpt_parts.append(text)
                 collected += len(text)
+            if want_full:
+                start = full_length + (len(_PAGE_SEPARATOR) if full_parts else 0)
+                room = CONTENT_TEXT_MAX_CHARS - start
+                if room <= 0:
+                    full_truncated = True
+                    continue
+                if len(text) > room:
+                    text, full_truncated = text[:room], True
+                page_offsets.append({"page": index + 1, "start": start})
+                full_parts.append(text)
+                full_length = start + len(text)
         sys_document["hasText"] = pages_with_text > 0
         sys_document["pagesWithText"] = pages_with_text
         sys_document["pagesScannedForText"] = pages_scanned
         result.text_excerpt = truncate_text("\n\n".join(excerpt_parts), ctx.max_text_chars)
+        if ctx.capture_full_text:
+            result.full_text = _PAGE_SEPARATOR.join(full_parts)
+            result.page_offsets = page_offsets
+            result.full_text_truncated = full_truncated
         rendered = 0
         for index in range(min(PDF_RASTER_PAGES, page_count)):
             try:

@@ -5,18 +5,23 @@
 binary files: PNG/JPEG/GIF via Pillow, WAV via the wave module, a hand-built PDF with a computed xref, and
 CSV/FCS/SVG/tileset bytes."""
 
+import datetime
 import io
 import json
 import os
 import wave
+import zipfile
 
+import docx
+import openpyxl
 from PIL import Image
+from pptx import Presentation
 
 from media_extractors.common import ExtractContext
 
 
 def make_ctx(tmp_path, file_name, max_text_chars=12_000, content_type="application/octet-stream",
-             extract_geo_location=False):
+             extract_geo_location=False, capture_full_text=False):
     work_dir = tmp_path / "work"
     work_dir.mkdir(exist_ok=True)
     return ExtractContext(
@@ -26,6 +31,7 @@ def make_ctx(tmp_path, file_name, max_text_chars=12_000, content_type="applicati
         max_text_chars=max_text_chars,
         work_dir=str(work_dir),
         extract_geo_location=extract_geo_location,
+        capture_full_text=capture_full_text,
     )
 
 
@@ -267,10 +273,11 @@ class FakeFfmpeg:
     keyframe command writes a PNG to its output path (or fails when its time is in `fail_at`). Every argv is
     recorded in `calls`."""
 
-    def __init__(self, header=FFMPEG_HEADER_SAMPLE, fail_at=(), probe_returncode=0):
+    def __init__(self, header=FFMPEG_HEADER_SAMPLE, fail_at=(), probe_returncode=0, fail_when_url=False):
         self.header = header
         self.fail_at = tuple(fail_at)
         self.probe_returncode = probe_returncode
+        self.fail_when_url = fail_when_url
         self.calls = []
 
     def __call__(self, argv, **kwargs):
@@ -281,7 +288,10 @@ class FakeFfmpeg:
             return subprocess.CompletedProcess(argv, self.probe_returncode, stdout=b"", stderr=self.header.encode())
         if "-ss" in argv:
             seconds = float(argv[argv.index("-ss") + 1])
+            source = argv[argv.index("-i") + 1]
             output = argv[-1]
+            if self.fail_when_url and source.startswith(("http://", "https://")):
+                return subprocess.CompletedProcess(argv, 1, stdout=b"", stderr=b"https: Connection refused")
             if any(abs(seconds - failing) < 1e-6 for failing in self.fail_at):
                 return subprocess.CompletedProcess(argv, 1, stdout=b"", stderr=b"Output file is empty, nothing was encoded")
             Image.new("RGB", (64, 36), (10, 20, 30)).save(output, "PNG")
@@ -316,6 +326,12 @@ class FakeS3:
         self.objects = {}
         self.puts = []
         self.downloads = []
+        self.presigns = []
+
+    def generate_presigned_url(self, ClientMethod, Params, ExpiresIn):
+        self.presigns.append((ClientMethod, dict(Params), ExpiresIn))
+        version = Params.get("VersionId", "")
+        return f"https://{Params['Bucket']}.s3.amazonaws.com/{Params['Key']}?versionId={version}&X-Amz-Expires={ExpiresIn}"
 
     def get_object(self, Bucket, Key):
         from botocore.exceptions import ClientError
@@ -337,3 +353,136 @@ class FakeS3:
 
     def manifest(self, bucket, key):
         return json.loads(self.objects[(bucket, key)])
+
+
+
+def _rewrite_zip(data, replacements):
+    """A copy of a zip with the named members replaced (or added)."""
+    source = zipfile.ZipFile(io.BytesIO(data))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            if info.filename in replacements:
+                continue
+            target.writestr(info, source.read(info.filename))
+        for name, body in replacements.items():
+            target.writestr(name, body)
+    return out.getvalue()
+
+
+# The extended-properties part Word writes; `pages` is the <Pages> element or "" for a package without a page count.
+_APP_XML = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
+    'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+    "<Application>Proto Office</Application>{pages}</Properties>"
+)
+
+
+def docx_bytes(paragraphs=("Alpha paragraph.", "Beta paragraph."), table=(("name", "qty"), ("bolt", "10")),
+               title="Proto Title", author="Proto Author", created=datetime.datetime(2026, 1, 2, 3, 4, 5), pages=3):
+    """A Word document with paragraphs, one table, core properties, and an extended-properties part carrying
+    `pages` (None writes the part without a page count)."""
+    document = docx.Document()
+    document.core_properties.title = title
+    document.core_properties.author = author
+    document.core_properties.created = created
+    for paragraph in paragraphs:
+        document.add_paragraph(paragraph)
+    if table:
+        grid = document.add_table(rows=len(table), cols=len(table[0]))
+        for row_index, row in enumerate(table):
+            for column_index, value in enumerate(row):
+                grid.cell(row_index, column_index).text = value
+    buffer = io.BytesIO()
+    document.save(buffer)
+    pages_xml = f"<Pages>{pages}</Pages>" if pages is not None else ""
+    return _rewrite_zip(buffer.getvalue(), {"docProps/app.xml": _APP_XML.format(pages=pages_xml).encode("utf-8")})
+
+
+def pptx_bytes(slides=(("Title 1", "Body 1", "Notes 1"), ("Title 2", "Body 2", ""), ("Title 3", "Body 3", "Notes 3")),
+               title="Proto Deck", author="Proto Author", created=datetime.datetime(2026, 1, 2, 3, 4, 5)):
+    """A presentation of title-and-content slides; a non-empty third element becomes the slide's notes."""
+    presentation = Presentation()
+    layout = presentation.slide_layouts[1]
+    for heading, body, notes in slides:
+        slide = presentation.slides.add_slide(layout)
+        slide.shapes.title.text = heading
+        slide.placeholders[1].text = body
+        if notes:
+            slide.notes_slide.notes_text_frame.text = notes
+    presentation.core_properties.title = title
+    presentation.core_properties.author = author
+    presentation.core_properties.created = created
+    buffer = io.BytesIO()
+    presentation.save(buffer)
+    return buffer.getvalue()
+
+
+def xlsx_bytes(sheets=(("Parts", [["name", "qty", "price"], ["bolt", 10, 0.25], ["nut", 20, None]]),
+                       ("Q1", [["month", "total"], ["Jan", 100]]))):
+    """A workbook of named sheets; the first row of each is its header."""
+    workbook = openpyxl.Workbook()
+    for index, (name, rows) in enumerate(sheets):
+        sheet = workbook.active if index == 0 else workbook.create_sheet()
+        sheet.title = name
+        for row in rows:
+            sheet.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+class FakeBedrockRuntime:
+    """Scripted `converse`: each script entry is a response dict or an exception, in call order; an exhausted
+    script repeats its last entry."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = []
+
+    def converse(self, **kwargs):
+        self.calls.append(kwargs)
+        item = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def converse_response(text, input_tokens=100, output_tokens=50, stop_reason="end_turn", trace=None):
+    response = {
+        "output": {"message": {"role": "assistant", "content": [{"text": text}]}},
+        "stopReason": stop_reason,
+        "usage": {"inputTokens": input_tokens, "outputTokens": output_tokens,
+                  "totalTokens": input_tokens + output_tokens},
+    }
+    if trace is not None:
+        response["trace"] = trace
+    return response
+
+
+def client_error(code, message="", operation="Converse"):
+    from botocore.exceptions import ClientError
+
+    return ClientError({"Error": {"Code": code, "Message": message}}, operation)
+
+
+class FakeEvents:
+    """`put_events` over an in-memory list; `fail_count` entries of every call are reported failed, and when
+    `error` is given every call raises it instead."""
+
+    def __init__(self, fail_count=0, error=None):
+        self.fail_count = fail_count
+        self.error = error
+        self.entries = []
+        self.calls = []
+
+    def put_events(self, Entries):
+        self.calls.append(list(Entries))
+        if self.error is not None:
+            raise self.error
+        self.entries.extend(Entries)
+        failed = min(self.fail_count, len(Entries))
+        return {"FailedEntryCount": failed,
+                "Entries": [{"ErrorCode": "InternalFailure", "ErrorMessage": "x"} if index < failed else {}
+                            for index in range(len(Entries))]}

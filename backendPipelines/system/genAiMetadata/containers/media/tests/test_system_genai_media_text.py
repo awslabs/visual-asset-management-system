@@ -226,3 +226,23 @@ class TestTiles3d:
         assert len(result.warnings) == 1 and "six finite numbers" in result.warnings[0]
         assert tiles3d.region_of({"region": [1, 2, 3, 4, 5, "x"]})[0] is None
         assert tiles3d.region_of({"region": [1, 2, 3, 4, 5, float("nan")]})[0] is None
+
+
+@pytest.mark.unit
+class TestFullTextCapture:
+    def test_full_text_is_captured_when_asked(self, tmp_path):
+        path = write(tmp_path, "notes.txt", (ENGLISH_TEXT * 3).encode("utf-8"))
+        result = text.extract_text(path, make_ctx(tmp_path, "notes.txt", max_text_chars=50, capture_full_text=True))
+        assert result.full_text == ENGLISH_TEXT * 3
+        assert result.full_text_truncated is False and result.page_offsets == []
+        assert len(result.text_excerpt) <= 50
+        assert text.extract_text(path, make_ctx(tmp_path, "notes.txt")).full_text == ""
+
+    def test_a_head_window_cut_flags_the_full_text(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(text, "TEXT_HEAD_BYTES", 100)
+        path = write(tmp_path, "big.log", ("line of text\n" * 40).encode("utf-8"))
+        result = text.extract_text(path, make_ctx(tmp_path, "big.log", capture_full_text=True))
+        assert result.full_text_truncated is True and len(result.full_text) == 100
+        monkeypatch.setattr(text, "CONTENT_TEXT_MAX_CHARS", 30)
+        result = text.extract_text(path, make_ctx(tmp_path, "big.log", capture_full_text=True))
+        assert result.full_text_truncated is True and len(result.full_text) == 30

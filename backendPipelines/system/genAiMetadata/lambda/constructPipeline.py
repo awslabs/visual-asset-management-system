@@ -34,6 +34,8 @@ _HASH_CHUNK_BYTES = 8 * 1024 * 1024
 # defaults match the default template's tag values.
 DEFAULT_RENDER_VIEWS = 8
 DEFAULT_MAX_TEXT_CHARS = 12000
+DEFAULT_VIDEO_SEGMENT_SECONDS = 0
+DEFAULT_CONTENT_CHUNKING = True
 
 
 def _version_kwargs(version_id):
@@ -182,6 +184,8 @@ def lambda_handler(event, context):
         "maxTextChars": common.as_int(config.get("maxTextChars"), DEFAULT_MAX_TEXT_CHARS),
         "includeSiblingFiles": common.as_bool(config.get("includeSiblingFiles"), True),
         "extractGeoLocation": common.as_bool(config.get("extractGeoLocation"), True),
+        "videoSegmentSeconds": common.as_int(config.get("videoSegmentSeconds"), DEFAULT_VIDEO_SEGMENT_SECONDS),
+        "contentChunking": common.as_bool(config.get("contentChunking"), DEFAULT_CONTENT_CHUNKING),
         "maxPointCloudPoints": MAX_POINT_CLOUD_POINTS,
         "render": True,
     })

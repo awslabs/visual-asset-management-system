@@ -126,9 +126,44 @@ def _embedded_text(mod):
 
 
 def _document(s3):
-    keys = [key for bucket, key in s3.puts if bucket == AUX and key.startswith(AUX_PREFIX + "embedding/")]
+    keys = [key for bucket, key in s3.puts
+            if bucket == AUX and key.startswith(AUX_PREFIX + "embedding/") and not key.endswith("/summary.json")]
     assert len(keys) == 1, s3.puts
     return keys[0], s3.json_at(AUX, keys[0])
+
+
+FULL_TEXT_KEY = AUX_PREFIX + "text/full.txt"
+PAGES_KEY = AUX_PREFIX + "text/pages.json"
+SUMMARY_KEY = AUX_PREFIX + "embedding/summary.json"
+SENTENCES = "".join(f"Sentence {i} of the manual. " for i in range(200))
+
+
+def _text_manifest(chars):
+    """A document manifest whose branch captured `chars` characters of text with page offsets."""
+    return _manifest(fileClass="document", renderBranch="MEDIA", fullTextS3Location=f"s3://{AUX}/{FULL_TEXT_KEY}",
+                     fullTextChars=chars, fullTextTruncated=False, pageOffsetsS3Location=f"s3://{AUX}/{PAGES_KEY}")
+
+
+def _seed_text(s3, text=None, pages=3, **seed_kwargs):
+    """The default text (4,000 characters of sentences) splits into exactly three chunks whatever the sentence
+    snap chooses; `pages` evenly spaced page entries label them page 1, 2, 3."""
+    text = SENTENCES[:4000] if text is None else text
+    s3 = _seed(s3, manifest=_text_manifest(len(text)), **seed_kwargs)
+    s3.objects[(AUX, FULL_TEXT_KEY)] = text.encode("utf-8")
+    s3.put_json(AUX, PAGES_KEY, [{"page": n + 1, "start": n * (len(text) // pages)} for n in range(pages)] if pages else [])
+    return s3
+
+
+def _documents(s3):
+    keys = [key for bucket, key in s3.puts
+            if bucket == AUX and key.startswith(AUX_PREFIX + "embedding/") and not key.endswith("/summary.json")]
+    return [(key, s3.json_at(AUX, key)) for key in keys]
+
+
+def _details(mod):
+    calls = mod.events_client.put_events.call_args_list
+    assert calls, "no PutEvents call was made"
+    return [json.loads(entry["Detail"]) for call in calls for entry in call.kwargs["Entries"]]
 
 
 @pytest.mark.unit
@@ -553,3 +588,207 @@ class TestCaughtFailures:
         with pytest.raises(RuntimeError, match="FailedEntryCount"):
             _run(_state(), s3, put_events=MagicMock(return_value={
                 "FailedEntryCount": 1, "Entries": [{"ErrorCode": "InternalFailure", "ErrorMessage": "x"}]}))
+
+
+@pytest.mark.unit
+class TestContentChunks:
+    def test_the_whole_file_document_is_published_first_with_the_chunk_count(self):
+        s3 = _seed_text(h.FakeS3())
+        mod, state = _run(_state(), s3)
+        details = _details(mod)
+        assert len(details) == 4
+        whole = details[0]
+        assert whole["segmentKind"] == "none" and whole["segmentKey"] == "" and whole["segmentCount"] == 3
+        expected_key = f"{AUX_PREFIX}embedding/{hashlib.sha256('/models/pump.glb#v1'.encode('utf-8')).hexdigest()}.json"
+        assert whole["documentS3Location"] == f"s3://{AUX}/{expected_key}"
+        # The whole-file document is written before the first chunk document.
+        embedding_puts = [key for bucket, key in s3.puts if key.startswith(AUX_PREFIX + "embedding/") and not key.endswith("/summary.json")]
+        assert embedding_puts[0] == expected_key and len(embedding_puts) == 4
+        assert state["embeddingStatus"] == "SUCCEEDED" and state["embeddingEventPublished"] is True
+        assert state["embeddingDocumentS3Location"] == f"s3://{AUX}/{expected_key}"
+
+    def test_chunk_documents_and_events(self):
+        s3 = _seed_text(h.FakeS3())
+        mod, _state_out = _run(_state(), s3)
+        chunks = [(key, document) for key, document in _documents(s3) if document["segmentKind"] == "textChunk"]
+        assert [document["segmentKey"] for _key, document in chunks] == ["c000001", "c000002", "c000003"]
+        for key, document in chunks:
+            expected_hash = hashlib.sha256(f"/models/pump.glb#v1#{document['segmentKey']}".encode("utf-8")).hexdigest()
+            assert key == f"{AUX_PREFIX}embedding/{expected_hash}.json"
+            assert (document["segmentStartMs"], document["segmentEndMs"], document["segmentCount"]) == (None, None, 3)
+            assert len(document) == 26 and len(document["sourceText"]) <= 8000
+            # Everything but the vector, the text, the modalities and the six segment fields is the whole-file value.
+            assert (document["databaseId"], document["assetId"], document["filePath"], document["versionId"],
+                    document["bucketId"], document["contentEtag"], document["analysisModelId"]) == (
+                "dbM", "xidM", "/models/pump.glb", "v1", "bkt-01", "abc123", ANALYSIS_MODEL)
+            assert document["fileClass"] == "document" and document["sourceModalities"] == [
+                "asset-metadata", "file-identity", "genai-metadata", "file-text"]
+        labels = [document["segmentLabel"] for _key, document in chunks]
+        assert labels == ["chunk 1/3 \u00b7 page 1", "chunk 2/3 \u00b7 page 2", "chunk 3/3 \u00b7 page 3"]
+        first = chunks[0][1]
+        lines = first["sourceText"].split("\n")
+        assert lines[:5] == ["Gear Pump", "document (PDF or office)", "/models/pump.glb", "Brass gear pump",
+                             "chunk 1/3 \u00b7 page 1"]
+        assert lines[5].startswith("Sentence 0 of the manual.") and len(lines) == 6
+        # One embed call per document, each through the adapter with purpose "index".
+        assert mod.embeddings.embed_text.call_count == 4
+        assert all(call.kwargs["purpose"] == "index" for call in mod.embeddings.embed_text.call_args_list)
+        chunk_details = _details(mod)[1:]
+        assert len(chunk_details) == 3
+        for detail in chunk_details:
+            document = dict(s3.json_at(AUX, detail["documentS3Location"][len(f"s3://{AUX}/"):]))
+            expected = {field: value for field, value in document.items() if field not in ("embedding", "sourceText")}
+            expected["documentS3Location"] = detail["documentS3Location"]
+            assert detail == expected and len(detail) == 25
+
+    def test_events_are_sent_ten_per_put_events_call(self):
+        s3 = _seed_text(h.FakeS3(), text="x" * 35200, pages=0)
+        mod, state = _run(_state(), s3)
+        sizes = [len(call.kwargs["Entries"]) for call in mod.events_client.put_events.call_args_list]
+        assert sizes == [1, 10, 10, 5]
+        assert state["contentChunks"] == {"count": 25, "dropped": 0, "skipped": None}
+        assert [document["segmentLabel"] for _key, document in _documents(s3)][1:3] == ["chunk 1/25", "chunk 2/25"]
+
+    def test_content_chunks_state_summary_and_metadata_row(self):
+        s3 = _seed_text(h.FakeS3())
+        _mod, state = _run(_state(), s3)
+        assert state["contentChunks"] == {"count": 3, "dropped": 0, "skipped": None}
+        summary = s3.json_at(AUX, SUMMARY_KEY)
+        assert summary["schemaVersion"] == 1 and summary["contentChunks"] == {"count": 3, "dropped": 0, "skipped": None}
+        assert summary["wholeFileDocument"] == state["embeddingDocumentS3Location"]
+        assert summary["videoSegmentCount"] == 0 and summary["embeddingModelId"] == "amazon.titan-embed-text-v2:0"
+        assert summary["generatedAt"].endswith("Z")
+        rows = {row["metadataKey"]: row for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert rows["genai_content_chunk_count"] == {"metadataKey": "genai_content_chunk_count", "metadataValue": "3",
+                                                     "metadataValueType": "number"}
+        assert rows["genai_title"]["metadataValue"] == "Brass gear pump"  # the analysis step's rows are kept
+        assert list(rows)[-1] == "genai_content_chunk_count"
+
+    def test_dropped_chunks_are_counted(self):
+        s3 = _seed_text(h.FakeS3())
+        mod = h.load_handler("generateEmbedding", {"EMBEDDING_DIMENSIONS": "4"})
+        mod.s3_client = s3
+        mod.events_client = MagicMock()
+        mod.events_client.put_events = MagicMock(return_value={"FailedEntryCount": 0, "Entries": [{}]})
+        mod.embeddings.embed_text = MagicMock(return_value=list(VECTOR))
+        mod.contentChunks.CONTENT_CHUNK_MAX = 2
+        state = mod.lambda_handler(_state(), MagicMock())
+        assert state["contentChunks"] == {"count": 2, "dropped": 1, "skipped": None}
+        assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 2, "dropped": 1, "skipped": None}
+        assert {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}[
+            "genai_content_chunk_count"] == "2"
+        documents = _documents(s3)
+        assert len(documents) == 3
+        assert all(document["segmentCount"] == 2 for _key, document in documents)
+        assert any("1 dropped" in str(call) for call in mod.logger.warning.call_args_list)
+
+    def test_chunking_off_publishes_the_whole_file_only(self):
+        s3 = _seed_text(h.FakeS3(), config={"embeddingIncludeTextExcerpt": True, "contentChunking": False})
+        mod, state = _run(_state(), s3)
+        assert len(_details(mod)) == 1 and _details(mod)[0]["segmentCount"] == 0
+        assert state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
+        assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
+        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+
+    def test_no_captured_text_means_no_chunks(self):
+        s3 = _seed(h.FakeS3())
+        mod, state = _run(_state(), s3)
+        assert len(_documents(s3)) == 1 and len(_details(mod)) == 1
+        assert state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
+        assert s3.json_at(AUX, SUMMARY_KEY)["videoSegmentCount"] == 0
+
+    def test_a_file_the_branch_skipped_for_size_publishes_the_whole_file_only(self):
+        # The media branch captured nothing because the file exceeds CONTENT_EMBED_MAX_FILE_BYTES; the manifest
+        # carries the reason and no text location.
+        s3 = _seed(h.FakeS3(), manifest=_manifest(fileClass="document", renderBranch="MEDIA",
+                                                   fullTextSkipped="size", fullTextChars=0))
+        mod, state = _run(_state(), s3)
+        assert len(_documents(s3)) == 1 and len(_details(mod)) == 1
+        whole = _details(mod)[0]
+        assert whole["segmentKind"] == "none" and whole["segmentCount"] == 0
+        assert state["embeddingStatus"] == "SUCCEEDED" and state["embeddingEventPublished"] is True
+        assert state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": "size"}
+        assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 0, "dropped": 0, "skipped": "size"}
+        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert mod.embeddings.embed_text.call_count == 1  # the whole-file vector only
+        assert not any(key.startswith(AUX_PREFIX + "text/") for _bucket, key in s3.puts)
+
+    def test_a_chunk_embedding_failure_is_recorded_as_an_embedding_error(self):
+        s3 = _seed_text(h.FakeS3())
+        embed = MagicMock(side_effect=[list(VECTOR), h.client_error("ValidationException", "input too long", "InvokeModel")])
+        mod, state = _run(_state(), s3, embed=embed)
+        assert state["embeddingStatus"] == "FAILED" and state["embeddingEventPublished"] is True
+        assert state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
+        status = s3.json_at("abkt", STATUS_KEY)
+        assert status["error"] == "BedrockEmbeddingError" and status["cause"].startswith("chunk c000001: ")
+        assert len(_documents(s3)) == 1 and len(_details(mod)) == 1  # the whole-file vector stands
+        assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
+        assert "genai_content_chunk_count" not in {row["metadataKey"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert "embeddingDocumentS3Location" in state
+
+    def test_a_throttled_chunk_embedding_is_recorded_as_throttled(self):
+        s3 = _seed_text(h.FakeS3())
+        embed = MagicMock(side_effect=[list(VECTOR), h.client_error("ThrottlingException", "slow down", "InvokeModel")])
+        mod, state = _run(_state(), s3, embed=embed)
+        assert state["embeddingStatus"] == "FAILED" and state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
+        status = s3.json_at("abkt", STATUS_KEY)
+        assert status["error"] == "BedrockThrottled" and status["cause"].startswith("chunk c000001: ")
+        assert len(_details(mod)) == 1  # the whole-file vector stands
+
+    def test_an_access_denied_chunk_embedding_is_recorded_as_access_denied(self):
+        s3 = _seed_text(h.FakeS3())
+        embed = MagicMock(side_effect=[list(VECTOR), h.client_error("AccessDeniedException", "no model access", "InvokeModel")])
+        mod, state = _run(_state(), s3, embed=embed)
+        assert state["embeddingStatus"] == "FAILED" and state["contentChunks"] == {"count": 0, "dropped": 0, "skipped": None}
+        status = s3.json_at("abkt", STATUS_KEY)
+        assert status["error"] == "BedrockAccessDenied" and status["cause"].startswith("chunk c000001: ")
+        assert "AccessDeniedException" in status["cause"] and len(_details(mod)) == 1
+
+    def test_a_failure_after_the_first_chunk_publishes_what_was_written(self):
+        s3 = _seed_text(h.FakeS3())
+        embed = MagicMock(side_effect=[list(VECTOR), list(VECTOR),
+                                      h.client_error("ValidationException", "input too long", "InvokeModel")])
+        mod, state = _run(_state(), s3, embed=embed)
+        assert state["embeddingStatus"] == "FAILED"
+        assert state["contentChunks"] == {"count": 1, "dropped": 0, "skipped": None}
+        assert len(_documents(s3)) == 2  # the whole-file document and chunk 1
+        details = _details(mod)
+        assert len(details) == 2 and details[1]["segmentKey"] == "c000001"
+        status = s3.json_at("abkt", STATUS_KEY)
+        assert status["error"] == "BedrockEmbeddingError" and status["cause"].startswith("chunk c000002: ")
+        assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 1, "dropped": 0, "skipped": None}
+        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert rows["genai_content_chunk_count"] == "1"
+
+    @pytest.mark.parametrize("failure, marker", [
+        ({"FailedEntryCount": 1, "Entries": [{"ErrorCode": "InternalFailure", "ErrorMessage": "try again"}]},
+         "FailedEntryCount=1"),
+        (h.client_error("InternalException", "bus unavailable", "PutEvents"), "InternalException"),
+    ], ids=["rejected-entry", "raised"])
+    def test_a_failed_chunk_event_batch_is_a_caught_publish_failure(self, failure, marker):
+        # 25 chunks: the whole-file event, then batches of ten, ten and five; the second chunk batch fails.
+        s3 = _seed_text(h.FakeS3(), text="x" * 35200, pages=0)
+        accepted = {"FailedEntryCount": 0, "Entries": [{}]}
+        mod, state = _run(_state(), s3, put_events=MagicMock(side_effect=[accepted, accepted, failure]))
+        assert state["embeddingStatus"] == "FAILED" and state["embeddingEventPublished"] is True
+        assert state["contentChunks"] == {"count": 10, "dropped": 0, "skipped": None}
+        sizes = [len(call.kwargs["Entries"]) for call in mod.events_client.put_events.call_args_list]
+        assert sizes == [1, 10, 10]  # nothing is sent after the failed batch
+        details = _details(mod)
+        assert [detail["segmentKey"] for detail in details[1:11]] == [f"c{n:06d}" for n in range(1, 11)]
+        assert details[11]["segmentKey"] == "c000011"  # the failed batch's first key names the cause
+        assert len(_documents(s3)) == 21  # the whole-file document and the twenty chunk documents written so far
+        status = s3.json_at("abkt", STATUS_KEY)
+        assert status["status"] == "FAILED" and status["error"] == "SegmentPublishError"
+        assert status["cause"].startswith("chunk c000011: ") and marker in status["cause"]
+        assert s3.json_at(AUX, SUMMARY_KEY)["contentChunks"] == {"count": 10, "dropped": 0, "skipped": None}
+        rows = {row["metadataKey"]: row["metadataValue"] for row in s3.json_at("abkt", METADATA_FILE_KEY)["metadata"]}
+        assert rows["genai_content_chunk_count"] == "10"
+
+    def test_the_video_window_count_reaches_the_whole_file_document(self):
+        s3 = _seed(h.FakeS3())
+        mod, _state_out = _run(_state(videoSegmentCount=12), s3)
+        _key, document = _document(s3)
+        assert document["segmentCount"] == 12 and document["segmentKind"] == "none"
+        assert _details(mod)[0]["segmentCount"] == 12
+        assert s3.json_at(AUX, SUMMARY_KEY)["videoSegmentCount"] == 12

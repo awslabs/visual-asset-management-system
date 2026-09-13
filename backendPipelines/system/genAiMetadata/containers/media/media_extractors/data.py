@@ -10,6 +10,8 @@ import io
 import re
 from typing import Dict, List
 
+from contentChunks import CONTENT_TEXT_MAX_CHARS
+
 from .common import (
     CLASS_DATA,
     DATA_CELL_MAX_CHARS,
@@ -136,6 +138,11 @@ def extract_csv(path: str, ctx: ExtractContext) -> BranchResult:
     writer.writerow(recorded_columns)
     writer.writerows(sample_rows)
     result.text_excerpt = truncate_text(buffer.getvalue(), ctx.max_text_chars)
+    if ctx.capture_full_text:
+        with open(path, "r", encoding=encoding, errors="replace", newline="") as handle:
+            full = handle.read(CONTENT_TEXT_MAX_CHARS + 1)
+        result.full_text_truncated = len(full) > CONTENT_TEXT_MAX_CHARS
+        result.full_text = full[:CONTENT_TEXT_MAX_CHARS]
     return result
 
 
@@ -200,7 +207,11 @@ def extract_fcs(path: str, ctx: ExtractContext) -> BranchResult:
         result.facts["cytometer"] = context["$CYT"]
     lines = [f"{key}: {value}" for key, value in context.items()]
     lines.append("parameters: " + ", ".join(columns))
-    result.text_excerpt = truncate_text("\n".join(lines), ctx.max_text_chars)
+    joined = "\n".join(lines)
+    result.text_excerpt = truncate_text(joined, ctx.max_text_chars)
+    if ctx.capture_full_text:
+        result.full_text = joined[:CONTENT_TEXT_MAX_CHARS]
+        result.full_text_truncated = len(joined) > CONTENT_TEXT_MAX_CHARS
     return result
 
 

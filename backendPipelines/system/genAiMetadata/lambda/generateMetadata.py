@@ -33,6 +33,7 @@ from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 import manifestHelper
 import analysisCommon as common
+import bedrockGuardrail
 import metadataCatalog
 import classificationVocabulary as vocabulary
 
@@ -49,16 +50,10 @@ bedrock_runtime = boto3.client('bedrock-runtime', config=retry_config)
 
 BEDROCK_ANALYSIS_MODEL_ID = os.environ["BEDROCK_ANALYSIS_MODEL_ID"]
 
-# The guardrail applied to every Converse call. Both values or neither: a guardrail identifier without
-# a version (or the reverse) cannot be applied and is a deployment error rather than a silent no-guardrail run.
-_GUARDRAIL_IDENTIFIER = (os.environ.get("BEDROCK_GUARDRAIL_IDENTIFIER") or "").strip()
-_GUARDRAIL_VERSION = (os.environ.get("BEDROCK_GUARDRAIL_VERSION") or "").strip()
-if bool(_GUARDRAIL_IDENTIFIER) != bool(_GUARDRAIL_VERSION):
-    raise ValueError("BEDROCK_GUARDRAIL_IDENTIFIER and BEDROCK_GUARDRAIL_VERSION must be set together")
-GUARDRAIL_CONFIG = ({"guardrailIdentifier": _GUARDRAIL_IDENTIFIER, "guardrailVersion": _GUARDRAIL_VERSION,
-                     "trace": "enabled"} if _GUARDRAIL_IDENTIFIER else None)
-GUARDRAIL_STOP_REASON = "guardrail_intervened"
-GUARD_CONTENT_QUALIFIERS = ["guard_content"]
+# The guardrail applied to every Converse call (bedrockGuardrail: both variables or neither).
+GUARDRAIL_CONFIG = bedrockGuardrail.guardrail_config_from_env(os.environ)
+GUARDRAIL_STOP_REASON = bedrockGuardrail.GUARDRAIL_STOP_REASON
+GUARD_CONTENT_QUALIFIERS = bedrockGuardrail.GUARD_CONTENT_QUALIFIERS
 
 MAX_IMAGES = 8
 MAX_IMAGE_BYTES = 3_750_000
@@ -85,6 +80,10 @@ LIST_SEPARATOR = ", "
 TYPE_STRING = "string"
 TYPE_MULTILINE_STRING = "multiline_string"
 TYPE_DATE = "date"
+TYPE_NUMBER = "number"
+# Written from the media branch's video window plan when one exists.
+SEGMENT_COUNT_KEY = "genai_segment_count"
+SEGMENT_INTERVAL_KEY = "genai_segment_interval_seconds"
 
 # (model result key, metadata key, metadataValueType) in the order the rows are written. List-valued
 # results are ", "-joined strings: the web's inline_controlled_list widget holds one value.
@@ -300,10 +299,7 @@ def build_user_content(asset_data, database_id, relative_path, file_class, file_
                              vocabulary_section, existing_lines, text_excerpt, image_count)
     plain = "\n".join(line for name in _UNGUARDED_PARTS for line in parts[name])
     guarded_text = "\n".join(line for name in _GUARDED_PARTS for line in parts[name])
-    blocks = [{"text": plain}]
-    if guarded_text:
-        blocks.append({"guardContent": {"text": {"text": guarded_text, "qualifiers": list(GUARD_CONTENT_QUALIFIERS)}}})
-    return blocks
+    return bedrockGuardrail.user_content_blocks(plain, guarded_text, GUARDRAIL_CONFIG)
 
 
 def _strip_fences(text):
@@ -378,17 +374,6 @@ def parse_model_json(text):
     }
 
 
-def _guardrail_cause(response):
-    """A short account of a guardrail intervention: the guardrail's reply text and its assessment trace."""
-    message = ((response.get("output") or {}).get("message") or {})
-    text = "".join(block.get("text", "") for block in (message.get("content") or []))
-    trace = ((response.get("trace") or {}).get("guardrail") or {})
-    cause = f"guardrail intervened: {text}".strip()
-    if trace:
-        cause += " " + json.dumps(trace, default=str, separators=(",", ":"))
-    return cause
-
-
 def analyze(user_blocks, image_blocks):
     """``(result, usage)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs off and
     retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an
@@ -413,8 +398,9 @@ def analyze(user_blocks, image_blocks):
                 time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
                 continue
             raise BedrockAnalysisFailure(code, str(e))
-        if response.get("stopReason") == GUARDRAIL_STOP_REASON:
-            raise BedrockAnalysisFailure(common.ERROR_BEDROCK_GUARDRAIL_INTERVENED, _guardrail_cause(response))
+        if bedrockGuardrail.intervened(response):
+            raise BedrockAnalysisFailure(common.ERROR_BEDROCK_GUARDRAIL_INTERVENED,
+                                         bedrockGuardrail.guardrail_cause(response))
         message = ((response.get("output") or {}).get("message") or {})
         text = "".join(block.get("text", "") for block in (message.get("content") or []))
         usage = response.get("usage") or {}
@@ -444,6 +430,29 @@ def genai_rows(result, modalities, generated_at):
     rows.append(_row("genai_model", BEDROCK_ANALYSIS_MODEL_ID, TYPE_STRING))
     rows.append(_row("genai_generated_at", generated_at, TYPE_DATE))
     rows.append(_row("genai_source_modalities", LIST_SEPARATOR.join(modalities), TYPE_STRING))
+    return rows
+
+
+def load_segment_plan(event, warnings):
+    """The video window plan the media branch wrote, or None when the state names none or it cannot be read."""
+    uri = event.get("videoSegmentPlanS3Location")
+    if not uri:
+        return None
+    try:
+        return common.read_json(s3_client, uri)
+    except Exception as e:  # noqa: BLE001 - the rows are descriptive; the Map runs from the state fields regardless
+        warnings.append(f"video segment plan unreadable ({uri}): {e}")
+        return None
+
+
+def segment_rows(plan):
+    """The window rows: the plan's count and its effective interval, both ``number``; none without a plan."""
+    if not plan or not plan.get("count"):
+        return []
+    rows = [_row(SEGMENT_COUNT_KEY, str(int(plan["count"])), TYPE_NUMBER)]
+    interval = plan.get("effectiveIntervalSeconds")
+    if isinstance(interval, (int, float)) and not isinstance(interval, bool):
+        rows.append(_row(SEGMENT_INTERVAL_KEY, f"{interval:g}", TYPE_NUMBER))
     return rows
 
 
@@ -527,6 +536,7 @@ def lambda_handler(event, context):
     promoted = metadataCatalog.promote(attributes, file_class) if write_extracted else []
     location_row = location_item(attributes, file_class, vams.get("fileMetadata") or {}) if extract_geo else None
     promoted_count = len(promoted) + (1 if location_row else 0)
+    segments = segment_rows(load_segment_plan(event, warnings))
     metadata_uri = common.uri_join(event["outputS3AssetMetadataPath"],
                                    relative_key(event["relativePath"]) + METADATA_FILE_SUFFIX)
 
@@ -579,7 +589,8 @@ def lambda_handler(event, context):
         result, usage = analyze(user_blocks, image_blocks)
         result, corrections = vocabulary.validate_against_vocabulary(result, vocab)
         common.write_json(s3_client, metadata_uri,
-                          metadata_file_body(promoted, location_row, genai_rows(result, modalities, generated_at)))
+                          metadata_file_body(promoted, location_row,
+                                             genai_rows(result, modalities, generated_at) + segments))
         event["metadataFileS3Location"] = metadata_uri
         if write_asset_keywords and (result["keywords"] or result["category"]):
             asset_metadata = vams.get("assetMetadata") or {}
@@ -597,9 +608,9 @@ def lambda_handler(event, context):
         logger.info(f"Metadata written: {metadata_uri} ({promoted_count} promoted, {len(corrections)} corrections)")
     except BedrockAnalysisFailure as failure:
         logger.error(f"Bedrock analysis failed ({failure.code}): {failure.cause}")
-        if promoted or location_row:
+        if promoted or location_row or segments:
             # The deterministic layer does not depend on the model; like the attributes, it lands.
-            common.write_json(s3_client, metadata_uri, metadata_file_body(promoted, location_row, []))
+            common.write_json(s3_client, metadata_uri, metadata_file_body(promoted, location_row, segments))
             event["metadataFileS3Location"] = metadata_uri
             summary["metadataFile"] = metadata_uri
         common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], failure.code, failure.cause)

@@ -275,16 +275,22 @@ release's PyPI metadata.
 | botocore                           | 1.43.89     | Apache-2.0                                     | AWS SDK for Python (core)                                                       |
 | charset-normalizer                 | 3.5.1       | MIT                                            | Text encoding detection                                                         |
 | defusedxml                         | 0.7.1       | PSF-2.0                                        | Safe XML parsing                                                                |
+| et_xmlfile                         | 2.0.0       | MIT                                            | Streaming XML writer (openpyxl dependency)                                      |
 | imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                                   | FFmpeg wrapper for video frame extraction                                       |
 | jmespath                           | 1.1.0       | MIT                                            | JSON querying (boto3 dependency)                                                |
+| lxml                               | 6.1.3       | BSD-3-Clause                                   | XML processing (python-docx / python-pptx dependency)                           |
+| openpyxl                           | 3.1.5       | MIT                                            | Excel workbook text extraction                                                  |
 | Pillow                             | 12.3.0      | MIT-CMU                                        | Image processing                                                                |
 | pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)             | PDF page rendering                                                              |
 | python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)               | Date parsing (boto3 dependency)                                                 |
+| python-docx                        | 1.2.0       | MIT                                            | Word document text extraction                                                   |
+| python-pptx                        | 1.0.2       | MIT                                            | PowerPoint document text extraction                                             |
 | s3transfer                         | 0.19.2      | Apache-2.0                                     | S3 transfer manager (boto3 dependency)                                          |
 | six                                | 1.17.0      | MIT                                            | Python 2/3 compatibility (dependency)                                           |
 | tinytag                            | 2.3.2       | MIT                                            | Audio and video metadata tags                                                   |
 | typing-extensions                  | 4.16.0      | PSF-2.0                                        | Typing backports                                                                |
 | urllib3                            | 2.7.0       | MIT                                            | HTTP client (boto3 dependency)                                                  |
+| XlsxWriter                         | 3.2.9       | BSD-2-Clause                                   | Excel writer (python-pptx dependency)                                           |
 
 \* **Blender License Note**: Blender is the GPL-3.0 renderer of the pipeline's BLENDER branch. The image installs the official Blender release and runs it as a separate process (`blender --background`), writing rendered views to disk; no VAMS code is linked against Blender and no Blender code is modified or redistributed by this repository. The GPL-3.0 terms apply to Blender's own files, whose license text ships beside it in the image (`GPL3-license.txt`).
 

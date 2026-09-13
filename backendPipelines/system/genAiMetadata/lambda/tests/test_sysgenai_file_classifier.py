@@ -8,7 +8,8 @@ The allow list is stored as an explicit literal (a Lambda cannot read the web ca
 that derives it — every ``supportedExtensions`` entry of every ``enabled: true`` viewer, the preview
 viewer's ``"*"`` excluded, minus ``EXCLUDED_EXTENSIONS`` — is re-derived here from
 ``web/src/visualizerPlugin/config/viewerConfig.json``. A viewer added without a classifier entry, or
-an extension the pipeline lists that no viewer serves, fails here rather than at upload time.
+an extension the pipeline lists that neither a viewer serves nor ``ADDITIONAL_EXTENSIONS`` names (the
+office formats admitted for their text), fails here rather than at upload time.
 
 The file-type phrases — the words a user types when asking for a kind of file — are embedded in every
 file's source text and matched on the query side by the backend's ``fileClassIntent`` module; the two
@@ -86,10 +87,22 @@ class TestAllowList:
         assert ".glb" in catalog and ".pdf" in catalog and ".las" in catalog
 
     def test_allow_list_equals_the_catalog_minus_the_exclusions(self):
-        assert set(fc.ALLOW_LIST) == catalog_extensions() - fc.EXCLUDED_EXTENSIONS
+        # The viewer catalog, minus the exclusions, plus the office formats admitted for their text.
+        assert set(fc.ALLOW_LIST) == (catalog_extensions() - fc.EXCLUDED_EXTENSIONS) | set(fc.ADDITIONAL_EXTENSIONS)
 
     def test_exclusions_are_empty_at_release(self):
         assert fc.EXCLUDED_EXTENSIONS == set()
+
+    def test_additional_extensions_are_the_office_formats_no_viewer_serves(self):
+        """The office formats join the allow list for their text although no viewer renders them. The tuple
+        is the registry literal, none of its members is a viewer extension, every member is allow-listed, and
+        their classes are document, data, document on the MEDIA branch."""
+        assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx")
+        assert not set(fc.ADDITIONAL_EXTENSIONS) & catalog_extensions()
+        assert set(fc.ADDITIONAL_EXTENSIONS) <= set(fc.ALLOW_LIST)
+        assert [fc.EXTENSION_CLASSES[extension] for extension in fc.ADDITIONAL_EXTENSIONS] == [
+            (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA),
+            (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)]
 
     def test_allow_list_is_sorted_finite_and_dotted(self):
         assert fc.ALLOW_LIST == sorted(fc.ALLOW_LIST)
@@ -134,6 +147,8 @@ class TestClassifyMatrix:
         (".png", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)), (".svg", (fc.CLASS_IMAGE, fc.BRANCH_MEDIA)),
         (".mp4", (fc.CLASS_VIDEO, fc.BRANCH_MEDIA)), (".wav", (fc.CLASS_AUDIO, fc.BRANCH_MEDIA)),
         (".pdf", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)), (".md", (fc.CLASS_TEXT, fc.BRANCH_MEDIA)),
+        (".docx", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)), (".pptx", (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA)),
+        (".xlsx", (fc.CLASS_DATA, fc.BRANCH_MEDIA)),
         (".html", (fc.CLASS_TEXT, fc.BRANCH_MEDIA)), (".csv", (fc.CLASS_DATA, fc.BRANCH_MEDIA)),
         (".fcs", (fc.CLASS_DATA, fc.BRANCH_MEDIA)),
         (".glb", (fc.CLASS_MESH, fc.BRANCH_BLENDER)), (".gltf", (fc.CLASS_MESH, fc.BRANCH_BLENDER)),

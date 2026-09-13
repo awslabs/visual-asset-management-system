@@ -5,7 +5,8 @@
 
 ``ALLOW_LIST`` is every ``supportedExtensions`` entry of every viewer with ``enabled: true`` in
 ``web/src/visualizerPlugin/config/viewerConfig.json`` — viewers gated by ``featuresEnabledRestriction``
-included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``. It is stored
+included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``, plus
+``ADDITIONAL_EXTENSIONS`` (office formats no viewer renders, admitted for their text). It is stored
 here as an explicit sorted list because a Lambda cannot read the web catalog at run time; the test
 suite re-derives it from the catalog and fails when the two drift.
 
@@ -75,6 +76,10 @@ RENDER_BRANCHES = (BRANCH_BLENDER, BRANCH_RENDER3D, BRANCH_MEDIA, BRANCH_FARGATE
 # Viewer extensions deliberately withheld from the pipeline. Empty at release.
 EXCLUDED_EXTENSIONS: Set[str] = set()
 
+# Office formats no viewer renders, admitted to the allow list for their text: document, data and document
+# on the MEDIA branch, never rasterised.
+ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx")
+
 # Leading bytes the two sniffed formats are decided from. A PLY header and a tileset root fit in
 # this window; a .json whose root does not fit is text as far as this pipeline is concerned.
 SNIFF_BYTES = 65536
@@ -85,13 +90,13 @@ PROPRIETARY_CAD_EXTENSIONS = (".asm", ".catpart", ".catproduct", ".iam", ".ipt",
 
 ALLOW_LIST: List[str] = [
     ".3dm", ".3ds", ".3mf", ".aac", ".amf", ".asm", ".avi", ".bim", ".brep", ".catpart",
-    ".catproduct", ".cfg", ".csv", ".dae", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".gif", ".glb",
-    ".gltf", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini", ".ipt",
-    ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".las", ".laz", ".lcc", ".log", ".m4a", ".m4v",
-    ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pdf", ".ply", ".png",
-    ".prt", ".ps1", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz", ".sql", ".step",
-    ".stl", ".stp", ".svg", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz", ".wav",
-    ".webm", ".wmv", ".wrl", ".x_b", ".x_t", ".xml", ".yaml", ".yml",
+    ".catproduct", ".cfg", ".csv", ".dae", ".docx", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".gif",
+    ".glb", ".gltf", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini",
+    ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".las", ".laz", ".lcc", ".log", ".m4a",
+    ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pdf", ".ply",
+    ".png", ".pptx", ".prt", ".ps1", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz",
+    ".sql", ".step", ".stl", ".stp", ".svg", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz",
+    ".wav", ".webm", ".wmv", ".wrl", ".x_b", ".x_t", ".xlsx", ".xml", ".yaml", ".yml",
 ]
 
 # Extension -> (fileClass, renderBranch) for every allow-listed extension the extension alone
@@ -104,10 +109,12 @@ for _extension in (".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4
 for _extension in (".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"):
     EXTENSION_CLASSES[_extension] = (CLASS_AUDIO, BRANCH_MEDIA)
 EXTENSION_CLASSES[".pdf"] = (CLASS_DOCUMENT, BRANCH_MEDIA)
+for _extension in (".docx", ".pptx"):
+    EXTENSION_CLASSES[_extension] = (CLASS_DOCUMENT, BRANCH_MEDIA)
 for _extension in (".txt", ".md", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".inf", ".log",
                    ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"):
     EXTENSION_CLASSES[_extension] = (CLASS_TEXT, BRANCH_MEDIA)
-for _extension in (".csv", ".fcs"):
+for _extension in (".csv", ".fcs", ".xlsx"):
     EXTENSION_CLASSES[_extension] = (CLASS_DATA, BRANCH_MEDIA)
 for _extension in (".glb", ".gltf", ".fbx", ".obj", ".dae", ".stl"):
     EXTENSION_CLASSES[_extension] = (CLASS_MESH, BRANCH_BLENDER)

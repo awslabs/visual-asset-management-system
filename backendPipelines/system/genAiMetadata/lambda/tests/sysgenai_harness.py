@@ -33,7 +33,8 @@ TASK_TOKEN = "tok-sysgenai"
 # Modules this pipeline's handlers import by bare name. Each is dropped from sys.modules before a
 # load so the copy under LAMBDA_DIR answers, not a same-named module another pipeline's suite loaded.
 _LOCAL_MODULES = ("manifestHelper", "fileClassifier", "analysisCommon", "metadataCatalog",
-                  "classificationVocabulary", "vectorsearch", "vectorsearch.embeddings")
+                  "classificationVocabulary", "bedrockGuardrail", "videoSegments", "contentChunks", "vectorsearch",
+                  "vectorsearch.embeddings")
 
 DEFAULT_ENV = {
     "AWS_DEFAULT_REGION": "us-east-1",

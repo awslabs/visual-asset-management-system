@@ -32,8 +32,14 @@ _IMPORT_TO_DISTRIBUTION = {
     "PIL": "pillow", "imageio_ffmpeg": "imageio-ffmpeg", "pypdfium2": "pypdfium2", "tinytag": "tinytag",
     "charset_normalizer": "charset-normalizer", "defusedxml": "defusedxml", "boto3": "boto3",
     "botocore": "botocore", "aws_lambda_powertools": "aws-lambda-powertools",
+    "docx": "python-docx", "pptx": "python-pptx", "openpyxl": "openpyxl",
 }
-_LOCAL_PACKAGES = {"media_extractors", "customLogging", "handler"}
+_LOCAL_PACKAGES = {"media_extractors", "customLogging", "handler", "videoSegments", "contentChunks",
+                   "bedrockGuardrail", "vectorsearch", "segment_handler"}
+_LAMBDA_DIR = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda")
+# Modules copied into the image from lambda/ because the build context cannot reach it; each is pinned
+# byte-identical to its source.
+_VENDORED_FROM_LAMBDA = ("videoSegments.py", "contentChunks.py", "bedrockGuardrail.py")
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9][A-Za-z0-9._!+-]*)$")
 _PINNED_BASE = re.compile(
     r"^FROM\s+--platform=linux/amd64\s+public\.ecr\.aws/lambda/python:3\.12@sha256:[0-9a-f]{64}\s*$")
@@ -99,6 +105,11 @@ def _top_level_imports(path):
             yield node.module.split(".")[0]
 
 
+def _digest(path):
+    with open(path, "rb") as handle:
+        return hashlib.md5(handle.read()).hexdigest()
+
+
 @pytest.mark.unit
 class TestBaseImage:
     def test_single_from_pinned_by_digest_for_amd64(self):
@@ -116,9 +127,17 @@ class TestRequirements:
     def test_every_line_is_an_exact_pin_and_the_spec_packages_are_present(self):
         pins = _requirements()
         for distribution in ("pillow", "imageio-ffmpeg", "pypdfium2", "tinytag", "charset-normalizer", "defusedxml",
-                             "boto3", "botocore", "aws-lambda-powertools"):
+                             "boto3", "botocore", "aws-lambda-powertools", "python-docx", "python-pptx", "openpyxl"):
             assert distribution in pins, distribution
         assert pins["boto3"] == pins["botocore"] == "1.43.89"
+
+    def test_office_libraries_carry_their_transitive_closure(self):
+        # python-pptx needs lxml and XlsxWriter, python-docx needs lxml, openpyxl needs et_xmlfile: the closure is
+        # pinned, or a rebuild resolves them afresh.
+        pins = _requirements()
+        assert (pins["python-docx"], pins["python-pptx"], pins["openpyxl"]) == ("1.2.0", "1.0.2", "3.1.5")
+        for distribution in ("lxml", "xlsxwriter", "et-xmlfile"):
+            assert distribution in pins, distribution
 
     def test_every_third_party_import_in_runtime_code_is_pinned(self):
         pins = _requirements()
@@ -176,6 +195,23 @@ class TestRuntimeStage:
     def test_task_root_is_world_readable(self):
         assert any("chmod -R a+rX ${LAMBDA_TASK_ROOT}" in line for line in _instruction_lines())
 
+    def test_the_build_asserts_https_in_ffmpeg_protocols(self):
+        # The Linux binary is only reachable at build time; the Dockerfile fails the build when it lacks https.
+        assert any("ffmpeg -hide_banner -protocols" in line and "grep -qw https" in line
+                   for line in _instruction_lines())
+
+    def test_the_local_ffmpeg_lists_https(self):
+        """The dev binary imageio-ffmpeg resolves lists https among its input protocols, so the presigned-URL
+        read the segment child relies on is exercised end to end wherever the tests run."""
+        import subprocess
+
+        import imageio_ffmpeg
+
+        output = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-protocols"],
+                                capture_output=True, text=True, check=True).stdout
+        inputs = output.split("Input:", 1)[1].split("Output:", 1)[0]
+        assert "https" in inputs.split()
+
 
 @pytest.mark.unit
 class TestContextHygiene:
@@ -190,3 +226,15 @@ class TestContextHygiene:
                 return hashlib.md5(handle.read()).hexdigest()
 
         assert digest(_LOGGER_COPY) == digest(_LOGGER_SOURCE)
+
+    def test_vendored_lambda_modules_are_byte_identical_to_the_lambda_copies(self):
+        # The image cannot COPY from lambda/, so the window-plan, chunking and guardrail modules are copied in;
+        # a copy that drifts would plan windows, cap text or guard prompts differently from the Lambdas.
+        for name in _VENDORED_FROM_LAMBDA:
+            assert _digest(os.path.join(_CONTAINER_DIR, name)) == _digest(os.path.join(_LAMBDA_DIR, name)), name
+
+    def test_vendored_embeddings_is_byte_identical_to_the_canonical_module(self):
+        canonical = os.path.join(_REPO_ROOT, "backend", "backend", "common", "vectorsearch", "embeddings.py")
+        assert os.path.isfile(canonical), f"{canonical} is missing: the canonical embedding adapter has not landed"
+        assert _digest(os.path.join(_CONTAINER_DIR, "vectorsearch", "embeddings.py")) == _digest(canonical), (
+            "vectorsearch/embeddings.py drifted from the canonical module; edit the canonical file and cp it here")

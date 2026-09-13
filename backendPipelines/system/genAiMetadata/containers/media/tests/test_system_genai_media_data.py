@@ -115,3 +115,26 @@ class TestFcs:
         broken[18:26] = b"       5"  # TEXT end before TEXT start
         with pytest.raises(ValueError, match="offsets"):
             data.parse_fcs_text_segment(bytes(broken))
+
+
+@pytest.mark.unit
+class TestFullTextCapture:
+    def test_csv_full_text_is_the_whole_file_when_asked(self, tmp_path):
+        body = csv_bytes()
+        result = data.extract_data(write(tmp_path, "parts.csv", body), make_ctx(tmp_path, "parts.csv", capture_full_text=True))
+        assert result.full_text == body.decode("utf-8")
+        assert result.full_text_truncated is False and result.page_offsets == []
+        assert data.extract_data(write(tmp_path, "parts2.csv", body), make_ctx(tmp_path, "parts2.csv")).full_text == ""
+
+    def test_csv_full_text_is_cut_at_the_content_cap(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(data, "CONTENT_TEXT_MAX_CHARS", 10)
+        body = csv_bytes()
+        result = data.extract_data(write(tmp_path, "parts.csv", body), make_ctx(tmp_path, "parts.csv", capture_full_text=True))
+        assert result.full_text == body.decode("utf-8")[:10] and result.full_text_truncated is True
+
+    def test_fcs_full_text_is_the_keyword_text(self, tmp_path):
+        result = data.extract_data(write(tmp_path, "sample.fcs", fcs_bytes()),
+                                   make_ctx(tmp_path, "sample.fcs", max_text_chars=20, capture_full_text=True))
+        assert "parameters: FSC-A, SSC-A, FL1-A" in result.full_text
+        assert len(result.text_excerpt) <= 20 and result.full_text_truncated is False
+        assert result.page_offsets == []

@@ -40,6 +40,12 @@ METADATA_FILE_KEY = META_PREFIX + "models/pump.glb.metadata.json"
 ASSET_METADATA_KEY = META_PREFIX + "asset.metadata.json"
 SUMMARY_KEY = RESULTS_PREFIX + "analysis-summary.json"
 STATUS_KEY = RESULTS_PREFIX + "execution.status.json"
+PLAN_KEY = AUX_PREFIX + "segments/plan.json"
+
+
+def _plan(count=10, interval=9.248):
+    return {"schemaVersion": 1, "videoSegmentSeconds": 10, "effectiveIntervalSeconds": interval,
+            "durationSeconds": 92.48, "count": count, "segments": []}
 
 GUARDRAIL_ENV = {"BEDROCK_GUARDRAIL_IDENTIFIER": "gr-abc123", "BEDROCK_GUARDRAIL_VERSION": "2"}
 
@@ -871,3 +877,42 @@ class TestCaughtBedrockFailures:
         s3 = h.FakeS3()  # no manifest seeded
         with pytest.raises(Exception):
             _run(_state(), s3, h.FakeBedrock([_reply()]))
+
+
+@pytest.mark.unit
+class TestVideoSegmentRows:
+    def test_segment_rows_are_written_from_the_plan(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(fileClass="video", renderBranch="MEDIA"))
+        s3.put_json(AUX, PLAN_KEY, _plan())
+        _mod, state = _run(_state(fileClass="video", renderBranch="MEDIA",
+                                  videoSegmentPlanS3Location=f"s3://{AUX}/{PLAN_KEY}", videoSegmentCount=10),
+                           s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert rows["genai_segment_count"] == {"metadataKey": "genai_segment_count", "metadataValue": "10",
+                                               "metadataValueType": "number"}
+        assert rows["genai_segment_interval_seconds"] == {"metadataKey": "genai_segment_interval_seconds",
+                                                          "metadataValue": "9.248", "metadataValueType": "number"}
+        keys = _keys(s3, METADATA_FILE_KEY)
+        assert keys[-2:] == ["genai_segment_count", "genai_segment_interval_seconds"]
+        assert keys.index("genai_source_modalities") < keys.index("genai_segment_count")
+        assert backend.validate_metadata_value_common("10", "number") == "10"
+        assert state["analysisStatus"] == "SUCCEEDED"
+
+    def test_no_plan_means_no_segment_rows(self):
+        s3 = _seed(h.FakeS3(), manifest=_manifest(fileClass="video", renderBranch="MEDIA"))
+        _run(_state(fileClass="video", renderBranch="MEDIA"), s3, h.FakeBedrock([_reply()]))
+        rows = _rows(s3, METADATA_FILE_KEY)
+        assert "genai_segment_count" not in rows and "genai_segment_interval_seconds" not in rows
+
+    def test_segment_rows_land_when_bedrock_is_denied(self):
+        """The rows come from the plan, not the model, so like ext_* they land on a caught failure."""
+        s3 = _seed(h.FakeS3(), manifest=_manifest(fileClass="video", renderBranch="MEDIA",
+                                                  attributes={"sys_file": dict(SYS_FILE)}))
+        s3.put_json(AUX, PLAN_KEY, _plan(count=360, interval=100.0))
+        bedrock = h.FakeBedrock([h.client_error("AccessDeniedException", "no model access")])
+        _mod, state = _run(_state(fileClass="video", renderBranch="MEDIA",
+                                  videoSegmentPlanS3Location=f"s3://{AUX}/{PLAN_KEY}"), s3, bedrock)
+        assert state["analysisStatus"] == "FAILED"
+        assert _keys(s3, METADATA_FILE_KEY) == ["genai_segment_count", "genai_segment_interval_seconds"]
+        assert _rows(s3, METADATA_FILE_KEY)["genai_segment_interval_seconds"]["metadataValue"] == "100"
+        assert s3.json_at("abkt", STATUS_KEY)["error"] == "BedrockAccessDenied"

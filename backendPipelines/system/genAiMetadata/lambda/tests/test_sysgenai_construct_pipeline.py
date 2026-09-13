@@ -19,7 +19,8 @@ MANIFEST_KEY = "pipelines/system-genai-metadata/E1/analysis.json"
 CONFIG_KEY = "pipelines/workflowExecutionInputs/E1/pipeline1/config.json"
 DEFAULT_CONFIG = {"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
                   "maxTextChars": 12000, "writeAssetKeywords": False, "embeddingIncludeTextExcerpt": True,
-                  "writeExtractedMetadata": True, "extractGeoLocation": True,
+                  "writeExtractedMetadata": True, "extractGeoLocation": True, "videoSegmentSeconds": 0,
+                  "contentChunking": True,
                   "classificationVocabulary": {"categories": {}, "styles": [], "materials": [], "colors": [],
                                                "allowUnlisted": True}}
 
@@ -167,6 +168,23 @@ class TestInputConfiguration:
         _mod, state = _run(_state(), s3)
         assert (state["renderViews"], state["maxTextChars"], state["includeSiblingFiles"]) == (8, 12000, True)
         assert state["extractGeoLocation"] is True
+        assert state["videoSegmentSeconds"] == 0 and state["contentChunking"] is True
+
+    def test_segment_and_chunking_values_are_copied_for_the_media_branch(self):
+        """The media branch decides the video window plan and the full-text capture from its EVENT, so
+        VIDEO_SEGMENT_SECONDS and CONTENT_CHUNKING reach it only through these copies; a string rendering of
+        either tag is read the same way as the typed literal."""
+        s3 = _s3_with("xidM/clips/tour.mp4", b"\x00" * 64, "video/mp4",
+                      config=dict(DEFAULT_CONFIG, videoSegmentSeconds=10, contentChunking=False))
+        _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/clips/tour.mp4",
+                                  relativePath="/clips/tour.mp4"), s3)
+        assert state["videoSegmentSeconds"] == 10 and state["contentChunking"] is False
+        assert (state["fileClass"], state["renderBranch"]) == ("video", "MEDIA")
+        s3 = _s3_with("xidM/clips/tour.mp4", b"\x00" * 64, "video/mp4",
+                      config=dict(DEFAULT_CONFIG, videoSegmentSeconds="10", contentChunking="false"))
+        _mod, state = _run(_state(inputS3AssetFilePath="s3://abkt/xidM/clips/tour.mp4",
+                                  relativePath="/clips/tour.mp4"), s3)
+        assert state["videoSegmentSeconds"] == 10 and state["contentChunking"] is False
 
     def test_extract_geo_location_is_copied_for_the_media_branch(self):
         """WP06c's image extractor reads extractGeoLocation from its EVENT to decide whether

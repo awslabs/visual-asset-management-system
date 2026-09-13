@@ -25,8 +25,9 @@ MEDIA_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TE
 
 # Extension -> fileClass, lower-case with the leading dot. `.svg` is `image` but takes the vector path;
 # `.json` enters as `text` and is reclassified from its parsed root: `asset` + `geometricError` -> `tiles3d`,
-# a GeoJSON root -> `data`. Outside CLASSIFIER_OVERRIDE_EXTENSIONS this table equals the MEDIA rows of the
-# pipeline's `lambda/fileClassifier.py` EXTENSION_CLASSES; that suite diffs the two.
+# a GeoJSON root -> `data`. The office formats (.docx .pptx .xlsx) are admitted by the pipeline's
+# ADDITIONAL_EXTENSIONS although no viewer renders them. Outside CLASSIFIER_OVERRIDE_EXTENSIONS this table
+# equals the MEDIA rows of the pipeline's `lambda/fileClassifier.py` EXTENSION_CLASSES; that suite diffs the two.
 MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".png": CLASS_IMAGE, ".jpg": CLASS_IMAGE, ".jpeg": CLASS_IMAGE, ".gif": CLASS_IMAGE, ".webp": CLASS_IMAGE,
     ".svg": CLASS_IMAGE,
@@ -34,12 +35,12 @@ MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
     ".flv": CLASS_VIDEO, ".wmv": CLASS_VIDEO, ".m4v": CLASS_VIDEO,
     ".mp3": CLASS_AUDIO, ".wav": CLASS_AUDIO, ".ogg": CLASS_AUDIO, ".aac": CLASS_AUDIO, ".flac": CLASS_AUDIO,
     ".m4a": CLASS_AUDIO,
-    ".pdf": CLASS_DOCUMENT,
+    ".pdf": CLASS_DOCUMENT, ".docx": CLASS_DOCUMENT, ".pptx": CLASS_DOCUMENT,
     ".txt": CLASS_TEXT, ".md": CLASS_TEXT, ".json": CLASS_TEXT, ".xml": CLASS_TEXT, ".yaml": CLASS_TEXT,
     ".yml": CLASS_TEXT, ".toml": CLASS_TEXT, ".ini": CLASS_TEXT, ".cfg": CLASS_TEXT, ".inf": CLASS_TEXT,
     ".log": CLASS_TEXT, ".py": CLASS_TEXT, ".js": CLASS_TEXT, ".ts": CLASS_TEXT, ".sql": CLASS_TEXT,
     ".sh": CLASS_TEXT, ".ps1": CLASS_TEXT, ".ipynb": CLASS_TEXT, ".html": CLASS_TEXT, ".htm": CLASS_TEXT,
-    ".csv": CLASS_DATA, ".fcs": CLASS_DATA,
+    ".csv": CLASS_DATA, ".fcs": CLASS_DATA, ".xlsx": CLASS_DATA,
 }
 
 # Entries the pipeline's classifier treats differently from this table, each with its reason: `.webp` is a
@@ -104,7 +105,9 @@ _YEAR_PREFIX = re.compile(r"^\s*(\d{4})")
 @dataclass
 class ExtractContext:
     """What an extractor knows about the file beyond its bytes. `extract_geo_location` is the state's
-    `extractGeoLocation` (template tag EXTRACT_GEO_LOCATION): when false, no coordinates are written."""
+    `extractGeoLocation` (template tag EXTRACT_GEO_LOCATION): when false, no coordinates are written.
+    `capture_full_text` asks a document, text or data extractor to keep the whole text and its page boundaries
+    for content chunking; the excerpt stays bounded by `max_text_chars` either way."""
 
     file_name: str
     extension: str
@@ -112,13 +115,16 @@ class ExtractContext:
     max_text_chars: int
     work_dir: str
     extract_geo_location: bool = False
+    capture_full_text: bool = False
 
 
 @dataclass
 class BranchResult:
     """One extractor's contribution to the analysis manifest. `render_images` are local PNG paths the handler
     uploads in order; `attributes` carries only this class's `sys_*` section (`sys_file` is already in the
-    manifest constructPipeline wrote)."""
+    manifest constructPipeline wrote). `full_text` is the whole extracted text when the context asked for it
+    (`""` otherwise), `page_offsets` its page or sheet boundaries as `{"page", "start"[, "name"]}` entries in
+    `full_text` positions, and `full_text_truncated` whether the extractor's own read was bounded."""
 
     file_class: str
     attributes: Dict[str, dict] = field(default_factory=dict)
@@ -127,6 +133,9 @@ class BranchResult:
     facts: Dict[str, str] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     render_skipped: Optional[str] = None
+    full_text: str = ""
+    full_text_truncated: bool = False
+    page_offsets: List[dict] = field(default_factory=list)
 
 
 def class_for_extension(extension: Optional[str]) -> Optional[str]:

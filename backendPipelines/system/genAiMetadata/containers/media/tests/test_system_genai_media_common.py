@@ -21,14 +21,27 @@ SPEC_MEDIA_EXTENSIONS = {
     "image": {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"},
     "video": {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"},
     "audio": {".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"},
-    "document": {".pdf"},
+    "document": {".pdf", ".docx", ".pptx"},
     "text": {".txt", ".md", ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".inf", ".log",
              ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"},
-    "data": {".csv", ".fcs"},
+    "data": {".csv", ".fcs", ".xlsx"},
 }
 # The one spec extension no viewer serves; the allow-list rule (§6.3) keeps it out of the pipeline's
 # allow list, and the image still handles it should a viewer gain it.
 _NOT_A_VIEWER_EXTENSION = {".webp"}
+# Office formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their text.
+_OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
+_FILE_CLASSIFIER = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda", "fileClassifier.py")
+
+
+def _file_classifier():
+    """`lambda/fileClassifier.py`, loaded by path under a suite-private name (it imports only json and struct)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("system_genai_media_file_classifier", _FILE_CLASSIFIER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # Master §3.6 "Promotion source contract", MEDIA groups, transcribed literally; nested objects as dotted paths.
 REGISTRY_PROMOTION_SOURCES = {
@@ -81,7 +94,7 @@ class TestExtensionTable:
             for extension in viewer.get("supportedExtensions", [])
             if extension != "*"
         }
-        assert set(common.MEDIA_EXTENSION_CLASSES) - viewer_extensions == _NOT_A_VIEWER_EXTENSION
+        assert set(common.MEDIA_EXTENSION_CLASSES) - viewer_extensions == _NOT_A_VIEWER_EXTENSION | _OFFICE_EXTENSIONS
 
     def test_classifier_overrides_are_table_entries_with_a_reason(self):
         # The pipeline's `lambda/fileClassifier.py` suite diffs its MEDIA rows against this table minus these
@@ -90,6 +103,18 @@ class TestExtensionTable:
         assert set(common.CLASSIFIER_OVERRIDE_EXTENSIONS) <= set(common.MEDIA_EXTENSION_CLASSES)
         assert _NOT_A_VIEWER_EXTENSION <= set(common.CLASSIFIER_OVERRIDE_EXTENSIONS)
         assert all(reason.strip() for reason in common.CLASSIFIER_OVERRIDE_EXTENSIONS.values())
+
+    def test_office_rows_match_the_classifier_additional_extensions(self):
+        """The office formats join the pipeline through the classifier's ADDITIONAL_EXTENSIONS; this table lists
+        exactly those, under the classes the classifier gives them, and they are not classifier overrides
+        (both sides agree on them)."""
+        fc = _file_classifier()
+        assert set(fc.ADDITIONAL_EXTENSIONS) == _OFFICE_EXTENSIONS
+        for extension in _OFFICE_EXTENSIONS:
+            file_class, branch = fc.EXTENSION_CLASSES[extension]
+            assert branch == common.RENDER_BRANCH
+            assert common.MEDIA_EXTENSION_CLASSES[extension] == file_class, extension
+            assert extension not in common.CLASSIFIER_OVERRIDE_EXTENSIONS
 
 
 @pytest.mark.unit
@@ -127,6 +152,15 @@ class TestResultShapes:
         assert result.facts == {}
         assert result.warnings == []
         assert result.render_skipped is None
+        assert result.full_text == ""
+        assert result.full_text_truncated is False
+        assert result.page_offsets == []
+
+    def test_extract_context_capture_flag_defaults_off(self):
+        # A caller that does not know about the capture never pays for a whole-document read.
+        ctx = common.ExtractContext("doc.pdf", ".pdf", "application/pdf", 100, "/tmp/work")
+        assert ctx.capture_full_text is False
+        assert common.ExtractContext("doc.pdf", ".pdf", "application/pdf", 100, "/tmp/work", False, True).capture_full_text is True
 
     def test_two_results_do_not_share_mutable_defaults(self):
         first, second = common.BranchResult(file_class="a"), common.BranchResult(file_class="b")

@@ -114,3 +114,35 @@ def test_pdf_date_to_iso():
     assert documents.pdf_date_to_iso("2026-01-02") is None
     assert documents.pdf_date_to_iso("D:20261340") is None
     assert documents.pdf_date_to_iso("") is None and documents.pdf_date_to_iso(None) is None
+
+
+@pytest.mark.unit
+class TestFullTextCapture:
+    def test_full_text_and_page_offsets_are_captured_when_asked(self, tmp_path):
+        path = write(tmp_path, "long.pdf", minimal_pdf_bytes(pages=3))
+        result = documents.extract_pdf(path, make_ctx(tmp_path, "long.pdf", max_text_chars=20, capture_full_text=True))
+        # The excerpt keeps its budget; the full text is every page and the scan covered every page.
+        assert len(result.text_excerpt) <= 20
+        assert result.attributes["sys_document"]["pagesScannedForText"] == 3
+        assert "page 1" in result.full_text and "page 3" in result.full_text
+        assert result.full_text_truncated is False
+        assert [entry["page"] for entry in result.page_offsets] == [1, 2, 3]
+        assert result.page_offsets[0]["start"] == 0
+        starts = [entry["start"] for entry in result.page_offsets] + [len(result.full_text)]
+        for entry, end in zip(result.page_offsets, starts[1:]):
+            assert f"page {entry['page']}" in result.full_text[entry["start"]:end]
+
+    def test_full_text_is_not_captured_by_default(self, tmp_path):
+        path = write(tmp_path, "report.pdf", minimal_pdf_bytes(pages=2))
+        result = documents.extract_pdf(path, make_ctx(tmp_path, "report.pdf"))
+        assert result.full_text == "" and result.page_offsets == [] and result.full_text_truncated is False
+
+    def test_full_text_is_cut_at_the_content_cap(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(documents, "CONTENT_TEXT_MAX_CHARS", 40)
+        path = write(tmp_path, "long.pdf", minimal_pdf_bytes(pages=3))
+        result = documents.extract_pdf(path, make_ctx(tmp_path, "long.pdf", max_text_chars=20, capture_full_text=True))
+        assert len(result.full_text) <= 40 and result.full_text_truncated is True
+        assert result.page_offsets[0] == {"page": 1, "start": 0}
+        assert all(entry["start"] <= 40 for entry in result.page_offsets)
+        # Both the excerpt budget and the cap were reached, so the scan stopped before the last page.
+        assert result.attributes["sys_document"]["pagesScannedForText"] < 3

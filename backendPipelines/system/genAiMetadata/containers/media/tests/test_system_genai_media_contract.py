@@ -12,11 +12,12 @@ import json
 
 import pytest
 
-from media_extractors import audio, data, documents, geo, images, text, tiles3d, video
+from media_extractors import audio, data, documents, geo, images, office, text, tiles3d, video
 from media_extractors.common import PROMOTION_SOURCE_KEYS
 from system_genai_media_fixtures import (
-    ENGLISH_TEXT, FFMPEG_HEADER_WITH_TAGS, SYDNEY_GPS, FakeFfmpeg, csv_bytes, fake_read_frames, fcs_bytes,
+    ENGLISH_TEXT, FFMPEG_HEADER_WITH_TAGS, SYDNEY_GPS, FakeFfmpeg, csv_bytes, docx_bytes, fake_read_frames, fcs_bytes,
     geojson_collection_dict, jpeg_with_exif_bytes, make_ctx, minimal_pdf_bytes, tileset_dict, wav_bytes, write,
+    xlsx_bytes,
 )
 
 # The sys_media contract is served by two kinds; each writes the keys its container can carry, and the two
@@ -147,3 +148,22 @@ def test_sys_geo(tmp_path):
     assert _is_number(sys_geo["featureCount"])
     assert isinstance(sys_geo["geometryTypes"], list) and all(isinstance(t, str) for t in sys_geo["geometryTypes"])
     assert sys_geo["footprint"]["type"] == "Polygon" and json.dumps(sys_geo["footprint"])
+
+
+@pytest.mark.unit
+def test_sys_document_docx(tmp_path):
+    path = write(tmp_path, "brief.docx", docx_bytes(pages=3))
+    sys_document = office.extract_docx(path, make_ctx(tmp_path, "brief.docx")).attributes["sys_document"]
+    assert _missing(PROMOTION_SOURCE_KEYS["sys_document"], sys_document) == set()
+    assert _is_number(sys_document["pageCount"]) and isinstance(sys_document["hasText"], bool)
+    assert isinstance(sys_document["title"], str) and isinstance(sys_document["author"], str)
+    assert sys_document["createdAt"] == "2026-01-02T03:04:05Z"
+
+
+@pytest.mark.unit
+def test_sys_data_xlsx(tmp_path):
+    path = write(tmp_path, "parts.xlsx", xlsx_bytes())
+    sys_data = office.extract_xlsx(path, make_ctx(tmp_path, "parts.xlsx")).attributes["sys_data"]
+    assert _missing(PROMOTION_SOURCE_KEYS["sys_data"], sys_data) == set()
+    assert _is_number(sys_data["columnCount"]) and _is_number(sys_data["rowCount"])
+    assert isinstance(sys_data["columns"], list) and all(isinstance(c, str) for c in sys_data["columns"])

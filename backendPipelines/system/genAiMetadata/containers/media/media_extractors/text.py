@@ -15,6 +15,8 @@ from typing import Dict, Optional, Tuple
 
 from charset_normalizer import from_bytes
 
+from contentChunks import CONTENT_TEXT_MAX_CHARS
+
 from . import geo, tiles3d
 from .common import (
     CLASS_TEXT,
@@ -229,4 +231,8 @@ def extract_text(path: str, ctx: ExtractContext) -> BranchResult:
     if sys_text.get("language"):
         result.facts["language"] = str(sys_text["language"])
     result.text_excerpt = truncate_text(body, ctx.max_text_chars)
+    if ctx.capture_full_text:
+        cut = len(body) > CONTENT_TEXT_MAX_CHARS
+        result.full_text = body[:CONTENT_TEXT_MAX_CHARS] if cut else body
+        result.full_text_truncated = truncated or cut
     return result

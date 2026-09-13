@@ -42,11 +42,14 @@ EXPECTED_TAGS = {
     "EMBEDDING_INCLUDE_TEXT_EXCERPT": ("boolean", True),
     "WRITE_EXTRACTED_METADATA": ("boolean", True),
     "EXTRACT_GEO_LOCATION": ("boolean", True),
+    "VIDEO_SEGMENT_SECONDS": ("integer", 0),
+    "CONTENT_CHUNKING": ("boolean", True),
 }
 EXPECTED_CONFIG_KEYS = {
     "seedWithExistingMetadata": bool, "includeSiblingFiles": bool, "renderViews": int,
     "maxTextChars": int, "writeAssetKeywords": bool, "embeddingIncludeTextExcerpt": bool,
-    "writeExtractedMetadata": bool, "extractGeoLocation": bool, "classificationVocabulary": dict,
+    "writeExtractedMetadata": bool, "extractGeoLocation": bool, "videoSegmentSeconds": int, "contentChunking": bool,
+    "classificationVocabulary": dict,
 }
 
 
@@ -100,6 +103,13 @@ class TestAllowLists:
         expected = {f"*{extension}" for extension in catalog_extensions() - fc.EXCLUDED_EXTENSIONS}
         assert set(pipeline["systemConfig"]["inputFileFilters"]["allow"]) >= expected
         assert len(expected) >= 80
+
+    def test_the_office_formats_are_admitted_on_every_surface(self):
+        # The classifier's ADDITIONAL_EXTENSIONS reach the pipeline, workflow and trigger lists.
+        office = {f"*{extension}" for extension in fc.ADDITIONAL_EXTENSIONS}
+        assert office == {"*.docx", "*.xlsx", "*.pptx"}
+        for name, filters in _allow_lists().items():
+            assert office <= set(filters["allow"]), name
 
     @pytest.mark.temporary  # pins the drop of .fls/.fws relative to the thumbnail allow list
     def test_the_faro_formats_are_not_admitted(self):
@@ -212,7 +222,22 @@ class TestTemplate:
         assert config == {"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
                           "maxTextChars": 12000, "writeAssetKeywords": False,
                           "embeddingIncludeTextExcerpt": True, "writeExtractedMetadata": True,
-                          "extractGeoLocation": True, "classificationVocabulary": cv.DEFAULT_VOCABULARY}
+                          "extractGeoLocation": True, "videoSegmentSeconds": 0, "contentChunking": True,
+                          "classificationVocabulary": cv.DEFAULT_VOCABULARY}
+
+    def test_the_segment_tags_carry_their_notes(self):
+        """VIDEO_SEGMENT_SECONDS is off by default and its description says why (the per-window cost);
+        CONTENT_CHUNKING is on by default. The rendered body places both before the vocabulary object."""
+        fields = {field["tagKey"]: field for field in template["tagSchema"]}
+        video = fields["VIDEO_SEGMENT_SECONDS"]
+        assert video["default"] == 0 and video["type"] == "integer"
+        assert "USD" in video["description"] and "360" in video["description"] and "off" in video["description"]
+        chunking = fields["CONTENT_CHUNKING"]
+        assert chunking["default"] is True and chunking["type"] == "boolean"
+        assert "1,600" in chunking["description"] and "1,000" in chunking["description"]
+        keys = list(_rendered_config())
+        assert keys[-3:] == ["videoSegmentSeconds", "contentChunking", "classificationVocabulary"]
+        assert len(template["tagSchema"]) == 10
 
     def test_the_vocabulary_is_a_plain_object_equal_to_the_module_default(self):
         """The vocabulary is edited with `vamscli pipeline template update --config-body-file`, so it sits in

@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Lambda image for the MEDIA branch of the SYSTEM GenAI metadata pipeline: images, SVG, video, audio, PDF,
-# text, tabular data and 3D Tiles tilesets. Video facts and keyframes come from the static ffmpeg binary the
-# imageio-ffmpeg wheel bundles; the wheel ships no ffprobe, so stream facts are parsed from ffmpeg's own
-# header output.
+# office documents, text, tabular data and 3D Tiles tilesets, plus the per-window video analysis function
+# (segment_handler) the same image serves under a different CMD. Video facts and keyframes come from the
+# static ffmpeg binary the imageio-ffmpeg wheel bundles; the wheel ships no ffprobe, so stream facts are
+# parsed from ffmpeg's own header output.
 #
 # Pinned by digest, not by tag. `lambda/python:3.12` is a moving reference: AWS republishes it with runtime
 # patches, so a rebuild months apart can produce a different image from identical sources. The tag is kept
@@ -35,10 +36,18 @@ RUN FFMPEG_BIN="$(python -c 'import glob, os, imageio_ffmpeg; print(glob.glob(os
     && chmod a+rx "${FFMPEG_BIN}" \
     && ln -s "${FFMPEG_BIN}" /usr/local/bin/ffmpeg
 ENV IMAGEIO_FFMPEG_EXE=/usr/local/bin/ffmpeg
+# The segment child reads its frames over a presigned URL, so the bundled ffmpeg must speak https; the build
+# fails here rather than the first window.
+RUN /usr/local/bin/ffmpeg -hide_banner -protocols | sed -n '/^Input:/,/^Output:/p' | grep -qw https
 
 COPY handler.py ${LAMBDA_TASK_ROOT}/handler.py
 COPY customLogging ${LAMBDA_TASK_ROOT}/customLogging
 COPY media_extractors ${LAMBDA_TASK_ROOT}/media_extractors
+COPY videoSegments.py ${LAMBDA_TASK_ROOT}/videoSegments.py
+COPY contentChunks.py ${LAMBDA_TASK_ROOT}/contentChunks.py
+COPY bedrockGuardrail.py ${LAMBDA_TASK_ROOT}/bedrockGuardrail.py
+COPY segment_handler.py ${LAMBDA_TASK_ROOT}/segment_handler.py
+COPY vectorsearch ${LAMBDA_TASK_ROOT}/vectorsearch
 
 # Lambda runs the function as its own least-privileged default user whatever USER says, so the task root is
 # made world-readable for that user; the explicit non-root USER covers the runtime interface emulator and any

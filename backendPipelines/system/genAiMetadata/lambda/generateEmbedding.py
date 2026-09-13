@@ -24,10 +24,11 @@ import json
 import os
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from customLogging.logger import safeLogger
 import manifestHelper
 import analysisCommon as common
+import contentChunks
 import fileClassifier
 import metadataCatalog
 from vectorsearch import embeddings
@@ -52,6 +53,14 @@ EMBEDDING_READY_DETAIL_TYPE = "vector.embedding.ready"
 EMBEDDING_DOCUMENT_PREFIX = "embedding/"
 SOURCE_TEXT_STORED_MAX_CHARS = 8000
 METADATA_FILE_SUFFIX = ".metadata.json"
+EMBEDDING_SUMMARY_FILENAME = "summary.json"
+# EventBridge accepts at most ten entries per PutEvents call.
+PUT_EVENTS_BATCH_SIZE = 10
+CONTENT_CHUNK_COUNT_KEY = "genai_content_chunk_count"
+TYPE_NUMBER = "number"
+# The code the segment child records for a failed PutEvents; the chunk loop records its own the same way,
+# and only the whole-file event raises.
+ERROR_SEGMENT_PUBLISH = "SegmentPublishError"
 
 # Segment identity of the whole-file document: one vector per file version, no time range, no chunk.
 WHOLE_FILE_SEGMENT_FIELDS = {
@@ -120,8 +129,13 @@ def derived_facts(attributes, file_class):
     return facts
 
 
-def embedding_document_key(aux_temp_prefix, relative_path, version_id):
-    digest = hashlib.sha256(file_version_key(relative_path, version_id).encode("utf-8")).hexdigest()
+def embedding_document_key(aux_temp_prefix, relative_path, version_id, segment_key=""):
+    """The aux object of a document: the whole-file document hashes the file version key; a segment document
+    hashes that key followed by ``#`` and its segment key."""
+    identity = file_version_key(relative_path, version_id)
+    if segment_key:
+        identity = f"{identity}#{segment_key}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return common.join_key(aux_temp_prefix, EMBEDDING_DOCUMENT_PREFIX + digest + ".json")
 
 
@@ -129,6 +143,102 @@ def genai_values(metadata_file_body):
     """``{metadataKey: metadataValue}`` from the .metadata.json body the analysis step wrote."""
     return {row.get("metadataKey"): row.get("metadataValue")
             for row in (metadata_file_body or {}).get("metadata") or [] if row.get("metadataKey")}
+
+
+def read_text_object(uri):
+    bucket, key = manifestHelper.parse_s3_uri(uri)
+    return s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+
+
+def chunk_failure_code(exc):
+    """The execution error code for a caught chunk embedding failure, mapped as the whole-file path maps its
+    own: BedrockAccessDenied for AccessDeniedException, BedrockThrottled for a throttle code,
+    BedrockEmbeddingError for every other cause. The adapter carries the Bedrock code on
+    EmbeddingModelError.code and lets throttling ClientErrors propagate."""
+    code = getattr(exc, "code", "") or (
+        ((getattr(exc, "response", None) or {}).get("Error") or {}).get("Code", ""))
+    if code == "AccessDeniedException":
+        return common.ERROR_BEDROCK_ACCESS_DENIED
+    if code in common.THROTTLE_ERROR_CODES:
+        return common.ERROR_BEDROCK_THROTTLED
+    return common.ERROR_BEDROCK_EMBEDDING
+
+
+def load_chunks(manifest, config):
+    """``(chunks, dropped)`` of the captured full text when the template's contentChunking is on and the branch
+    captured text; ``([], 0)`` otherwise — chunking off, a manifest whose fullTextSkipped names why the branch
+    captured nothing, or no text location."""
+    if (not common.as_bool(config.get("contentChunking"), True) or manifest.get("fullTextSkipped")
+            or not manifest.get("fullTextS3Location")):
+        return [], 0
+    full_text = read_text_object(manifest["fullTextS3Location"])
+    page_offsets = []
+    if manifest.get("pageOffsetsS3Location"):
+        loaded = json.loads(read_text_object(manifest["pageOffsetsS3Location"]))
+        page_offsets = loaded if isinstance(loaded, list) else []
+    return contentChunks.chunk_text(full_text, page_offsets)
+
+
+def compose_chunk_source_text(asset_name, phrase, relative_path, genai_title, label, chunk_body):
+    """``(sourceText, sourceModalities)`` of one chunk: the asset name; the file-type phrase and path; the whole
+    file's title; the chunk label and the chunk text — one line per part, each distinct string once, and a
+    modality label for each part that contributed."""
+    parts = []
+    modalities = []
+    seen = set()
+
+    def add(part, modality):
+        text = " ".join(str(part).split()) if part is not None else ""
+        if not text or text.lower() in seen:
+            return
+        seen.add(text.lower())
+        parts.append(text)
+        if modality not in modalities:
+            modalities.append(modality)
+
+    add(asset_name, MODALITY_ASSET_METADATA)
+    add(phrase, MODALITY_FILE_IDENTITY)
+    add(relative_path, MODALITY_FILE_IDENTITY)
+    add(genai_title, MODALITY_GENAI_METADATA)
+    add(label, MODALITY_FILE_TEXT)
+    add(chunk_body, MODALITY_FILE_TEXT)
+    return "\n".join(parts), modalities
+
+
+def segment_document(document, *, embedding, source_text, modalities, segment_key, segment_kind, segment_label,
+                     segment_start_ms, segment_end_ms, segment_count):
+    """A segment document: the whole-file document with its own vector, text and modalities and the six segment
+    fields filled in."""
+    return {
+        **document,
+        "embedding": embedding,
+        "sourceText": source_text[:SOURCE_TEXT_STORED_MAX_CHARS],
+        "sourceModalities": modalities,
+        "segmentKey": segment_key,
+        "segmentKind": segment_kind,
+        "segmentLabel": segment_label,
+        "segmentStartMs": segment_start_ms,
+        "segmentEndMs": segment_end_ms,
+        "segmentCount": segment_count,
+    }
+
+
+def append_metadata_row(metadata_file_uri, row):
+    """Appends one row to the .metadata.json the analysis step wrote (replacing an earlier row of the same key);
+    a missing file is created with that row alone."""
+    try:
+        body = common.read_json(s3_client, metadata_file_uri)
+    except (ClientError, ValueError):
+        body = {"type": "metadata", "updateType": "update", "metadata": []}
+    rows = [existing for existing in body.get("metadata") or [] if existing.get("metadataKey") != row["metadataKey"]]
+    rows.append(row)
+    body["metadata"] = rows
+    common.write_json(s3_client, metadata_file_uri, body)
+
+
+def write_embedding_summary(aux_bucket, aux_prefix, body):
+    key = common.join_key(aux_prefix, EMBEDDING_DOCUMENT_PREFIX + EMBEDDING_SUMMARY_FILENAME)
+    return common.write_json(s3_client, f"s3://{aux_bucket}/{key}", body)
 
 
 def compose_source_text(asset_data, database_id, relative_path, file_class, genai, facts, existing_lines,
@@ -187,6 +297,44 @@ def _publish(detail, source):
     return True
 
 
+class SegmentPublishFailure(Exception):
+    """A PutEvents failure while publishing chunk events: ``segment_key`` is the first key of the batch that
+    failed and ``published`` the count the call had accepted before it."""
+
+    def __init__(self, message, segment_key, published):
+        super().__init__(message)
+        self.segment_key = segment_key
+        self.published = published
+
+
+def _publish_entries(details, source):
+    """Publishes ``details`` PUT_EVENTS_BATCH_SIZE per call; returns the count published (0 without a bus or
+    source). A batch that fails raises SegmentPublishFailure, which the chunk loop records as a caught failure."""
+    if not details:
+        return 0
+    if not ORCHESTRATION_BUS_NAME or not source:
+        logger.warning(f"Orchestration bus or event source not configured; {len(details)} segment documents were "
+                       "written but no vector.embedding.ready events are published")
+        return 0
+    published = 0
+    for start in range(0, len(details), PUT_EVENTS_BATCH_SIZE):
+        batch = details[start:start + PUT_EVENTS_BATCH_SIZE]
+        try:
+            response = events_client.put_events(Entries=[{
+                "EventBusName": ORCHESTRATION_BUS_NAME,
+                "Source": source,
+                "DetailType": EMBEDDING_READY_DETAIL_TYPE,
+                "Detail": json.dumps(detail),
+            } for detail in batch])
+        except (ClientError, BotoCoreError) as exc:
+            raise SegmentPublishFailure(f"PutEvents failed: {exc}", batch[0]["segmentKey"], published)
+        if response.get("FailedEntryCount"):
+            raise SegmentPublishFailure(f"PutEvents FailedEntryCount={response['FailedEntryCount']}: "
+                                        f"{response.get('Entries')}", batch[0]["segmentKey"], published)
+        published += len(batch)
+    return published
+
+
 def lambda_handler(event, context):
     """
     GenerateEmbedding
@@ -242,6 +390,16 @@ def lambda_handler(event, context):
         asset_data, event.get("databaseId", ""), relative_path, file_class, genai,
         facts, existing, text_excerpt)
 
+    # The captured text is split before the whole-file document is built, so that document carries the true
+    # segment count; the chunks themselves are embedded only after the whole-file document is published.
+    chunks, chunks_dropped = load_chunks(manifest, config)
+    # The branch's reason for capturing nothing (None when it captured, or was never asked to) rides on
+    # contentChunks so a reader of the state need not open the manifest.
+    chunks_skipped = manifest.get("fullTextSkipped") or None
+    if chunks_dropped:
+        logger.warning(f"Content chunks over the cap of {contentChunks.CONTENT_CHUNK_MAX}: {len(chunks)} kept, "
+                       f"{chunks_dropped} dropped")
+
     try:
         prepared = embeddings.truncate_for_model(source_text, EMBEDDING_MODEL_ID)
         vector = embeddings.round_vector(embeddings.embed_text(
@@ -261,6 +419,7 @@ def lambda_handler(event, context):
         logger.error(f"Embedding failed ({error}): {e}")
         common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], error, str(e))
         event["embeddingStatus"] = common.STATUS_FAILED
+        event["contentChunks"] = {"count": 0, "dropped": chunks_dropped, "skipped": chunks_skipped}
         return event
 
     aux_bucket, aux_prefix = manifestHelper.parse_s3_uri(event["inputOutputS3AssetAuxiliaryFilesPath"])
@@ -290,12 +449,74 @@ def lambda_handler(event, context):
         "generatedAt": generated_at,
         **WHOLE_FILE_SEGMENT_FIELDS,
     }
+    # One vector per file version plus the segments this run publishes: the chunks below, or the video windows
+    # the Map fans out over.
+    document["segmentCount"] = len(chunks) or int(event.get("videoSegmentCount") or 0)
     document_uri = common.write_json(s3_client, f"s3://{aux_bucket}/{document_key}", document)
     logger.info(f"Embedding document written: {document_uri}")
 
     detail = {field: value for field, value in document.items() if field not in ("embedding", "sourceText")}
     detail["documentS3Location"] = document_uri
-    event["embeddingEventPublished"] = _publish(detail, event.get("orchestrationEventPrefix", "") or "")
-    event["embeddingStatus"] = common.STATUS_SUCCEEDED
+    source = event.get("orchestrationEventPrefix", "") or ""
+    event["embeddingEventPublished"] = _publish(detail, source)
     event["embeddingDocumentS3Location"] = document_uri
+
+    published_chunks = 0
+    chunk_error = None
+    if chunks:
+        phrase = fileClassifier.FILE_CLASS_PHRASES.get(file_class, fileClassifier.FILE_CLASS_PHRASES[fileClassifier.CLASS_OTHER])
+        details = []
+        segment_key = ""
+        try:
+            try:
+                for chunk in chunks:
+                    segment_key = contentChunks.build_text_chunk_key(chunk.index)
+                    label = contentChunks.chunk_label(chunk.index, len(chunks), chunk.page)
+                    chunk_text, chunk_modalities = compose_chunk_source_text(
+                        asset_data.get("assetName"), phrase, relative_path, genai.get("genai_title"), label, chunk.text)
+                    chunk_vector = embeddings.round_vector(embeddings.embed_text(
+                        embeddings.truncate_for_model(chunk_text, EMBEDDING_MODEL_ID), model_id=EMBEDDING_MODEL_ID,
+                        dimensions=EMBEDDING_DIMENSIONS, purpose="index", client=bedrock_runtime))
+                    chunk_document = segment_document(
+                        document, embedding=chunk_vector, source_text=chunk_text, modalities=chunk_modalities,
+                        segment_key=segment_key, segment_kind=contentChunks.SEGMENT_KIND, segment_label=label,
+                        segment_start_ms=None, segment_end_ms=None, segment_count=len(chunks))
+                    chunk_key = embedding_document_key(aux_prefix, relative_path, version_id, segment_key)
+                    chunk_uri = common.write_json(s3_client, f"s3://{aux_bucket}/{chunk_key}", chunk_document)
+                    chunk_detail = {field: value for field, value in chunk_document.items()
+                                    if field not in ("embedding", "sourceText")}
+                    chunk_detail["documentS3Location"] = chunk_uri
+                    details.append(chunk_detail)
+                    if len(details) == PUT_EVENTS_BATCH_SIZE:
+                        published_chunks += _publish_entries(details, source)
+                        details = []
+            except (ClientError, embeddings.EmbeddingModelError) as e:
+                error = chunk_failure_code(e)
+                chunk_error = f"chunk {segment_key}: {e}"
+                logger.error(f"Content chunk embedding failed ({error}): {chunk_error}")
+                common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], error, chunk_error)
+            # The chunk documents already written are published; every vector already published stays indexed.
+            published_chunks += _publish_entries(details, source)
+        except SegmentPublishFailure as e:
+            # A failed chunk batch is recorded like a chunk embedding failure, never raised: the whole-file vector
+            # and every accepted batch stay indexed, and the status file names where the run ended.
+            published_chunks += e.published
+            chunk_error = f"chunk {e.segment_key}: {e}"
+            logger.error(f"Content chunk events not published ({ERROR_SEGMENT_PUBLISH}): {chunk_error}")
+            common.write_execution_status(s3_client, event["outputS3AssetResultsPath"], ERROR_SEGMENT_PUBLISH, chunk_error)
+        logger.info(f"Content chunks: {published_chunks} published, {chunks_dropped} dropped")
+
+    event["contentChunks"] = {"count": published_chunks, "dropped": chunks_dropped, "skipped": chunks_skipped}
+    write_embedding_summary(aux_bucket, aux_prefix, {
+        "schemaVersion": common.EMBEDDING_DOCUMENT_SCHEMA_VERSION,
+        "wholeFileDocument": document_uri,
+        "contentChunks": event["contentChunks"],
+        "videoSegmentCount": int(event.get("videoSegmentCount") or 0),
+        "embeddingModelId": EMBEDDING_MODEL_ID,
+        "generatedAt": generated_at,
+    })
+    if published_chunks:
+        append_metadata_row(metadata_file_uri, {"metadataKey": CONTENT_CHUNK_COUNT_KEY,
+                                                "metadataValue": str(published_chunks), "metadataValueType": TYPE_NUMBER})
+    event["embeddingStatus"] = common.STATUS_FAILED if chunk_error else common.STATUS_SUCCEEDED
     return event
