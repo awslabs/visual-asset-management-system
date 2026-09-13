@@ -36,7 +36,7 @@ def build_workflow_system_config(
     """Workflow system-config block. Defaults match the create-when-unspecified defaults.
 
     - input_file_arity: none | one | multi
-    - concurrency_restriction: none | perAsset | perInputFile
+    - concurrency_restriction: none | perAsset | perInputFile | perInputFileVersion
     - output_target: {locationType: asset, allowOverride: bool}
     - allow_workflow_trigger_chaining: whether ANOTHER workflow's output may fire this workflow's
       triggers. Self-triggering is always blocked regardless, so an A->A loop cannot be enabled.

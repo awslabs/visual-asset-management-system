@@ -31,6 +31,7 @@ from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import outputPathExtension as ope
+from common.workflows import executionLocks as el
 
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
 
@@ -95,6 +96,11 @@ try:
     pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
     pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    # Read by the terminal lock release: the workflow row supplies the stored concurrencyRestriction and
+    # the input rows the file versions the run held.
+    workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     # Shared workflow SFN log group (same group for every workflow). Read from env, not
     # the ASL event, so it applies to executions of workflows that were not redeployed
     # with a newer ASL. Optional: empty string disables CloudWatch log retrieval.
@@ -1000,6 +1006,14 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
+
+    # The run is terminal on the main row, so a perInputFileVersion launch may now take the same file
+    # versions. A no-op for every other restriction; best-effort by contract (an unreleased row expires
+    # through the table's TTL).
+    el.release_locks_for_execution(
+        dynamo, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table_name,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=workflow_execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
 
 
 def _terminal_status(output_failures):
