@@ -26,14 +26,6 @@ import { newTestApp } from "../support/testApp";
 /** Commercial-template config with a fixed synth environment. */
 const createMockConfig = (): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
-    // Disabled placeholder under the pipeline key getConfig() rejects from config.json; the VPC
-    // builder reads it to decide the Bedrock and Rekognition endpoints.
-    config.app.pipelines.useGenAiMetadata3dLabeling = {
-        enabled: false,
-        bedrockModelId: "",
-        autoRegisterWithVAMS: false,
-        autoRegisterAutoTriggerOnFileUpload: false,
-    };
     config.env.account = "123456789012";
     config.env.region = "us-east-1";
     config.env.partition = "aws";
@@ -127,7 +119,7 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
         "useConversionCoordinateTransform",
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata.useFargateRenderer",
     ];
 
     // The three blocks, keyed by an anchor unique to each.
@@ -293,5 +285,35 @@ describe("setupSecurityAndLoggingEnvironmentAndPermissions", () => {
         expect(refs).not.toContain(
             JSON.stringify(stack.resolve(resources.dynamo.authEntitiesStorageTable.tableArn))
         );
+    });
+});
+
+describe("Bedrock Runtime endpoint condition", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "..", "../lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts"),
+        "utf8"
+    );
+    const bedrockAt = source.indexOf('"BedrockEndpoint"');
+    const conditionBlock = source.slice(source.lastIndexOf("if (", bedrockAt), bedrockAt);
+    // The two predicate constants directly above the `if`.
+    const predicateBlock = source.slice(
+        source.lastIndexOf("const bedrockFromAllLambdas", bedrockAt),
+        bedrockAt
+    );
+
+    test("is gated on the system pipeline or vector search with every Lambda in the VPC, or on the search placement", () => {
+        expect(bedrockAt).toBeGreaterThan(-1);
+        expect(conditionBlock).toContain("bedrockFromAllLambdas || bedrockFromSearch");
+        expect(predicateBlock).toContain("useForAllLambdas");
+        expect(predicateBlock).toContain("useSystemGenAiMetadata.enabled");
+        expect(predicateBlock).toContain("vectorSearch.enabled");
+        expect(predicateBlock).toContain("searchLambdasInVpc(props.config)");
+        // In the isolated subnets, where the pipeline and search Lambdas sit.
+        expect(source.slice(bedrockAt, bedrockAt + 400)).toContain("this.isolatedSubnets");
+    });
+
+    test("no Rekognition endpoint is created", () => {
+        expect(source).not.toContain("RekognitionEndpoint");
+        expect(source).not.toContain("REKOGNITION");
     });
 });

@@ -744,6 +744,7 @@ export function getConfig(app: cdk.App): Config {
                 maxInputFileSizeMb: SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB,
                 maxPointCloudPoints: SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS,
             },
+            bedrockGuardrail: { guardrailIdentifier: "", guardrailVersion: "" },
         };
     }
     if (config.app.pipelines.useSystemGenAiMetadata.enabled == undefined) {
@@ -768,6 +769,28 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxPointCloudPoints == undefined) {
         config.app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxPointCloudPoints =
             SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS;
+    }
+    //Operator-owned Amazon Bedrock guardrail applied to every analysis prompt. Both fields name one
+    //guardrail, so a half-set pair is a configuration mistake in either pipeline state.
+    if (config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
+            guardrailIdentifier: "",
+            guardrailVersion: "",
+        };
+    }
+    config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier ??= "";
+    config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion ??= "";
+    {
+        const guardrail = config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail;
+        const identifierSet = String(guardrail.guardrailIdentifier).trim() !== "";
+        const versionSet = String(guardrail.guardrailVersion).trim() !== "";
+        if (identifierSet !== versionSet) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail requires both " +
+                    "guardrailIdentifier and guardrailVersion, or neither. Received: " +
+                    JSON.stringify(guardrail)
+            );
+        }
     }
 
     //Natural-language file search over the embeddings the system GenAI metadata pipeline produces.
@@ -3553,6 +3576,10 @@ export interface ConfigPublic {
                 lambdaLimits: {
                     maxInputFileSizeMb: number;
                     maxPointCloudPoints: number;
+                };
+                bedrockGuardrail: {
+                    guardrailIdentifier: string;
+                    guardrailVersion: string;
                 };
             };
             useNvidiaCosmos: {

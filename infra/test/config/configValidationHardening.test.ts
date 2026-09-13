@@ -717,4 +717,51 @@ describe("system GenAI metadata pipeline validation", () => {
             })
         ).toThrow(/require a VPC: pipelines\.useSystemGenAiMetadata\.useFargateRenderer\./);
     });
+
+    describe("bedrockGuardrail", () => {
+        const withGuardrail = (identifier: string, version: string) => (c: any) => {
+            vectorSearchOff(c);
+            c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
+                guardrailIdentifier: identifier,
+                guardrailVersion: version,
+            };
+        };
+
+        test("accepts both fields set", () => {
+            expect(resolve(withGuardrail("gr-0123456789ab", "1"))).not.toThrow();
+        });
+
+        test("accepts both fields empty", () => {
+            expect(resolve(withGuardrail("", ""))).not.toThrow();
+        });
+
+        test.each([
+            ["identifier only", "gr-0123456789ab", ""],
+            ["version only", "", "DRAFT"],
+        ])("rejects %s", (_label, identifier, version) => {
+            expect(resolve(withGuardrail(identifier, version))).toThrow(
+                /bedrockGuardrail requires both guardrailIdentifier and guardrailVersion, or neither/
+            );
+        });
+
+        test("a half-set pair is rejected on a disabled pipeline too", () => {
+            expect(
+                resolve((c) => {
+                    withGuardrail("gr-0123456789ab", "")(c);
+                    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                })
+            ).toThrow(/bedrockGuardrail requires both/);
+        });
+
+        test("backfills an absent block to two empty strings", () => {
+            const config = resolve((c) => {
+                vectorSearchOff(c);
+                delete c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail;
+            })();
+            expect(config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail).toEqual({
+                guardrailIdentifier: "",
+                guardrailVersion: "",
+            });
+        });
+    });
 });

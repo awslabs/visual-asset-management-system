@@ -13,6 +13,7 @@ import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
+import { searchLambdasInVpc } from "../../helper/searchPlacement";
 
 export interface VPCBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -655,7 +656,8 @@ export class VPCBuilderNestedStack extends NestedStack {
             if (
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
                 props.config.app.pipelines.usePreview3dThumbnail.enabled ||
-                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+                (props.config.app.pipelines.useSystemGenAiMetadata.enabled &&
+                    props.config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer) ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
@@ -709,25 +711,20 @@ export class VPCBuilderNestedStack extends NestedStack {
                 }
             }
 
-            //All Lambda and Metadata Generation Pipeline Required Endpoints
-            if (
+            // Bedrock Runtime endpoint. The analysis and embedding Lambdas call Bedrock from the
+            // isolated subnets when every Lambda runs in the VPC; the vector search Lambda does so
+            // whenever the search stack's placement puts it in the VPC.
+            const bedrockFromAllLambdas =
                 props.config.app.useGlobalVpc.useForAllLambdas &&
-                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled
-            ) {
-                // Create VPC endpoint for Bedrock Runtime
+                (props.config.app.pipelines.useSystemGenAiMetadata.enabled ||
+                    props.config.app.vectorSearch.enabled);
+            const bedrockFromSearch =
+                props.config.app.vectorSearch.enabled && searchLambdasInVpc(props.config);
+            if (bedrockFromAllLambdas || bedrockFromSearch) {
                 new ec2.InterfaceVpcEndpoint(this, "BedrockEndpoint", {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
-                // Create VPC endpoint for Rekognition
-                new ec2.InterfaceVpcEndpoint(this, "RekognitionEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.REKOGNITION,
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });

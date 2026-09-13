@@ -60,8 +60,10 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy pipeline code
+# Copy pipeline code. lambda_handler.py is the render3d branch handler the Fargate render branch of the
+# SYSTEM GenAI metadata pipeline runs through `python3 -m preview_pipeline analysisBatch`.
 COPY ./preview_pipeline /app/preview_pipeline
+COPY lambda_handler.py /app/lambda_handler.py
 
 # Create the runtime user and every path it has to write.
 #

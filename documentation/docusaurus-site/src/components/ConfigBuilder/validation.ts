@@ -2376,6 +2376,24 @@ export const RULES: Rule[] = [
             message: `pipelines.useSystemGenAiMetadata.lambdaLimits.${field} must be a positive integer.`,
         })
     ),
+    {
+        id: "system-genai-bedrock-guardrail-pair",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion",
+        ],
+        // Both fields name one guardrail; the check is not gated on the pipeline state.
+        appliesWhen: (c) =>
+            !isBlank(
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier")
+            ) !==
+            !isBlank(
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion")
+            ),
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockGuardrail requires both guardrailIdentifier and guardrailVersion, or neither.",
+    },
 
     // ----- Vector search (config.ts: "DynamoDB vector search is not available in the European Sovereign
     // Cloud", "app.vectorSearch.enabled requires app.pipelines.useSystemGenAiMetadata.enabled",

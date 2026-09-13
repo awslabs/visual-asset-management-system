@@ -251,6 +251,7 @@ const COMMERCIAL: ConfigShape = {
                     maxInputFileSizeMb: 2048,
                     maxPointCloudPoints: 20000000,
                 },
+                bedrockGuardrail: { guardrailIdentifier: "", guardrailVersion: "" },
             },
             useConversionCoordinateTransform: {
                 enabled: false,
