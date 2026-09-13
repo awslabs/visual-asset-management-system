@@ -6,6 +6,7 @@
 import { apiClient } from "./apiClient";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
+import type { NlpSearchRequest, NlpSearchResponse } from "../components/search/types";
 
 export const getAmplifyConfig = async () => {
     console.log("getAmplifyConfig");
@@ -3414,6 +3415,21 @@ export const fetchSearchMappings = async () => {
     } catch (error: any) {
         console.log(error);
         return false;
+    }
+};
+
+export const searchNlp = async (
+    body: NlpSearchRequest
+): Promise<[boolean, NlpSearchResponse | string]> => {
+    try {
+        const response = await apiClient.post("search/nlp", {
+            "Content-type": "application/json",
+            body,
+        } as any);
+        return [true, response as NlpSearchResponse];
+    } catch (error: any) {
+        console.log(error);
+        return [false, error?.message];
     }
 };
 

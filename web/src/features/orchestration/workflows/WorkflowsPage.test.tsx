@@ -257,6 +257,70 @@ describe("WorkflowsPage", () => {
         });
         expect(screen.queryByText("View Executions")).not.toBeInTheDocument();
     });
+
+    it("marks a system workflow and offers View instead of Edit and Archive", async () => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useWorkflows.mockReturnValue(
+            infinite([
+                {
+                    workflowId: "system-genai-metadata",
+                    workflowName: "System GenAI Metadata",
+                    databaseId: "GLOBAL",
+                    category: "SYSTEM - GenAI",
+                    enabled: true,
+                    archived: false,
+                    isSystem: true,
+                    specifiedPipelines: [{ pipelineId: "system-genai-metadata" }],
+                },
+            ])
+        );
+        useWorkflowMutations.mockReturnValue({ archiveWorkflow: { mutateAsync: jest.fn() } });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: () => true });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("System")).toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole("button", { name: "Actions for System GenAI Metadata" })
+        );
+        await screen.findByRole("menu");
+        expect(screen.queryByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Execute" })).toBeInTheDocument();
+    });
+
+    it("explains why a disabled workflow's Execute action is unavailable", async () => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
+        useWorkflowMutations.mockReturnValue({ archiveWorkflow: { mutateAsync: jest.fn() } });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: () => true });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        // Workflow Beta is disabled.
+        await userEvent.click(screen.getByRole("button", { name: "Actions for Workflow Beta" }));
+        await screen.findByRole("menu");
+        const execute = screen.getByRole("menuitem", { name: "Execute" });
+        expect(execute).toHaveAttribute("aria-disabled", "true");
+        expect(execute).toHaveAttribute("title", "Disabled workflows cannot be executed");
+        expect(screen.queryByText("System")).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "View" })).not.toBeInTheDocument();
+    });
 });
 
 /**

@@ -66,6 +66,11 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const { createTemplate, updateTemplate } = useTemplateMutations();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
     const pipelineLabel = pipeline?.pipelineName || pipelineId;
+    // Templates of a system pipeline: only the config body and the tag schema may change (the backend
+    // compares every other supplied field to the stored value), and none may be added.
+    const systemPipeline = !!pipeline?.isSystem;
+    const lockedFields = mode === "edit" && systemPipeline;
+    const createRefused = mode === "create" && systemPipeline;
 
     const [templateName, setTemplateName] = useState(initial?.templateName || "");
     const [description, setDescription] = useState(initial?.description || "");
@@ -118,6 +123,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     };
 
     const handleSave = async () => {
+        if (createRefused) return;
         const configBodySize = new Blob([configBody]).size;
         const webFormJsonSize = new Blob([JSON.stringify(tagSchema)]).size;
         if (configBodySize + webFormJsonSize > TEMPLATE_BODY_CAP_BYTES) {
@@ -220,102 +226,129 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
             <Stepper steps={STEPS} current={wizardStep} />
 
             <div className="orch-outline bg-surface-container border border-border-default rounded-lg p-4 space-y-4">
+                {lockedFields && (
+                    <div className="p-3 bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 rounded">
+                        <strong>System template:</strong> shipped with the deployment. Only the
+                        config body and the tag schema can be changed here; a redeploy re-asserts
+                        the shipped values.
+                    </div>
+                )}
+                {createRefused && (
+                    <div className="p-3 bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300 rounded">
+                        Templates of system pipelines cannot be added; edit the shipped template's
+                        config body and tag schema instead.
+                    </div>
+                )}
                 {wizardStep === "basic" && (
                     <>
-                        <div>
-                            <label className="block text-sm font-medium mb-1">
-                                Template Name *
-                            </label>
-                            <input
-                                type="text"
-                                value={templateName}
-                                onChange={(e) => setTemplateName(e.target.value)}
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                placeholder="Template name"
-                            />
-                            {basicError && (
-                                <p className="text-vams-error text-sm mt-1">{basicError}</p>
-                            )}
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium mb-1">Description</label>
-                            <textarea
-                                value={description}
-                                onChange={(e) => setDescription(e.target.value)}
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                rows={2}
-                                placeholder="Template description"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium mb-1">
-                                Input Instructions
-                            </label>
-                            <textarea
-                                value={inputInstructions}
-                                onChange={(e) => setInputInstructions(e.target.value)}
-                                // Monospace and tall enough to author a metadata-key list: these
-                                // instructions are where a pipeline documents every metadata field
-                                // it reads, so line breaks and alignment are load-bearing and a
-                                // 2-row proportional box made that effectively unwritable.
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary font-mono text-xs"
-                                rows={10}
-                                placeholder={
-                                    "Instructions shown to the person running an execution with this template.\n\n" +
-                                    "Line breaks and indentation are preserved. For a pipeline that reads metadata, " +
-                                    "list each key, whether it is asset- or file-level, and whether it is required."
-                                }
-                            />
-                            <p className="mt-1 text-xs text-text-secondary">
-                                Line breaks are preserved. Long instructions collapse into a hover
-                                panel on the execute screen so they do not crowd out the form.
-                            </p>
-                            {inputInstructions.trim() && (
-                                <div className="mt-2">
-                                    <div className="text-xs font-medium text-text-secondary mb-1">
-                                        Preview (as shown when running)
-                                    </div>
-                                    {/* Live preview: the inline/tooltip choice is length-based, so an
-                                        author cannot otherwise tell which one their text will get. */}
-                                    <InstructionsPanel
-                                        text={inputInstructions}
-                                        title="Instructions for this template"
-                                    />
-                                </div>
-                            )}
-                        </div>
-                        <div>
-                            <label className="flex items-center space-x-2">
+                        <fieldset
+                            disabled={lockedFields}
+                            className="m-0 p-0 border-0 min-w-0 space-y-4"
+                        >
+                            <div>
+                                <label className="block text-sm font-medium mb-1">
+                                    Template Name *
+                                </label>
                                 <input
-                                    type="checkbox"
-                                    checked={isDefault}
-                                    onChange={(e) => setIsDefault(e.target.checked)}
-                                    className="w-4 h-4"
+                                    type="text"
+                                    value={templateName}
+                                    onChange={(e) => setTemplateName(e.target.value)}
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                    placeholder="Template name"
                                 />
-                                <span className="text-sm">
-                                    Set as the pipeline's default template
-                                </span>
-                                <InfoTooltip text="The default template is pre-selected first on the execute form, and is auto-selected by the backend when a require-template pipeline runs without a template chosen. Only one template per pipeline can be the default — setting this clears any prior default." />
-                            </label>
-                            {isDefault && (
-                                <p className="text-xs text-vams-warning mt-1">
-                                    A pipeline can have only one default template. Saving this will
-                                    unset the default on any other template of this pipeline.
+                                {basicError && (
+                                    <p className="text-vams-error text-sm mt-1">{basicError}</p>
+                                )}
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium mb-1">
+                                    Description
+                                </label>
+                                <textarea
+                                    value={description}
+                                    onChange={(e) => setDescription(e.target.value)}
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                    rows={2}
+                                    placeholder="Template description"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium mb-1">
+                                    Input Instructions
+                                </label>
+                                <textarea
+                                    value={inputInstructions}
+                                    onChange={(e) => setInputInstructions(e.target.value)}
+                                    // Monospace and tall enough to author a metadata-key list: these
+                                    // instructions are where a pipeline documents every metadata field
+                                    // it reads, so line breaks and alignment are load-bearing and a
+                                    // 2-row proportional box made that effectively unwritable.
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary font-mono text-xs"
+                                    rows={10}
+                                    placeholder={
+                                        "Instructions shown to the person running an execution with this template.\n\n" +
+                                        "Line breaks and indentation are preserved. For a pipeline that reads metadata, " +
+                                        "list each key, whether it is asset- or file-level, and whether it is required."
+                                    }
+                                />
+                                <p className="mt-1 text-xs text-text-secondary">
+                                    Line breaks are preserved. Long instructions collapse into a
+                                    hover panel on the execute screen so they do not crowd out the
+                                    form.
                                 </p>
-                            )}
-                        </div>
+                                {inputInstructions.trim() && (
+                                    <div className="mt-2">
+                                        <div className="text-xs font-medium text-text-secondary mb-1">
+                                            Preview (as shown when running)
+                                        </div>
+                                        {/* Live preview: the inline/tooltip choice is length-based, so an
+                                            author cannot otherwise tell which one their text will get. */}
+                                        <InstructionsPanel
+                                            text={inputInstructions}
+                                            title="Instructions for this template"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                            <div>
+                                <label className="flex items-center space-x-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={isDefault}
+                                        onChange={(e) => setIsDefault(e.target.checked)}
+                                        className="w-4 h-4"
+                                    />
+                                    <span className="text-sm">
+                                        Set as the pipeline's default template
+                                    </span>
+                                    <InfoTooltip text="The default template is pre-selected first on the execute form, and is auto-selected by the backend when a require-template pipeline runs without a template chosen. Only one template per pipeline can be the default — setting this clears any prior default." />
+                                </label>
+                                {isDefault && (
+                                    <p className="text-xs text-vams-warning mt-1">
+                                        A pipeline can have only one default template. Saving this
+                                        will unset the default on any other template of this
+                                        pipeline.
+                                    </p>
+                                )}
+                            </div>
+                        </fieldset>
                     </>
                 )}
 
                 {wizardStep === "config" && (
                     <>
                         <div>
-                            <label className="block text-sm font-medium mb-1">
+                            <label
+                                htmlFor="configFormat"
+                                className="block text-sm font-medium mb-1"
+                            >
                                 Config Format *
                             </label>
                             <select
+                                id="configFormat"
                                 value={configFormat}
                                 onChange={(e) => setConfigFormat(e.target.value as ConfigFormat)}
+                                disabled={lockedFields}
                                 className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                             >
                                 {CONFIG_FORMATS.map((format) => (
@@ -340,33 +373,39 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 <SystemTagHelp />
                             </div>
                         </div>
-                        <div>
-                            <label className="flex items-center space-x-2">
-                                <input
-                                    type="checkbox"
-                                    checked={allowCustomEdit}
-                                    onChange={(e) => setAllowCustomEdit(e.target.checked)}
-                                    className="w-4 h-4"
-                                />
-                                <span className="text-sm">
-                                    Allow editing the config body at execution time
-                                </span>
-                                <InfoTooltip text="When on, the person running an execution with this template may edit the config body inline before launch (a one-off change for that run)." />
-                            </label>
-                        </div>
-                        <div>
-                            <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
-                                Pipeline setting overrides
-                                <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />
+                        <fieldset
+                            disabled={lockedFields}
+                            className="m-0 p-0 border-0 min-w-0 space-y-4"
+                        >
+                            <div>
+                                <label className="flex items-center space-x-2">
+                                    <input
+                                        type="checkbox"
+                                        aria-label="Allow editing the config body at execution time"
+                                        checked={allowCustomEdit}
+                                        onChange={(e) => setAllowCustomEdit(e.target.checked)}
+                                        className="w-4 h-4"
+                                    />
+                                    <span className="text-sm">
+                                        Allow editing the config body at execution time
+                                    </span>
+                                    <InfoTooltip text="When on, the person running an execution with this template may edit the config body inline before launch (a one-off change for that run)." />
+                                </label>
                             </div>
-                            <TemplateOverridesEditor
-                                value={overrides}
-                                onChange={setOverrides}
-                                inheritedAssetScope={pipeline?.systemConfig?.assetScope}
-                                inheritedArity={pipeline?.systemConfig?.inputFileArity}
-                                inheritedFilters={pipeline?.systemConfig?.inputFileFilters}
-                            />
-                        </div>
+                            <div>
+                                <div className="flex items-center gap-1.5 text-sm font-medium mb-2">
+                                    Pipeline setting overrides
+                                    <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />
+                                </div>
+                                <TemplateOverridesEditor
+                                    value={overrides}
+                                    onChange={setOverrides}
+                                    inheritedAssetScope={pipeline?.systemConfig?.assetScope}
+                                    inheritedArity={pipeline?.systemConfig?.inputFileArity}
+                                    inheritedFilters={pipeline?.systemConfig?.inputFileFilters}
+                                />
+                            </div>
+                        </fieldset>
                     </>
                 )}
 
@@ -491,6 +530,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                         <button
                             onClick={handleSave}
                             disabled={
+                                createRefused ||
                                 !!basicError ||
                                 !!tagsError ||
                                 createTemplate.isPending ||

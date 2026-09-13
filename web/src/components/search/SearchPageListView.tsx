@@ -50,6 +50,7 @@ import {
 } from "./utils/searchRowToFileInfo";
 import { isFileHitSource } from "./utils/recordType";
 import { areFilenamesViewableTogether } from "../../visualizerPlugin/core/viewableExtensions";
+import { describeSegmentMatch, formatRelevancePercent } from "./utils/relevance";
 
 let tagTypes: any;
 
@@ -586,6 +587,38 @@ function columnRender(
                 <div style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{description}</div>
             </Box>
         );
+    } else if (name === "relevance") {
+        // Natural-language hits: `_score` is 1 - cosine distance; the popover names what the
+        // embedding was built from (render, text, ...) and, for a file matched through its segment
+        // vectors, the best window or chunk and how many matched.
+        const modalities: string[] = Array.isArray(e._vector?.sourceModalities)
+            ? e._vector.sourceModalities
+            : [];
+        const segmentMatch = describeSegmentMatch(e._vector);
+        return (
+            <Box>
+                <SpaceBetween direction="horizontal" size="xs">
+                    <span>{formatRelevancePercent(e._score)}</span>
+                    {(modalities.length > 0 || segmentMatch) && (
+                        <Popover
+                            size="small"
+                            position="right"
+                            triggerType="custom"
+                            dismissButton={false}
+                            header="Matched from"
+                            content={
+                                <Box>
+                                    {modalities.length > 0 && <div>{modalities.join(", ")}</div>}
+                                    {segmentMatch && <div>{segmentMatch}</div>}
+                                </Box>
+                            }
+                        >
+                            <Icon name="status-info" variant="link" />
+                        </Popover>
+                    )}
+                </SpaceBetween>
+            </Box>
+        );
     } else if (name.indexOf("str") === 0 || name.indexOf("num_") === 0) {
         return <Box>{value}</Box>;
     }
@@ -618,6 +651,7 @@ const COLUMN_WIDTHS: Record<string, { width: number; minWidth: number }> = {
     str_assetversionid: { width: 180, minWidth: 130 },
     num_filesize: { width: 100, minWidth: 70 },
     num_size: { width: 100, minWidth: 70 },
+    relevance: { width: 130, minWidth: 100 },
     // Client-side thumbnail columns. Each is declared from a separate asset-mode and file-mode
     // branch below, so they resolve here rather than being written out twice.
     preview: { width: 150, minWidth: 100 },
@@ -789,6 +823,16 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     header: isFileMode ? `${Synonyms.Asset} Tags` : "Tags",
                     cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
                     sortingField: name,
+                    isRowHeader: false,
+                    ...columnWidthFor(name),
+                };
+            }
+            if (name === "relevance") {
+                return {
+                    id: name,
+                    header: "Relevance",
+                    cell: (e: any) => columnRender(e, name, e._score, navigate, isFileMode),
+                    sortingField: "_score",
                     isRowHeader: false,
                     ...columnWidthFor(name),
                 };
@@ -1127,6 +1171,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     items={state?.result?.hits?.hits?.map((hit: any) => ({
                         ...hit._source,
                         _id: hit._id,
+                        _score: hit._score,
+                        _vector: hit._vector,
                         explanation: hit.explanation,
                     }))}
                     sortingColumn={

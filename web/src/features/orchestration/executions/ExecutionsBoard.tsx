@@ -649,11 +649,13 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         onChange={(e) => setTriggerFilter(e.target.value)}
                         className={control}
                     >
-                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"), which
-                            is what the server-side triggerType filter compares against. */}
+                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"/
+                            "System-Reindex"), which is what the server-side triggerType filter
+                            compares against. */}
                         <option value="">All triggers</option>
                         <option value="Manual">Manual</option>
                         <option value="File-Upload">File upload</option>
+                        <option value="System-Reindex">System reindex</option>
                     </select>
                     {isGlobalScope && (
                         <select

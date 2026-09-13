@@ -138,3 +138,47 @@ describe("WorkflowSystemConfigFields ordering", () => {
         });
     });
 });
+
+describe("WorkflowSystemConfigFields inside a disabled fieldset", () => {
+    // WorkflowBuilder locks a system workflow by wrapping this component in `<fieldset disabled>`,
+    // which reaches native form controls only. A control rendered as a div with a click handler or
+    // an ARIA-only widget would stay live in the read-only builder, so every control must be native.
+    const NATIVE = "input, select, textarea, button";
+    const ARIA_ONLY = [
+        '[role="checkbox"]',
+        '[role="switch"]',
+        '[role="radio"]',
+        '[role="combobox"]',
+        '[role="listbox"]',
+        '[role="slider"]',
+        '[role="textbox"]',
+        '[contenteditable="true"]',
+    ].join(", ");
+
+    it("has every control disabled by the enclosing fieldset", () => {
+        render(
+            <fieldset disabled>
+                <WorkflowSystemConfigFields {...(baseProps as any)} />
+            </fieldset>
+        );
+        const controls = Array.from(document.querySelectorAll(NATIVE));
+        // The concurrency select is among them, so the WP04 option is locked with the rest.
+        expect(controls).toContain(document.getElementById("concurrencyRestriction"));
+        for (const control of controls) {
+            expect(control).toBeDisabled();
+        }
+        const ariaOnly = Array.from(document.querySelectorAll(ARIA_ONLY)).filter(
+            (el) => !el.matches(NATIVE)
+        );
+        expect(ariaOnly).toEqual([]);
+    });
+
+    it("has every control enabled outside one (control for the assertion above)", () => {
+        render(<WorkflowSystemConfigFields {...(baseProps as any)} />);
+        const controls = Array.from(document.querySelectorAll(NATIVE));
+        expect(controls.length).toBeGreaterThan(0);
+        for (const control of controls) {
+            expect(control).not.toBeDisabled();
+        }
+    });
+});
