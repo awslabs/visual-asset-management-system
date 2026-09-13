@@ -49,13 +49,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
--   **Web** Dependency updates: `maplibre-gl` 5.8 → 6.9 with `react-map-gl` 8.1.3. maplibre 6 ships its web worker as a separate module, so every map consumer imports the worker setup module (a bundled worker registered through `setWorkerUrl()`) before a map mounts; a Jest guard holds that in place.
--   **Web** SuperSplat Editor viewer bumped from v2.27.4 to v3.1.1.
-    -   Note: SuperSplat 3 renders through WebGPU and has no WebGL fallback; a browser without WebGPU reports that WebGPU is required (see Troubleshooting → Common Issues).
--   **Web** Veerum viewer install adds `uuid` 11 to its dependencies.
--   **Pipeline** RapidPipeline EKS Lambda layer: `pyasn1` 0.6.4, `setuptools` 84.0.0.
--   **Docs** Documentation site dependency updates (`css-select` 6, `css-what` 7, `svgo` 4.1, `sax` 1.6.1, `js-yaml` 3.15.2); `NOTICE.md` follows the maplibre and SuperSplat versions.
--   Root `package.json`: removed the duplicated `engines` block a merge had left behind.
+-   **MCP** Aligned the `vams-mcp` package `__version__` (`tools/VamsMCP/vams_mcp/__init__.py`) with the VAMS release version; it had remained at `0.3.0`. Corrected the version-roll file list in the root `CLAUDE.md` to name all seven files that carry the VAMS version.
 
 ### Known Outstanding Issues
 
