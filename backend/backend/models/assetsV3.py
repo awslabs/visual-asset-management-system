@@ -602,6 +602,8 @@ class AssetFileItemModel(BaseModel, extra='ignore'):
     previewFile: Optional[str] = ""  # Path to preview file for this file
     changeSource: Optional[str] = None  # How the current version was created
     changeUserId: Optional[str] = None  # Who created the current version
+    changeWorkflowId: Optional[str] = None  # Source workflow id of the current version (workflowExecution only)
+    changeWorkflowExecutionId: Optional[str] = None  # Source execution id of the current version (workflowExecution only)
 
 class ListAssetFilesRequestModel(BaseModel, extra='ignore'):
     """Query parameters for listing asset files"""
@@ -663,6 +665,8 @@ class FileInfoResponseModel(BaseModel, extra='ignore'):
     previewFile: Optional[str] = ""  # Path to preview file for this file
     changeSource: Optional[str] = None  # How the current version was created
     changeUserId: Optional[str] = None  # Who created the current version
+    changeWorkflowId: Optional[str] = None  # Source workflow id of the current version (workflowExecution only)
+    changeWorkflowExecutionId: Optional[str] = None  # Source execution id of the current version (workflowExecution only)
     versions: Optional[List[FileVersionModel]] = None
 
 class MoveFileRequestModel(BaseModel, extra='ignore'):

@@ -12,6 +12,7 @@
 
 import React from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import InstructionsPanel, { fitsInline } from "./InstructionsPanel";
 
 const SHORT = "Select the source model as the input file.";
@@ -99,5 +100,41 @@ describe("fitsInline", () => {
     it("is inclusive at the limits", () => {
         expect(fitsInline("a\nb\nc", 3, 10)).toBe(true);
         expect(fitsInline("a\nb\nc\nd", 3, 10)).toBe(false);
+    });
+});
+
+/**
+ * On the execute dialog's pipeline step the instructions sit directly under the template picker, so
+ * a hover tooltip there hides the guidance one step away from where it is needed. The inline variant
+ * keeps long text on the surface but folded, and the fold says how much it hides.
+ */
+describe("InstructionsPanel inline", () => {
+    it("renders long text as a collapsed inline section with a Show all control", () => {
+        render(<InstructionsPanel inline text={LONG} title="Instructions for this template" />);
+        const box = screen.getByTestId("instructions-collapsible");
+        expect(box).toHaveTextContent("Instructions for this template");
+        expect(box).toHaveTextContent("(20 lines)");
+        // Folded: the body is not in the DOM until asked for.
+        expect(screen.queryByText(/KEY_0 does a thing/)).not.toBeInTheDocument();
+        expect(screen.queryByTestId("instructions-tooltip-trigger")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("instructions-inline")).not.toBeInTheDocument();
+        const toggle = screen.getByRole("button", { name: "Show all" });
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("expands and collapses in place", async () => {
+        render(<InstructionsPanel inline text={LONG} />);
+        await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+        expect(screen.getByText(/KEY_0 does a thing/)).toBeInTheDocument();
+        const toggle = screen.getByRole("button", { name: "Show less" });
+        expect(toggle).toHaveAttribute("aria-expanded", "true");
+        await userEvent.click(toggle);
+        expect(screen.queryByText(/KEY_0 does a thing/)).not.toBeInTheDocument();
+    });
+
+    it("still renders short text inline without a fold", () => {
+        render(<InstructionsPanel inline text={SHORT} />);
+        expect(screen.getByTestId("instructions-inline")).toBeInTheDocument();
+        expect(screen.queryByTestId("instructions-collapsible")).not.toBeInTheDocument();
     });
 });

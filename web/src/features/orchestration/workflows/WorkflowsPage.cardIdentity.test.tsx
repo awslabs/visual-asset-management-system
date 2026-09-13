@@ -38,7 +38,7 @@ jest.mock("react-router-dom", () => ({
     useNavigate: () => jest.fn(),
 }));
 
-jest.mock("../wizard/ExecuteWizard", () => ({ __esModule: true, default: () => null }));
+jest.mock("../executions/ExecuteWorkflowModal", () => ({ __esModule: true, default: () => null }));
 
 /** The props of every CategoryGroupedList the page rendered, newest last. */
 const listProps: any[] = [];

@@ -142,7 +142,12 @@ CloudWatch log locations — by putting an event on the orchestration event bus 
 `{eventSourcePrefix}.execution.{executionId}.pipeline.{pipelineExecutionId}` with the detail type
 `pipeline.execution.register`. A standing Amazon EventBridge rule routes the event to
 `registerPipelineExecution`, which appends the reported resources to the targeted pipeline row's
-`registeredSubExecutions` and `registeredLogs` lists.
+`registeredSubExecutions` and `registeredLogs` lists. The handler accepts an event only when its `Source`
+ends in `.pipeline.{pipelineExecutionId}` for the `pipelineExecutionId` the detail names, so a pipeline
+can attach resources to its own execution alone. Log entries are deduplicated by location — the log group
+(ARN without a trailing `:*`, or name), stream name, and stream prefix — and a redelivery that carries a
+`stageName`, `label`, or `sourceType` the stored entry lacks merges them in; at most 50 log entries and 50
+sub-executions are stored per row.
 
 Registration is optional and additive — it does not replace the task-token callback a pipeline already
 uses — but it is what makes two capabilities work:
@@ -153,8 +158,26 @@ uses — but it is what makes two capabilities work:
     AWS Batch jobs and AWS Deadline Cloud farm jobs are stopped, and any other type is registered but
     returns a non-fatal warning so the caller knows the sub-process was left running.
 -   **Full-mode log retrieval finds the right log group.** Each `registeredLogs` entry carries
-    `logGroupArn`, `logGroupName`, `logStreamName` and `logStreamPrefix`, so a full-mode log read pulls from
-    the pipeline's own CloudWatch location rather than only the workflow log group.
+    `logGroupArn`, `logGroupName`, `logStreamName`, `logStreamPrefix`, `stageName`, `label`, and
+    `sourceType` (the last three are `""` when the producer did not send them; `sourceType` is one of
+    `stateMachine`, `lambda`, `batch`, `ecs`, `container`, `custom`), so a full-mode log read pulls from the
+    pipeline's own CloudWatch location rather than only the workflow log group. The details route lists every
+    entry — together with the step's derived invocation log and a registered sub-state-machine's logging
+    destination — as `availableLogs`, each with a `logId` (the first 16 hex characters of the SHA-256 of
+    the UTF-8 JSON array `[kind, logGroupArn without a trailing ":*", logStreamName, logStreamPrefix]`,
+    with `""` for an absent stream or prefix — `log_id()` in `common/workflows/availableLogs.py`, the only
+    place the encoding lives), and the logs route reports the same list with a read status as `logSources` and
+    reads one entry alone when given `logId`. An entry with an exact stream is read without
+    the execution-scope terms only when the stream starts with a prefix registered on the same pipeline
+    execution or was itself registered with that stream.
+-   **Stage status is derived, never stored.** `registeredSubExecutions` holds locators only. When a details
+    request carries `includeSubExecutions=true`, `executionService` describes the registered state machine
+    (memoised per invocation), walks its definition into an ordered stage frame, and attributes the execution
+    history's events to those stages to produce `subExecutions[].stages` with a status per stage. The reads
+    are bounded (definition ≤ 256 KiB, ≤ 50 stages, depth ≤ 3, ≤ 5 history pages per sub-execution and 20
+    per request) and best-effort — a Step Functions or AWS Batch error yields `UNKNOWN` plus a
+    `subExecutionWarnings` entry, never a failed request — and the CloudWatch `nextToken` of a logs request is
+    never passed to `get_execution_history`.
 
 ## Adding a read or write path
 

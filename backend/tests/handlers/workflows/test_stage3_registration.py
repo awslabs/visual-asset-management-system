@@ -98,8 +98,9 @@ class TestManifestEnvelopeAndHelpers:
 @pytest.mark.unit
 class TestRegisterPipelineExecution:
     def _event(self, detail):
+        pexec = (detail or {}).get("pipelineExecutionId", "P1") or "P1"
         return {"detail": detail, "detail-type": "pipeline.execution.register",
-                "source": "vams.prod.execution.e1000000000000000000000000000001.pipeline.P1"}
+                "source": f"vams.prod.execution.e1000000000000000000000000000001.pipeline.{pexec}"}
 
     # Valid, partition-correct ARNs so these assertions hold whether validation is stubbed
     # (conftest) or real (full-suite ordering) — the lambda validates ARN formats before storing.
@@ -126,8 +127,11 @@ class TestRegisterPipelineExecution:
         # to a Step Functions execution.
         assert subs == [{"resourceType": "stepFunctionsExecution",
                          "stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}]
+        # Every stored log entry carries the same seven keys; the descriptive ones are "" when the
+        # producer did not report them.
         assert logs == [{"logGroupArn": self._LG_ARN, "logGroupName": "lg",
-                         "logStreamName": "s1", "logStreamPrefix": ""}]
+                         "logStreamName": "s1", "logStreamPrefix": "",
+                         "stageName": "", "label": "", "sourceType": ""}]
 
     def test_append_is_atomic_carrying_only_new_entries(self):
         # An existing list is NOT read into the expression: the update is an atomic
@@ -175,6 +179,40 @@ class TestRegisterPipelineExecution:
             resp = reg.lambda_handler(self._event({"pipelineExecutionId": "P1"}), MagicMock())
         assert resp == {"handled": True}
 
+    def test_a_source_naming_another_pipeline_execution_is_ignored(self):
+        # The standing rule matches on the deployment's source PREFIX only, so this is the check that
+        # keeps one pipeline from attaching a log location to another pipeline's execution.
+        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "e1000000000000000000000000000001",
+               "registeredSubExecutions": [], "registeredLogs": []}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        event = self._event({"pipelineExecutionId": "P1",
+                             "subExecution": {"stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}})
+        event["source"] = "vams.prod.execution.e1000000000000000000000000000001.pipeline.P2"
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(event, MagicMock())
+        table.query.assert_not_called()
+        table.update_item.assert_not_called()
+
+    def test_a_missing_source_is_ignored(self):
+        table = MagicMock(query=MagicMock(return_value={"Items": []}), update_item=MagicMock())
+        event = self._event({"pipelineExecutionId": "P1",
+                             "subExecution": {"stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}})
+        del event["source"]
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(event, MagicMock())
+        table.query.assert_not_called()
+        table.update_item.assert_not_called()
+
+    def test_a_source_ending_in_the_pipeline_execution_id_is_accepted(self):
+        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "e1000000000000000000000000000001",
+               "registeredSubExecutions": [], "registeredLogs": []}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "P1",
+                "subExecution": {"stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}}), MagicMock())
+        table.update_item.assert_called_once()
+
 
 # ============================ registration input validation ============================
 
@@ -197,8 +235,9 @@ class TestRegistrationInputValidation:
     (best-effort: never raises). These run against the REAL validate() dispatcher."""
 
     def _event(self, detail):
+        pexec = (detail or {}).get("pipelineExecutionId", "P1") or "P1"
         return {"detail": detail, "detail-type": "pipeline.execution.register",
-                "source": "vams.prod.execution.e1000000000000000000000000000001.pipeline.P1"}
+                "source": f"vams.prod.execution.e1000000000000000000000000000001.pipeline.{pexec}"}
 
     def test_invalid_arns_are_dropped_valid_kept(self):
         row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001",
@@ -255,6 +294,315 @@ class TestRegistrationInputValidation:
             }), MagicMock())
         table.query.assert_not_called()
         table.update_item.assert_not_called()
+
+    def test_descriptive_log_fields_are_stored_when_valid(self):
+        row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001",
+               "registeredSubExecutions": [], "registeredLogs": []}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "Pvalid123",
+                "subExecution": {
+                    "stateMachineArn": "arn:aws:states:us-east-1:123456789012:stateMachine:sm",
+                    "executionArn": "arn:aws:states:us-east-1:123456789012:execution:sm:e",
+                    "stageName": "Preview3dThumbnailBatchJob", "label": "3D thumbnail processing"},
+                "logs": [{
+                    "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job",
+                    "logGroupName": "/aws/batch/job",
+                    "logStreamPrefix": "vams-thumb-jobdef/default/",
+                    "stageName": "Preview3dThumbnailBatchJob",
+                    "label": "Preview3dThumbnailBatchJob container",
+                    "sourceType": "batch",
+                }],
+            }), MagicMock())
+        kw = table.update_item.call_args.kwargs
+        sub = kw["ExpressionAttributeValues"][":s"][0]
+        assert sub["stageName"] == "Preview3dThumbnailBatchJob"
+        assert sub["label"] == "3D thumbnail processing"
+        log = kw["ExpressionAttributeValues"][":l"][0]
+        assert log["stageName"] == "Preview3dThumbnailBatchJob"
+        assert log["label"] == "Preview3dThumbnailBatchJob container"
+        assert log["sourceType"] == "batch"
+        assert log["logStreamPrefix"] == "vams-thumb-jobdef/default/"
+
+    def test_invalid_descriptive_fields_are_dropped_not_stored(self):
+        row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001",
+               "registeredSubExecutions": [], "registeredLogs": []}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "Pvalid123",
+                "subExecution": {
+                    "executionArn": "arn:aws:states:us-east-1:123456789012:execution:sm:e",
+                    "stageName": "x" * 81, "label": "bad\tlabel"},
+                "logs": [{
+                    "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/g:*",
+                    "stageName": "line\nbreak", "label": "y" * 129,
+                }],
+            }), MagicMock())
+        kw = table.update_item.call_args.kwargs
+        sub = kw["ExpressionAttributeValues"][":s"][0]
+        assert "stageName" not in sub and "label" not in sub
+        log = kw["ExpressionAttributeValues"][":l"][0]
+        assert log["stageName"] == "" and log["label"] == ""
+
+    def test_an_unknown_source_type_is_stored_as_custom(self):
+        row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001",
+               "registeredSubExecutions": [], "registeredLogs": []}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "Pvalid123",
+                "logs": [{"logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/g:*",
+                          "sourceType": "kubernetes"}],
+            }), MagicMock())
+        log = table.update_item.call_args.kwargs["ExpressionAttributeValues"][":l"][0]
+        assert log["sourceType"] == "custom"
+
+    def test_a_sub_execution_carrying_only_a_label_is_still_dropped(self):
+        # stageName/label describe a locator; they are not one.
+        table = MagicMock(query=MagicMock(return_value={"Items": [
+            {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001"}]}),
+            update_item=MagicMock())
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "Pvalid123",
+                "subExecution": {"resourceType": "stepFunctionsExecution", "label": "orphan"},
+            }), MagicMock())
+        table.update_item.assert_not_called()
+
+
+# ============================ location-keyed log dedup ============================
+
+_ARN = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/batch/job"
+
+
+def _log(arn=_ARN, name="/aws/batch/job", stream="", prefix="", stage="", label="", source=""):
+    return {"logGroupArn": arn, "logGroupName": name, "logStreamName": stream, "logStreamPrefix": prefix,
+            "stageName": stage, "label": label, "sourceType": source}
+
+
+@pytest.mark.unit
+class TestLogLocationPlanner:
+    """A log entry is identified by WHERE it is (group, stream, prefix), never by its descriptive
+    fields, so a legacy four-key row entry and a seven-key redelivery of the same place are one."""
+
+    def test_location_key_strips_the_wildcard_suffix_and_falls_back_to_the_name(self):
+        assert reg._location_key(_log(arn=_ARN + ":*", stream="s")) == (_ARN, "s", "")
+        assert reg._location_key(_log(arn=_ARN, prefix="jd/default/")) == (_ARN, "", "jd/default/")
+        assert reg._location_key({"logGroupArn": "", "logGroupName": "/g", "logStreamName": "",
+                                  "logStreamPrefix": ""}) == ("/g", "", "")
+
+    def test_a_new_location_is_appended(self):
+        append, merges = reg._plan_log_writes([_log(prefix="jd/default/", stage="S")], [])
+        assert append == [_log(prefix="jd/default/", stage="S")]
+        assert merges == []
+
+    def test_a_known_location_with_nothing_new_is_neither_appended_nor_merged(self):
+        stored = _log(prefix="jd/default/", stage="S", label="L", source="batch")
+        append, merges = reg._plan_log_writes([dict(stored)], [stored])
+        assert append == [] and merges == []
+
+    def test_a_known_location_fills_only_the_fields_the_stored_entry_lacks(self):
+        legacy = {"logGroupArn": _ARN + ":*", "logGroupName": "/aws/batch/job",
+                  "logStreamName": "", "logStreamPrefix": "jd/default/"}
+        incoming = _log(prefix="jd/default/", stage="S", label="L", source="batch")
+        append, merges = reg._plan_log_writes([incoming], [{"logGroupArn": "x"}, legacy])
+        assert append == []
+        assert merges == [(1, {"stageName": "S", "label": "L", "sourceType": "batch"})]
+
+    def test_a_stored_field_is_never_overwritten(self):
+        stored = _log(prefix="jd/default/", stage="Stored", label="", source="")
+        incoming = _log(prefix="jd/default/", stage="Other", label="L", source="batch")
+        _append, merges = reg._plan_log_writes([incoming], [stored])
+        assert merges == [(0, {"label": "L", "sourceType": "batch"})]
+
+    def test_duplicates_within_one_event_collapse_to_one_append(self):
+        first = _log(stream="s1", stage="S")
+        second = _log(stream="s1", label="L")
+        append, merges = reg._plan_log_writes([first, second], [])
+        assert len(append) == 1
+        assert append[0]["stageName"] == "S" and append[0]["label"] == "L"
+        assert merges == []
+
+    def test_non_dict_stored_entries_are_ignored(self):
+        append, merges = reg._plan_log_writes([_log(stream="s1")], ["junk", None])
+        assert len(append) == 1 and merges == []
+
+
+# ============================ concurrency-safe writes ============================
+
+def _conditional_failure():
+    import botocore
+    return botocore.exceptions.ClientError(
+        {"Error": {"Code": "ConditionalCheckFailedException", "Message": "cond"}}, "UpdateItem")
+
+
+@pytest.mark.unit
+class TestConcurrencySafeRegistration:
+    """Two in-flight events for one location must not both append; the guard is the list length the
+    writer read, and the merge is guarded by the identity of the element it targets. A writer that
+    loses the race twice appends unconditionally, so contention never drops a registration."""
+
+    _SM_ARN = "arn:aws:states:us-east-1:123456789012:stateMachine:sm"
+    _EX_ARN = "arn:aws:states:us-east-1:123456789012:execution:sm:ex"
+    _SRC = "vams.prod.execution.e1000000000000000000000000000001.pipeline.P1"
+
+    def _row(self, subs=None, logs=None):
+        return {"pipelineExecutionId": "P1", "workflowExecutionId": "e1000000000000000000000000000001",
+                "executionStatus": "RUNNING",
+                "registeredSubExecutions": list(subs or []), "registeredLogs": list(logs or [])}
+
+    def test_the_append_is_conditioned_on_the_list_lengths_that_were_read(self):
+        row = self._row(logs=[_log(stream="already")])
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.register({"pipelineExecutionId": "P1",
+                          "subExecution": {"stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN},
+                          "logs": [_log(stream="new")]}, source=self._SRC)
+        kw = table.update_item.call_args.kwargs
+        condition = kw["ConditionExpression"]
+        assert "attribute_not_exists(registeredSubExecutions) OR size(registeredSubExecutions) = :ns" in condition
+        assert "attribute_not_exists(registeredLogs) OR size(registeredLogs) = :nl" in condition
+        assert " AND " in condition
+        assert kw["ExpressionAttributeValues"][":ns"] == 0
+        assert kw["ExpressionAttributeValues"][":nl"] == 1
+        assert kw["ExpressionAttributeValues"][":l"] == [_log(stream="new")]
+        assert "list_append(if_not_exists(registeredLogs, :empty), :l)" in kw["UpdateExpression"]
+
+    def test_a_failed_condition_re_reads_once_and_drops_what_the_re_read_now_holds(self):
+        first_row = self._row()
+        # Between the read and the write another event stored the same location.
+        second_row = self._row(logs=[_log(stream="s1")])
+        table = MagicMock(update_item=MagicMock(side_effect=[_conditional_failure(), None]))
+        table.query.side_effect = [{"Items": [first_row]}, {"Items": [second_row]}]
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.register({"pipelineExecutionId": "P1",
+                          "subExecution": {"stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN},
+                          "logs": [_log(stream="s1")]}, source=self._SRC)
+        assert table.query.call_count == 2
+        assert table.update_item.call_count == 2
+        retry = table.update_item.call_args_list[1].kwargs
+        # The log is now known, so only the sub-execution is appended, against the fresh lengths.
+        assert retry["ExpressionAttributeValues"][":l"] == []
+        assert retry["ExpressionAttributeValues"][":nl"] == 1
+        assert len(retry["ExpressionAttributeValues"][":s"]) == 1
+
+    def test_the_re_read_after_a_lost_race_is_strongly_consistent(self):
+        table = MagicMock(query=MagicMock(return_value={"Items": [self._row()]}),
+                          update_item=MagicMock(side_effect=[_conditional_failure(), None]))
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.register({"pipelineExecutionId": "P1", "logs": [_log(stream="s1")]}, source=self._SRC)
+        first, second = table.query.call_args_list
+        assert "ConsistentRead" not in first.kwargs
+        assert second.kwargs["ConsistentRead"] is True
+
+    def test_a_second_failed_condition_appends_unconditionally_rather_than_dropping(self):
+        # Both conditioned attempts lose. The re-read row already holds one of the two reported
+        # locations, so only the other one and the sub-execution go on — without a condition, so the
+        # abort path still learns of the job.
+        rows = [self._row(), self._row(logs=[_log(stream="held")])]
+        table = MagicMock(query=MagicMock(side_effect=[{"Items": [r]} for r in rows]),
+                          update_item=MagicMock(side_effect=[_conditional_failure(), _conditional_failure(), None]))
+        logger = MagicMock()
+        with patch.object(reg.dynamodb, "Table", return_value=table), patch.object(reg, "logger", logger):
+            reg.register({"pipelineExecutionId": "P1",
+                          "subExecution": {"resourceType": "batchJob", "jobId": "job-1"},
+                          "logs": [_log(stream="held"), _log(stream="s1")]}, source=self._SRC)
+        assert table.update_item.call_count == 3
+        for conditioned in table.update_item.call_args_list[:2]:
+            assert "ConditionExpression" in conditioned.kwargs
+        fallback = table.update_item.call_args_list[2].kwargs
+        assert "ConditionExpression" not in fallback
+        assert "list_append(if_not_exists(registeredSubExecutions, :empty), :s)" in fallback["UpdateExpression"]
+        assert "list_append(if_not_exists(registeredLogs, :empty), :l)" in fallback["UpdateExpression"]
+        assert fallback["ExpressionAttributeValues"] == {
+            ":s": [{"resourceType": "batchJob", "jobId": "job-1"}], ":l": [_log(stream="s1")], ":empty": []}
+        warnings = " ".join(str(c.args[0]) for c in logger.warning.call_args_list)
+        assert "P1" in warnings and "unconditionally" in warnings
+
+    def test_a_non_conditional_client_error_still_propagates_to_the_handler(self):
+        import botocore
+        other = botocore.exceptions.ClientError(
+            {"Error": {"Code": "ProvisionedThroughputExceededException"}}, "UpdateItem")
+        table = MagicMock(query=MagicMock(return_value={"Items": [self._row()]}),
+                          update_item=MagicMock(side_effect=other))
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            with pytest.raises(botocore.exceptions.ClientError):
+                reg.register({"pipelineExecutionId": "P1", "logs": [_log(stream="s1")]}, source=self._SRC)
+
+    def test_a_known_location_is_merged_in_place_under_an_identity_guard(self):
+        legacy = {"logGroupArn": _ARN + ":*", "logGroupName": "/aws/batch/job",
+                  "logStreamName": "", "logStreamPrefix": "jd/default/"}
+        row = self._row(logs=[_log(stream="other"), legacy])
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.register({"pipelineExecutionId": "P1",
+                          "logs": [_log(prefix="jd/default/", stage="Batch", label="Batch container",
+                                        source="batch")]}, source=self._SRC)
+        assert table.update_item.call_count == 1
+        kw = table.update_item.call_args.kwargs
+        update = kw["UpdateExpression"]
+        assert update.startswith("SET ")
+        for field in ("label", "sourceType", "stageName"):
+            assert f"registeredLogs[1].{field} = :m_{field}" in update
+        assert "registeredLogs[0]" not in update
+        guard = kw["ConditionExpression"]
+        for field, placeholder in (("logGroupArn", ":loc_arn"), ("logStreamName", ":loc_stream"),
+                                   ("logStreamPrefix", ":loc_prefix")):
+            assert f"registeredLogs[1].{field} = {placeholder}" in guard
+        assert kw["ExpressionAttributeValues"] == {
+            ":loc_arn": _ARN + ":*", ":loc_stream": "", ":loc_prefix": "jd/default/",
+            ":m_label": "Batch container", ":m_sourceType": "batch", ":m_stageName": "Batch"}
+        assert "list_append" not in kw["UpdateExpression"]
+
+    def test_a_merge_whose_guard_fails_is_skipped_with_a_warning(self):
+        row = self._row(logs=[_log(prefix="jd/default/")])
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}),
+                          update_item=MagicMock(side_effect=_conditional_failure()))
+        logger = MagicMock()
+        with patch.object(reg.dynamodb, "Table", return_value=table), patch.object(reg, "logger", logger):
+            reg.register({"pipelineExecutionId": "P1",
+                          "logs": [_log(prefix="jd/default/", stage="Batch")]}, source=self._SRC)
+        assert table.update_item.call_count == 1
+        assert logger.warning.called
+
+    def test_appends_beyond_the_store_cap_are_skipped_and_warned(self):
+        stored = [_log(stream=f"s{i}") for i in range(reg.MAX_REGISTERED_LOGS_STORED - 1)]
+        row = self._row(logs=stored)
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        logger = MagicMock()
+        with patch.object(reg.dynamodb, "Table", return_value=table), patch.object(reg, "logger", logger):
+            reg.register({"pipelineExecutionId": "P1",
+                          "logs": [_log(stream="new-a"), _log(stream="new-b")]}, source=self._SRC)
+        kw = table.update_item.call_args.kwargs
+        assert [e["logStreamName"] for e in kw["ExpressionAttributeValues"][":l"]] == ["new-a"]
+        assert logger.warning.called
+
+    def test_sub_execution_appends_are_capped_too(self):
+        stored = [{"resourceType": "batchJob", "jobId": f"job-{i}"}
+                  for i in range(reg.MAX_REGISTERED_SUB_EXECUTIONS_STORED)]
+        row = self._row(subs=stored)
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        logger = MagicMock()
+        with patch.object(reg.dynamodb, "Table", return_value=table), patch.object(reg, "logger", logger):
+            reg.register({"pipelineExecutionId": "P1",
+                          "subExecution": {"resourceType": "batchJob", "jobId": "job-new"}}, source=self._SRC)
+        table.update_item.assert_not_called()
+        assert logger.warning.called
+
+    def test_an_ordinary_registration_emits_no_warning(self):
+        # Control for the warning assertions above.
+        table = MagicMock(query=MagicMock(return_value={"Items": [self._row()]}), update_item=MagicMock())
+        logger = MagicMock()
+        with patch.object(reg.dynamodb, "Table", return_value=table), patch.object(reg, "logger", logger):
+            reg.register({"pipelineExecutionId": "P1", "logs": [_log(stream="s1")]}, source=self._SRC)
+        assert not logger.warning.called
+        assert table.update_item.call_count == 1
 
 
 # ============================ abort uses registered sub-execs ============================

@@ -29,6 +29,7 @@ import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as ServiceHelper from "../../../../../../helper/service-helper";
 import { Service } from "../../../../../../helper/service-helper";
+import { jobDefinitionNameFromRef } from "../../../../../../helper/batchJobLogGroup";
 import * as s3AssetBuckets from "../../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../../config/config";
 import {
@@ -695,6 +696,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            { jobDefinitionName: jobDefinitionNameFromRef(batchJobDefinition.ref) },
             props.storageResources.encryption.kmsKey
         );
 

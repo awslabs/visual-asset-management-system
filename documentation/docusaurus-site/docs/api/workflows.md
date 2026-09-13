@@ -1351,7 +1351,7 @@ A permanent delete is authorized like an abort: `GET` on the execution's workflo
 
 ## Get execution details
 
-Returns the full detail and input/output traceability for a single execution, including the underlying pipelines (with status, timing, and each pipeline's resolved configuration), input files, input metadata, input configurations, the execution's output target, and a listing of all outputs (files, metadata, and results). Input metadata arrives in two collections: asset and file metadata under `inputMetadata`, and database metadata under `inputDatabaseMetadata`, which belongs to no asset. Every input-metadata row carries the `pipelineId` of the pipeline that read the entity, and every output file/metadata entry the `pipelineId` of the pipeline that produced it. Pipeline names and descriptions are resolved from the pipeline definitions, and the workflow description from the workflow definition. Large collections are bounded and any partial section is named in `truncatedCollections`.
+Returns the full detail and input/output traceability for a single execution, including the underlying pipelines (with status, timing, and each pipeline's resolved configuration), input files, input metadata, input configurations, the execution's output target, and a listing of all outputs (files, metadata, and results). Input metadata arrives in two collections: asset and file metadata under `inputMetadata`, and database metadata under `inputDatabaseMetadata`, which belongs to no asset. Every input-metadata row carries the `pipelineId` of the pipeline that read the entity, and every output file/metadata entry the `pipelineId` of the pipeline that produced it. Pipeline names and descriptions are resolved from the pipeline definitions, and the workflow description from the workflow definition. Every pipeline entry lists the log sources known for that step in `availableLogs`, and with `includeSubExecutions=true` also its registered sub-processes with per-stage status in `subExecutions`. Large collections are bounded and any partial section is named in `truncatedCollections`.
 
 ```
 GET /workflows/executions/{executionId}/details
@@ -1364,6 +1364,12 @@ The route is keyed on the execution identifier because an execution may span inp
 | Parameter     | Type   | Required | Description          |
 | ------------- | ------ | -------- | -------------------- |
 | `executionId` | string | Yes      | Execution identifier |
+
+### Query parameters
+
+| Parameter              | Type   | Required | Default | Description                                                                                                                                                                                                                                                               |
+| ---------------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `includeSubExecutions` | string | No       | `false` | `true` adds `subExecutions`, `subExecutionsTruncated`, and `subExecutionWarnings` to every pipeline entry — each registered sub-process with its stage status derived from the sub-state-machine definition and execution history. Any other value is rejected with `400` |
 
 ### Response
 
@@ -1419,7 +1425,29 @@ The route is keyed on the execution identifier because an execution may span inp
                     "inputFileArity": "one",
                     "inputFileFilters": { "allow": ["*.fbx"], "exclude": [] }
                 },
-                "templateOverrides": {}
+                "templateOverrides": {},
+                "availableLogs": [
+                    {
+                        "logId": "3f9a0c1d2e4b5a67",
+                        "kind": "invocation",
+                        "label": "vams-open-pipeline",
+                        "sourceType": "lambda",
+                        "stageName": "",
+                        "logGroupName": "/aws/lambda/vams-open-pipeline",
+                        "logStreamName": "",
+                        "logStreamPrefix": ""
+                    },
+                    {
+                        "logId": "9b8c7d6e5f4a3b21",
+                        "kind": "registered",
+                        "label": "Preview3dThumbnailBatchJob container",
+                        "sourceType": "batch",
+                        "stageName": "Preview3dThumbnailBatchJob",
+                        "logGroupName": "/aws/batch/job",
+                        "logStreamName": "",
+                        "logStreamPrefix": "vams-thumbnail-a1b2c3d4e5/default/"
+                    }
+                ]
             }
         ],
         "inputFiles": [
@@ -1534,7 +1562,7 @@ Two settings blocks in the response describe different points in time, so a view
 :::
 
 :::note[Traceability, not internals]
-The response is scoped to input/output traceability. Internal details — Step Functions and resource ARNs, temporary and auxiliary S3 input/output locations, and credential-vending fields — are intentionally omitted. Output file size and content type are included when still available; a lifecycle policy may expire temporary output files, in which case only the relative path and type are returned.
+The response is scoped to input/output traceability. Internal details — Step Functions and resource ARNs, temporary and auxiliary S3 input/output locations, and credential-vending fields — are intentionally omitted. `availableLogs` names log groups and log-stream prefixes, which embed function and job-definition names, but never ARNs. Output file size and content type are included when still available; a lifecycle policy may expire temporary output files, in which case only the relative path and type are returned.
 
 The `outputs` collections list what the execution wrote to its output **asset**. Files a pipeline writes to the **auxiliary** location are not recorded and are absent from the response, including special preview-file locations — they are working and viewer-support files rather than tracked asset outputs.
 
@@ -1573,6 +1601,80 @@ Each row reports two content maps. `metadata` holds the entity's metadata, and `
 Both metadata collections are per pipeline, so their bounds are spent evenly across the run's pipelines rather than in collection order: each pipeline reads its own share of the 2,000-row read budget, and a return trim takes a share from each pipeline instead of a prefix. A trimmed collection therefore still holds rows for every pipeline, rather than the first pipelines' rows and none of the later ones' — which would read as those steps having taken no metadata.
 :::
 
+:::note[Sub-processes and available logs]
+`pipelines[].availableLogs` lists every log source known for a step, each with a stable `logId`, so a client can offer them by name and read one at a time through [Get execution logs](#get-execution-logs) (`logId`). `kind` is `invocation` (the step's own invocation log, derived from its execution type), `registered` (a location the pipeline reported for itself while running), `subStateMachine` (the logging destination of a registered Step Functions sub-execution), or `deadlineCloudJob` (the session logs of a registered AWS Deadline Cloud job: the queue's `/aws/deadline/{farmId}/{queueId}` log group under the `session-` stream prefix, read by the exact streams of the job's sessions); `sourceType` is one of `stateMachine`, `lambda`, `batch`, `ecs`, `container`, `custom`, `deadlineCloud`; `stageName` is the sub-state-machine state the source belongs to, when the pipeline registered one (empty for a Deadline Cloud job).
+
+With `includeSubExecutions=true`, each entry also carries `subExecutions` — one per registered sub-process — and the flags `subExecutionsTruncated` and `subExecutionWarnings`:
+
+```json
+{
+    "subExecutions": [
+        {
+            "resourceType": "stepFunctionsExecution",
+            "label": "3D thumbnail processing",
+            "stageName": "",
+            "resourceName": "Preview3dThumbnailStateMachine",
+            "status": "FAILED",
+            "startDate": "2026-09-11T10:00:00Z",
+            "stopDate": "2026-09-11T10:02:10Z",
+            "error": "States.TaskFailed",
+            "cause": "",
+            "stageSource": "definition",
+            "stagesTruncated": false,
+            "historyTruncated": false,
+            "stages": [
+                {
+                    "stageName": "ConstructPipelineTask",
+                    "stateType": "Task",
+                    "status": "SUCCEEDED",
+                    "startDate": "2026-09-11T10:00:00Z",
+                    "stopDate": "2026-09-11T10:00:04Z",
+                    "error": "",
+                    "cause": "",
+                    "attempts": 1
+                },
+                {
+                    "stageName": "Preview3dThumbnailBatchJob",
+                    "stateType": "Task",
+                    "status": "FAILED",
+                    "caught": true,
+                    "startDate": "2026-09-11T10:00:04Z",
+                    "stopDate": "2026-09-11T10:02:05Z",
+                    "error": "States.TaskFailed",
+                    "cause": "Essential container in task exited",
+                    "attempts": 1,
+                    "batch": {
+                        "jobId": "1a2b3c4d-…",
+                        "logStreamName": "vams-thumbnail-a1b2c3d4e5/default/7e8f…"
+                    }
+                },
+                {
+                    "stageName": "PipelineEndTask",
+                    "stateType": "Task",
+                    "status": "SUCCEEDED",
+                    "startDate": "2026-09-11T10:02:05Z",
+                    "stopDate": "2026-09-11T10:02:09Z",
+                    "error": "",
+                    "cause": "",
+                    "attempts": 1
+                }
+            ]
+        }
+    ],
+    "subExecutionsTruncated": false,
+    "subExecutionWarnings": []
+}
+```
+
+Nothing about stages is stored. The stage frame is derived when the request is served: the sub-state-machine's definition gives the ordered list of states (`stageSource: "definition"`), and its execution history gives each stage's status, timing, retries (`attempts`), and error. When the definition cannot be read the first-entered order seen in the history is used (`"history"`), and when neither is readable the sub-process is reported with its summary only (`"none"`). A stage's `status` is `RUNNING`, `SUCCEEDED`, `FAILED`, `ABORTED`, `TIMED_OUT`, `NOT_STARTED` (never entered), or `UNKNOWN`; `caught: true` marks a failure the sub-process handled and continued past, which is how a failed container job usually appears — the Batch task fails, the state machine catches it and runs its end-state reporting, and the sub-execution finishes `FAILED`. A Map state reports `iterations` (\{`started`, `succeeded`, `failed`, `aborted`\}) or `distributed: true` when its children are separate executions. A Batch task whose stream could be resolved (through `batch:DescribeJobs` on the job id it submitted) carries `batch` (\{`jobId`, `logStreamName`\}), which is the exact container stream the logs route reads.
+
+A registered AWS Deadline Cloud job (`resourceType: "deadlineCloudJob"`) has no state machine and is reported with its summary only (`stageSource: "none"`), resolved live from the farm: `resourceName` is the job's name, `status` is the job's task-run status folded onto the same vocabulary — `RUNNING` while the job is pending, scheduled, running, suspended, or being interrupted; `SUCCEEDED`; `FAILED` for a failed or not-compatible job and for a job whose creation, update, or upload failed; `ABORTED` for a cancelled job; otherwise `UNKNOWN` — `startDate` and `stopDate` are the job's start and end, `cause` is its lifecycle status message, and `deadline` (\{`farmId`, `queueId`, `jobId`\}) names the job by id alone. The job's parameters are never returned.
+
+Every read behind this flag is best-effort and bounded: a sub-state-machine definition above 256 KiB is not parsed, at most 50 stages are reported to a depth of 3, and at most 5 history pages per sub-process (20 per request, terminal sub-processes first) are read — `stagesTruncated` and `historyTruncated` say when a bound was hit, and a Step Functions, Batch, or Deadline Cloud error yields `status: "UNKNOWN"` plus an entry in `subExecutionWarnings` rather than a failed request (a Deadline Cloud job in a partition without the service is reported the same way, with the warning `Deadline Cloud client unavailable`). All dates are ISO-8601 UTC strings. The flag is off by default because the derivation reads each sub-process's history; a client polling a running execution should request it only where it renders stages.
+
+Under the response byte ceiling, `stages` are dropped from every sub-execution (the summaries stay) and `truncatedCollections` names `pipelines.subExecutions`, before any inline configuration body is shortened.
+:::
+
 :::note[Truncated configuration bodies]
 A pipeline entry's `renderedConfig` is the configuration body after the execution's own template-tag values were substituted, and before the system tags were. Template substitution runs in two stages: the values a caller supplies for a template's `tagSchema` are filled in when the execution is validated, while the system tags — `{{assetMetadataObject}}`, `{{jobName}}`, the output paths, and the rest of the reserved set — resolve per step at launch, once the step's manifest and execution context exist. `renderedConfig` therefore still shows the system tags as literal `{{tag}}` placeholders, which is expected rather than a sign that substitution failed.
 
@@ -1605,12 +1707,12 @@ The `pipelines` array and `inputConfigurations` are charged against the response
 
 ### Error responses
 
-| Status | Description                                                                                                                            |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`                                                                                                       |
-| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
-| `404`  | Execution not found                                                                                                                    |
-| `500`  | Internal server error                                                                                                                  |
+| Status | Description                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, or an `includeSubExecutions` value other than `true` / `false` (`includeSubExecutions must be 'true' or 'false'`) |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database)              |
+| `404`  | Execution not found                                                                                                                                 |
+| `500`  | Internal server error                                                                                                                               |
 
 ---
 
@@ -1713,15 +1815,17 @@ GET /workflows/executions/{executionId}/logs
 
 ### Query parameters
 
-| Parameter             | Type   | Required | Default     | Description                                                                                                                                      |
-| --------------------- | ------ | -------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mode`                | string | No       | `truncated` | `truncated` returns the stored log text, falling back to a live search when it is empty; `full` always runs a live Amazon CloudWatch Logs search |
-| `pipelineExecutionId` | string | No       | —           | Narrow the logs to a single pipeline execution of this execution                                                                                 |
-| `filterPattern`       | string | No       | —           | (`full` mode) Additional CloudWatch Logs filter pattern, AND-ed with the execution/pipeline scope                                                |
-| `startTime`           | number | No       | —           | (`full` mode) Start of the time range, epoch milliseconds                                                                                        |
-| `endTime`             | number | No       | —           | (`full` mode) End of the time range, epoch milliseconds                                                                                          |
-| `limit`               | number | No       | `100`       | (`full` mode) Maximum number of events to return                                                                                                 |
-| `nextToken`           | string | No       | —           | (`full` mode) Pagination token from a previous response                                                                                          |
+| Parameter             | Type   | Required | Default     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------- | ------ | -------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                | string | No       | `truncated` | `truncated` returns the stored log text, falling back to a live search when it is empty; `full` always runs a live Amazon CloudWatch Logs search                                                                                                                                                                                                                                                                                                      |
+| `pipelineExecutionId` | string | No       | —           | Narrow the logs to a single pipeline execution of this execution                                                                                                                                                                                                                                                                                                                                                                                      |
+| `filterPattern`       | string | No       | —           | (`full` mode) Additional CloudWatch Logs filter pattern, AND-ed with the execution/pipeline scope                                                                                                                                                                                                                                                                                                                                                     |
+| `startTime`           | number | No       | —           | (`full` mode) Start of the time range, epoch milliseconds                                                                                                                                                                                                                                                                                                                                                                                             |
+| `endTime`             | number | No       | —           | (`full` mode) End of the time range, epoch milliseconds                                                                                                                                                                                                                                                                                                                                                                                               |
+| `limit`               | number | No       | `100`       | (`full` mode) Maximum number of events to return                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `nextToken`           | string | No       | —           | (`full` mode) Pagination token from a previous response                                                                                                                                                                                                                                                                                                                                                                                               |
+| `logId`               | string | No       | —           | (`full` mode, with `pipelineExecutionId`) Read one log source by the `logId` the details route lists in `availableLogs`; `events`, `nextToken`, and — when the source is the log group a registered sub-state-machine writes to (kind `subStateMachine`, or `registered` when the pipeline reported that group itself) — `sfnHistoryEvents` then describe that source alone. `400` without full mode and a pipeline scope; `404` for an unknown value |
+| `stageName`           | string | No       | —           | (`full` mode, with `pipelineExecutionId`) Keep only the sources registered for this sub-state-machine stage and the sub-execution history between that state's entry and exit. `400` without full mode and a pipeline scope                                                                                                                                                                                                                           |
 
 ### Response (truncated mode)
 
@@ -1758,13 +1862,58 @@ When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipelin
 {
     "message": {
         "mode": "full",
-        "pipelineExecutionId": "",
+        "pipelineExecutionId": "b7c1d2e3f405162738495a6b7c8d9e0f",
         "events": [{ "timestamp": 1718496000000, "message": "..." }],
-        "sfnHistoryEvents": [
-            { "timestamp": 1718496000000, "message": "TaskStateEntered: Convert" }
+        "logSources": [
+            {
+                "logId": "3f9a0c1d2e4b5a67",
+                "kind": "invocation",
+                "label": "vams-open-pipeline",
+                "sourceType": "lambda",
+                "stageName": "",
+                "logGroupName": "/aws/lambda/vams-open-pipeline",
+                "logStreamName": "",
+                "logStreamPrefix": "",
+                "status": "read",
+                "eventCount": 41
+            },
+            {
+                "logId": "9b8c7d6e5f4a3b21",
+                "kind": "registered",
+                "label": "Preview3dThumbnailBatchJob container",
+                "sourceType": "batch",
+                "stageName": "Preview3dThumbnailBatchJob",
+                "logGroupName": "/aws/batch/job",
+                "logStreamName": "",
+                "logStreamPrefix": "vams-thumbnail-a1b2c3d4e5/default/",
+                "status": "read",
+                "eventCount": 212
+            },
+            {
+                "logId": "c4d5e6f7a8b90123",
+                "kind": "registered",
+                "label": "3D thumbnail state machine",
+                "sourceType": "stateMachine",
+                "stageName": "",
+                "logGroupName": "/aws/vendedlogs/states/vams-preview3dthumbnail",
+                "logStreamName": "",
+                "logStreamPrefix": "",
+                "status": "read",
+                "eventCount": 9
+            }
         ],
         "subProcessEvents": [
-            { "timestamp": 1718496000000, "message": "...", "logGroupArn": "..." }
+            {
+                "timestamp": 1718496000000,
+                "message": "...",
+                "logGroupName": "/aws/lambda/vams-vamsExecutePreview3dThumbnail",
+                "logId": "3f9a0c1d2e4b5a67"
+            },
+            {
+                "timestamp": 1718496000000,
+                "message": "TaskStateEntered: Preview3dThumbnailBatchJob",
+                "logId": "c4d5e6f7a8b90123"
+            }
         ],
         "warnings": [],
         "nextToken": null
@@ -1772,22 +1921,41 @@ When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipelin
 }
 ```
 
-For the whole execution (no `pipelineExecutionId`), a full-mode response also includes `sfnHistoryEvents` — the Step Functions execution history rendered as a state-transition timeline. When `pipelineExecutionId` is supplied, `subProcessEvents` carries three kinds of log, merged and sorted together:
+For the whole execution (no `pipelineExecutionId`), a full-mode response also includes `sfnHistoryEvents` — the Step Functions execution history rendered as a state-transition timeline. When `pipelineExecutionId` is supplied, `subProcessEvents` carries four kinds of log, merged and sorted by timestamp, and each event names its source by `logId` — a CloudWatch event carries the `logId` of the source it was read from, and a registered sub-state-machine's history line carries the `logId` of the log group that machine writes to (an empty string when it has no logging destination):
 
-| Source                    | What it is                                                                                                                                                                                                                                    |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Step invocation log       | The log of the resource the workflow's state machine invoked for this step — for a `Lambda` step, that function's own CloudWatch log group. Derived from the step's recorded execution type and resource, so a pipeline does not register it. |
-| Registered logs           | Any log location the pipeline reported for itself while running (`registeredLogs`).                                                                                                                                                           |
-| Registered sub-executions | For a step that runs its own Step Functions sub-execution: that sub-execution's history, plus the resolved log group of its state machine.                                                                                                    |
+| Source                         | What it is                                                                                                                                                                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Step invocation log            | The log of the resource the workflow's state machine invoked for this step — for a `Lambda` step, that function's own CloudWatch log group. Derived from the step's recorded execution type and resource, so a pipeline does not register it. |
+| Registered logs                | Any log location the pipeline reported for itself while running (`registeredLogs`).                                                                                                                                                           |
+| Registered sub-executions      | For a step that runs its own Step Functions sub-execution: that sub-execution's history, plus the resolved log group of its state machine.                                                                                                    |
+| Registered Deadline Cloud jobs | For a step that registered an AWS Deadline Cloud job: the CloudWatch log streams of the job's sessions, in the queue's `/aws/deadline/{farmId}/{queueId}` log group.                                                                          |
 
-The step invocation log is what holds the reason a launch failed before the pipeline's own logging started. Only execution types with a log group that can be derived have one:
+The step invocation log is what holds the reason a launch failed before the pipeline's own logging started. It is read scoped to the execution id alone: the invoked resource logs the invoke body, which carries the workflow execution id but not the pipeline execution id that scopes every other shared read. Only execution types with a log group that can be derived have one:
 
-| Execution type  | Step invocation log                                                                             |
-| --------------- | ----------------------------------------------------------------------------------------------- |
-| `Lambda`        | Yes — the invoked function's log group                                                          |
-| `SQS`           | No — a queue has no invocation log; the consumer's log is a separate resource VAMS does not own |
-| `EventBridge`   | No — a bus does not log deliveries by default                                                   |
-| `DeadlineCloud` | No — session logs are reachable through the job rather than a derivable CloudWatch group        |
+| Execution type  | Step invocation log                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------------- |
+| `Lambda`        | Yes — the invoked function's log group                                                                        |
+| `SQS`           | No — a queue has no invocation log; the consumer's log is a separate resource VAMS does not own               |
+| `EventBridge`   | No — a bus does not log deliveries by default                                                                 |
+| `DeadlineCloud` | No — a registered job's session logs are a `deadlineCloudJob` source instead, read through the job's sessions |
+
+A step-scoped full-mode response also carries `logSources`: every log source known for the step — the same entries [Get execution details](#get-execution-details) lists in `availableLogs` — each with what the read of it produced:
+
+| `status`   | Meaning                                                                                                                                                                                                                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`     | The source was read; `eventCount` is the number of events it contributed to this page (`0` with a `nextToken` still means read — the page was empty, not the log)                                                             |
+| `denied`   | The log group exists but the service role may not read it                                                                                                                                                                     |
+| `notFound` | The log group or stream does not exist (yet)                                                                                                                                                                                  |
+| `error`    | The read failed for a reason other than a missing log group or a denied permission — throttling, an invalid CloudWatch token, or a registered location that could not be parsed; the entry in `warnings` names the cause      |
+| `empty`    | The read returned no events and no continuation token                                                                                                                                                                         |
+| `skipped`  | Beyond the per-request cap on registered logs (20); the source is listed so it can be read alone with `logId`                                                                                                                 |
+| `unscoped` | A container log-stream prefix searched with the execution-scope terms because no exact stream could be resolved. Container output does not carry the execution id, so an empty `unscoped` source means unresolved, not silent |
+
+A registered log entry with an exact `logStreamName` is read without the execution-scope terms only when the stream starts with a `logStreamPrefix` registered on the same pipeline execution, or was itself registered with that exact stream; a `batch` entry with only a prefix uses the exact stream resolved for its stage — `batch:DescribeJobs` on the job id the sub-state-machine history recorded at submission (a machine that keeps the SubmitJob result, or fails with its DescribeJobs object as the cause, yields the stream from the history directly; the built-in machines do not), or the stream of a registered Batch job — and otherwise the prefix with the scope terms (`unscoped`). A job Batch no longer lists (its retention is about seven days) leaves the source `unscoped` silently; a failed `DescribeJobs` call also leaves it `unscoped` and is named in that pipeline's `subExecutionWarnings` on [Get execution details](#get-execution-details) with `includeSubExecutions=true`. A `deadlineCloudJob` entry is read by exact stream as well: the job's sessions are listed (`deadline:ListSessions`), the 10 most recent by start time are taken, and their session ids — each the name of one stream in the queue's log group — are read directly, without the execution-scope terms, since the streams are the job's own. A job with no session yet is `notFound` and costs no CloudWatch read, a refused session listing or log read is `denied`, and any other failure is `error`; the entry is never `unscoped`. Every other entry keeps the execution-scoped search.
+
+Each `logSources` entry reports the location as registered, so a prefix-only `batch` entry keeps an empty `logStreamName` even when its read used a resolved stream; the exact stream a stage was read from is the stage's `batch.logStreamName` in the details response.
+
+`logId` reads one source: `events` holds that source's events, `nextToken` is that source's CloudWatch token, and when the source is the log group a registered sub-state-machine writes to (kind `subStateMachine`, or `registered` when the pipeline reported that group itself — every built-in pipeline does) the response also carries that sub-execution's `sfnHistoryEvents` (first page — the CloudWatch token is never handed to Step Functions). Without `logId`, a step-scoped response never carries `sfnHistoryEvents`: the sub-state-machine's history lines are merged into `subProcessEvents`, as in the example above. `stageName` restricts `logSources` to the entries registered for that sub-state-machine stage, and the sub-execution history to the events between that state's entry and exit. Both apply only in full mode with `pipelineExecutionId`.
 
 `warnings` is present only when a log could not be read — a missing permission on one group, or a registration list longer than the per-request cap. Each entry names the log in question. A warning never fails the request: the logs that could be read are still returned.
 
@@ -1801,12 +1969,12 @@ A full-mode CloudWatch search is always restricted to the requested execution wi
 
 ### Error responses
 
-| Status | Description                                                                                                                            |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`, an invalid `mode`, or a non-integer `limit`, `startTime`, or `endTime`                               |
-| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
-| `404`  | Execution (or specified pipeline execution) not found                                                                                  |
-| `500`  | Internal server error                                                                                                                  |
+| Status | Description                                                                                                                                                                                                     |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, an invalid `mode`, a non-integer `limit`, `startTime`, or `endTime`, or `logId` / `stageName` outside full mode or without `pipelineExecutionId` (the message names the rule) |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database)                                                                          |
+| `404`  | Execution (or specified pipeline execution) not found, or `logId` names no log source of that pipeline execution (`Log source not found for this pipeline execution`)                                           |
+| `500`  | Internal server error                                                                                                                                                                                           |
 
 ---
 

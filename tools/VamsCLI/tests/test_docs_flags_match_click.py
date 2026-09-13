@@ -165,7 +165,7 @@ def check_option_tables(text):
             continue
 
         cells = line.strip().strip("|").split("|")
-        if len(cells) < 3:
+        if len(cells) < 2:
             continue
 
         for flag in _TABLE_FLAG.findall(cells[0]):

@@ -1104,8 +1104,10 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
         }
         
         # Add primaryType and current-version change provenance from S3 metadata
-        # (only for non-folder objects). changeSource/changeUserId come straight from
-        # the live object metadata already fetched here — no extra DynamoDB read.
+        # (only for non-folder objects). changeSource/changeUserId and the workflow
+        # ids come straight from the live object metadata already fetched here — no
+        # extra DynamoDB read. The workflow ids are stamped only by workflow output
+        # writes and are blank on every other change source.
         if not result['isFolder']:
             metadata = response.get('Metadata', {})
             primary_type = metadata.get(VAMS_PRIMARY_TYPE_METADATA_KEY, '')
@@ -1114,10 +1116,16 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
             result['changeSource'] = change_source if change_source else None
             change_user_id = metadata.get(VAMS_CHANGE_USER_ID_METADATA_KEY, '')
             result['changeUserId'] = change_user_id if change_user_id else None
+            change_workflow_id = metadata.get(VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY, '')
+            result['changeWorkflowId'] = change_workflow_id if change_workflow_id else None
+            change_execution_id = metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY, '')
+            result['changeWorkflowExecutionId'] = change_execution_id if change_execution_id else None
         else:
             result['primaryType'] = None
             result['changeSource'] = None
             result['changeUserId'] = None
+            result['changeWorkflowId'] = None
+            result['changeWorkflowExecutionId'] = None
         
         # Include version history if requested
         if include_versions:
@@ -1360,6 +1368,10 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                         item['changeSource'] = ct if ct else None
                         cu = metadata.get(VAMS_CHANGE_USER_ID_METADATA_KEY)
                         item['changeUserId'] = cu if cu else None
+                        cw = metadata.get(VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY)
+                        item['changeWorkflowId'] = cw if cw else None
+                        ce = metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY)
+                        item['changeWorkflowExecutionId'] = ce if ce else None
                     else:
                         item['primaryType'] = None
                 except Exception as e:

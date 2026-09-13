@@ -6,6 +6,8 @@ import {
     useState,
     useRef,
     useCallback,
+    lazy,
+    Suspense,
 } from "react";
 import { useParams } from "react-router";
 import { Alert } from "@cloudscape-design/components";
@@ -25,6 +27,14 @@ import {
 import { addFiles, getRootByPath } from "./utils/FileManagerUtils";
 import { fileManagerReducer } from "./utils/FileManagerReducer";
 import "./EnhancedFileManager.css";
+
+// The execution quick view belongs to the orchestration module (Tailwind + Radix). It is
+// lazy-loaded so this Cloudscape bundle does not pull that module in until a provenance link is
+// followed; its drawer portals to document.body under `.orchestration-root`, which keeps the
+// module's styles scoped and paints it above the Cloudscape layout (see components/zLayers.ts).
+const ExecutionQuickView = lazy(
+    () => import("../../features/orchestration/executions/ExecutionQuickView")
+);
 
 // Main Component
 export function EnhancedFileManager({
@@ -81,43 +91,41 @@ export function EnhancedFileManager({
     // Track if we're currently loading to prevent duplicate loads
     const loadingRef = useRef(false);
     const hasInitializedRef = useRef(false);
-    // Track if we've already navigated to the filePathToNavigate
-    const hasNavigatedRef = useRef(false);
+    // The deep-link path that was last selected. Keyed on the path rather than a one-shot flag so a
+    // new `?filePath=` on an already loaded listing selects its target as well.
+    const navigatedPathRef = useRef<string | null>(null);
 
     // Update the tree name when assetName prop changes
     useEffect(() => {
         if (assetName && assetName !== state.fileTree.name) {
             console.log("📝 Updating tree name from", state.fileTree.name, "to", assetName);
-            dispatch({
-                type: "MERGE_FILES",
-                payload: {
-                    files: [],
-                    loadingPhase: state.loadingPhase,
-                    loadingProgress: state.loadingProgress,
-                    paginationTokens: state.paginationTokens,
-                },
-            });
-            // Update the tree with the new name
-            const updatedTree = {
-                ...state.fileTree,
-                name: assetName,
-                displayName: assetName,
-            };
-            dispatch({ type: "FETCH_SUCCESS", payload: updatedTree });
+            // Rename only: the name arrives from its own fetch, often after the listing is already
+            // interactive, and a FETCH_SUCCESS here would clear the selection under the user.
+            dispatch({ type: "SET_TREE_NAME", payload: assetName });
         }
     }, [assetName]);
 
     // Handle filePathToNavigate after basic data loading is complete
     useEffect(() => {
+        if (!filePathToNavigate) return;
+        // The parent writes `?filePath=` back from our own selection callback, so a path that is
+        // already selected — or any path while a multi-selection is active — counts as navigated
+        // without re-dispatching SELECT_ITEM, which would collapse the user's selection.
+        if (state.multiSelectMode || state.selectedItem?.relativePath === filePathToNavigate) {
+            navigatedPathRef.current = filePathToNavigate;
+            return;
+        }
         // Only proceed if:
-        // 1. We have a filePathToNavigate prop
-        // 2. We haven't already navigated to it
-        // 3. Basic loading is complete (basic-complete or complete phase)
-        // 4. We're not in legacy mode (assetFiles is empty)
+        // 1. This path has not been navigated to yet
+        // 2. The basic listing has landed (the tree holds every file from basic-complete on; the
+        //    detailed phase only enriches it, and on a large asset it streams for many seconds, so
+        //    waiting for `complete` would leave a deep link pointing at the previous selection)
+        // 3. We're not in legacy mode (assetFiles is empty)
         if (
-            filePathToNavigate &&
-            !hasNavigatedRef.current &&
-            (state.loadingPhase === "basic-complete" || state.loadingPhase === "complete") &&
+            navigatedPathRef.current !== filePathToNavigate &&
+            (state.loadingPhase === "basic-complete" ||
+                state.loadingPhase === "detailed-loading" ||
+                state.loadingPhase === "complete") &&
             (!assetFiles || assetFiles.length === 0)
         ) {
             console.log("🎯 Attempting to navigate to:", filePathToNavigate);
@@ -132,7 +140,7 @@ export function EnhancedFileManager({
                 // Then select the file
                 dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });
                 // Mark as navigated
-                hasNavigatedRef.current = true;
+                navigatedPathRef.current = filePathToNavigate;
             } else {
                 console.log("❌ Target file not found:", filePathToNavigate);
                 // File not found - show non-blocking error
@@ -149,10 +157,17 @@ export function EnhancedFileManager({
                 // Still select root so user can browse
                 dispatch({ type: "SELECT_ITEM", payload: { item: state.fileTree } });
                 // Mark as navigated to prevent retrying
-                hasNavigatedRef.current = true;
+                navigatedPathRef.current = filePathToNavigate;
             }
         }
-    }, [filePathToNavigate, state.loadingPhase, state.fileTree, assetFiles]);
+    }, [
+        filePathToNavigate,
+        state.loadingPhase,
+        state.fileTree,
+        state.selectedItem,
+        state.multiSelectMode,
+        assetFiles,
+    ]);
 
     // Auto-select the root (top) asset node once loading completes when no
     // filePathToNavigate deep-link is supplied. The filePathToNavigate effect
@@ -187,27 +202,6 @@ export function EnhancedFileManager({
     useEffect(() => {
         hasAutoSelectedRootRef.current = false;
     }, [assetId, assetVersionId]);
-
-    // Reset navigation flag when filePathToNavigate changes. Skip the
-    // reset when the new path matches what's already selected — this
-    // happens when the parent (ViewAsset) writes `?filePath=` in
-    // response to OUR `onSelectedPathChange` callback, which causes the
-    // memoized prop to cycle. Without this guard we'd redundantly
-    // re-dispatch SELECT_ITEM for the item that's already selected.
-    // An active multi-selection also counts as "already navigated" — the
-    // param cycling to empty during multi-select must not re-dispatch a
-    // single SELECT_ITEM that would collapse the user's selection.
-    useEffect(() => {
-        if (
-            filePathToNavigate &&
-            (state.multiSelectMode || state.selectedItem?.relativePath === filePathToNavigate)
-        ) {
-            // Treat as already-navigated so the navigation effect skips.
-            hasNavigatedRef.current = true;
-            return;
-        }
-        hasNavigatedRef.current = false;
-    }, [filePathToNavigate, state.selectedItem, state.multiSelectMode]);
 
     // Notify the parent whenever the active selection path changes so the
     // asset detail page can keep the URL `?filePath=` query param in sync.
@@ -246,7 +240,7 @@ export function EnhancedFileManager({
             // Reset all tracking flags
             hasInitializedRef.current = false;
             loadingRef.current = false;
-            hasNavigatedRef.current = false;
+            navigatedPathRef.current = null;
 
             // Trigger refresh to reload data for new asset
             dispatch({ type: "REFRESH_FILES", payload: null });
@@ -523,8 +517,15 @@ export function EnhancedFileManager({
     // State for the preview modal
     const [showPreviewModal, setShowPreviewModal] = useState(false);
 
+    // The workflow execution whose quick view is open, opened from a file's provenance link.
+    const [quickViewExecutionId, setQuickViewExecutionId] = useState<string | null>(null);
+    const onViewExecution = useCallback(
+        (executionId: string) => setQuickViewExecutionId(executionId),
+        []
+    );
+
     return (
-        <FileManagerContext.Provider value={{ state, dispatch }}>
+        <FileManagerContext.Provider value={{ state, dispatch, onViewExecution }}>
             {/* Non-blocking error alert */}
             {state.error && (
                 <Alert
@@ -559,6 +560,18 @@ export function EnhancedFileManager({
                 }
                 assetName={assetName}
             />
+
+            {/* Execution quick view — mounted only once a provenance link is followed, so the
+                orchestration chunk is never fetched otherwise. */}
+            {quickViewExecutionId && (
+                <Suspense fallback={null}>
+                    <ExecutionQuickView
+                        open={!!quickViewExecutionId}
+                        onClose={() => setQuickViewExecutionId(null)}
+                        executionId={quickViewExecutionId}
+                    />
+                </Suspense>
+            )}
         </FileManagerContext.Provider>
     );
 }

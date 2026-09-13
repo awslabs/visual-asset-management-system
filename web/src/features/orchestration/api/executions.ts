@@ -39,10 +39,20 @@ export async function listExecutionsForAsset(
     });
 }
 
+/**
+ * The execution's details. `includeSubExecutions: "true"` asks for each step's registered
+ * sub-processes with their stage statuses; without it the read is the cheaper default.
+ */
 export async function getExecutionDetails(
-    executionId: string
+    executionId: string,
+    params?: Record<string, string>
 ): Promise<[boolean, ExecutionDetail | string]> {
-    return toTuple(() => apiClient.get(`workflows/executions/${executionId}/details`));
+    return toTuple(() => {
+        const path = `workflows/executions/${executionId}/details`;
+        return params
+            ? apiClient.get(path, { queryStringParameters: params })
+            : apiClient.get(path);
+    });
 }
 
 /** The metadata collections the paged detail-metadata route serves, in its own vocabulary. */

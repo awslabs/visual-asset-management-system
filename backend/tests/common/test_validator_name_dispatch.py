@@ -105,6 +105,9 @@ LEGITIMATE_VALUES = {
     'CLOUDWATCH_LOG_GROUP_NAME': '/aws/vendedlogs/my-group',
     'LOG_STREAM_NAME': 'stream/1',
     'S3_BUCKET_NAME': 'my-vams-bucket',
+    'SFN_STATE_NAME': 'Job Complete?',
+    'DISPLAY_LABEL': 'Preview 3D thumbnail state machine',
+    'LOG_SOURCE_TYPE': 'batch',
 }
 
 

@@ -26,6 +26,7 @@ import {
 import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
@@ -91,6 +92,12 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     return fun;
 }
 
+/** The Batch job definition and the metadata-generation function whose logs openPipeline registers per stage. */
+export interface OpenPipelineStageLogProps {
+    jobDefinitionName: string;
+    metadataGenerationFunctionName: string;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -102,9 +109,13 @@ export function buildOpenPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    stageLogs: OpenPipelineStageLogProps,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
+    // Named rather than read off the function: `fn.logGroup` synthesizes a Custom::LogRetention.
+    const metadataGenerationLogGroupName =
+        "/aws/lambda/" + stageLogs.metadataGenerationFunctionName;
     const vpcSubnets = vpc.selectSubnets({
         subnets: subnets,
     });
@@ -135,6 +146,14 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // Batch default container log group + the Blender job definition name, registered as
+            // the Batch state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...batchJobLogGroupEnvironment(),
+            BATCH_JOB_DEFINITION_NAME: stageLogs.jobDefinitionName,
+            // The metadata-generation function's own log group, registered as that state's log source.
+            METADATA_GENERATION_LOG_GROUP_NAME: metadataGenerationLogGroupName,
+            METADATA_GENERATION_LOG_GROUP_ARN: ServiceHelper.IAMArn(metadataGenerationLogGroupName)
+                .loggroup,
         },
     });
 
