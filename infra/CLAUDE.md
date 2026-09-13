@@ -80,9 +80,10 @@ infra/
         pipelineBuilder-nestedStack.ts     # Pipeline orchestrator
         constructs/                        # batch-fargate-pipeline, batch-gpu-pipeline,
                                            # securitygroup-gateway-pipeline, vamsSchemaRegistration
-        conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
+        conversion/{3dBasic,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/{cosmos,gr00t}}/
+        3dRecon/splatToolbox/  genAi/nvidia/{cosmos,gr00t}/
+        system/genAiMetadata/               # SYSTEM GenAI metadata pipeline (ids in infra/common/systemPipelines.ts)
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -170,7 +171,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, useConversion3dBasic, useConversionCoordinateTransform, usePreviewPcPotreeViewer, usePreview3dThumbnail, useSplatToolbox, useSystemGenAiMetadata (enabled, bedrockAnalysisModelId, useFargateRenderer, lambdaLimits, bedrockGuardrail), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t
 -   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase)

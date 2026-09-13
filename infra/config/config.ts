@@ -474,19 +474,6 @@ export function getConfig(app: cdk.App): Config {
             );
         }
     }
-    //Disabled placeholders under the rejected keys, read by the pipeline and VPC builders those keys
-    //still gate.
-    configPublic.app.pipelines.useGenAiMetadata3dLabeling = {
-        enabled: false,
-        bedrockModelId: "",
-        autoRegisterWithVAMS: false,
-        autoRegisterAutoTriggerOnFileUpload: false,
-    };
-    configPublic.app.pipelines.useConversionCadMeshMetadataExtraction = {
-        enabled: false,
-        autoRegisterWithVAMS: false,
-        autoRegisterAutoTriggerOnFileUpload: false,
-    };
     const config: Config = <Config>configPublic;
 
     //Debugging Variables
@@ -3497,11 +3484,6 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
             };
-            useConversionCadMeshMetadataExtraction: {
-                enabled: boolean;
-                autoRegisterWithVAMS: boolean;
-                autoRegisterAutoTriggerOnFileUpload: boolean;
-            };
             useConversionCoordinateTransform: {
                 enabled: boolean;
                 useCodeBuild: boolean;
@@ -3517,12 +3499,6 @@ export interface ConfigPublic {
                 enabled: boolean;
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
-            };
-            useGenAiMetadata3dLabeling: {
-                enabled: boolean;
-                bedrockModelId: string;
-                autoRegisterWithVAMS: boolean;
-                autoRegisterAutoTriggerOnFileUpload: boolean;
             };
             useRapidPipeline: {
                 useEcs: {

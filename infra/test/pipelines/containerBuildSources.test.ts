@@ -22,9 +22,10 @@
  *      shared libraries the open3d wheel links against. Those libraries are absent from the slim base
  *      image, and their absence surfaces as `ImportError: libGL.so.1` at task start — after the pipeline
  *      has been dispatched, so the execution fails rather than the build.
- *   3. The other three Fargate images (both pcPotreeViewer images and 3dThumbnail) must likewise declare
- *      a non-root `USER`, in the stage that actually runs, along with the writable HOME and scratch
- *      directory that user needs. The Dockerfile half of this is inert on its own: the shared Batch
+ *   3. The other three Fargate images (both pcPotreeViewer images and 3dThumbnail) and the three Lambda
+ *      images of the system GenAI metadata pipeline (the 3dThumbnail Dockerfile.lambda, Blender, media)
+ *      must likewise declare a non-root `USER`, in the stage that actually runs, along with the writable
+ *      HOME and, where the image creates one, the scratch directory that user needs. The Dockerfile half of this is inert on its own: the shared Batch
  *      construct used to set `user: "root"` on every Fargate container definition, which REPLACES the
  *      image's USER, so `fargateBatchContainerUser.test.ts` pins the absence of that override.
  *
@@ -271,6 +272,34 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
         file: path.join(PIPELINES_DIR, "preview", "3dThumbnail", "container", "Dockerfile"),
         scratchDir: "/app/tmp",
     },
+    // The three Lambda images of the system GenAI metadata pipeline. Each writes only under /tmp, which
+    // the Lambda runtime provides, so none names a scratch directory here.
+    {
+        label: "3dThumbnail Lambda image",
+        file: path.join(PIPELINES_DIR, "preview", "3dThumbnail", "container", "Dockerfile.lambda"),
+    },
+    {
+        label: "system genAiMetadata blender",
+        file: path.join(
+            PIPELINES_DIR,
+            "system",
+            "genAiMetadata",
+            "containers",
+            "blender",
+            "Dockerfile"
+        ),
+    },
+    {
+        label: "system genAiMetadata media",
+        file: path.join(
+            PIPELINES_DIR,
+            "system",
+            "genAiMetadata",
+            "containers",
+            "media",
+            "Dockerfile"
+        ),
+    },
 ];
 
 /**
@@ -297,7 +326,7 @@ describe("base images are not pulled from a floating tag", () => {
 
     it("examines every Dockerfile it names", () => {
         // Control: a typo'd path would otherwise make the rule below pass over an empty set.
-        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(4);
+        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(7);
         for (const f of ALL_DOCKERFILES) expect(fs.existsSync(f)).toBe(true);
     });
 
