@@ -47,6 +47,7 @@ backend/
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
+│   │       ├── executionLocks.py                   #   perInputFileVersion lock rows (conditional put/delete, TTL, row-derived release)
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
