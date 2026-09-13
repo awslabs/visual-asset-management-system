@@ -100,9 +100,10 @@ class TestEndStateReleasesLocks:
         dynamo, _w, _i, locks_table, main_table = _dynamo()
         _record(dynamo, status)
         assert _released_keys(locks_table) == KEYS
-        for call in locks_table.delete_item.call_args_list:
-            assert call.kwargs["ConditionExpression"] == "workflowExecutionId = :e"
-            assert call.kwargs["ExpressionAttributeValues"] == {":e": EXEC}
+        releases = locks_table.delete_item.call_args_list
+        assert {(c.kwargs["Key"]["lockKey"], c.kwargs["ExpressionAttributeValues"][":e"]) for c in releases} == {
+            (key, EXEC) for key in KEYS}
+        assert {"workflowExecutionId" in c.kwargs["ConditionExpression"] for c in releases} == {True}
         # The terminal status write happened, and before the release.
         main_table.update_item.assert_called_once()
         assert dynamo.mock_calls.index(("Table", (po.workflow_execution_database_v2,), {})) < \

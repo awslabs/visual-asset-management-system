@@ -209,7 +209,7 @@ class TestAssetWriteBackPath:
         text rather than fetching the object a second time."""
         _kw, reads = _run_asset_path(_staged(FAILED_STATUS))
         assert reads.count((RUN_BUCKET, STATUS_KEY)) == 1
-        assert all(bucket == RUN_BUCKET for bucket, _key in reads)
+        assert {bucket for bucket, _key in reads} == {RUN_BUCKET}
 
     def test_a_status_file_beyond_the_results_recording_cap_is_still_read(self):
         """The collector stops at MAX_RECORDED_OUTPUT_RESULT_ROWS rows, so a status object listed after
@@ -279,4 +279,4 @@ class TestResultsOnlyPath:
     def test_the_status_file_is_read_once_from_the_run_bucket(self):
         _kw, reads = _run_results_only(_staged(FAILED_STATUS))
         assert reads.count((RUN_BUCKET, STATUS_KEY)) == 1
-        assert all(bucket == RUN_BUCKET for bucket, _key in reads)
+        assert {bucket for bucket, _key in reads} == {RUN_BUCKET}
