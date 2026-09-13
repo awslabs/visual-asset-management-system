@@ -363,10 +363,11 @@ export async function chooseViewer(page: Page, name: RegExp): Promise<void> {
  * `mouse.down()/up()` on the option's box likewise does nothing.
  *
  * The keyboard route works because the control implements the ARIA listbox pattern: opening it moves
- * focus to the listbox and highlights the FIRST option. So move by INDEX — read the option texts, count
- * ArrowDown presses, then Enter. Watching `aria-activedescendant` instead is unreliable, because
- * `document.querySelector("[aria-activedescendant]")` can land on another widget entirely (the file
- * tree carries one) and read an empty value while the listbox is perfectly healthy.
+ * focus to the listbox and highlights an option — the currently SELECTED one when the control has a
+ * value, the first one otherwise. So move by INDEX — read the option texts, find where the highlight
+ * starts, count ArrowDown presses from there, then Enter. Watching `aria-activedescendant` instead is
+ * unreliable, because `document.querySelector("[aria-activedescendant]")` can land on another widget
+ * entirely (the file tree carries one) and read an empty value while the listbox is perfectly healthy.
  *
  * Callers should confirm the selection took, in whatever terms their page expresses it — this helper
  * can only verify that an option matching `option` existed to be chosen.
@@ -400,15 +401,30 @@ export async function chooseSelectOption(
     // the tree and read an empty value while the listbox is perfectly healthy. That produced an empty
     // "highlights walked" list and a false "no viewer option matching" failure.
     //
-    // Opening the control highlights option 0, so pressing ArrowDown exactly `index` times lands on the
-    // wanted option. The option texts give the index directly, and this needs no attribute at all.
+    // The walk starts from wherever the highlight lands on open, which is NOT always option 0: a Select
+    // that already has a value opens with the highlight on that value (Cloudscape's `use-select`), and
+    // ArrowDown wraps from the last option back to the first. Assuming 0 sent the compare differ's
+    // context-lines picker (default "3 lines", index 2) four presses toward "10 lines" — 3, 4, 0, 1 —
+    // and selected "1 line". So find the starting index first and walk the modular distance.
+    //
+    // The selected option is read from `aria-selected`, which Cloudscape sets from the same controlled
+    // `selectedOption` it uses to place the highlight. The trigger's text is NOT a substitute: it can
+    // be a placeholder, "1 line" is a prefix of "10 lines", and the highlighted option's textContent
+    // carries a duplicate screen-reader announcement of its own label, so text equality fails for the
+    // very option that matters. When nothing is marked selected the highlight is on option 0.
+    const options = page.locator('[role="option"]');
     const index = texts.findIndex((t) => option.test(t));
     expect(
         index,
         `no option matching ${option} in ${describeTrigger}; offered: ` +
             texts.map((t) => t.slice(0, 34)).join(" | ")
     ).toBeGreaterThanOrEqual(0);
-    for (let i = 0; i < index; i++) {
+    const selected = await options.evaluateAll((nodes) =>
+        nodes.findIndex((n) => n.getAttribute("aria-selected") === "true")
+    );
+    const start = selected >= 0 ? selected : 0;
+    const presses = (index - start + texts.length) % texts.length;
+    for (let i = 0; i < presses; i++) {
         await page.keyboard.press("ArrowDown");
         await page.waitForTimeout(200);
     }
