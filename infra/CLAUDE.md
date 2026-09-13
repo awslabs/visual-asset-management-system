@@ -55,7 +55,7 @@ infra/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # 64 SSM String parameters, one per registry descriptor
+        resourceNamesBuilder-nestedStack.ts  # 66 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
@@ -117,7 +117,7 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
-  |     +-- ResourceNamesBuilder (publishes 64 SSM parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM parameters)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
@@ -137,7 +137,7 @@ CoreVAMSStack (root)
 
 ### Cross-Stack Shared Interfaces
 
-**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 46 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). There is no `sqs` member: the two Amazon SQS queues the builder creates buffer S3 object-created/deleted notifications for the indexers and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
+**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 48 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`; `vectorEmbeddingsStorageTable` carries its vector index and the index's filter-attribute definitions only when `app.vectorSearch.enabled`, and `workflowExecutionLocksStorageTable` is the one table with a TTL attribute, `expiresAt`). There is no `sqs` member: the two Amazon SQS queues the builder creates buffer S3 object-created/deleted notifications for the indexers and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
 
 **`authResources`** (`authBuilder-nestedStack.ts`): `roles.unAuthenticatedRole`; `cognito.{userPool, webClientUserPool, userPoolId, identityPoolId, webClientId}`.
 
@@ -282,7 +282,7 @@ The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is t
 **A fourth ceiling governs the storage stack: 200 Outputs per template, not adjustable.**
 `StorageResourcesBuilder` emits 133 of them where the next highest stack emits 32 — every table a
 sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a
-`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 64 as its own
+`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 66 as its own
 Parameters. Exceeding 200 is rejected at ValidateTemplate, the same class of failure that forced the
 API stack split, so roughly 30 more cross-stack-referenced storage resources would hit it.
 `test/api/apiStackCeilings.test.ts` fails above 170, which leaves headroom to design a split rather than
@@ -569,7 +569,7 @@ These axes are independent. **Retained + auto-named** resources (asset, auxiliar
 
 **The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 
-**SSM String parameters** (64 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
+**SSM String parameters** (66 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables, the 6 pipeline/workflow V2 data-model tables, and the vector embeddings and workflow execution locks tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 

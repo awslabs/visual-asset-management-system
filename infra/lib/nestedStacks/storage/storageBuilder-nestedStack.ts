@@ -14,7 +14,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cdk from "aws-cdk-lib";
-import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, NestedStack, Validations } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
@@ -42,6 +42,47 @@ import {
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
+
+/** Attribute that holds the embedding vector (a list of numbers) on a vector embeddings item. */
+const VECTOR_ATTRIBUTE_NAME = "embedding";
+
+/**
+ * Equality-filter attributes of the vector index; every item writes all seven as strings. The
+ * SearchSchema is fixed for the life of an index, so every attribute a search may filter on is
+ * declared here (segmentKind is "none" on a whole-file item, "videoTime" or "textChunk" on a segment).
+ */
+const VECTOR_INDEX_FILTER_ATTRIBUTES = [
+    "databaseId",
+    "isLatest",
+    "isArchived",
+    "fileClass",
+    "fileExt",
+    "embeddingModelId",
+    "segmentKind",
+] as const;
+
+/** Non-key attributes projected into the vector index, so a search hit needs no base-table read. */
+const VECTOR_INDEX_PROJECTED_ATTRIBUTES = [
+    "databaseId",
+    "assetId",
+    "filePath",
+    "versionId",
+    "isLatest",
+    "isArchived",
+    "fileClass",
+    "fileExt",
+    "embeddingModelId",
+    "fileSize",
+    "contentType",
+    "indexedAt",
+    "sourceModalities",
+    "previewFileKey",
+    "segmentKey",
+    "segmentKind",
+    "segmentLabel",
+    "segmentStartMs",
+    "segmentEndMs",
+] as const;
 
 export interface storageResources {
     encryption: {
@@ -126,6 +167,9 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
+        // Vector search + workflow coordination tables
+        vectorEmbeddingsStorageTable: dynamodb.Table;
+        workflowExecutionLocksStorageTable: dynamodb.Table;
     };
 }
 
@@ -2087,6 +2131,82 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Vector Embeddings — one item per (file, S3 version) embedding plus one per segment (video time
+    // window or text chunk) of a version, written only by the vector indexer in the search stack. PK
+    // is the composite databaseId:assetId; SK is the fileVersionKey (hash-bounded file path + "#" +
+    // S3 VersionId, "null" on unversioned buckets, + "#" + segment key on a segment item), so one
+    // Query covers an asset, begins_with covers a file's items across versions, and a longer
+    // begins_with covers one version's segments. No streams, TTL, or GSIs.
+    const vectorEmbeddingsStorageTable = new dynamodb.Table(scope, "VectorEmbeddingsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "fileVersionKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // The vector index and its filter attributes exist only while vector search is enabled. The L2
+    // Table has no typed VectorIndexes property, so the index is a raw property override on the
+    // CfnTable, and AttributeDefinitions is overridden in full because CreateTable rejects a
+    // SearchSchema attribute that is declared without an index using it. The SearchSchema cannot be
+    // changed after the index is created; a new filter attribute means a new index name. Both
+    // overrides should become the typed property once aws-cdk-lib ships one.
+    if (config.app.vectorSearch.enabled) {
+        const cfnVectorTable = vectorEmbeddingsStorageTable.node.defaultChild as dynamodb.CfnTable;
+        cfnVectorTable.addPropertyOverride("AttributeDefinitions", [
+            { AttributeName: "databaseId:assetId", AttributeType: "S" },
+            { AttributeName: "fileVersionKey", AttributeType: "S" },
+            ...VECTOR_INDEX_FILTER_ATTRIBUTES.map((name) => ({
+                AttributeName: name,
+                AttributeType: "S",
+            })),
+        ]);
+        cfnVectorTable.addPropertyOverride("VectorIndexes", [
+            {
+                IndexName: config.vectorIndexName,
+                VectorAttribute: { AttributeName: VECTOR_ATTRIBUTE_NAME },
+                Dimensions: config.app.vectorSearch.embeddingDimensions,
+                DistanceFunction: "COSINE",
+                Projection: {
+                    ProjectionType: "INCLUDE",
+                    NonKeyAttributes: [...VECTOR_INDEX_PROJECTED_ATTRIBUTES],
+                },
+                SearchSchema: VECTOR_INDEX_FILTER_ATTRIBUTES.map((name) => ({
+                    AttributeName: name,
+                    SearchSchemaElementType: "INLINE_FILTER",
+                })),
+            },
+        ]);
+        // CloudFormation creates, updates, and drift-checks VectorIndexes, but the published resource
+        // schema and the bundled CloudFormation-Validate rules do not list the property, so the
+        // validator's schema warning is acknowledged here.
+        Validations.of(cfnVectorTable).acknowledge({
+            id: "CloudFormation-Validate::F3002",
+            reason: "AWS::DynamoDB::Table.VectorIndexes is accepted by CloudFormation but absent from the published resource schema; the VAMS vector embeddings table needs the index and the L2 Table has no typed property for it.",
+        });
+    }
+
+    // Workflow Execution Locks — one row per lock a running execution holds under the
+    // perInputFileVersion concurrency restriction. PK lockKey; attributes workflowExecutionId,
+    // acquiredAt, expiresAt. expiresAt is the TTL attribute (epoch seconds), so a lock whose release
+    // path never ran expires on its own. No GSIs, no stream.
+    const workflowExecutionLocksStorageTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionLocksStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "lockKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+
     ///DEPRECATED TABLES - KEPT FOR DATA MIGRATION PURPOSES
 
     const assetLinksStorageTableDeprecated = new dynamodb.Table(scope, "AssetLinksStorageTable", {
@@ -2193,6 +2313,9 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
+            // Vector search + workflow coordination tables
+            vectorEmbeddingsStorageTable: vectorEmbeddingsStorageTable,
+            workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
         },
     };
 
@@ -2756,6 +2879,11 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        // Vector search + workflow coordination tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.vectorEmbeddingsStorage]:
+            storageResources.dynamo.vectorEmbeddingsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
+            storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

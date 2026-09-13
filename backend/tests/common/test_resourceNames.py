@@ -17,6 +17,8 @@ ALL_OVERRIDE_ENV_VARS = [
     "AUTH_ENTITIES_TABLE", "TAG_STORAGE_TABLE_NAME", "TAGS_STORAGE_TABLE_NAME",
     "S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME",
     "S3_ASSETAUXILIARY_STORAGE_BUCKET", "AUDIT_LOG_AUTHENTICATION",
+    "VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME",
+    "WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",
 ]
 
 
@@ -319,3 +321,58 @@ class TestConstantsCompleteness:
         # Pinned rather than derived: no handler resolves them (see MIRRORED_LEGACY_KEYS), so
         # removing them is a deliberate registry + mirror + ssm_resource_lookup.py change.
         assert MIRRORED_LEGACY_KEYS <= {k.param_key for k in _mirror_keys(rn)}
+
+
+@pytest.mark.unit
+class TestVectorEmbeddingsStorageKey:
+    """ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE: the SSM suffix the storage stack registers
+    and the single env override the break-glass path honours."""
+
+    def test_names_its_ssm_suffix_and_override(self, rn):
+        key = rn.ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE
+        assert key.param_key == "dynamoTables/vectorEmbeddingsStorage"
+        assert key.env_var_names == ("VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME",)
+
+    def test_env_override_wins(self, rn, monkeypatch):
+        monkeypatch.setenv("VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME", "vectors-override")
+        assert rn.get_table_name(rn.ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE) == "vectors-override"
+
+    @mock_aws
+    def test_resolves_from_ssm_without_an_override(self, rn):
+        ssm = boto3.client("ssm", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+        _put(ssm, "dynamoTables/vectorEmbeddingsStorage", "ssm-vectors")
+        assert rn.get_table_name(rn.ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE) == "ssm-vectors"
+
+
+@pytest.mark.unit
+class TestWorkflowExecutionLocksStorageKey:
+    """ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE: the lock table the perInputFileVersion
+    restriction writes; resolved like every other table."""
+
+    def test_names_its_ssm_suffix_and_override(self, rn):
+        key = rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE
+        assert key.param_key == "dynamoTables/workflowExecutionLocksStorage"
+        assert key.env_var_names == ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",)
+
+    def test_env_override_wins(self, rn, monkeypatch):
+        monkeypatch.setenv("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME", "locks-override")
+        assert rn.get_table_name(rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE) == "locks-override"
+
+    @mock_aws
+    def test_resolves_from_ssm_without_an_override(self, rn):
+        ssm = boto3.client("ssm", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+        _put(ssm, "dynamoTables/workflowExecutionLocksStorage", "ssm-locks")
+        assert rn.get_table_name(rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE) == "ssm-locks"
+
+
+@pytest.mark.unit
+class TestToolingOnlyLambdaKeys:
+    def test_vector_reindexer_key_is_published_but_not_mirrored(self, rn):
+        # lambdaFunctions/* names are published by the search stack for the data-migration tooling
+        # (SsmResourceLookup); no handler resolves them, so ResourceKeys must not carry the key.
+        canonical = _canonical_param_keys()
+        assert "lambdaFunctions/vectorReindexer" in canonical
+        assert "lambdaFunctions/crOsReindexer" in canonical
+        mirrored = {k.param_key for k in _mirror_keys(rn)}
+        assert "lambdaFunctions/vectorReindexer" not in mirrored
+        assert "lambdaFunctions/crOsReindexer" not in mirrored

@@ -54,7 +54,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 64 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -113,7 +113,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 46 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -163,6 +163,9 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
+        // Vector search + workflow coordination tables
+        vectorEmbeddingsStorageTable: dynamodb.Table; // PK databaseId:assetId, SK fileVersionKey (+ "#" + segment key on a segment item); vector index vec-<model slug>-<dims> on `embedding` with seven INLINE_FILTER attributes (fixed at index creation), only when app.vectorSearch.enabled
+        workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL attribute expiresAt
     };
 }
 ```
