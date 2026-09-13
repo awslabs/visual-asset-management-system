@@ -13,20 +13,20 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | OBJ         | `.obj`    | Trimesh                                     |
 | GLB         | `.glb`    | Trimesh                                     |
 | GLTF        | `.gltf`   | Trimesh (with external dependency download) |
-| FBX         | `.fbx`    | Trimesh                                     |
+| FBX         | `.fbx`    | Trimesh, with Open3D as the fallback loader |
 | DRC (Draco) | `.drc`    | Trimesh                                     |
 
 ### Point Cloud Formats
 
-| Format | Extension | Library        |
-| ------ | --------- | -------------- |
-| LAS    | `.las`    | laspy          |
-| LAZ    | `.laz`    | laspy + laszip |
-| E57    | `.e57`    | pye57          |
-| PTX    | `.ptx`    | Open3D         |
-| PCD    | `.pcd`    | Open3D         |
-| FLS    | `.fls`    | Open3D         |
-| FWS    | `.fws`    | Open3D         |
+| Format | Extension | Library                                                      |
+| ------ | --------- | ------------------------------------------------------------ |
+| LAS    | `.las`    | laspy                                                        |
+| LAZ    | `.laz`    | laspy + lazrs                                                |
+| E57    | `.e57`    | pye57                                                        |
+| PTX    | `.ptx`    | Built-in text reader                                         |
+| PCD    | `.pcd`    | Built-in reader (`ascii`, `binary`, `binary_compressed`)     |
+| FLS    | `.fls`    | No open reader; the run fails and names the conversion route |
+| FWS    | `.fws`    | No open reader; the run fails and names the conversion route |
 
 ### CAD Formats
 
@@ -185,10 +185,14 @@ The container image is built during CDK deployment from `backendPipelines/previe
 -   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
 -   **laspy** -- LAS/LAZ point cloud reading (BSD license)
 -   **pye57** -- E57 point cloud reading (MIT license)
--   **Open3D** -- Additional point cloud formats: PTX, PCD, FLS, FWS (MIT license)
+-   **Open3D** -- FBX loading when Trimesh cannot read the file (MIT license)
 -   **CadQuery** -- STEP/STP CAD file support (LGPL license)
 -   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
 -   **Xvfb** -- Virtual framebuffer for headless rendering
+
+### Lambda image
+
+The same `preview_pipeline` package is also built as an AWS Lambda container image from `Dockerfile.lambda` in the same directory. That image is the 3D render branch of the SYSTEM - GenAI Metadata Generation pipeline: it loads a file with the format handlers above, extracts `sys_*` attributes, and renders still frames for the analysis model. It differs from the Fargate image in three ways. Every dependency is pinned to an exact version in `requirements.lambda.txt`, and Open3D is not installed because that pipeline routes FBX files to its Blender image. Xvfb is started by the handler into `/tmp` rather than by the image entrypoint. All working directories live under `/tmp`, the only writable path in AWS Lambda. The 3D Preview Thumbnail pipeline itself does not use this image.
 
 ## How It Works
 
