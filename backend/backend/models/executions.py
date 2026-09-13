@@ -17,7 +17,7 @@ from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="ExecutionModels")
 
-TRIGGER_TYPES = ("Manual", "File-Upload")
+TRIGGER_TYPES = ("Manual", "File-Upload", "System-Reindex")
 
 
 class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
@@ -299,10 +299,17 @@ class WorkflowExecutionConfigurationRecord(
 #######################
 
 # Trigger types on the execute request. The storage layer records the canonical stored values
-# "Manual"/"File-Upload" (TRIGGER_TYPES above); the request accepts the lowercase forms and the
-# handler maps them (TRIGGER_TYPE_TO_STORED).
-EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload")
-TRIGGER_TYPE_TO_STORED = {"manual": "Manual", "fileUpload": "File-Upload"}
+# "Manual"/"File-Upload"/"System-Reindex" (TRIGGER_TYPES above); the request accepts the lowercase forms
+# and the handler maps them (TRIGGER_TYPE_TO_STORED). "fileUpload" is set by the upload trigger
+# dispatcher and "systemReindex" by the vector-search reindex launcher; both invoke the execute handler
+# directly as SYSTEM_USER. The workflow trigger KIND set (models.workflows.TRIGGER_TYPES) is a separate
+# vocabulary: a reindex launch is not a workflow trigger.
+EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload", "systemReindex")
+TRIGGER_TYPE_TO_STORED = {
+    "manual": "Manual",
+    "fileUpload": "File-Upload",
+    "systemReindex": "System-Reindex",
+}
 
 # Upper bound on the input-file selection per execute request. Bounds the per-request S3 existence
 # checks + metadata-service fan-out; matches the asset-upload request's MAX_FILES_PER_UPLOAD_REQUEST.

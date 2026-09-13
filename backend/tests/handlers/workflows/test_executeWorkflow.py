@@ -1590,6 +1590,18 @@ class TestPerPipelineFilteredManifest:
         assert manifest_puts, "pipeline 1 manifest was not written"
         return json.loads(manifest_puts[0].kwargs["Body"].decode("utf-8"))
 
+    def test_manifest_entries_carry_the_assets_bucket_id(self):
+        # Each entry names its asset bucket twice: by NAME (`bucket`, what the pipeline reads S3 with)
+        # and by registration id (`bucketId`, what a consumer resolving the bucket row needs). The id
+        # is the asset row's -- the same value the bucket-name lookup was keyed on.
+        wf, pipe = self._multi_input_workflow()
+        body = {"inputFiles": [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/g.glb"}]}
+        manifest = self._launch_and_read_manifest(wf, pipe, body)
+        assert [f["bucketId"] for f in manifest["inputFiles"]] == [_ASSET["bucketId"]] * 2
+        assert {f["bucket"] for f in manifest["inputFiles"]} == {"asset-bucket"}
+
     def test_manifest_excludes_files_the_pipeline_filters_reject(self):
         # Workflow allows multiple files with no filters; the pipeline allows only *.glb. The manifest
         # must carry the .glb only — the pipeline never sees the .txt the workflow selected.

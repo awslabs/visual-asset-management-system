@@ -4408,8 +4408,8 @@ paths:
                                     description: "Optional group id for bulk grouping / abort-by-group. Must be a valid identifier: it becomes a query key on the executions list and the abort-by-group route."
                                 triggerType:
                                     type: string
-                                    enum: [manual, fileUpload]
-                                    description: "Trigger type (default manual; set by trigger dispatch otherwise)."
+                                    enum: [manual, fileUpload, systemReindex]
+                                    description: "Trigger type in its request form (default manual). fileUpload is set by the upload trigger dispatcher and systemReindex by the vector-search reindex launcher; the execution row stores the canonical forms Manual, File-Upload and System-Reindex, which the list endpoints filter on."
             responses:
                 "200":
                     description: Workflow execution started.
@@ -4591,6 +4591,7 @@ paths:
                     type: string
               - in: query
                 name: triggerType
+                description: "Filter by the stored trigger type: Manual, File-Upload, or System-Reindex."
                 required: false
                 schema:
                     type: string
@@ -7906,6 +7907,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     type: string
               - in: query
                 name: triggerType
+                description: "Filter by the stored trigger type: Manual, File-Upload, or System-Reindex."
                 required: false
                 schema:
                     type: string
@@ -9728,6 +9730,7 @@ components:
                     description: "Empty while the execution is still running."
                 triggerType:
                     type: string
+                    description: "Stored trigger type: Manual (execute endpoint), File-Upload (upload trigger), or System-Reindex (vector-search reindex launcher)."
                 triggeredByUserId:
                     type: string
                 executionGroupId:
