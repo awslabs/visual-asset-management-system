@@ -82,6 +82,16 @@ const KNOWN_NON_FORM_PATHS: ReadonlySet<string> = new Set([
     "app.assetBuckets.externalAssetBuckets.bucketAccountId",
     "app.assetBuckets.externalAssetBuckets.bucketRegion",
     "app.assetBuckets.externalAssetBuckets.bucketKmsKeyArn",
+    // Rejected by getConfig() when present in config.json (the pipelines they configured are replaced by
+    // app.pipelines.useSystemGenAiMetadata), so the builder neither renders nor ships them. The interface
+    // members are removed together with the pipeline stacks that still read them.
+    "app.pipelines.useGenAiMetadata3dLabeling.enabled",
+    "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId",
+    "app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS",
+    "app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload",
+    "app.pipelines.useConversionCadMeshMetadataExtraction.enabled",
+    "app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS",
+    "app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload",
 ]);
 
 function readJson(filePath: string): Record<string, unknown> {

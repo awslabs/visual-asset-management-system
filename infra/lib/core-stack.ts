@@ -284,6 +284,12 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.NOOPENSEARCH);
             }
 
+            //Natural-language file search. The web and CLI gate the NLP search surfaces on this switch,
+            //independently of NOOPENSEARCH: a deployment may publish both, either, or neither.
+            if (props.config.app.vectorSearch.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.VECTORSEARCH);
+            }
+
             ///Optional Pipelines (Nested Stack)
             const pipelineBuilderNestedStack = new PipelineBuilderNestedStack(
                 this,

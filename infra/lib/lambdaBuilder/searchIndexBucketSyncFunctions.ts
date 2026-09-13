@@ -28,6 +28,7 @@ import {
     suppressCdkNagDynamoStreamListWildcard,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
+import { searchLambdasInVpc } from "../helper/searchPlacement";
 
 // The single orchestration-bus event sqsBucketSync publishes (publish_to_orchestration_bus in
 // backend/backend/handlers/indexing/sqsBucketSync.py): Source is the deployment's event-source prefix
@@ -45,6 +46,7 @@ export function buildSearchFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "search";
+    const inVpc = searchLambdasInVpc(config);
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.search.${name}.lambda_handler`,
@@ -52,20 +54,8 @@ export function buildSearchFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? vpc
-                : undefined, //Use VPC for provisioned OS, a private (non-public) serverless collection, or the use-for-all-lambdas flag
-        vpcSubnets:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? { subnets: subnets }
-                : undefined,
+        vpc: inVpc ? vpc : undefined, //Provisioned OpenSearch, a private Serverless collection, or useForAllLambdas
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
 
         environment: {
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
@@ -109,6 +99,7 @@ export function buildFileIndexingFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "fileIndexer";
+    const inVpc = searchLambdasInVpc(config);
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.indexing.fileIndexer.lambda_handler`,
@@ -116,20 +107,8 @@ export function buildFileIndexingFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? vpc
-                : undefined,
-        vpcSubnets:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? { subnets: subnets }
-                : undefined,
+        vpc: inVpc ? vpc : undefined, //Provisioned OpenSearch, a private Serverless collection, or useForAllLambdas
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
 
         environment: {
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
@@ -176,6 +155,7 @@ export function buildAssetIndexingFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "assetIndexer";
+    const inVpc = searchLambdasInVpc(config);
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.indexing.assetIndexer.lambda_handler`,
@@ -183,20 +163,8 @@ export function buildAssetIndexingFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? vpc
-                : undefined,
-        vpcSubnets:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? { subnets: subnets }
-                : undefined,
+        vpc: inVpc ? vpc : undefined, //Provisioned OpenSearch, a private Serverless collection, or useForAllLambdas
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
 
         environment: {
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
@@ -341,6 +309,7 @@ export function buildReindexerFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "crOsReindexer";
+    const inVpc = searchLambdasInVpc(config);
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.indexing.crReindexer.lambda_handler`,
@@ -348,20 +317,8 @@ export function buildReindexerFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? vpc
-                : undefined,
-        vpcSubnets:
-            config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-            (config.app.openSearch.useServerless.enabled &&
-                !config.app.openSearch.useServerless.allowPublic)
-                ? { subnets: subnets }
-                : undefined,
+        vpc: inVpc ? vpc : undefined, //Provisioned OpenSearch, a private Serverless collection, or useForAllLambdas
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
 
         environment: {
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,

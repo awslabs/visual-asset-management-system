@@ -65,6 +65,12 @@
             },
             "reindexOnCdkDeploy": false
         },
+        "vectorSearch": {
+            "enabled": true,
+            "embeddingModelId": "amazon.titan-embed-text-v2:0",
+            "embeddingDimensions": 1024,
+            "indexingConcurrency": 5
+        },
         "useLocationService": {
             "enabled": true
         },
@@ -96,10 +102,16 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
-            "useConversionCadMeshMetadataExtraction": {
-                "enabled": false,
+            "useSystemGenAiMetadata": {
+                "enabled": true,
+                "bedrockAnalysisModelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "useFargateRenderer": false,
+                "lambdaLimits": {
+                    "maxInputFileSizeMb": 2048,
+                    "maxPointCloudPoints": 20000000
+                }
             },
             "useConversionCoordinateTransform": {
                 "enabled": false,
@@ -111,12 +123,6 @@
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "useGenAiMetadata3dLabeling": {
-                "enabled": false,
-                "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": false
             },
             "useSplatToolbox": {
                 "enabled": false,

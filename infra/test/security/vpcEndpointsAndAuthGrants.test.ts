@@ -26,6 +26,14 @@ import { newTestApp } from "../support/testApp";
 /** Commercial-template config with a fixed synth environment. */
 const createMockConfig = (): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
+    // Disabled placeholder under the pipeline key getConfig() rejects from config.json; the VPC
+    // builder reads it to decide the Bedrock and Rekognition endpoints.
+    config.app.pipelines.useGenAiMetadata3dLabeling = {
+        enabled: false,
+        bedrockModelId: "",
+        autoRegisterWithVAMS: false,
+        autoRegisterAutoTriggerOnFileUpload: false,
+    };
     config.env.account = "123456789012";
     config.env.region = "us-east-1";
     config.env.partition = "aws";

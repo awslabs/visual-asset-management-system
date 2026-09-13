@@ -167,6 +167,20 @@ function buildConfig(name: TemplateName, mutate?: (c: any) => void): Config.Conf
     config.app.adminUserId = "t1-admin";
     config.app.adminEmailAddress = "t1-admin@example.com";
 
+    // Disabled placeholders under the two pipeline keys getConfig() rejects from config.json. The
+    // pipeline and VPC builders read them, and a mutator may switch one on to synthesize that stack.
+    config.app.pipelines.useGenAiMetadata3dLabeling = {
+        enabled: false,
+        bedrockModelId: "",
+        autoRegisterWithVAMS: false,
+        autoRegisterAutoTriggerOnFileUpload: false,
+    };
+    config.app.pipelines.useConversionCadMeshMetadataExtraction = {
+        enabled: false,
+        autoRegisterWithVAMS: false,
+        autoRegisterAutoTriggerOnFileUpload: false,
+    };
+
     // Placeholders the templates ship with UNDEFINED that the ALB branch requires. Only filled when
     // that branch is actually enabled, so the commercial template is left as shipped.
     if ((config.app as any).useAlb?.enabled) {

@@ -65,6 +65,12 @@
             },
             "reindexOnCdkDeploy": false
         },
+        "vectorSearch": {
+            "enabled": false,
+            "embeddingModelId": "amazon.titan-embed-text-v2:0",
+            "embeddingDimensions": 1024,
+            "indexingConcurrency": 5
+        },
         "useLocationService": {
             "enabled": false
         },
@@ -96,10 +102,16 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
-            "useConversionCadMeshMetadataExtraction": {
+            "useSystemGenAiMetadata": {
                 "enabled": false,
+                "bedrockAnalysisModelId": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "useFargateRenderer": false,
+                "lambdaLimits": {
+                    "maxInputFileSizeMb": 2048,
+                    "maxPointCloudPoints": 20000000
+                }
             },
             "useConversionCoordinateTransform": {
                 "enabled": false,
@@ -109,12 +121,6 @@
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "useGenAiMetadata3dLabeling": {
-                "enabled": false,
-                "bedrockModelId": "",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },

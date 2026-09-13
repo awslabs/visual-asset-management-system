@@ -50,6 +50,14 @@ const HF_TOKEN = "hf_regressionTestTokenValue";
 
 const createMockConfig = (): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
+    // Disabled placeholder under the pipeline key getConfig() rejects from config.json; the construct
+    // under test reads it, and the metadata3dLabeling harness switches it on.
+    config.app.pipelines.useGenAiMetadata3dLabeling = {
+        enabled: false,
+        bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        autoRegisterWithVAMS: true,
+        autoRegisterAutoTriggerOnFileUpload: false,
+    };
     config.env.account = ACCOUNT;
     config.env.region = REGION;
     config.env.partition = "aws";

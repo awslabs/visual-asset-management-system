@@ -13,10 +13,12 @@
  *
  * Keep them byte-for-byte in sync with those files. `makeDefaultConfig()`
  * returns a deep clone so callers can freely mutate. GovCloud differs from
- * Commercial in ~12 values (FIPS, KMS, govCloud, VPC, OpenSearch serverless-
- * vs-provisioned, Location Service, ALB-vs-CloudFront, bedrock model id, GenAI
- * auto-trigger). EU Sovereign Cloud is GovCloud with 4 further differences
- * (region, FIPS off, aws-eusc certificate ARN, amazonaws.eu ECR URIs).
+ * Commercial in the values buildGovCloud() sets (FIPS, KMS, govCloud, VPC,
+ * OpenSearch serverless-vs-provisioned, Location Service, ALB-vs-CloudFront,
+ * vector search off, the system GenAI pipeline off with a GovCloud model id).
+ * EU Sovereign Cloud is GovCloud with the values buildEuSovereign() sets
+ * (region, FIPS off, aws-eusc certificate ARN, amazonaws.eu ECR URIs, empty
+ * embedding and analysis model ids).
  */
 
 import type { ConfigShape, Profile } from "./types";
@@ -204,6 +206,12 @@ const COMMERCIAL: ConfigShape = {
             },
             reindexOnCdkDeploy: false,
         },
+        vectorSearch: {
+            enabled: true,
+            embeddingModelId: "amazon.titan-embed-text-v2:0",
+            embeddingDimensions: 1024,
+            indexingConcurrency: 5,
+        },
         useLocationService: { enabled: true },
         useAlb: {
             enabled: false,
@@ -233,10 +241,16 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
             },
-            useConversionCadMeshMetadataExtraction: {
-                enabled: false,
+            useSystemGenAiMetadata: {
+                enabled: true,
+                bedrockAnalysisModelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
+                useFargateRenderer: false,
+                lambdaLimits: {
+                    maxInputFileSizeMb: 2048,
+                    maxPointCloudPoints: 20000000,
+                },
             },
             useConversionCoordinateTransform: {
                 enabled: false,
@@ -248,12 +262,6 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
-            },
-            useGenAiMetadata3dLabeling: {
-                enabled: false,
-                bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                autoRegisterWithVAMS: true,
-                autoRegisterAutoTriggerOnFileUpload: false,
             },
             useSplatToolbox: {
                 enabled: false,
@@ -399,11 +407,13 @@ function buildGovCloud(): ConfigShape {
     cfg.app.useAlb.certificateArn =
         "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>";
     cfg.app.useCloudFront.enabled = false;
-    // Left empty: the "global." cross-Region inference profiles exist only in the commercial
-    // partition, and getConfig() rejects one here. The operator sets a model id offered in their
-    // partition when they enable the pipeline (it ships disabled).
-    cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
-    cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
+    // Off in the restricted partitions; Amazon Bedrock model access there is a manual, two-account step.
+    cfg.app.vectorSearch.enabled = false;
+    cfg.app.pipelines.useSystemGenAiMetadata.enabled = false;
+    // The GovCloud preset names the "us-gov." inference profile; getConfig() also accepts a "us."
+    // profile there, with a warning.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
+        "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
     return cfg;
 }
 
@@ -425,6 +435,9 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useModelOps.ecrContainerImageURI = euEcr;
+    // No embedding or analysis model is verified in the partition, so neither is preset.
+    cfg.app.vectorSearch.embeddingModelId = "";
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId = "";
     return cfg;
 }
 
