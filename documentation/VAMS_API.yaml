@@ -4788,7 +4788,7 @@ paths:
                                         items:
                                             type: string
                 "400":
-                    description: Invalid parameters.
+                    description: 'Invalid parameters, or a field other than enabled on a system pipeline (message: System pipelines are read-only; only "enabled" may be changed.).'
                     content:
                         application/json:
                             schema:
@@ -4830,7 +4830,7 @@ paths:
                 "200":
                     description: Pipeline archived (archived set to true).
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the pipeline is a system pipeline (message: System pipelines cannot be archived or restored through the API; the deployment owns them.)."
                     content:
                         application/json:
                             schema:
@@ -5041,7 +5041,7 @@ paths:
                                     message:
                                         $ref: '#/components/schemas/workflowV2'
                 "400":
-                    description: Invalid parameters.
+                    description: 'Invalid parameters, or a field other than enabled on a system workflow (message: System workflows are read-only; only "enabled" may be changed.).'
                     content:
                         application/json:
                             schema:
@@ -5083,7 +5083,7 @@ paths:
                 "200":
                     description: Workflow archived (archived set to true).
                 "400":
-                    description: Invalid path parameters.
+                    description: "Invalid path parameters, or the workflow is a system workflow (message: System workflows cannot be archived or restored through the API; the deployment owns them.)."
                     content:
                         application/json:
                             schema:
@@ -5250,7 +5250,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/workflowTrigger'
                 "400":
-                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; a pipeline of the parent workflow that sets requireTemplate in its own pipeline systemConfig (a pipeline field, not one of the workflow systemConfig keys) for which no template is set by the trigger's defaultTemplateIds, the workflow reference's defaultTemplateId, or the pipeline's own default template (reported in the same triggerTemplateErrors list, naming the pipeline; any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them, so this rejection is limited to the combination a triggered execution could never run); an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one. The require-template check is best-effort: a step whose pipeline record or default template cannot be read is skipped rather than rejected, so the trigger saves with the missing template undetected - and nothing user-visible records the consequence. Template resolution runs BEFORE the execution record is written, so each triggered launch is rejected with a 400 carrying templateResolutionErrors and no execution is created: the workflow's execution list stays empty and the only trace is in CloudWatch (a trigger-dispatcher warning naming the workflow and the status it received, plus the rejected launch's own templateResolutionErrors entry naming the pipeline, which also reaches the audit errors log group)."
+                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; a pipeline of the parent workflow that sets requireTemplate in its own pipeline systemConfig (a pipeline field, not one of the workflow systemConfig keys) for which no template is set by the trigger's defaultTemplateIds, the workflow reference's defaultTemplateId, or the pipeline's own default template (reported in the same triggerTemplateErrors list, naming the pipeline; any one of the three sources satisfies the requirement, and a pipeline that requires no template needs none of them, so this rejection is limited to the combination a triggered execution could never run); an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one. The require-template check is best-effort: a step whose pipeline record or default template cannot be read is skipped rather than rejected, so the trigger saves with the missing template undetected - and nothing user-visible records the consequence. Template resolution runs BEFORE the execution record is written, so each triggered launch is rejected with a 400 carrying templateResolutionErrors and no execution is created: the workflow's execution list stays empty and the only trace is in CloudWatch (a trigger-dispatcher warning naming the workflow and the status it received, plus the rejected launch's own templateResolutionErrors entry naming the pipeline, which also reaches the audit errors log group). On a system workflow (isSystem true) the trigger is part of the shipped bundle: enabled may be switched, but a key with no stored trigger is refused (message: Triggers of system workflows cannot be added or deleted.), and a supplied inputFileFilters or defaultTemplateIds that differs from the stored trigger is refused with a message naming the field."
                     content:
                         application/json:
                             schema:
@@ -5300,7 +5300,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 "200":
                     description: Trigger deleted.
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the workflow is a system workflow (message: Triggers of system workflows cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -6540,7 +6540,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list), or the pipeline is a system pipeline (message: Templates of system pipelines cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -6651,7 +6651,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list), or a locked field of a system pipeline's template differs from the stored value (only configBody, tagSchema and webFormJson may change; the message names the field)."
                     content:
                         application/json:
                             schema:
@@ -6711,7 +6711,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                         items:
                                             type: string
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the pipeline is a system pipeline (message: Templates of system pipelines cannot be added or deleted.)."
                     content:
                         application/json:
                             schema:
@@ -10491,6 +10491,11 @@ components:
                     type: boolean
                     description: "Whether the pipeline is archived (soft-deleted). Archived pipelines are hidden by default."
                     default: false
+                isSystem:
+                    type: boolean
+                    readOnly: true
+                    default: false
+                    description: "True for a pipeline the deployment registered from a vamsSchema bundle that declares it. Set only by the importer — the create and update request bodies ignore the key. A system pipeline is read-only through the API except for enabled (PUT) and the configBody, tagSchema and webFormJson of its templates; a redeploy re-asserts the shipped values."
                 dateCreated:
                     type: string
                     description: "ISO-8601 creation timestamp."
@@ -10940,6 +10945,11 @@ components:
                     type: boolean
                     description: "Whether the workflow is archived (soft-deleted). Archived workflows are hidden by default."
                     default: false
+                isSystem:
+                    type: boolean
+                    readOnly: true
+                    default: false
+                    description: "True for a workflow the deployment registered from a vamsSchema bundle that declares it. Set only by the importer — the create and update request bodies ignore the key. A system workflow is read-only through the API except for enabled (PUT) and the enabled switch of its stored triggers; a redeploy re-asserts the shipped values."
                 workflow_arn:
                     type: string
                     description: "ARN of the workflow's Step Functions state machine."

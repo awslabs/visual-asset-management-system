@@ -321,6 +321,8 @@ Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)`
 
 The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
 
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a pipeline it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
+
 ### Workflow Storage Table (V2)
 
 Stores workflow definitions scoped to a database.
@@ -339,6 +341,8 @@ Stores workflow definitions scoped to a database.
 | `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
 
 The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a workflow it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
 
 ### Workflow Triggers Storage Table
 

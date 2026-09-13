@@ -6,6 +6,10 @@ The Workflows API allows you to create, retrieve, and delete workflows that orch
 All endpoints require a valid JWT token in the `Authorization` header. Workflows are subject to two-tier Casbin authorization.
 :::
 
+:::note[System workflows]
+A workflow registered from a `vamsSchema` bundle that declares `isSystem: true` is a **system workflow**, owned by the deployment. Every workflow response carries `isSystem` — `false` for a workflow created through this API, because the create and update bodies ignore the key. A system workflow accepts only `enabled` on [Update a workflow](#update-a-workflow); refuses [Delete a workflow](#delete-a-workflow) and the `archived` restore; and holds its triggers to their shipped filters and default templates — [Set a trigger](#set-a-trigger) may switch a stored trigger on or off, while adding a trigger under a new key or [deleting one](#delete-a-trigger) is refused. Each refusal is a `400` whose `message` names the rule. The switches are pauses: the deployment re-asserts the shipped values — the workflow enabled, the trigger's `enabled` set from `autoRegisterAutoTriggerOnFileUpload` — when it next registers the bundle. See [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+:::
+
 ---
 
 ## List all workflows
@@ -74,6 +78,7 @@ Three things shorten a page, so page until `NextToken` is absent rather than unt
                 "subDashboardUrl": "",
                 "enabled": true,
                 "archived": false,
+                "isSystem": false,
                 "workflow_arn": "arn:aws:states:us-east-1:123456789012:stateMachine:vams-convert-and-preview",
                 "dateCreated": "2026-03-15T10:30:00Z",
                 "dateModified": "2026-03-16T14:20:00Z",
@@ -167,7 +172,7 @@ Archived workflows are hidden by default. Set `includeArchived=true` to retrieve
 
 ### Response
 
-Returns a single workflow object, in the same shape as an item of [List all workflows](#list-all-workflows) plus a `triggers` array describing the workflow's configured triggers (each entry carrying `triggerType`, `triggerConfig`, and `enabled`). `executionCount`, `triggerCount`, and `triggersEnabledCount` are computed for list responses and are `null` here. See [System configuration](#system-configuration) for the shape of `systemConfig`.
+Returns a single workflow object, in the same shape as an item of [List all workflows](#list-all-workflows) plus a `triggers` array describing the workflow's configured triggers (each entry carrying `triggerType`, `triggerConfig`, and `enabled`). `executionCount`, `triggerCount`, and `triggersEnabledCount` are computed for list responses and are `null` here. See [System configuration](#system-configuration) for the shape of `systemConfig`. `isSystem` is `true` only for a workflow the deployment registered from a bundle that declares it.
 
 ### Error responses
 
@@ -323,6 +328,10 @@ Set `enabled` to `true` or `false` to enable or disable a workflow without chang
 `PUT` with `{"archived": false}` returns an archived workflow to the active listings under its original identifier, together with every execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the workflow.
 :::
 
+:::warning[A system workflow accepts only `enabled`]
+When the stored workflow carries `isSystem: true`, the body may contain no field other than `enabled`. Any other field — `archived` included, so a system workflow cannot be restored through this route — is refused with `400` and the message `System workflows are read-only; only "enabled" may be changed.` Disabling is a pause: the deployment re-enables the workflow when it next registers the bundle.
+:::
+
 :::warning[`specifiedPipelines` and `systemConfig` replace the stored value]
 Both are stored whole. A request that supplies either one persists exactly what it sends, and anything it omits is gone rather than retained — send the complete list or block, not the part being changed. Supplying `specifiedPipelines` also regenerates the workflow's AWS Step Functions definition, which is how a change to a referenced pipeline's execution binding is picked up.
 :::
@@ -342,12 +351,12 @@ Returns the updated workflow, in the same shape as [Get a workflow](#get-a-workf
 
 ### Error responses
 
-| Status | Description                                                                                                                                                             |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, no field supplied, a referenced pipeline out of the workflow's database scope or archived, or a save-consistency error (`saveErrors` under `message`) |
-| `403`  | Not authorized (API, the workflow as read, the workflow as changed, or one of the referenced pipelines)                                                                 |
-| `404`  | Workflow not found, or a referenced pipeline was not found                                                                                                              |
-| `500`  | Internal server error                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no field supplied, a referenced pipeline out of the workflow's database scope or archived, a save-consistency error (`saveErrors` under `message`), or a field other than `enabled` on a system workflow (`System workflows are read-only; only "enabled" may be changed.`) |
+| `403`  | Not authorized (API, the workflow as read, the workflow as changed, or one of the referenced pipelines)                                                                                                                                                                                       |
+| `404`  | Workflow not found, or a referenced pipeline was not found                                                                                                                                                                                                                                    |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                         |
 
 :::note[A save-consistency problem blocks or warns depending on the request]
 When the request supplies `specifiedPipelines`, a consistency problem in that set is a `400` carrying a `saveErrors` list. An edit that leaves the stored pipeline set untouched — a rename, a description change, enable or disable — reports the same conditions as `warnings` on a successful save instead, so a workflow whose pipeline was archived after it was added stays editable without replacing the pipeline list.
@@ -380,12 +389,12 @@ DELETE /database/{databaseId}/workflows/{workflowId}
 
 ### Error responses
 
-| Status | Description             |
-| ------ | ----------------------- |
-| `400`  | Invalid path parameters |
-| `403`  | Not authorized          |
-| `404`  | Workflow not found      |
-| `500`  | Internal server error   |
+| Status | Description                                                                                                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid path parameters, or the workflow is a system workflow (`System workflows cannot be archived or restored through the API; the deployment owns them.`) |
+| `403`  | Not authorized                                                                                                                                               |
+| `404`  | Workflow not found                                                                                                                                           |
+| `500`  | Internal server error                                                                                                                                        |
 
 ---
 
@@ -416,6 +425,8 @@ Two conditions on an additional trigger of a type are rejected with `400`; the h
 Trigger endpoints are authorized on the parent workflow: API-level access is checked first, followed by object-level Casbin policy enforcement on the owning workflow.
 
 An execution the system launches runs as the reserved system identity rather than as a user, and its execution record reflects this: `triggerType` is `File-Upload` when an upload trigger fired it and `System-Reindex` when the vector-search reindexer launched it, and `triggeredByUserId` is the system identity. This is intentional: the user who uploaded a file may not hold permission to run the workflow, but the trigger must still process the upload reliably, so the execution is decoupled from the acting user's permissions. Executions started directly through the [execute endpoint](#execute-a-workflow) run as the calling user.
+
+On a **system workflow** (`isSystem: true`) the triggers are part of the shipped bundle. [Set a trigger](#set-a-trigger) may switch a stored trigger on or off: `enabled` is free, and `inputFileFilters` and `defaultTemplateIds`, when sent, must equal the stored trigger — the comparison is made after the same normalisation the store applies, so re-sending the stored trigger with `enabled` flipped is accepted, and a body carrying only `enabled` keeps the stored filters and templates. A key with no stored trigger, a locked field that differs, and [Delete a trigger](#delete-a-trigger) are refused with `400` (`Triggers of system workflows cannot be added or deleted.`, or a message naming the field).
 
 ### List triggers
 
@@ -608,12 +619,12 @@ This second check is best-effort: a step whose pipeline record cannot be read, o
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error; a chosen default template has a required tag with no default value; or a pipeline of the workflow requires a template and no default template is set for it. Both template rejections report `triggerTemplateErrors`. |
-| `403`  | Not authorized                                                                                                                                                                                                                          |
-| `404`  | Workflow not found                                                                                                                                                                                                                      |
-| `500`  | Internal server error                                                                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error; a chosen default template has a required tag with no default value; a pipeline of the workflow requires a template and no default template is set for it (both report `triggerTemplateErrors`); or, on a system workflow, a trigger key with no stored trigger (`Triggers of system workflows cannot be added or deleted.`) or a changed `inputFileFilters`/`defaultTemplateIds` (a message naming the field) |
+| `403`  | Not authorized                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `404`  | Workflow not found                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ### Delete a trigger
 
@@ -641,12 +652,12 @@ DELETE /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Error responses
 
-| Status | Description                   |
-| ------ | ----------------------------- |
-| `400`  | Invalid path parameters       |
-| `403`  | Not authorized                |
-| `404`  | Workflow or trigger not found |
-| `500`  | Internal server error         |
+| Status | Description                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid path parameters, or the workflow is a system workflow (`Triggers of system workflows cannot be added or deleted.`) |
+| `403`  | Not authorized                                                                                                             |
+| `404`  | Workflow or trigger not found                                                                                              |
+| `500`  | Internal server error                                                                                                      |
 
 ---
 
