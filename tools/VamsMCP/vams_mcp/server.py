@@ -564,6 +564,103 @@ def search_files(
     return CLIENT.trim_search_results(raw, max_hits=request["size"])
 
 
+_NLP_ENTITY_TYPES = ("file", "asset")
+_NLP_SIZE_MAX = 100
+
+
+def _build_nlp_search_request(
+    query: str,
+    database_ids: Optional[List[str]],
+    entity_type: str,
+    size: int,
+    include_archived: bool,
+    file_classes: Optional[List[str]],
+    metadata_query: Optional[str],
+    include_segments: bool,
+) -> Dict[str, Any]:
+    if entity_type not in _NLP_ENTITY_TYPES:
+        raise ValueError(f"entity_type must be one of {_NLP_ENTITY_TYPES}, got {entity_type!r}")
+    request: Dict[str, Any] = {
+        "query": query,
+        "entityTypes": [entity_type],
+        "size": max(1, min(size, _NLP_SIZE_MAX)),
+        "includeArchived": include_archived,
+    }
+    scoped = [d for d in (database_ids or []) if d not in _UNSCOPED_DATABASE_IDS]
+    if scoped:
+        request["databaseIds"] = scoped
+    if file_classes:
+        request["fileClasses"] = list(file_classes)
+    if metadata_query:
+        request["metadataQuery"] = metadata_query
+        request["metadataSearchMode"] = "both"
+    # The server default is to search segments; only the opt-out travels on the wire.
+    if not include_segments:
+        request["includeSegments"] = False
+    return request
+
+
+@mcp.tool()
+@tool_result
+def search_nlp(
+    query: str,
+    database_ids: Optional[List[str]] = None,
+    entity_type: str = "file",
+    size: int = 25,
+    include_archived: bool = False,
+    file_classes: Optional[List[str]] = None,
+    metadata_query: Optional[str] = None,
+    include_segments: bool = True,
+) -> Dict[str, Any]:
+    """Natural-language (semantic) search over indexed files, ranked by embedding distance.
+
+    Works whether or not OpenSearch is deployed, but requires the deployment's VECTORSEARCH
+    feature switch — without it the route does not exist and the call fails with a 403/404 from
+    API Gateway. Every call embeds `query` with Amazon Bedrock and is billed per call, which is
+    why this read tool is not in the README's autoApprove sample.
+
+    - query: 1..1000 characters, the natural-language expression to embed (required).
+    - database_ids: restrict to these databases (at most 100 ids; the server intersects them with
+      the caller's accessible databases). "GLOBAL" is the unscoped pipeline/workflow keyword, not
+      an asset database, and is dropped from the list.
+    - entity_type: "file" (default) returns one hit per file; "asset" groups file hits by asset,
+      keeping the best score.
+    - size: 1..100 hits (default 25; values outside are clamped). There is no offset paging on
+      this route — narrow with database_ids or file_classes instead of asking for more.
+    - include_archived: also match archived files.
+    - file_classes: hard filter on the indexed file class (e.g. "video", "document", "3d-model").
+      When omitted, type words in the query soft-boost matching classes and the classes detected
+      are echoed in `nlp.classIntent`.
+    - metadata_query: `key:value` metadata constraint (same syntax as search_assets). OpenSearch-only:
+      when OpenSearch is off it is ignored and reported as the warning `opensearch:fields_ignored`.
+    - include_segments: True (default) also searches inside-file segments (video time windows, text
+      chunks); a hit found that way carries `source._vector.segmentHits` and
+      `source._vector.bestSegment` ({segmentKey, segmentKind, segmentLabel, segmentStartMs,
+      segmentEndMs}, or null when the whole-file vector won). False sends `includeSegments: false`
+      and matches whole-file vectors only — use it when chunked documents crowd out other kinds.
+
+    Returns {total, relation, returned, results, nlp, warnings}. `relation` is "gte" and
+    `nlp.truncated` is true when `total` is a LOWER BOUND: the vector index answers fixed windows
+    and one filled, so more files may match than were ranked — do not report the count as exact.
+    `warnings[]` is the closed set truncated:window, truncated:targets, databases:none_accessible,
+    opensearch:fields_ignored, opensearch:enrichment_failed, segments:window_full; an empty result
+    with databases:none_accessible means the caller can access no database, not that nothing
+    matched. Each result's `source` carries the OpenSearch-style fields (str_databaseid,
+    str_assetid, str_assetname, str_key, str_fileext, …) plus `_vector` {distance,
+    embeddingModelId, sourceModalities, indexedAt, fileClass, segmentHits, bestSegment}."""
+    request = _build_nlp_search_request(
+        query, database_ids, entity_type, size, include_archived, file_classes, metadata_query,
+        include_segments,
+    )
+    raw = CLIENT.api.search_nlp(request)
+    trimmed = CLIENT.trim_search_results(raw, max_hits=request["size"])
+    total = raw.get("hits", {}).get("total", {}) if isinstance(raw, dict) else {}
+    trimmed["relation"] = total.get("relation", "eq") if isinstance(total, dict) else "eq"
+    trimmed["nlp"] = raw.get("nlp", {}) if isinstance(raw, dict) else {}
+    trimmed["warnings"] = raw.get("warnings", []) if isinstance(raw, dict) else []
+    return trimmed
+
+
 @mcp.tool()
 @tool_result
 def get_search_fields() -> Dict[str, Any]:
@@ -625,7 +722,9 @@ def list_workflow_executions(
     form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
 
     The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED),
-    trigger_type, group_id, and triggered_by_user_id.
+    trigger_type, group_id, and triggered_by_user_id. trigger_type filters on the stored form:
+    "Manual", "File-Upload" or "System-Reindex" (system reindex runs launched by the vector-search
+    backfill).
 
     A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
     executions inspected for this asset, or it spent its budget re-checking runs an earlier page
@@ -997,7 +1096,9 @@ def list_executions(
 
     Distinct from list_workflow_executions(), which is scoped to ONE asset's history. The filters
     each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED), workflow_id,
-    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. group_id is how a group's
+    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. trigger_type filters on
+    the stored form: "Manual", "File-Upload" or "System-Reindex" (system reindex runs launched by
+    the vector-search backfill). group_id is how a group's
     members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
     listing the group here first.
 
@@ -1520,6 +1621,10 @@ if CONFIG.enable_writes:
         Carries the same save `warnings` as create_pipeline. An executionConfig change adds a
         stale-deployment warning: referencing workflows keep invoking the PREVIOUS execution target
         until each one is re-saved, so the repoint is not live until then. Always relay it.
+
+        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
+        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
+        set_workflow_trigger(..., {"enabled": false}) instead.
         """
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
@@ -1542,6 +1647,10 @@ if CONFIG.enable_writes:
         enumValues. Any other key is rejected naming the offending index and key, so do not invent a
         spelling — a misspelled 'requried' or a capitalised 'Type' fails the call rather than storing
         a tag that is silently optional or untyped.
+
+        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
+        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
+        set_workflow_trigger(..., {"enabled": false}) instead.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
@@ -1555,6 +1664,10 @@ if CONFIG.enable_writes:
         `overrides` and `tagSchema` carry the same rules as on create_pipeline_template: the
         overrides block is at most 65536 bytes serialized, and a tag entry's keys are limited to
         tagKey, type, required, default, label, description and enumValues.
+
+        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
+        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
+        set_workflow_trigger(..., {"enabled": false}) instead.
         """
         return CLIENT.unwrap_message(CLIENT.api.update_pipeline_template(database_id, pipeline_id, template_id, body))
 
@@ -1569,6 +1682,10 @@ if CONFIG.enable_writes:
         enumValues. Any other key is rejected naming the offending index and key, rather than being
         ignored, so a misspelled 'requried' or a capitalised 'Type' fails the call instead of storing
         a tag that is silently optional or untyped.
+
+        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
+        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
+        set_workflow_trigger(..., {"enabled": false}) instead.
         """
         return CLIENT.unwrap_message(
             CLIENT.api.set_pipeline_template_tag_schema(
@@ -1600,7 +1717,11 @@ if CONFIG.enable_writes:
     @mcp.tool()
     @tool_result
     def update_workflow(database_id: str, workflow_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a workflow. Only the fields present in `body` change."""
+        """Update a workflow. Only the fields present in `body` change.
+
+        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
+        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
+        """
         return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, body))
 
     @mcp.tool()
@@ -1623,6 +1744,9 @@ if CONFIG.enable_writes:
         concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
         trigger naming the same defaultTemplateIds as an existing one — including two that both name
         none, which is a valid choice and therefore a comparable value.
+
+        On a system workflow only {"enabled": true|false} is accepted (system records are otherwise
+        read-only); any other change is answered with 400.
         """
         return CLIENT.unwrap_message(CLIENT.api.set_workflow_trigger(database_id, workflow_id, trigger_type, body))
 
@@ -1960,7 +2084,12 @@ if CONFIG.enable_destructive:
     @mcp.tool()
     @tool_result
     def archive_pipeline(database_id: str, pipeline_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline."""
+        """Archive (soft-delete) a pipeline. Reversible via unarchive_pipeline.
+
+        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
+        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
+        set_workflow_trigger(..., {"enabled": false}) instead.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline(database_id, pipeline_id))
 
     @mcp.tool()
@@ -1972,6 +2101,10 @@ if CONFIG.enable_destructive:
 
         Archiving also DISABLES, so clearing the archived flag alone leaves a pipeline that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+
+        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
+        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
+        set_workflow_trigger(..., {"enabled": false}) instead.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -1981,7 +2114,11 @@ if CONFIG.enable_destructive:
     @mcp.tool()
     @tool_result
     def archive_workflow(database_id: str, workflow_id: str) -> Dict[str, Any]:
-        """Archive (soft-delete) a workflow. Reversible via unarchive_workflow."""
+        """Archive (soft-delete) a workflow. Reversible via unarchive_workflow.
+
+        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
+        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow(database_id, workflow_id))
 
     @mcp.tool()
@@ -1993,6 +2130,9 @@ if CONFIG.enable_destructive:
 
         Archiving also DISABLES, so clearing the archived flag alone leaves a workflow that
         is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+
+        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
+        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
         """
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
@@ -2012,6 +2152,10 @@ if CONFIG.enable_destructive:
         template as a default for this pipeline. The delete happened; triggered executions of the
         named workflows fail until each trigger picks a different default template, so relay the
         warnings rather than reporting a clean delete.
+
+        System pipelines (isSystem) are read-only except the enabled flag (templates: config body
+        and tag schema only); the API answers 400 — toggle a system workflow's trigger with
+        set_workflow_trigger(..., {"enabled": false}) instead.
         """
         return CLIENT.unwrap_message(CLIENT.api.delete_pipeline_template(database_id, pipeline_id, template_id))
 
@@ -2020,7 +2164,11 @@ if CONFIG.enable_destructive:
     def delete_workflow_trigger(
         database_id: str, workflow_id: str, trigger_type: str
     ) -> Dict[str, Any]:
-        """Delete a workflow trigger, so the workflow stops firing automatically."""
+        """Delete a workflow trigger, so the workflow stops firing automatically.
+
+        System workflows (isSystem) are read-only except the enabled flag; the API answers 400 —
+        set_workflow_trigger(..., {"enabled": false}) is the supported toggle.
+        """
         return CLIENT.unwrap_message(CLIENT.api.delete_workflow_trigger(database_id, workflow_id, trigger_type))
 
     @mcp.tool()

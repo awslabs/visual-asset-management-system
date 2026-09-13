@@ -58,6 +58,36 @@ The Amazon OpenSearch Service domain is temporarily unreachable, or the deployme
 -   Verify the deployment version with `vamscli version`. The dual-index search system requires VAMS 2.2 or later.
 -   Fall back to `vamscli assets list` or `vamscli database list-assets -d <database-id>` while the service is recovering.
 
+### Natural-Language Search Is Not Enabled
+
+**Symptoms:**
+
+-   `vamscli search nlp` exits with "Natural-language search is not enabled for this environment (the VECTORSEARCH feature switch is off)"
+
+**Cause:**
+
+The deployment was built without `app.vectorSearch.enabled`. The `/search/nlp` route does not exist on such a deployment, so the CLI checks the feature switch before calling it.
+
+**Resolution:**
+
+-   Confirm the deployment's feature switches with `vamscli features list`. A `VECTORSEARCH` entry means the command is available.
+-   The `NOOPENSEARCH` switch does not affect this command; use the keyword commands (`search assets`, `search files`) when only OpenSearch is available.
+
+### Vector Index Is Being Built
+
+**Symptoms:**
+
+-   `vamscli search nlp` exits with "Search Unavailable: Vector index is being built"
+
+**Cause:**
+
+The vector index was just created or re-created and is still being backfilled from DynamoDB; the API answers 503 until the index is ready.
+
+**Resolution:**
+
+-   Retry in a few minutes.
+-   Keyword search (`search assets`, `search files`) is unaffected while the index is being built.
+
 ---
 
 ## Authentication and Setup

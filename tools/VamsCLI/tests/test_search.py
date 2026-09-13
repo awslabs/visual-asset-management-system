@@ -3,10 +3,12 @@
 import json
 import pytest
 import click
+import requests
 from unittest.mock import Mock, patch, mock_open
 from click.testing import CliRunner
 
 from vamscli.main import cli
+from vamscli.utils.api_client import APIClient
 from vamscli.utils.exceptions import (
     SearchDisabledError, SearchUnavailableError, InvalidSearchParametersError,
     SearchQueryError, SearchMappingError, AuthenticationError, APIError, SetupRequiredError
@@ -1303,3 +1305,179 @@ class TestSearchRecordTypeColumn:
 
 if __name__ == '__main__':
     pytest.main([__file__])
+
+
+def _http_error(status_code: int, body: dict) -> requests.exceptions.HTTPError:
+    """An HTTPError whose response answers both the json() and text readings of the message."""
+    response = Mock(status_code=status_code)
+    response.json.return_value = body
+    response.text = json.dumps(body)
+    return requests.exceptions.HTTPError(response=response)
+
+
+class TestSearchNlpClient:
+    """APIClient.search_nlp posts the body to /search/nlp and maps errors like search_query,
+    plus the 503 the vector store answers while its index is still being built."""
+
+    def _client(self):
+        return APIClient("https://example.invalid/api", Mock())
+
+    def test_posts_the_body_to_the_nlp_route_and_returns_the_envelope(self, monkeypatch):
+        client = self._client()
+        seen = {}
+
+        def _fake_post(endpoint, data=None, include_auth=True, **kwargs):
+            seen["endpoint"], seen["data"], seen["auth"] = endpoint, data, include_auth
+            response = Mock()
+            response.json.return_value = {
+                "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+                "nlp": {"truncated": False}, "warnings": [],
+            }
+            return response
+
+        monkeypatch.setattr(client, "post", _fake_post)
+        body = client.search_nlp({"query": "rusty pipe", "entityTypes": ["file"]})
+        assert seen == {"endpoint": "/search/nlp",
+                        "data": {"query": "rusty pipe", "entityTypes": ["file"]}, "auth": True}
+        assert body["nlp"] == {"truncated": False}
+
+    def test_a_503_preserves_the_index_building_message(self, monkeypatch):
+        client = self._client()
+        monkeypatch.setattr(client, "post", Mock(
+            side_effect=_http_error(503, {"message": "Vector index is being built"})))
+        with pytest.raises(SearchUnavailableError, match="Vector index is being built"):
+            client.search_nlp({"query": "x"})
+
+    @pytest.mark.parametrize("status, expected, fragment", [
+        (400, APIError, "Invalid search parameters"),
+        (404, APIError, "not found"),
+        (403, AuthenticationError, "Authentication failed"),
+    ])
+    def test_400_404_403_map_as_search_query_does(self, monkeypatch, status, expected, fragment):
+        client = self._client()
+        monkeypatch.setattr(client, "post", Mock(side_effect=_http_error(status, {"message": "m"})))
+        with pytest.raises(expected, match=fragment):
+            client.search_nlp({"query": "x"})
+
+
+_NLP_RESULT = {
+    "took": 12, "timed_out": False,
+    "hits": {
+        "total": {"value": 2, "relation": "gte"}, "max_score": 0.91,
+        "hits": [
+            {"_index": "vams-vectors", "_id": "db1#a1#docs/manual.pdf#v1", "_score": 0.91,
+             "_index_type": "file",
+             "_source": {"str_databaseid": "db1", "str_assetid": "a1", "str_assetname": "Pump",
+                         "str_key": "docs/manual.pdf", "str_fileext": "pdf"},
+             "_vector": {"distance": 0.09, "embeddingModelId": "m", "fileClass": "document",
+                         "segmentHits": 3,
+                         "bestSegment": {"segmentKey": "c:4", "segmentKind": "textChunk",
+                                         "segmentLabel": "chunk 4", "segmentStartMs": None,
+                                         "segmentEndMs": None}}},
+            {"_index": "vams-vectors", "_id": "db1#a2#scan.glb#v1", "_score": 0.80,
+             "_index_type": "file",
+             "_source": {"str_databaseid": "db1", "str_assetid": "a2", "str_assetname": "Valve",
+                         "str_key": "scan.glb", "str_fileext": "glb"},
+             "_vector": {"distance": 0.20, "embeddingModelId": "m", "fileClass": "3d-model",
+                         "segmentHits": 0, "bestSegment": None}},
+        ],
+    },
+    "aggregations": {}, "aggregationTotal": 2,
+    "nlp": {"query": "pump manual", "truncated": True, "itemsCollapsed": 2, "classIntent": ["document"]},
+    "warnings": [{"code": "truncated:window"}],
+}
+
+
+class TestSearchNlpCommand:
+    def test_help_lists_the_spec_option_set(self, cli_runner):
+        result = cli_runner.invoke(cli, ['search', 'nlp', '--help'])
+        assert result.exit_code == 0
+        for flag in ('--query', '--entity-type', '--database', '--include-archived', '--size',
+                     '--file-class', '--file-ext', '--no-segments', '--filters', '--filter',
+                     '--metadata-query', '--output-format', '--json-output'):
+            assert flag in result.output, flag
+
+    def test_builds_the_request_and_projects_the_segment_column(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            mocks['api_client'].search_nlp.return_value = _NLP_RESULT
+            result = cli_runner.invoke(cli, [
+                'search', 'nlp', '-q', 'pump manual', '-d', 'db1', '-d', 'db2', '--size', '10',
+                '--file-class', 'document', '--file-ext', 'pdf', '--no-segments',
+                '--metadata-query', 'product:Training', '--include-archived'])
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].search_query.assert_not_called()
+            body = mocks['api_client'].search_nlp.call_args[0][0]
+            assert body == {
+                "query": "pump manual", "entityTypes": ["file"], "size": 10, "includeArchived": True,
+                "databaseIds": ["db1", "db2"], "fileClasses": ["document"], "fileExtensions": ["pdf"],
+                "includeSegments": False, "metadataQuery": "product:Training",
+                "metadataSearchMode": "both",
+            }
+            assert 'Found 2+ files' in result.output           # relation "gte" -> lower bound
+            assert 'segment' in result.output and 'chunk 4' in result.output
+            assert 'Warning: truncated:window' in result.output
+
+    def test_default_request_omits_the_optional_keys(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            mocks['api_client'].search_nlp.return_value = {
+                "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "nlp": {}, "warnings": []}
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'anything'])
+            assert result.exit_code == 0, result.output
+            body = mocks['api_client'].search_nlp.call_args[0][0]
+            assert body == {"query": "anything", "entityTypes": ["file"], "size": 25,
+                            "includeArchived": False}
+            assert 'Found 0 files' in result.output and 'No results found.' in result.output
+
+    def test_segment_column_is_absent_when_no_hit_has_a_best_segment(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            whole_file_only = json.loads(json.dumps(_NLP_RESULT))
+            whole_file_only["hits"]["hits"] = [whole_file_only["hits"]["hits"][1]]
+            mocks['api_client'].search_nlp.return_value = whole_file_only
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'valve', '--entity-type', 'asset'])
+            assert result.exit_code == 0, result.output
+            assert 'segment' not in result.output
+            assert mocks['api_client'].search_nlp.call_args[0][0]["entityTypes"] == ["asset"]
+            assert 'Found 2+ assets' in result.output
+
+    def test_json_output_is_the_raw_body_and_nothing_else(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            mocks['api_client'].search_nlp.return_value = _NLP_RESULT
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'pump manual', '--json-output'])
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output) == _NLP_RESULT
+
+    def test_the_feature_gate_refuses_without_vectorsearch(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            mocks['profile_manager'].has_feature_switch.return_value = False
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x'])
+            assert result.exit_code != 0
+            assert 'VECTORSEARCH' in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
+
+    def test_the_gate_ignores_noopensearch(self, cli_runner, search_command_mocks):
+        """The NOOPENSEARCH switch disables the keyword commands, never this one."""
+        with search_command_mocks as mocks:
+            mocks['profile_manager'].has_feature_switch.side_effect = lambda name: name == 'VECTORSEARCH'
+            mocks['api_client'].search_nlp.return_value = {
+                "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "nlp": {}, "warnings": []}
+            with patch('vamscli.commands.search.is_feature_enabled', return_value=True):
+                result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x'])
+            assert result.exit_code == 0, result.output
+
+    def test_a_503_is_reported_with_the_server_message(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            mocks['api_client'].search_nlp.side_effect = SearchUnavailableError("Vector index is being built")
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x', '--json-output'])
+            assert result.exit_code != 0
+            # JSON mode emits exactly one object: the exception class name and its message.
+            payload = json.loads(result.output)
+            assert payload.get('error_type') == 'SearchUnavailableError'
+            assert payload.get('error') == 'Vector index is being built'
+
+
+class TestSearchGroupHelpNlpExemption:
+    def test_group_help_keeps_the_pinned_sentence_and_names_the_exemption(self, cli_runner):
+        result = cli_runner.invoke(cli, ['search', '--help'])
+        assert result.exit_code == 0
+        assert 'NOOPENSEARCH feature is enabled' in result.output
+        assert "'nlp'" in result.output and 'VECTORSEARCH' in result.output

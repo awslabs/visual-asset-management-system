@@ -104,7 +104,7 @@ from ..constants import (
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
     API_COMMENTS_ASSET, API_COMMENTS_ASSET_VERSION, API_COMMENTS_ASSET_VERSION_COMMENT,
     API_SUBSCRIPTIONS, API_CHECK_SUBSCRIPTION, API_UNSUBSCRIBE,
-    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
+    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING, API_SEARCH_NLP,
     API_PIPELINES, API_DATABASE_PIPELINES, API_DATABASE_PIPELINE,
     API_PIPELINE_TEMPLATES, API_PIPELINE_TEMPLATE, API_PIPELINE_TEMPLATE_TAG_SCHEMA,
     API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_DATABASE_WORKFLOW,
@@ -134,7 +134,8 @@ from .exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
+    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    SearchUnavailableError
 )
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
@@ -4435,6 +4436,52 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to execute search query: {e}")
+
+    def search_nlp(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a natural-language (vector) search using the /search/nlp POST endpoint.
+
+        Args:
+            search_params: Parameters matching NlpSearchRequestModel:
+                - query: natural-language text (1-1000 characters), embedded server-side
+                - entityTypes: ["file"] (default) or ["asset"]
+                - databaseIds: restrict to these databases (at most 100)
+                - includeArchived, includeSegments, fileClasses, fileExtensions, size (1-100)
+                - filters, metadataQuery, metadataSearchMode: OpenSearch-only constraints
+
+        Returns:
+            The raw response body: an OpenSearch-style envelope whose hits carry `_vector`,
+            plus top-level `nlp` and `warnings`
+
+        Raises:
+            SearchUnavailableError: 503 while the vector index is being built (message preserved)
+            AuthenticationError: 401/403
+            APIError: 400 (invalid parameters), 404 (route absent - feature off), other failures
+        """
+        try:
+            response = self.post(API_SEARCH_NLP, data=search_params, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise APIError(f"Invalid search parameters: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_message = _api_error_message(e.response, str(e))
+                raise APIError(f"Natural-language search endpoint not found "
+                               f"(is the VECTORSEARCH feature enabled?): {error_message}")
+
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Natural-language search failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to execute natural-language search: {e}")
 
     def search_simple(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
         """

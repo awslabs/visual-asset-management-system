@@ -140,6 +140,7 @@ API_METADATA_SCHEMA_BY_ID = "/database/{databaseId}/metadataSchema/{metadataSche
 API_SEARCH = "/search"
 API_SEARCH_SIMPLE = "/search/simple"
 API_SEARCH_MAPPING = "/search"
+API_SEARCH_NLP = "/search/nlp"
 
 # Pipeline API Endpoints
 API_PIPELINES = "/pipelines"
