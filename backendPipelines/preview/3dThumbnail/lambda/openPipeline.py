@@ -35,8 +35,9 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
-# AWS Batch's default container log group + this pipeline's job definition name; the container log
-# source is registered only when both are configured.
+# This pipeline's vended container log group (the group its Fargate job definition writes to through
+# the awslogs driver) + its job definition name; the container log source is registered only when
+# both are configured.
 BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
 BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
 BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
@@ -55,7 +56,7 @@ def abort_external_workflow(error, task_token):
 
 
 def batch_container_log_entry(job_definition_name, state_name):
-    """The log source for one Batch state's container: AWS Batch's default group, streamed under
+    """The log source for one Batch state's container: the job's vended group, streamed under
     `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
     if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
         return None

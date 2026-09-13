@@ -468,6 +468,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             {
                 jobDefinitionName:
                     blenderRendererBatchPipeline.batchJobDefinition.jobDefinitionName,
+                logGroup: blenderRendererLogGroup,
                 metadataGenerationFunctionName: metadataGenerationPipelineFunction.functionName,
             },
             props.storageResources.encryption.kmsKey

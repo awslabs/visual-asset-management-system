@@ -129,10 +129,16 @@ describe("BatchFargatePipelineConstruct sizing and logging props", () => {
     });
 
     test("logGroup routes the container log stream through the awslogs driver", () => {
-        const lc = jobDefinitionNamed("SizedJob_").ContainerProperties.LogConfiguration;
+        const jd = jobDefinitionNamed("SizedJob_");
+        const lc = jd.ContainerProperties.LogConfiguration;
         expect(lc.LogDriver).toBe("awslogs");
         expect(lc.Options["awslogs-group"]).toEqual(stack.resolve(logGroup.logGroupName));
-        expect(lc.Options["awslogs-stream-prefix"]).toBe("SizedJob_vams-test");
+        // The prefix is the PHYSICAL job definition name (base + hash), not the base name the caller
+        // passed: the registering lambdas build their `<name>/default/` prefix from
+        // `jobDefinition.jobDefinitionName`, which resolves to this string, and the stream
+        // `<prefix>/default/<task-id>` has to start with it.
+        expect(lc.Options["awslogs-stream-prefix"]).toBe(jd.JobDefinitionName);
+        expect(jd.JobDefinitionName).toMatch(/^SizedJob_vams-test[0-9a-f]{10}$/);
     });
 
     test("without logGroup no LogConfiguration is rendered, so Batch keeps its default", () => {

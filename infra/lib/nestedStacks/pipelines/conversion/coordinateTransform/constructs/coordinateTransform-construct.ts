@@ -256,6 +256,7 @@ export class CoordinateTransformConstruct extends Construct {
             props.lambdaCommonBaseLayer,
             batchPipeline.batchJobQueue,
             batchPipeline.batchJobDefinition,
+            containerLogGroup,
             props.storageResources.eventBridge.orchestrationBus,
             props.config,
             props.vpc,

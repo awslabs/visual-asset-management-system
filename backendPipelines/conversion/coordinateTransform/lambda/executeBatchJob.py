@@ -29,7 +29,8 @@ events_client = boto3.client("events", config=retry_config)
 BATCH_JOB_QUEUE = os.environ["BATCH_JOB_QUEUE"]
 BATCH_JOB_DEFINITION = os.environ["BATCH_JOB_DEFINITION"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
-# AWS Batch's default container log group; the job's log source is registered only when configured.
+# This pipeline's vended container log group (the group its Fargate job definition writes to through
+# the awslogs driver); the job's log source is registered only when configured.
 BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
 BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"

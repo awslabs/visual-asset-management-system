@@ -490,7 +490,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
             stateMachineLogGroup,
             {
                 pdalJobDefinitionName: pdalBatchPipeline.batchJobDefinition.jobDefinitionName,
+                pdalLogGroup: pdalLogGroup,
                 potreeJobDefinitionName: potreeBatchPipeline.batchJobDefinition.jobDefinitionName,
+                potreeLogGroup: potreeLogGroup,
             },
             props.storageResources.encryption.kmsKey
         );
