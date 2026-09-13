@@ -1,0 +1,19 @@
+# Exact pins for the MEDIA branch Lambda image, including the transitive closure so a rebuild months apart
+# installs the same wheels. boto3/botocore match the backend layer pin; pip installs into
+# /var/lang/lib/python3.12/site-packages, the same directory that carries the base image's boto3, so these
+# pins replace it in place.
+aws-lambda-powertools==3.2.0
+boto3==1.43.89
+botocore==1.43.89
+charset-normalizer==3.5.1
+defusedxml==0.7.1
+imageio-ffmpeg==0.6.0
+jmespath==1.1.0
+Pillow==12.3.0
+pypdfium2==5.13.0
+python-dateutil==2.9.0.post0
+s3transfer==0.19.2
+six==1.17.0
+tinytag==2.3.2
+typing-extensions==4.16.0
+urllib3==2.7.0
