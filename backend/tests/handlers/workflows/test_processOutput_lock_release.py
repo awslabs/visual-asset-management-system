@@ -101,6 +101,7 @@ class TestEndStateReleasesLocks:
         _record(dynamo, status)
         assert _released_keys(locks_table) == KEYS
         releases = locks_table.delete_item.call_args_list
+        assert releases, "no lock was released"
         assert {(c.kwargs["Key"]["lockKey"], c.kwargs["ExpressionAttributeValues"][":e"]) for c in releases} == {
             (key, EXEC) for key in KEYS}
         assert {"workflowExecutionId" in c.kwargs["ConditionExpression"] for c in releases} == {True}
