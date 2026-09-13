@@ -13,9 +13,9 @@ contract any pipeline may fulfil. The whole-file document is one vector per file
 the segment fields at their whole-file defaults. A caught Bedrock failure is recorded through
 ``execution.status.json`` and the handler returns normally.
 
-The indexer resolves the file's bucket from the event's ``bucketId`` and drops an event without one, so
-a run whose manifest carried no bucket registration id (a manifest built from an earlier workflow step's
-outputs) records the embedding SKIPPED rather than spending a model call on a vector nothing could index.
+The event carries the manifest's ``bucketId`` as given. A manifest built from an earlier workflow step's
+outputs carries an empty one, and the indexer then resolves the file's bucket from the asset row, so the
+embedding is produced and published regardless.
 """
 
 import datetime
@@ -201,12 +201,6 @@ def lambda_handler(event, context):
     if not event.get("vectorSearchEnabled") or event.get("analysisStatus") == common.STATUS_FAILED:
         logger.info("Embedding skipped (vector search disabled or analysis FAILED)")
         event["embeddingStatus"] = common.STATUS_SKIPPED
-        return event
-    if not event.get("bucketId"):
-        logger.warning("Embedding skipped: the run carries no bucketId, so the indexer could not resolve the "
-                       "file's bucket and would drop the event")
-        event["embeddingStatus"] = common.STATUS_SKIPPED
-        event["embeddingEventPublished"] = False
         return event
 
     relative_path = event.get("relativePath", "") or ""

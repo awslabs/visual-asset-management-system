@@ -150,16 +150,18 @@ class TestGuards:
         assert s3.puts == []
         mod.events_client.put_events.assert_not_called()
 
-    def test_skipped_when_the_run_carries_no_bucket_id(self):
-        """A manifest built from an earlier workflow step's outputs carries no bucketId; the indexer would
-        drop the event, so no model call is spent and nothing is written or published."""
+    def test_publishes_when_the_run_carries_no_bucket_id(self):
+        """A manifest built from an earlier workflow step's outputs carries no bucketId. The embedding is
+        still produced and published with the empty value; the indexer resolves the file's bucket from
+        the asset row (registry §3.5), so a chained-step run is indexed like a first-step one."""
         s3 = _seed(h.FakeS3())
         mod, state = _run(_state(bucketId=""), s3)
-        assert state["embeddingStatus"] == "SKIPPED" and state["embeddingEventPublished"] is False
-        assert s3.puts == [] and s3.gets == []
-        mod.events_client.put_events.assert_not_called()
-        mod.embeddings.embed_text.assert_not_called()
-        assert "embeddingDocumentS3Location" not in state
+        assert state["embeddingStatus"] == "SUCCEEDED" and state["embeddingEventPublished"] is True
+        mod.embeddings.embed_text.assert_called_once()
+        _, document = _document(s3)
+        assert document["bucketId"] == ""
+        detail = json.loads(mod.events_client.put_events.call_args.kwargs["Entries"][0]["Detail"])
+        assert detail["bucketId"] == ""
 
     def test_the_handler_never_touches_step_functions(self):
         source = io.open(os.path.join(h.LAMBDA_DIR, "generateEmbedding.py"), encoding="utf-8").read()
@@ -415,7 +417,7 @@ class TestDocumentAndEvent:
         assert (document["databaseId"], document["assetId"], document["filePath"], document["versionId"]) == (
             "dbM", "xidM", "/models/pump.glb", "v1")
         assert document["contentEtag"] == "abc123"
-        # The real registration id: WP07 lists bucketId in REQUIRED_DETAIL_KEYS and drops "" as missing.
+        # The manifest's registration id is carried through as given.
         assert document["bucketId"] == "bkt-01"
         # fileExt is the un-dotted table form here (the state's ".glb" is the dotted form).
         assert (document["fileClass"], document["fileExt"], document["fileSize"], document["contentType"]) == (

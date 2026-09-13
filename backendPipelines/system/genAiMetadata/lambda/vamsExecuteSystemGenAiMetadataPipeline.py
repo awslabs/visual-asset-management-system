@@ -144,12 +144,11 @@ def lambda_handler(event, context):
         if not resolved.get('outputS3AssetResultsPath'):
             raise Exception("The workflow manifest carries no results prefix; this pipeline cannot record its analysis summary or a failure status without one.")
 
-        # The vector indexer resolves the file's bucket from the event's bucketId and drops an event
-        # without one. A manifest built from an earlier step's outputs carries no bucketId, so the
-        # run still analyses the file and writes its attributes and metadata; the embedding step
-        # records SKIPPED instead of publishing an event nothing could index.
+        # A manifest built from an earlier step's outputs carries no bucketId. The value is threaded
+        # through as given; the vector indexer resolves the file's bucket from the asset row when the
+        # event's bucketId is empty.
         if not (resolved['inputFiles'][0] or {}).get('bucketId'):
-            logger.warning("The workflow manifest's input file carries no bucketId; the embedding step will be skipped for this run.")
+            logger.warning("The workflow manifest's input file carries no bucketId; the vector indexer will resolve the bucket from the asset row.")
 
         # Validate input is a specific file path, not a folder/whole asset
         input_path = resolved['inputS3AssetFilePath']
