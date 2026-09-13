@@ -14,7 +14,8 @@ Handles the database-scoped workflow endpoints:
 Two-tier Casbin: Tier-1 (enforceAPI) gates the route; Tier-2 (enforce on the workflow object, now
 carrying category + name) gates the specific workflow, and every referenced pipeline is authorized
 (GET) + database-scope-checked at create/update. Workflows are database-scoped rows (PK databaseId,
-SK workflowId) in WorkflowStorageTableV2 and are never hard-deleted — DELETE sets archived=true.
+SK workflowId) in WorkflowStorageTableV2 and are never hard-deleted — DELETE sets archived=true and
+removes the workflow's trigger rows, so an archived workflow stops firing on uploads.
 
 Create/update assemble the Step Functions ASL from the referenced pipeline records (mapping each
 pipeline's executionConfig to the shape the shared generator reads) and (re)deploy the state machine.
@@ -782,6 +783,53 @@ def _resolve_snapshot_pipeline_records(workflow_item):
     return records
 
 
+def _delete_workflow_triggers(database_id, workflow_id, event=None):
+    """Delete every trigger row of one workflow, auditing each deletion as the trigger service's DELETE
+    route does. Returns the number deleted.
+
+    The partition is read to exhaustion (a workflow may carry several triggers of one type). Best-effort
+    throughout: a failed partition read is logged and yields 0, and a failed delete is logged while the
+    remaining rows are still attempted, so an archived workflow keeps as few live triggers as possible
+    without the archive itself answering an error; the upload dispatcher additionally skips any row
+    left behind for an archived workflow."""
+    composite = wr.workflow_composite_key(database_id, workflow_id)
+    table = _triggers_table()
+    trigger_keys = []
+    kwargs = {"KeyConditionExpression": Key("workflowDatabaseId:workflowId").eq(composite)}
+    try:
+        while True:
+            response = table.query(**kwargs)
+            trigger_keys.extend(row.get("triggerType", "") for row in response.get("Items", []))
+            if "LastEvaluatedKey" not in response:
+                break
+            kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+    except Exception as e:
+        logger.exception(f"Failed listing triggers of archived workflow {database_id}:{workflow_id} "
+                         f"(continuing): {e}")
+        return 0
+
+    deleted = 0
+    for trigger_type in trigger_keys:
+        if not trigger_type:
+            continue
+        try:
+            table.delete_item(
+                Key={"workflowDatabaseId:workflowId": composite, "triggerType": trigger_type})
+        except Exception as e:
+            logger.exception(f"Failed deleting trigger {trigger_type} of archived workflow "
+                             f"{database_id}:{workflow_id} (continuing): {e}")
+            continue
+        deleted += 1
+        # AUDIT LOG: trigger deleted with its workflow's archive — the workflow stops firing automatically.
+        log_actions(event or {}, "workflowTriggerDelete", {
+            "databaseId": database_id,
+            "workflowId": workflow_id,
+            "triggerType": trigger_type,
+            "operation": "delete",
+        })
+    return deleted
+
+
 def archive_workflow(database_id, workflow_id, username, claims_and_roles, event=None):
     item = get_workflow_item(database_id, workflow_id)
     if not item:
@@ -795,10 +843,15 @@ def archive_workflow(database_id, workflow_id, username, claims_and_roles, event
         "modifiedBy": username,
     }):
         return validation_error(status_code=404, body={"message": "Workflow not found"})
+    # The archived workflow's triggers go with it: a trigger row that outlives its workflow keeps
+    # matching uploads, and each match costs a launch the execute handler refuses. Deleted after the
+    # archive write, so a refused or failed archive leaves them untouched.
+    deleted_triggers = _delete_workflow_triggers(database_id, workflow_id, event)
     # AUDIT LOG: workflow archived (the delete route archives rather than removing).
     log_actions(event or {}, "workflowArchive", {
         "databaseId": database_id,
         "workflowId": workflow_id,
+        "triggersDeleted": deleted_triggers,
         "operation": "archive",
     })
     return success(body={"message": "Workflow archived"})
