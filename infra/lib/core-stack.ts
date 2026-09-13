@@ -271,10 +271,13 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResourcesNestedStack.storageResources,
                 lambdaLayers.lambdaCommonBaseLayer,
                 this.vpc,
-                this.subnetsIsolated
+                this.subnetsIsolated,
+                apiBuilder2NestedStack.executeWorkflowV2FunctionName
             );
             searchBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             searchBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+            // The system-workflow launcher invokes the execute-workflow lambda built in ApiBuilder2.
+            searchBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
 
             //Set feature for no opensearch in neither provisioned or serverless selected
             if (

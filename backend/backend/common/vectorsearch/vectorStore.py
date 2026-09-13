@@ -203,7 +203,8 @@ class VectorStore(Protocol):
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
     ) -> Tuple[int, Optional[dict]]: ...
     def search(self, vector: List[float], *, top_k: int, filters: Dict[str, str]) -> List[VectorHit]: ...
-    def scan_keys(self, start_key: Optional[dict] = None, limit: int = 1000) -> Tuple[List[dict], Optional[dict]]: ...
+    def scan_keys(self, start_key: Optional[dict] = None, limit: int = 1000,
+                  pk_prefix: Optional[str] = None) -> Tuple[List[dict], Optional[dict]]: ...
     def delete_keys(self, keys: List[dict]) -> int: ...
 
 
@@ -572,13 +573,19 @@ class DynamoDbVectorStore:
                 )
         return deleted
 
-    def scan_keys(self, start_key: Optional[dict] = None, limit: int = 1000) -> Tuple[List[dict], Optional[dict]]:
+    def scan_keys(self, start_key: Optional[dict] = None, limit: int = 1000,
+                  pk_prefix: Optional[str] = None) -> Tuple[List[dict], Optional[dict]]:
+        """One page of primary keys; with ``pk_prefix`` only the keys whose partition key begins with it.
+        The filter narrows a page after the read, so the returned cursor still walks the whole table."""
         kwargs: Dict[str, Any] = {
             "TableName": self._table_name,
             "ProjectionExpression": _KEY_PROJECTION,
             "ExpressionAttributeNames": dict(_KEY_NAMES),
             "Limit": limit,
         }
+        if pk_prefix:
+            kwargs["FilterExpression"] = "begins_with(#pk, :prefix)"
+            kwargs["ExpressionAttributeValues"] = {":prefix": {"S": pk_prefix}}
         if start_key is not None:
             kwargs["ExclusiveStartKey"] = start_key
         response = self._client.scan(**kwargs)

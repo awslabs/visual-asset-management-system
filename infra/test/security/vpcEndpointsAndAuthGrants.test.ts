@@ -209,6 +209,14 @@ describe("core stack nested-stack dependencies", () => {
             "pipelineBuilderNestedStack.addStackDependency(apiBuilder2NestedStack)"
         );
     });
+
+    // The system-workflow launcher built in SearchBuilder invokes the execute-workflow Lambda built in
+    // ApiBuilder2 by name; ApiBuilder2 consumes nothing from Search, so the arrow is acyclic.
+    test("searchBuilderNestedStack depends on apiBuilder2NestedStack", () => {
+        expect(activeSource).toContain(
+            "searchBuilderNestedStack.addStackDependency(apiBuilder2NestedStack)"
+        );
+    });
 });
 
 describe("setupSecurityAndLoggingEnvironmentAndPermissions", () => {

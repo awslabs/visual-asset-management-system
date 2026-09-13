@@ -46,9 +46,9 @@ infra/
       s3AssetBuckets.ts         # Global asset bucket registry
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
-    lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
+    lambdaBuilder/              # 18 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
                                 # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
-                                # metadataSchema, assetsLink, searchIndexBucketSync)
+                                # metadataSchema, assetsLink, searchIndexBucketSync, vectorSearch)
     nestedStacks/
       vpc/vpcBuilder-nestedStack.ts      # VPC, subnets, VPC endpoints
       storage/
@@ -74,8 +74,9 @@ infra/
         staticWebBuilder-nestedStack.ts    # S3 + CloudFront or ALB web hosting
         constructs/                        # cloudfront-s3-website, alb-s3-website-albDeploy, gateway-albDeploy, custom-cognito-config
       searchAndIndexing/
-        searchBuilder-nestedStack.ts       # OpenSearch serverless or provisioned
-        constructs/                        # opensearch-serverless, opensearch-provisioned, schemaDeploy/deployschema.ts
+        searchBuilder-nestedStack.ts       # OpenSearch serverless or provisioned; vector indexing when vectorSearch.enabled
+        constructs/                        # opensearch-serverless, opensearch-provisioned, schemaDeploy/deployschema.ts,
+                                           # vectorIndexing-construct (queues, embedding-ready rule, indexer/reindexer/launcher)
       pipelines/                           # Pipeline stacks — see pipelines/CLAUDE.md
         pipelineBuilder-nestedStack.ts     # Pipeline orchestrator
         constructs/                        # batch-fargate-pipeline, batch-gpu-pipeline,
@@ -122,7 +123,9 @@ CoreVAMSStack (root)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
-  |     +-- SearchBuilder (OpenSearch)                           -> storage, resourceNames
+  |     +-- SearchBuilder (OpenSearch, vector indexing)          -> storage, resourceNames, ApiBuilder2
+  |     |                                                           (its system-workflow launcher invokes
+  |     |                                                            an ApiBuilder2 Lambda by name)
   |     +-- PipelineBuilder (all use-case pipelines)             -> storage, ApiBuilder2
   |     |                                                           (its vamsSchema registration custom
   |     |                                                            resources invoke an ApiBuilder2 Lambda)
@@ -188,7 +191,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 
 ## Lambda Builder Pattern
 
-All 17 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
+All 18 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
 
 ### Standard Function Signature + Configuration
 

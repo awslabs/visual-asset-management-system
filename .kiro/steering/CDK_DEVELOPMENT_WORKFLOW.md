@@ -60,7 +60,8 @@ CoreVAMSStack (root)
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
   |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
   |     |                                                    -> storage, resourceNames, ApiBuilder
-  |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
+  |     +-- SearchBuilder (OpenSearch, vector indexing)      -> storage, resourceNames, ApiBuilder2
+  |     |    (its system-workflow launcher invokes an ApiBuilder2 Lambda by name)
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
   |     +-- AddonBuilder (Garnet, Physna Sync)               -> storage, resourceNames

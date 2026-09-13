@@ -17,6 +17,7 @@ import {
     buildAssetIndexingFunction,
     buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import { VectorIndexingConstruct } from "./constructs/vectorIndexing-construct";
 import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -44,7 +45,8 @@ export class SearchBuilderNestedStack extends NestedStack {
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        executeWorkflowV2FunctionName: string
     ) {
         super(parent, name);
 
@@ -55,7 +57,8 @@ export class SearchBuilderNestedStack extends NestedStack {
             storageResources,
             lambdaCommonBaseLayer,
             vpc,
-            subnets
+            subnets,
+            executeWorkflowV2FunctionName
         );
     }
 
@@ -66,7 +69,8 @@ export class SearchBuilderNestedStack extends NestedStack {
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        executeWorkflowV2FunctionName: string
     ): lambda.Function {
         const searchFun = buildSearchFunction(
             scope,
@@ -498,6 +502,22 @@ export class SearchBuilderNestedStack extends NestedStack {
         }
 
         /////////////////////////////////////////////////////////////////////////////
+        // Vector indexing (independent of the OpenSearch flavour: its topics exist regardless)
+        /////////////////////////////////////////////////////////////////////////////
+
+        let vectorIndexing: VectorIndexingConstruct | undefined = undefined;
+        if (config.app.vectorSearch.enabled) {
+            vectorIndexing = new VectorIndexingConstruct(scope, "VectorIndexing", {
+                config: config,
+                storageResources: storageResources,
+                lambdaCommonBaseLayer: lambdaCommonBaseLayer,
+                vpc: vpc,
+                subnets: subnets,
+                executeWorkflowV2FunctionName: executeWorkflowV2FunctionName,
+            });
+        }
+
+        /////////////////////////////////////////////////////////////////////////////
         // Setup Custom Resource for Reindexing
         /////////////////////////////////////////////////////////////////////////////
 
@@ -534,6 +554,14 @@ export class SearchBuilderNestedStack extends NestedStack {
             new ssm.StringParameter(scope, "ResourceNameParamCrOsReindexer", {
                 parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer}`,
                 stringValue: reindexerFunction.functionName,
+            });
+        }
+
+        // Same reasoning for the vector reindexer: read by the data-migration tooling only.
+        if (vectorIndexing) {
+            new ssm.StringParameter(scope, "ResourceNameParamVectorReindexer", {
+                parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer}`,
+                stringValue: vectorIndexing.vectorReindexerFunction.functionName,
             });
         }
 
