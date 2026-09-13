@@ -313,7 +313,8 @@ def get_workflow(ctx: click.Context, database_id: str, workflow_id: str,
               help='specifiedPipelines from a JSON file')
 @click.option('--category', default='', help='Workflow category')
 @click.option('--description', default='', help='Workflow description')
-@click.option('--system-config', help='systemConfig as inline JSON')
+@click.option('--system-config', help='systemConfig as inline JSON (concurrencyRestriction: none, perAsset, '
+                                      'perInputFile, or perInputFileVersion)')
 @click.option('--system-config-file', type=click.Path(exists=True), help='systemConfig from a JSON file')
 @click.option('--sub-dashboard-url', default='', help='Optional sub-dashboard URL')
 @click.option('--disabled', is_flag=True, help='Create the workflow disabled')
@@ -334,6 +335,10 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
     systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
     and databaseMetadata, each defaulting to true; it gates which metadata a run of this workflow
     captures. The workflow's gate builds the one metadata envelope every step shares.
+
+    systemConfig.concurrencyRestriction is none, perAsset, perInputFile, or perInputFileVersion.
+    perInputFileVersion locks each selected file version for the run's duration: a second execution
+    of the same workflow on the same version is rejected with 400 until the first one finishes.
 
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\
@@ -393,7 +398,8 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
               help='Replacement specifiedPipelines from a JSON file')
 @click.option('--category', help='New category')
 @click.option('--description', help='New description')
-@click.option('--system-config', help='New systemConfig as inline JSON')
+@click.option('--system-config', help='New systemConfig as inline JSON (concurrencyRestriction: none, perAsset, '
+                                      'perInputFile, or perInputFileVersion)')
 @click.option('--system-config-file', type=click.Path(exists=True), help='New systemConfig from a JSON file')
 @click.option('--sub-dashboard-url', help='New sub-dashboard URL')
 @click.option('--enable/--disable', 'enabled', default=None, help='Enable or disable the workflow')

@@ -925,3 +925,16 @@ class TestWorkflowListTriggerCounts:
             result = cli_runner.invoke(cli, ['workflow', 'get', '-d', 'db1', '-w', 'wf1'])
             assert result.exit_code == 0
             assert 'Triggers: fileUpload' in result.output
+
+
+class TestWorkflowSystemConfigHelp:
+    """The concurrency values are named in the help so an operator authoring --system-config by hand
+    finds the lock value without opening the API reference. Click keeps a single token intact when it
+    re-wraps help text, so the assertion is on the tokens."""
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    def test_system_config_help_names_every_concurrency_value(self, cli_runner, command):
+        result = cli_runner.invoke(cli, ['workflow', command, '--help'])
+        assert result.exit_code == 0
+        for value in ("perAsset", "perInputFile", "perInputFileVersion"):
+            assert value in result.output

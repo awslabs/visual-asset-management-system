@@ -74,6 +74,7 @@ const DYNAMO_FIELDS = [
     "workflowExecutionsStorageTableV2",
     "workflowExecutionInputsStorageTable",
     "workflowExecutionConfigurationStorageTable",
+    "workflowExecutionLocksStorageTable",
     "workflowStorageTableV2",
     "workflowTriggersStorageTable",
 ] as const;
@@ -449,5 +450,119 @@ describe("processWorkflowExecutionOutput least privilege", () => {
             .join(" ");
         expect(dynamoRefs).not.toContain(synthed.logicalIdOf("databaseStorageTable"));
         expect(dynamoRefs).toContain(synthed.logicalIdOf("s3AssetBucketsStorageTable"));
+    });
+});
+
+/**
+ * perInputFileVersion locks live in their own table. The launch handler takes them (PutItem) and
+ * releases them when a launch fails after acquiring (DeleteItem); the three terminal handlers release
+ * them from the execution's input rows, which the end-state and error handlers did not previously read.
+ * Interim tracking touches none of this and is the negative control.
+ */
+describe("perInputFileVersion lock table grants", () => {
+    const LOCK_WRITES = ["dynamodb:PutItem", "dynamodb:DeleteItem"];
+    const ROW_READS = ["dynamodb:GetItem", "dynamodb:Query"];
+
+    const refsFor = (synthed: SynthedLambda, lambdaId: string, actions: string[]) =>
+        actions.map((action) => resourcesForAction(synthed.template, lambdaId, action)).join(" ");
+
+    const executeWorkflow = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecuteWorkflowV2Function(
+                scope,
+                layer,
+                resources,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const processOutput = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildProcessWorkflowExecutionOutputFunction(
+                scope,
+                layer,
+                resources,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const handleError = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildHandleExecutionErrorFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const executionService = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildExecutionServiceFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const interim = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildInterimPipelineTrackingFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+
+    test.each([
+        ["executeWorkflow", executeWorkflow],
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+        ["executionService", executionService],
+    ])("%s can put and delete lock rows", (lambdaId, build) => {
+        const synthed = build();
+        expect(refsFor(synthed, lambdaId, LOCK_WRITES)).toContain(
+            synthed.logicalIdOf("workflowExecutionLocksStorageTable")
+        );
+    });
+
+    test.each([
+        ["processWorkflowExecutionOutput", processOutput],
+        ["handleExecutionError", handleError],
+    ])(
+        "%s can read the workflow row and the input rows the release derives its keys from",
+        (lambdaId, build) => {
+            const synthed = build();
+            const reads = refsFor(synthed, lambdaId, ROW_READS);
+            expect(reads).toContain(synthed.logicalIdOf("workflowStorageTableV2"));
+            expect(reads).toContain(synthed.logicalIdOf("workflowExecutionInputsStorageTable"));
+        }
+    );
+
+    test("interimPipelineTracking holds no grant on the lock table", () => {
+        const synthed = interim();
+        // Positive control: the same scan does find a table this lambda writes.
+        expect(refsFor(synthed, "interimPipelineTracking", ["dynamodb:PutItem"])).toContain(
+            synthed.logicalIdOf("pipelineExecutionsStorageTable")
+        );
+        expect(
+            refsFor(synthed, "interimPipelineTracking", [...ROW_READS, ...LOCK_WRITES])
+        ).not.toContain(synthed.logicalIdOf("workflowExecutionLocksStorageTable"));
     });
 });
