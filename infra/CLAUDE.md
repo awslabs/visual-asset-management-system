@@ -104,6 +104,7 @@ infra/
     tools/ssm_resource_lookup.py                 # Resolves resource names from the SSM parameters
     v2.4_to_v2.5/upgrade/                        # Backfills databaseId + databaseId:assetId on asset versions
     v2.5_to_v2.6/upgrade/                        # Transforms pipeline/workflow/execution rows into the V2 tables
+    v2.6_to_v2.7/upgrade/                        # Deletes orphaned trigger rows, backfills the vector index, reports retired-pipeline references
 ```
 
 ---
