@@ -7,7 +7,9 @@
  * T1 arms for the system GenAI metadata pipeline across the three shipped templates: the pipeline's
  * stack is emitted iff the pipeline is enabled; no template in any arm creates a Rekognition
  * endpoint; the Bedrock Runtime endpoint follows the one placement rule; the guardrail grant and the
- * Fargate job definition follow their flags. Every negative arm pairs with a positive control.
+ * Fargate job definition follow their flags; the video-segment Distributed Map, its self-grant, the
+ * segment function and the 89-entry openPipeline allow list are present in every partition. Every
+ * negative arm pairs with a positive control.
  *
  * Vector search requires the pipeline (config.ts rejects the other way round), so the "search
  * placement" arm enables both and derives its expectation from searchLambdasInVpc() over the mutated
@@ -159,7 +161,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         );
     });
 
-    it("grants bedrock:ApplyGuardrail on the exact guardrail iff configured", () => {
+    it("grants bedrock:ApplyGuardrail on the exact guardrail iff configured, once per analysis function", () => {
         const withGuardrail = synthTemplate(name, {
             mutate: (c) => {
                 enable(c);
@@ -170,11 +172,109 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             },
             mutateKey: "sysgenai-guardrail",
         });
+        // The whole-file analysis Lambda and the per-segment analysis Lambda, each on the exact ARN.
         const grants = statementsWith(withGuardrail, "bedrock:ApplyGuardrail");
-        expect(grants).toHaveLength(1);
-        expect(SynthResult.flatten(grants[0].Resource)).toContain(":guardrail/gr-t1test");
+        expect(grants).toHaveLength(2);
+        for (const grant of grants) {
+            expect(SynthResult.flatten(grant.Resource)).toContain(":guardrail/gr-t1test");
+            expect(SynthResult.flatten(grant.Resource)).not.toContain("*");
+        }
         const without = synthTemplate(name, { mutate: enable, mutateKey: "sysgenai-on" });
         expect(statementsWith(without, "bedrock:ApplyGuardrail")).toHaveLength(0);
+    });
+
+    it("deploys the video-segment Distributed Map, grants the machine StartExecution on itself outside its default policy, and admits the classifier's 89 extensions", () => {
+        const on = synthTemplate(name, { mutate: enable, mutateKey: "sysgenai-on" });
+        const machines = stateMachines(on).filter((m) =>
+            SynthResult.flatten((m.properties as any).DefinitionString).includes("VideoSegmentMap")
+        );
+        expect(machines).toHaveLength(1);
+        const smId = machines[0].logicalId;
+        const definition = SynthResult.flatten((machines[0].properties as any).DefinitionString);
+        for (const fragment of [
+            '"VideoSegmentChoice"',
+            '"HandleVideoSegmentsError"',
+            '"SegmentAnalyzeTask"',
+            '"Label":"VideoSegments"',
+            '"ExecutionType":"EXPRESS"',
+            '"Key.$":"$.videoSegmentItemsKey"',
+            '"Prefix.$":"$.videoSegmentResultsPrefix"',
+        ]) {
+            expect(definition).toContain(fragment);
+        }
+        // The reader and writer integration ARNs carry the partition pseudo-parameter, not a literal.
+        expect(definition).toContain("arn:${AWS::Partition}:states:::s3:getObject");
+        expect(definition).toContain("arn:${AWS::Partition}:states:::s3:putObject");
+        expect(definition).not.toMatch(/arn:aws[a-z-]*:states:::s3:/);
+
+        const selfGrants = on.resources
+            .filter((r) => /IAM::(Policy|ManagedPolicy)$/.test(r.type))
+            .filter((p) =>
+                (((p.properties as any).PolicyDocument?.Statement ?? []) as any[]).some(
+                    (st) =>
+                        JSON.stringify(st.Action).includes("states:StartExecution") &&
+                        JSON.stringify(st.Resource).includes(smId)
+                )
+            );
+        // The L2's map policy and the openPipeline Lambda's grant; the state machine role's default
+        // policy (the one the machine depends on) never holds the self-grant.
+        expect(selfGrants.map((p) => p.logicalId)).toEqual(
+            expect.arrayContaining([
+                expect.stringMatching(
+                    /^SystemGenAiMetadataProcessingStateMachineDistributedMapPolicy/
+                ),
+            ])
+        );
+        expect(selfGrants.map((p) => p.logicalId)).not.toEqual(
+            expect.arrayContaining([
+                expect.stringMatching(
+                    /^SystemGenAiMetadataProcessingStateMachineRoleDefaultPolicy/
+                ),
+            ])
+        );
+        expect(machines[0].raw.DependsOn ?? []).not.toEqual(
+            expect.arrayContaining([expect.stringMatching(/DistributedMapPolicy/)])
+        );
+        // Control: the same scan finds nothing for a state-machine id that does not exist.
+        expect(
+            on.resources.filter(
+                (r) =>
+                    /IAM::(Policy|ManagedPolicy)$/.test(r.type) &&
+                    JSON.stringify(r.properties).includes("NoSuchStateMachineControl")
+            )
+        ).toEqual([]);
+
+        // The reader's and writer's grants name the auxiliary bucket, never `*`.
+        const s3Writes = statementsWith(on, "s3:ListMultipartUploadParts");
+        expect(s3Writes.length).toBeGreaterThan(0);
+        for (const st of s3Writes) {
+            expect(SynthResult.flatten(st.Resource)).toMatch(
+                /^arn:\$\{AWS::Partition\}:s3:::\$\{.*AssetAuxiliaryBucket.*\}\/\*$/
+            );
+        }
+
+        // The segment function: the media image with its command pointed at the segment handler.
+        const segment = on.where("AWS::Lambda::Function", (r) =>
+            r.logicalId.startsWith("SystemGenAiMetadataSegmentAnalyze")
+        );
+        expect(segment).toHaveLength(1);
+        expect((segment[0].properties as any).ImageConfig).toEqual({
+            Command: ["segment_handler.lambda_handler"],
+        });
+        expect((segment[0].properties as any).Timeout).toBe(300);
+
+        // The openPipeline gate admits the classifier's whole allow list, office formats included.
+        const openPipeline = on.where(
+            "AWS::Lambda::Function",
+            (r) => (r.properties as any).Handler === "openPipeline.lambda_handler"
+        );
+        expect(openPipeline).toHaveLength(1);
+        const allowed = String(
+            (openPipeline[0].properties as any).Environment.Variables.ALLOWED_INPUT_FILEEXTENSIONS
+        ).split(",");
+        expect(allowed).toHaveLength(89);
+        expect(new Set(allowed).size).toBe(89);
+        expect(allowed).toEqual(expect.arrayContaining([".docx", ".pptx", ".xlsx"]));
     });
 
     it("emits the Fargate render job definition iff useFargateRenderer", () => {

@@ -40,6 +40,7 @@ import {
     buildOpenPipelineFunction,
     buildPipelineEndFunction,
     buildRender3dFunction,
+    buildSegmentAnalyzeFunction,
     buildVamsExecuteSystemGenAiMetadataFunction,
 } from "../lambdaBuilder/systemGenAiMetadataFunctions";
 
@@ -63,7 +64,7 @@ const defaultProps: Partial<SystemGenAiMetadataConstructProps> = {};
  * generated from the classifier's allow list (backendPipelines/system/genAiMetadata/lambda/fileClassifier.py).
  */
 export const allowedInputFileExtensions =
-    ".3dm,.3ds,.3mf,.aac,.amf,.asm,.avi,.bim,.brep,.catpart,.catproduct,.cfg,.csv,.dae,.e57,.fbx,.fcs,.flac,.flv,.gif,.glb,.gltf,.htm,.html,.iam,.ifc,.ifczip,.iges,.igs,.inf,.ini,.ipt,.ipynb,.jpeg,.jpg,.js,.json,.jt,.las,.laz,.lcc,.log,.m4a,.m4v,.md,.mkv,.mov,.mp3,.mp4,.obj,.off,.ogg,.par,.pdf,.ply,.png,.prt,.ps1,.py,.sh,.sldasm,.sldprt,.sog,.splat,.spz,.sql,.step,.stl,.stp,.svg,.toml,.ts,.txt,.usd,.usda,.usdc,.usdz,.wav,.webm,.wmv,.wrl,.x_b,.x_t,.xml,.yaml,.yml";
+    ".3dm,.3ds,.3mf,.aac,.amf,.asm,.avi,.bim,.brep,.catpart,.catproduct,.cfg,.csv,.dae,.docx,.e57,.fbx,.fcs,.flac,.flv,.gif,.glb,.gltf,.htm,.html,.iam,.ifc,.ifczip,.iges,.igs,.inf,.ini,.ipt,.ipynb,.jpeg,.jpg,.js,.json,.jt,.las,.laz,.lcc,.log,.m4a,.m4v,.md,.mkv,.mov,.mp3,.mp4,.obj,.off,.ogg,.par,.pdf,.ply,.png,.pptx,.prt,.ps1,.py,.sh,.sldasm,.sldprt,.sog,.splat,.spz,.sql,.step,.stl,.stp,.svg,.toml,.ts,.txt,.usd,.usda,.usdc,.usdz,.wav,.webm,.wmv,.wrl,.x_b,.x_t,.xlsx,.xml,.yaml,.yml";
 
 /** The Fargate render branch's attempt budget; the entry module reports it as the remaining time. */
 const FARGATE_RENDER_ATTEMPT_DURATION = cdk.Duration.hours(4);
@@ -72,10 +73,12 @@ const FARGATE_RENDER_ATTEMPT_DURATION = cdk.Duration.hours(4);
  * The SYSTEM - GenAI Metadata Generation pipeline: a state machine that classifies one uploaded file,
  * renders or extracts a view of it on the branch its class selects (Blender, the 3D render image, the
  * media image, or an AWS Batch Fargate job for files above the Lambda limits), analyses the result
- * with Amazon Bedrock, and, when vector search is enabled, publishes a per-file-version embedding.
+ * with Amazon Bedrock, and, when vector search is enabled, publishes a per-file-version embedding
+ * followed by one embedding per time window or text chunk of the file through a Distributed Map.
  * Creates:
  * - SFN state machine and its vended log group
- * - six zip Lambdas and three container-image Lambdas
+ * - six zip Lambdas and four container-image Lambdas
+ * - the state machine role's deployment-key grant for the Map's CMK-encrypted items and results
  * - optionally a Batch Fargate job definition, queue and compute environment
  * - the VAMS pipeline/workflow/template registration
  */
@@ -183,6 +186,16 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             props.vpc,
             props.pipelineSubnets,
             props.pipelineSecurityGroups,
+            kmsKey
+        );
+        const segmentAnalyzeFunction = buildSegmentAnalyzeFunction(
+            this,
+            assetAuxiliaryBucket,
+            props.config,
+            props.vpc,
+            props.pipelineSubnets,
+            props.pipelineSecurityGroups,
+            props.storageResources.eventBridge.orchestrationBus,
             kmsKey
         );
 
@@ -388,8 +401,69 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             )
             .otherwise(embeddingSkippedPass);
         generateMetadataTask.next(vectorSearchChoice);
-        generateEmbeddingTask.next(pipelineEndTask);
         embeddingSkippedPass.next(pipelineEndTask);
+
+        /**
+         * SFN States — video segments. One EXPRESS child execution per time window (or text chunk)
+         * of the plan the media branch wrote, eight at a time; the Map's own result manifest lands
+         * under the execution's auxiliary prefix, and an uncaught child fault is routed to
+         * PipelineEndTask with the error alongside the state like every other task failure.
+         */
+        const handleVideoSegmentsError = handleError("HandleVideoSegmentsError");
+
+        // The child: receives {segment, state} and returns {segmentKey, status, documentS3Location}
+        // plus, when status is FAILED or SKIPPED, error — one of BedrockSegmentError,
+        // BedrockGuardrailIntervened, SegmentPublishError, SegmentFramesUnavailable. The Map
+        // tolerates no failed child, and a child is idempotent by document key and event, so a
+        // fault the handler did not catch re-runs the window behind the L2's default Lambda
+        // service-exception retrier before it can fail the Map.
+        const segmentAnalyzeTask = invoke("SegmentAnalyzeTask", segmentAnalyzeFunction).addRetry({
+            errors: [sfn.Errors.ALL],
+            interval: Duration.seconds(10),
+            maxAttempts: 2,
+            backoffRate: 2,
+        });
+
+        // The items file and the result manifest are both in the auxiliary bucket, named statically
+        // so the L2 scopes the role's S3 grants to it; the key and the prefix are the ones the media
+        // branch wrote to the state. Zero tolerated failures is the Step Functions default, and the
+        // CDK elides a literal 0, so neither ToleratedFailure* key is set.
+        const videoSegmentMap = new sfn.DistributedMap(this, "VideoSegmentMap", {
+            mapExecutionType: sfn.StateMachineType.EXPRESS,
+            itemReader: new sfn.S3JsonItemReader({
+                bucket: assetAuxiliaryBucket,
+                key: sfn.JsonPath.stringAt("$.videoSegmentItemsKey"),
+            }),
+            itemSelector: {
+                segment: sfn.JsonPath.stringAt("$$.Map.Item.Value"),
+                state: sfn.JsonPath.entirePayload,
+            },
+            maxConcurrency: 8,
+            label: "VideoSegments",
+            resultWriter: new sfn.ResultWriter({
+                bucket: assetAuxiliaryBucket,
+                prefix: sfn.JsonPath.stringAt("$.videoSegmentResultsPrefix"),
+            }),
+            resultPath: "$.videoSegmentMapResult",
+        });
+        // The class renders ProcessorConfig.Mode DISTRIBUTED and mapExecutionType supplies the
+        // ExecutionType; a ProcessorConfig passed here would be validated against and then ignored.
+        videoSegmentMap.itemProcessor(segmentAnalyzeTask);
+        videoSegmentMap.addCatch(handleVideoSegmentsError, { resultPath: "$.error" });
+        videoSegmentMap.next(pipelineEndTask);
+
+        // Segments are analysed only when a plan exists and the whole-file vector was published.
+        const videoSegmentChoice = new sfn.Choice(this, "VideoSegmentChoice")
+            .when(
+                sfn.Condition.and(
+                    sfn.Condition.isPresent("$.videoSegmentItemsS3Location"),
+                    sfn.Condition.isPresent("$.embeddingStatus"),
+                    sfn.Condition.stringEquals("$.embeddingStatus", "SUCCEEDED")
+                ),
+                videoSegmentMap
+            )
+            .otherwise(pipelineEndTask);
+        generateEmbeddingTask.next(videoSegmentChoice);
 
         // The render branch constructPipeline selected for the file class and size.
         const renderBranchChoice = new sfn.Choice(this, "RenderBranchChoice")
@@ -446,6 +520,17 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                 tracingEnabled: true,
             }
         );
+
+        /**
+         * The Distributed Map's own policy on the state machine role (the L2 writes it: StartExecution
+         * on the machine, DescribeExecution/StopExecution/RedriveExecution on its executions) covers
+         * the child executions, and the L2 grants the role the items-file read and the result-manifest
+         * write on the auxiliary bucket. Both objects are CMK-encrypted, so the role also needs the
+         * deployment key.
+         */
+        if (kmsKey) {
+            pipelineStateMachine.addToRolePolicy(kmsKeyPolicyStatementGenerator(kmsKey));
+        }
 
         /**
          * Entry Lambdas
@@ -546,16 +631,37 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs to invoke the pipeline's Lambda functions by version and, with the Fargate renderer, to submit and track Batch jobs",
+                    reason: "The state machine role's default policy carries the wildcard permissions Step Functions needs to invoke the pipeline's Lambda functions by version and, with the Fargate renderer, to submit and track Batch jobs. The video-segment map reads its items file from, and writes its result manifest under, run-time prefixes of the CMK-encrypted auxiliary bucket, so its two S3 grants name the bucket with an object wildcard and the deployment key's data-key actions sit beside them",
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
+                        "Action::kms:ReEncrypt*",
                         `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },
                         {
                             regex: "/^Action::s3:.*$/g",
+                        },
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:s3:::<.*>/\\*$/g",
+                        },
+                    ],
+                },
+            ],
+            true
+        );
+
+        NagSuppressions.addResourceSuppressionsByPath(
+            Stack.of(this),
+            `/${this.toString()}/SystemGenAiMetadataProcessing-StateMachine/DistributedMapPolicy/Resource`,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Child executions of the video-segment Distributed Map are named by Step Functions at run time, so the execution ARNs the map policy describes, stops and redrives are scoped to this state machine's name (and the map's label) with a trailing wildcard",
+                    appliesTo: [
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:states:.*:execution:.*:\\*$/g",
                         },
                     ],
                 },
@@ -591,6 +697,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             "SystemGenAiMetadataBlenderRender",
             "SystemGenAiMetadataRender3d",
             "SystemGenAiMetadataMediaExtract",
+            "SystemGenAiMetadataSegmentAnalyze",
         ]) {
             NagSuppressions.addResourceSuppressionsByPath(
                 Stack.of(this),

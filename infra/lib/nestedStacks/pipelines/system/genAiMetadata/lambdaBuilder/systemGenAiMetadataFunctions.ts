@@ -55,6 +55,8 @@ const RENDER_IMAGE_EPHEMERAL_STORAGE = cdk.Size.mebibytes(10240);
 const MEDIA_IMAGE_MEMORY_MB = 3008;
 const MEDIA_IMAGE_TIMEOUT = Duration.seconds(600);
 const MEDIA_IMAGE_EPHEMERAL_STORAGE = cdk.Size.mebibytes(4096);
+// One segment of a file per invocation: a few frames or one text chunk, one Bedrock call each.
+const SEGMENT_ANALYZE_TIMEOUT = Duration.seconds(300);
 
 /**
  * The foundation-model id underneath a cross-Region inference-profile prefix, which is what the
@@ -501,5 +503,87 @@ export function buildMediaExtractFunction(
         ...vpcPlacement(config, vpc, subnets, pipelineSecurityGroups),
     });
     grantImageFunction(scope, fun, assetAuxiliaryBucket, config, kmsKey);
+    return fun;
+}
+
+/**
+ * The media image's second function: the child of the video-segment Distributed Map. One invocation
+ * analyses one time window (or one text chunk) of a file with the analysis model, embeds the result
+ * with the embedding model, writes the segment's embedding document and publishes its event.
+ */
+export function buildSegmentAnalyzeFunction(
+    scope: Construct,
+    assetAuxiliaryBucket: s3.IBucket,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    pipelineSecurityGroups: ec2.ISecurityGroup[],
+    orchestrationBus: events.IEventBus,
+    kmsKey?: kms.IKey
+): lambda.DockerImageFunction {
+    const pipeline = config.app.pipelines.useSystemGenAiMetadata;
+    const analysisModelId = pipeline.bedrockAnalysisModelId;
+    const embeddingModelId = config.app.vectorSearch.embeddingModelId;
+    const guardrail = pipeline.bedrockGuardrail;
+
+    const fun = new lambda.DockerImageFunction(scope, "SystemGenAiMetadataSegmentAnalyze", {
+        code: lambda.DockerImageCode.fromImageAsset(path.join(CONTAINERS_DIR, "media"), {
+            file: "Dockerfile",
+            platform: ecr_assets.Platform.LINUX_AMD64,
+            cmd: ["segment_handler.lambda_handler"],
+        }),
+        timeout: SEGMENT_ANALYZE_TIMEOUT,
+        memorySize: MEDIA_IMAGE_MEMORY_MB,
+        // The whole file is downloaded when a ranged read of it is not possible.
+        ephemeralStorageSize: MEDIA_IMAGE_EPHEMERAL_STORAGE,
+        ...vpcPlacement(config, vpc, subnets, pipelineSecurityGroups),
+        environment: {
+            BEDROCK_ANALYSIS_MODEL_ID: analysisModelId,
+            EMBEDDING_MODEL_ID: embeddingModelId,
+            EMBEDDING_DIMENSIONS: String(config.app.vectorSearch.embeddingDimensions),
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            BEDROCK_GUARDRAIL_IDENTIFIER: guardrail.guardrailIdentifier,
+            BEDROCK_GUARDRAIL_VERSION: guardrail.guardrailVersion,
+        },
+    });
+
+    // Reads the file from its asset bucket and writes the segment's result there; the embedding
+    // document and the frames it decodes go to the auxiliary bucket.
+    grantImageFunction(scope, fun, assetAuxiliaryBucket, config, kmsKey);
+    orchestrationBus.grantPutEventsTo(fun);
+
+    fun.addToRolePolicy(bedrockInvokeStatement(config, analysisModelId, true));
+    // The Map runs only on the vector-search path, so the embedding grant follows that flag.
+    if (config.app.vectorSearch.enabled) {
+        fun.addToRolePolicy(bedrockInvokeStatement(config, embeddingModelId, false));
+    }
+
+    if (guardrail.guardrailIdentifier !== "") {
+        // arn:<partition>:bedrock:<region>:<account>:guardrail/<identifier> — the one guardrail the
+        // per-segment analysis prompts are sent with.
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["bedrock:ApplyGuardrail"],
+                resources: [Service("BEDROCK").ARN("guardrail", guardrail.guardrailIdentifier)],
+            })
+        );
+    }
+
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Cross-Region inference profiles are created by Bedrock under an account-scoped id " +
+                    "that is not known at synthesis, so the analysis model's inference-profile grant is a " +
+                    "wildcard on this account's inference-profile namespace in this Region only; the " +
+                    "foundation-model ARNs beside it are exact.",
+                appliesTo: [{ regex: "/^Resource::arn:.*:bedrock:.*:inference-profile/\\*$/g" }],
+            },
+        ],
+        true
+    );
     return fun;
 }

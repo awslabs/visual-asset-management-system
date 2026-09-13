@@ -53,6 +53,10 @@ EXPECTED_CONFIG_KEYS = {
 }
 
 
+CDK_CONSTRUCT = os.path.join(h.REPO_ROOT, "infra", "lib", "nestedStacks", "pipelines", "system", "genAiMetadata",
+                             "constructs", "systemGenAiMetadata-construct.ts")
+
+
 def _backend_template_body_storage():
     """backend/backend/common/workflows/templateBodyStorage.py by path (it imports only hashlib and Decimal)."""
     path = os.path.join(h.REPO_ROOT, "backend", "backend", "common", "workflows", "templateBodyStorage.py")
@@ -60,6 +64,17 @@ def _backend_template_body_storage():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _cdk_allow_list_literal():
+    """The construct's `allowedInputFileExtensions` value: every quoted piece of the declaration joined, so a
+    literal written across several operands reads the same as a single-line one (the shape the cross-tree
+    gate test in backendPipelines/tests/test_open_pipeline_extension_gates.py reads too)."""
+    with open(CDK_CONSTRUCT, encoding="utf-8") as fh:
+        source = fh.read()
+    match = re.search(r"const allowedInputFileExtensions\s*=\s*([^;]*);", source)
+    assert match, f"no allowedInputFileExtensions declaration in {CDK_CONSTRUCT}"
+    return "".join(re.findall(r'"([^"]*)"', match.group(1)))
 
 
 def catalog_extensions():
@@ -110,6 +125,15 @@ class TestAllowLists:
         assert office == {"*.docx", "*.xlsx", "*.pptx"}
         for name, filters in _allow_lists().items():
             assert office <= set(filters["allow"]), name
+
+    def test_the_cdk_runtime_gate_is_the_classifier_allow_list(self):
+        """The construct's `allowedInputFileExtensions` literal is what openPipeline gates uploads on at
+        run time, so it is the comma-joined ALLOW_LIST verbatim: an extension the classifier admits but
+        the literal lacks is rejected before the state machine starts, and no unit test of the handlers
+        would notice."""
+        literal = _cdk_allow_list_literal()
+        assert literal == ",".join(fc.ALLOW_LIST)
+        assert len(literal.split(",")) == len(fc.ALLOW_LIST) == 89
 
     @pytest.mark.temporary  # pins the drop of .fls/.fws relative to the thumbnail allow list
     def test_the_faro_formats_are_not_admitted(self):
