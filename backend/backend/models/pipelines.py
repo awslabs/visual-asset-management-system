@@ -488,6 +488,9 @@ class PipelineRecordV2(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = {}
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system pipeline is read-only through the API except for
+    # `enabled` and the content of its templates. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""
@@ -774,6 +777,9 @@ class PipelineResponseModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = {}
     enabled: bool = True
     archived: bool = False
+    # Set only by the vamsSchema importer; a system pipeline is read-only through the API except for
+    # `enabled` and the content of its templates. A row without the attribute reads False.
+    isSystem: bool = False
     dateCreated: Optional[str] = ""
     dateModified: Optional[str] = ""
     createdBy: Optional[str] = ""

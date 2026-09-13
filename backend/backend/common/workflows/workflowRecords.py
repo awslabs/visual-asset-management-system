@@ -82,13 +82,16 @@ def build_workflow_record(
     specified_pipelines, system_config,
     workflow_arn="", asl_schema_version="", sub_dashboard_url="",
     enabled=True, archived=False, created_by="", modified_by="",
-    date_created="", date_modified="", job_names=None,
+    date_created="", date_modified="", job_names=None, is_system=False,
 ):
     """WorkflowStorageTableV2 row (database-scoped: PK databaseId, SK workflowId).
 
     job_names are the per-pipeline job names the ASL generator baked into the execution output S3
     paths (workflow order). The execute handler reads them to reconstruct the identical output
     prefixes — the parity contract mirrored from V1's workflow record jobNames.
+
+    `is_system` marks a record the deployment registered from a vamsSchema bundle and owns; the API
+    holds such a record read-only except for its enabled switch and its triggers' enabled switches.
     """
     now = iso_now()
     return {
@@ -107,6 +110,7 @@ def build_workflow_record(
         "subDashboardUrl": sub_dashboard_url or "",
         "enabled": bool(enabled),
         "archived": bool(archived),
+        "isSystem": bool(is_system),
         "dateCreated": date_created or now,
         "dateModified": date_modified or now,
         "createdBy": created_by or "",
