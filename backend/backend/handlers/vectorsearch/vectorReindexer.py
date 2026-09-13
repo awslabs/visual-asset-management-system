@@ -68,9 +68,9 @@ try:
     s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     workflow_storage_table_v2_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     pipeline_storage_table_v2_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
-    launch_queue_url = os.environ["SYSTEM_WORKFLOW_LAUNCH_QUEUE_URL"]
-    system_workflow_id = os.environ["SYSTEM_GENAI_WORKFLOW_ID"]
-    system_workflow_database_id = os.environ.get("SYSTEM_GENAI_WORKFLOW_DATABASE_ID", "GLOBAL")
+    launch_queue_url = os.environ["WORKFLOW_LAUNCH_QUEUE_URL"]
+    system_workflow_id = os.environ["GENAI_METADATA_WORKFLOW_ID"]
+    system_workflow_database_id = os.environ.get("GENAI_METADATA_WORKFLOW_DATABASE_ID", "GLOBAL")
     vector_index_name = os.environ["VECTOR_INDEX_NAME"]
     embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
     embedding_dimensions = int(os.environ["EMBEDDING_DIMENSIONS"])

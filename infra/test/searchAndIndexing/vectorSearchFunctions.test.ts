@@ -157,9 +157,9 @@ const synthAll = (config: Config.Config): Harness => {
         h.vpc,
         h.vpc.isolatedSubnets,
         {
-            SYSTEM_WORKFLOW_LAUNCH_QUEUE_URL: "https://sqs.example/launch",
-            SYSTEM_GENAI_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
-            SYSTEM_GENAI_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
+            WORKFLOW_LAUNCH_QUEUE_URL: "https://sqs.example/launch",
+            GENAI_METADATA_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
+            GENAI_METADATA_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
         }
     );
     buildSystemWorkflowLauncherFunction(
@@ -171,8 +171,8 @@ const synthAll = (config: Config.Config): Harness => {
         h.vpc.isolatedSubnets,
         {
             EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME: "executeWorkflowV2-test",
-            SYSTEM_GENAI_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
-            SYSTEM_GENAI_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
+            GENAI_METADATA_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
+            GENAI_METADATA_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
         }
     );
     return { ...h, template: Template.fromStack(h.stack) };
@@ -236,14 +236,14 @@ describe("vector-search Lambda builders", () => {
         const [, reindexer] = functionFor(h.template, "vectorReindexer");
         const renv = reindexer.Properties.Environment.Variables;
         expect(renv.VECTOR_INDEX_NAME).toBe("vec-amazon-titan-embed-text-v2-0-1024");
-        expect(renv.SYSTEM_WORKFLOW_LAUNCH_QUEUE_URL).toBe("https://sqs.example/launch");
-        expect(renv.SYSTEM_GENAI_WORKFLOW_ID).toBe("system-genai-metadata");
-        expect(renv.SYSTEM_GENAI_WORKFLOW_DATABASE_ID).toBe("GLOBAL");
+        expect(renv.WORKFLOW_LAUNCH_QUEUE_URL).toBe("https://sqs.example/launch");
+        expect(renv.GENAI_METADATA_WORKFLOW_ID).toBe("system-genai-metadata");
+        expect(renv.GENAI_METADATA_WORKFLOW_DATABASE_ID).toBe("GLOBAL");
 
         const [, launcher] = functionFor(h.template, "systemWorkflowLauncher");
         const lenv = launcher.Properties.Environment.Variables;
         expect(lenv.EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME).toBe("executeWorkflowV2-test");
-        expect(lenv.SYSTEM_GENAI_WORKFLOW_ID).toBe("system-genai-metadata");
+        expect(lenv.GENAI_METADATA_WORKFLOW_ID).toBe("system-genai-metadata");
         expect(lenv).not.toHaveProperty("VECTOR_INDEX_NAME");
     });
 

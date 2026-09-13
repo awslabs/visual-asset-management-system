@@ -35,10 +35,10 @@ os.environ.setdefault("EMBEDDING_DIMENSIONS", "4")
 os.environ.setdefault("AUX_BUCKET_NAME", "test-aux-bucket")
 os.environ.setdefault("VECTOR_INDEXER_QUEUE_URL",
                       "https://sqs.us-east-1.amazonaws.com/123456789012/indexer-queue")
-os.environ.setdefault("SYSTEM_WORKFLOW_LAUNCH_QUEUE_URL",
+os.environ.setdefault("WORKFLOW_LAUNCH_QUEUE_URL",
                       "https://sqs.us-east-1.amazonaws.com/123456789012/launch-queue")
-os.environ.setdefault("SYSTEM_GENAI_WORKFLOW_ID", "system-genai-metadata")
-os.environ.setdefault("SYSTEM_GENAI_WORKFLOW_DATABASE_ID", "GLOBAL")
+os.environ.setdefault("GENAI_METADATA_WORKFLOW_ID", "system-genai-metadata")
+os.environ.setdefault("GENAI_METADATA_WORKFLOW_DATABASE_ID", "GLOBAL")
 os.environ.setdefault("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "executeWorkflowV2-test")
 os.environ.setdefault("AWS_LAMBDA_FUNCTION_NAME", "vectorReindexer-test")
 

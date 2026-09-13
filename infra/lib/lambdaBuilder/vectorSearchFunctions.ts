@@ -179,7 +179,7 @@ export function buildSystemWorkflowLauncherFunction(
         ...vectorLambdaPlacement(config, vpc, subnets),
         environment: {
             // The workflow database id is the shared literal of infra/common/systemPipelines.ts.
-            SYSTEM_GENAI_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
+            GENAI_METADATA_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
             ...(extraEnv ?? {}),
         },
     });

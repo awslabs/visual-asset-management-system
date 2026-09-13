@@ -149,9 +149,9 @@ export class VectorIndexingConstruct extends Construct {
             vpc,
             subnets,
             {
-                SYSTEM_WORKFLOW_LAUNCH_QUEUE_URL: this.systemWorkflowLaunchQueue.queueUrl,
-                SYSTEM_GENAI_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
-                SYSTEM_GENAI_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
+                WORKFLOW_LAUNCH_QUEUE_URL: this.systemWorkflowLaunchQueue.queueUrl,
+                GENAI_METADATA_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
+                GENAI_METADATA_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
             }
         );
         this.systemWorkflowLauncherFunction = buildSystemWorkflowLauncherFunction(
@@ -163,8 +163,8 @@ export class VectorIndexingConstruct extends Construct {
             subnets,
             {
                 EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME: props.executeWorkflowV2FunctionName,
-                SYSTEM_GENAI_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
-                SYSTEM_GENAI_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
+                GENAI_METADATA_WORKFLOW_ID: SYSTEM_GENAI_METADATA_WORKFLOW_ID,
+                GENAI_METADATA_WORKFLOW_DATABASE_ID: SYSTEM_WORKFLOW_DATABASE_ID,
             }
         );
 
