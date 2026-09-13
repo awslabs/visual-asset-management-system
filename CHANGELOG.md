@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   **MCP** Aligned the `vams-mcp` package `__version__` (`tools/VamsMCP/vams_mcp/__init__.py`) with the VAMS release version; it had remained at `0.3.0`. Corrected the version-roll file list in the root `CLAUDE.md` to name all seven files that carry the VAMS version.
+
 ### Known Outstanding Issues
 
 ### Troubleshooting
