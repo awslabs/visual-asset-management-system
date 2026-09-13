@@ -26,7 +26,7 @@ import {
 import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
-import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
@@ -95,6 +95,8 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
 /** The Batch job definition and the metadata-generation function whose logs openPipeline registers per stage. */
 export interface OpenPipelineStageLogProps {
     jobDefinitionName: string;
+    /** The VAMS-owned group the Blender job definition writes its container output to. */
+    logGroup: logs.ILogGroup;
     metadataGenerationFunctionName: string;
 }
 
@@ -146,9 +148,9 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
-            // Batch default container log group + the Blender job definition name, registered as
+            // The Blender job's vended container log group + its job definition name, registered as
             // the Batch state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
-            ...batchJobLogGroupEnvironment(),
+            ...vendedBatchJobLogGroupEnvironment(stageLogs.logGroup),
             BATCH_JOB_DEFINITION_NAME: stageLogs.jobDefinitionName,
             // The metadata-generation function's own log group, registered as that state's log source.
             METADATA_GENERATION_LOG_GROUP_NAME: metadataGenerationLogGroupName,
@@ -253,7 +255,8 @@ export function buildMetadataGenerationPipelineFunction(
     // `foundation-model/*` ARN in the grant below has to name. The prefix set is partition-specific:
     // `global.`/`us.` in the commercial partition, `us-gov.` in GovCloud, `eu.`/`apac.` for the
     // regional profiles. Anchored, and only the leading prefix is removed — a bare `.replace()` would
-    // also strip the same text from the middle of a model name.
+    // also strip the same text from the middle of a model name. The inference-profile ARN names the
+    // configured id as-is: with a cross-Region prefix it is the profile the handler invokes.
     const bedrockModelPermissions = bedrockModelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
 
     const fun = new lambda.Function(scope, name, {
@@ -308,7 +311,8 @@ export function buildMetadataGenerationPipelineFunction(
                 config.env.region +
                 ":" +
                 config.env.account +
-                ":inference-profile/*",
+                ":inference-profile/" +
+                bedrockModelId,
         ],
     });
     fun.addToRolePolicy(bedrockPolicy);
@@ -340,12 +344,9 @@ export function buildMetadataGenerationPipelineFunction(
     });
     fun.addToRolePolicy(rekognitionPolicy);
 
-    // The two resource wildcards this handler genuinely needs, each named rather than covered by a
-    // blanket. Amazon Rekognition's detection APIs analyse bytes supplied in the request and publish no
-    // resource to scope to (see the link above the policy). The Bedrock inference-profile wildcard
-    // exists because the profile is chosen by the operator through
-    // `useGenAiMetadata3dLabeling.bedrockModelId` and its id is not known at synthesis; the
-    // foundation-model ARNs beside it are already exact.
+    // The one resource wildcard this handler genuinely needs, named rather than covered by a blanket.
+    // Amazon Rekognition's detection APIs analyse bytes supplied in the request and publish no
+    // resource to scope to (see the link above the policy). The Bedrock ARNs beside it are exact.
     NagSuppressions.addResourceSuppressions(
         fun,
         [
@@ -356,14 +357,6 @@ export function buildMetadataGenerationPipelineFunction(
                     "request and support no resource-level permissions, so Resource must be '*'. " +
                     "https://docs.aws.amazon.com/rekognition/latest/dg/security_iam_id-based-policy-examples.html",
                 appliesTo: [{ regex: "/^Resource::\\*$/g" }],
-            },
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "The Bedrock cross-Region inference profile is selected by the operator through " +
-                    "pipelines.useGenAiMetadata3dLabeling.bedrockModelId, so its identifier is not known " +
-                    "at synthesis. Scoped to this account and Region, and to inference profiles only.",
-                appliesTo: [{ regex: "/^Resource::arn:.*:bedrock:.*:inference-profile/\\*$/g" }],
             },
         ],
         true

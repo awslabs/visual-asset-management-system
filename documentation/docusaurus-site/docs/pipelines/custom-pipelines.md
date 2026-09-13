@@ -645,7 +645,7 @@ events_client.put_events(Entries=[{
         "logs": [
             {"logGroupArn": log_group_arn, "logGroupName": log_group_name,
              "sourceType": "stateMachine", "label": "Thumbnail state machine"},
-            {"logGroupArn": batch_log_group_arn, "logGroupName": "/aws/batch/job",
+            {"logGroupArn": batch_log_group_arn, "logGroupName": batch_log_group_name,
              "logStreamPrefix": f"{job_definition_name}/default/",
              "stageName": "ThumbnailBatchJob", "sourceType": "batch",
              "label": "ThumbnailBatchJob container"},
@@ -668,27 +668,38 @@ state machine the log belongs to (1–80 printable characters, matching the ASL 
 a display name (1–128 characters); and `sourceType`, one of `stateMachine`, `lambda`, `batch`, `ecs`,
 `container`, `custom` (anything else is stored as `custom`). `subExecution` takes the same `stageName` and
 `label`. The descriptors are what let the execution view label each log source and tie it to a stage; an
-entry without them is still read, with the log group's name as its label. For an AWS Batch job, the
-container log is the AWS Batch default group `/aws/batch/job` with streams named
-`<jobDefinitionName>/default/<ecs-task-id>`, so register the group with `logStreamPrefix` set to
-`<jobDefinitionName>/default/` — a prefix registered on the pipeline execution is what allows VAMS to read
-the container stream, which does not print the execution id, without the execution-scope filter.
+entry without them is still read, with the log group's name as its label. For an AWS Batch job, register
+the group the job definition writes to with `logStreamPrefix` set to `<jobDefinitionName>/default/`, the
+prefix of the streams AWS Batch creates (`<jobDefinitionName>/default/<ecs-task-id>`). Which group that is
+depends on the job definition's log configuration: a Fargate job definition that routes its output through
+the `awslogs` driver writes to the group it names — for the built-in Fargate pipelines, a VAMS-owned,
+KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group — while a job definition with no log
+configuration, such as the built-in GPU pipelines, writes to AWS Batch's default `/aws/batch/job`.
+Registering a group the container does not write to is not caught at deploy time; the execution view
+resolves a stream in a group that holds nothing. A prefix registered on the pipeline execution is what
+allows VAMS to read the container stream, which does not print the execution id, without the
+execution-scope filter.
 
 For a pipeline deployed by the VAMS CDK, the builder of the lambda that publishes the event — the
 `openPipeline`-equivalent, not the `vamsExecute` entry point — supplies these values. It sets
 `ORCHESTRATION_BUS_NAME` from `storageResources.eventBridge.orchestrationBus.eventBusName`, grants the
 function `events:PutEvents` with `orchestrationBus.grantPutEventsTo(fn)`, and passes the name and ARN of
 the Amazon CloudWatch Logs group the construct created for the nested state machine. For an AWS Batch
-pipeline it spreads `batchJobLogGroupEnvironment()` from `infra/lib/helper/batchJobLogGroup.ts`, which sets
-`BATCH_JOB_LOG_GROUP_NAME` (`/aws/batch/job`) and `BATCH_JOB_LOG_GROUP_ARN` in the form the
-`CLOUDWATCH_LOG_GROUP_ARN` validator accepts, and sets `BATCH_JOB_DEFINITION_NAME` to the job definition's
+pipeline it spreads one of the two helpers in `infra/lib/helper/batchJobLogGroup.ts`, each of which sets
+`BATCH_JOB_LOG_GROUP_NAME` and `BATCH_JOB_LOG_GROUP_ARN` in the form the `CLOUDWATCH_LOG_GROUP_ARN`
+validator accepts: a Fargate pipeline spreads `vendedBatchJobLogGroupEnvironment(containerLogGroup)` with
+the VAMS-owned `/aws/vendedlogs/Pipelines/<Name><hash>` group it passed to `BatchFargatePipelineConstruct`
+as `logGroup` (the Potree viewer, whose two job definitions write to two groups, sets `PDAL_` /
+`POTREE_JOB_LOG_GROUP_NAME` / `_ARN` per job instead), while a GPU pipeline whose job definition sets no
+log configuration spreads `batchJobLogGroupEnvironment()`, which names AWS Batch's default `/aws/batch/job`.
+The builder also sets `BATCH_JOB_DEFINITION_NAME` to the job definition's
 **name**: a Fargate `EcsJobDefinition`'s `.jobDefinitionName`, the `jobDefinitionName` prop of a named
 `CfnJobDefinition`, or `jobDefinitionNameFromRef(jobDefinition.ref)` for an unnamed one. The Ref is an ARN
 with a revision, and a `:` in the prefix fails the `LOG_STREAM_NAME` validator, which leaves the container
 source permanently unscoped.
 
 ```typescript
-import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 
 const fun = new lambda.Function(scope, "openPipeline", {
     // code, handler, runtime, layers, timeout, memorySize, vpc as in the other builders
@@ -697,7 +708,9 @@ const fun = new lambda.Function(scope, "openPipeline", {
         ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
         STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
         STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
-        ...batchJobLogGroupEnvironment(),
+        // Fargate: the group the job definition writes to; a GPU pipeline with no log
+        // configuration spreads ...batchJobLogGroupEnvironment() instead.
+        ...vendedBatchJobLogGroupEnvironment(containerLogGroup),
         BATCH_JOB_DEFINITION_NAME: batchPipeline.batchJobDefinition.jobDefinitionName,
     },
 });

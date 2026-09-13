@@ -249,7 +249,7 @@ def lambda_handler(event, context):
     Handle processing of GenAI metadata labeling, metadata saving, and cleanup
     """
 
-    logger.info(f"Event Input: {event}")
+    logger.info("Event Input", event=event)
     logger.info(f"Context Input: {context}")
 
     #TODO: Try/catch

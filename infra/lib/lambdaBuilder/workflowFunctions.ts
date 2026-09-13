@@ -246,10 +246,13 @@ export function buildExecutionServiceFunction(
             //   (2) config-name-based groups (the audit/log groups that embed the config name);
             //   (3) pipeline state-machine groups — BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
             //       '/aws/vendedlogs/VAMSstateMachine-*' are used across pipelines (case varies);
-            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*';
-            //   (5) AWS Batch's default container group '/aws/batch/job' — the built-in Batch
-            //       pipelines register it as a per-stage log source (no job definition sets a log
-            //       configuration, so every container stream lands there).
+            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*' — the ECS pipelines and
+            //       the five Fargate Batch pipelines (coordinate transform, Blender renderer, 3D
+            //       thumbnail, PDAL, Potree), whose job definitions route container output there
+            //       through the awslogs driver and register that group per stage;
+            //   (5) AWS Batch's default container group '/aws/batch/job' — the GPU Batch pipelines
+            //       (Cosmos, GR00T, Isaac Lab, Splat) set no log configuration, so their container
+            //       streams land there and that is the group they register.
             // Scoped to these prefixes (not the whole /aws/vendedlogs/* namespace) so it cannot read
             // unrelated apps' vended log groups. Each is suffixed with ':*' for stream-level reads.
             resources: [

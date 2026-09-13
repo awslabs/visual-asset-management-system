@@ -60,7 +60,7 @@ def lambda_handler(event, context):
     # {"includeAllAssetFileHierarchyFiles": "True", "seedMetadataGenerationWithInputMetadata": "True" }
     #################
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     # The token is captured BEFORE the work, so a raise inside definition construction can still be

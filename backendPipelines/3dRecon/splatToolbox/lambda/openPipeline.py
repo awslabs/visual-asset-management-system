@@ -46,7 +46,7 @@ REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
@@ -120,7 +120,7 @@ def lambda_handler(event, context):
     Starts StepFunctions State Machine for processing 
     """
 
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
     logger.info(f"Context: {context}")
 
     responses = []

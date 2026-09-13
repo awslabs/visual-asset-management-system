@@ -98,17 +98,17 @@ External buckets can be added incrementally across deployments. Each bucket requ
 
 ### WAF and FIPS (`app`)
 
-| Field                        | Type    | Default | Description                                                                                                                                                                                    |
-| ---------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.useWaf`                 | boolean | `true`  | Enables AWS WAF. Always protects the Amazon API Gateway API and, when present, the Amazon CloudFront distribution or Application Load Balancer. Disabling this generates a deployment warning. |
-| `app.useFips`                | boolean | `false` | Enables FIPS-compliant AWS partition endpoints. Must be combined with the `AWS_USE_FIPS_ENDPOINT=true` environment variable.                                                                   |
-| `app.addStackCloudTrailLogs` | boolean | `true`  | Creates a dedicated Amazon CloudWatch Logs group and associated AWS CloudTrail trail for this stack.                                                                                           |
+| Field                        | Type    | Default | Description                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.useWaf`                 | boolean | `true`  | Enables AWS WAF. Always protects the Amazon API Gateway API and, when present, the Amazon CloudFront distribution or Application Load Balancer. Disabling this generates a deployment warning.                                                                                                                               |
+| `app.useFips`                | boolean | `false` | Switches the hostnames VAMS composes at synthesis to their FIPS variants and, when the VPC and a KMS CMK are enabled, adds a KMS FIPS interface endpoint. AWS SDK clients inside the Lambda functions and containers are not affected. Setting `AWS_USE_FIPS_ENDPOINT=true` in the synth environment also turns the flag on. |
+| `app.addStackCloudTrailLogs` | boolean | `true`  | Creates a dedicated Amazon CloudWatch Logs group and associated AWS CloudTrail trail for this stack.                                                                                                                                                                                                                         |
 
 :::info[Implemented by]
 These three keys do **not** map to a single nested stack:
 
 -   `app.useWaf` — standalone WAF stack(s) `infra/lib/cf-waf-stack.ts` (`CfWafStack`), gated in `infra/bin/infra.ts`. The regional web ACL attaches to the API Gateway stage in `apiLambda/constructs/rest-api-gateway-construct.ts` and to the ALB in `staticWebApp/staticWebBuilder-nestedStack.ts`; the CloudFront web ACL attaches to the distribution in `staticWebApp/constructs/cloudfront-s3-website-construct.ts`.
--   `app.useFips` — global endpoint resolution in `infra/lib/helper/service-helper.ts` (no stack of its own).
+-   `app.useFips` — resolved in `getConfig()` (`infra/config/config.ts`) from the CDK context key, the config file value, or the `AWS_USE_FIPS_ENDPOINT` environment variable, whichever is `true`; a synthesis-time flag, not a runtime setting. Read in two places: `infra/lib/helper/service-helper.ts`, where `Service(...).Endpoint` returns the partition's FIPS hostname for the hostnames VAMS composes itself (the Cognito hosted UI domain, for example), and `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`, which adds a `KMSEndpoint_FIPS` interface endpoint beside the standard KMS endpoint when `useGlobalVpc` and `useKmsCmkEncryption` are both enabled. Calls that pass an explicit `false` override (the CSP sources, `COGNITO_BASE_URL`, the S3 and DynamoDB hostnames handed to the web application) keep the standard hostname. AWS SDK clients in the Lambda functions and pipeline containers resolve their own Regional endpoints and are not switched by it.
 -   `app.addStackCloudTrailLogs` — created inline in the root stack `infra/lib/core-stack.ts` (`CoreVAMSStack`).
     :::
 
@@ -287,6 +287,8 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 | ECS Telemetry   | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
 | Bedrock Runtime | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
 | Rekognition     | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
+
+The KMS FIPS endpoint is the only FIPS-variant interface endpoint `useFips` adds; the other endpoints in the table have no FIPS variant. AWS SDK clients in the Lambda functions and pipeline containers resolve the standard Regional endpoints inside the VPC whether or not `useFips` is set.
 
 #### Gateway Endpoints (Always Created)
 

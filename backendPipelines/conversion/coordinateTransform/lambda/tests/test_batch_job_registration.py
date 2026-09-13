@@ -238,4 +238,7 @@ class TestPrefixReachesTheBatchLambda:
             "coordinateTransformFunctions.ts"))
         source = open(builder, encoding="utf-8").read()
         batch_builder = source.split("export function buildExecuteBatchJobFunction")[1]
-        assert "...batchJobLogGroupEnvironment()" in batch_builder
+        # The job definition writes to a VAMS-owned vended group through the awslogs driver, so the
+        # registration names THAT group; Batch's default group would point the log view at nothing.
+        assert "...vendedBatchJobLogGroupEnvironment(containerLogGroup)" in batch_builder
+        assert "batchJobLogGroupEnvironment()" not in batch_builder

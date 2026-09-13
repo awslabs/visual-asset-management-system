@@ -156,7 +156,7 @@ events_client.put_events(Entries=[{
         "logs": [
             {"logGroupArn": log_group_arn, "logGroupName": log_group_name,
              "sourceType": "stateMachine", "label": "Thumbnail state machine"},
-            {"logGroupArn": batch_log_group_arn, "logGroupName": "/aws/batch/job",
+            {"logGroupArn": batch_log_group_arn, "logGroupName": batch_log_group_name,
              "logStreamPrefix": f"{job_definition_name}/default/",
              "stageName": "ThumbnailBatchJob", "sourceType": "batch",
              "label": "ThumbnailBatchJob container"},
@@ -177,8 +177,12 @@ The optional `stageName` (the exact ASL state name, 1–80 printable characters)
 `sourceType` (`stateMachine`, `lambda`, `batch`, `ecs`, `container`, or `custom`) on a `logs[]` entry — and
 `stageName` / `label` on `subExecution` — are what let the execution view label each source and tie it to a
 stage; an entry without them is still read, labelled by its log group's name. Register an AWS Batch
-container log as the default group `/aws/batch/job` with `logStreamPrefix` set to
-`<jobDefinitionName>/default/`. The event's `Source` must end in `.pipeline.<pipelineExecutionId>` for the
+container log as the group the job definition writes to, with `logStreamPrefix` set to
+`<jobDefinitionName>/default/`: a Fargate job definition that routes its output through the `awslogs`
+driver writes to the group it names (the built-in Fargate pipelines use a VAMS-owned
+`/aws/vendedlogs/Pipelines/<Name><hash>` group), while a job definition with no log configuration, such as
+the built-in GPU pipelines, writes to AWS Batch's default `/aws/batch/job`. The event's `Source` must end in
+`.pipeline.<pipelineExecutionId>` for the
 pipeline execution it names (the prefix on the payload already does). See
 [Registering sub-processes and logs](custom-pipelines.md#registering-sub-processes-and-logs) for the full
 contract.

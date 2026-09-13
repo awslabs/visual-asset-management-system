@@ -201,6 +201,48 @@ class TestReadPlanning:
         assert al.registered_prefixes([_registered(prefix="a/"), _registered(), _registered(prefix="b/"), "x"]) \
             == ["a/", "b/"]
 
+    # The Fargate pipelines (coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree) write
+    # container output through the awslogs driver to a VAMS-owned vended group, as
+    # `<awslogs-stream-prefix>/default/<ecs-task-id>`; the CDK sets that prefix to the PHYSICAL job
+    # definition name (base + 10-hex hash), which is also what the registering lambda's derived
+    # `*_JOB_DEFINITION_NAME` resolves to. Both halves are pinned in CDK
+    # (`infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts`); this is the read side: an entry
+    # exactly as the producer builds it, a stream exactly as the driver names it, no scope terms.
+    FARGATE_JOB_DEFINITION = "Preview3dThumbnailJobvams_sbx-us-east-1d283217caa"
+    VENDED_ARN = ("arn:aws:logs:us-east-1:123456789012:log-group:"
+                  "/aws/vendedlogs/Pipelines/Preview3dThumbnail0a1b2c3d4e:*")
+
+    def _fargate_entry(self):
+        # `batch_container_log_entry` in backendPipelines/preview/3dThumbnail/lambda/openPipeline.py
+        registered = _registered(arn=self.VENDED_ARN, name=al.log_group_name_from_arn(self.VENDED_ARN),
+                                 prefix=f"{self.FARGATE_JOB_DEFINITION}/default/",
+                                 stage="Preview3dThumbnailBatchJob", source="batch",
+                                 label="Preview3dThumbnailBatchJob container")
+        [entry] = al.build_available_logs("", [registered], [], REFERENCE)
+        return entry, al.registered_prefixes([registered])
+
+    def test_a_fargate_container_stream_in_the_vended_group_is_read_unscoped(self):
+        entry, prefixes = self._fargate_entry()
+        # A vended group derives `container`, but the producer says `batch` and the producer wins --
+        # only the batch branch consults the resolved stream at all.
+        assert entry["sourceType"] == "batch"
+        assert entry["logGroupName"].startswith("/aws/vendedlogs/Pipelines/")
+        stream = f"{self.FARGATE_JOB_DEFINITION}/default/1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f"
+        plan = al.plan_source_read(entry, prefixes, resolved_stream=stream)
+        assert plan == {"logStreamName": stream, "logStreamPrefix": "", "scoped": False, "unscoped": False}
+
+    def test_a_stream_prefixed_with_the_unhashed_base_name_falls_outside_the_registered_prefix(self):
+        # The pre-reconciliation shape: awslogs-stream-prefix was the base name the construct was given
+        # while the registration carried the hashed physical name. Every container line then passes
+        # through the execution-scope filter, which container output never satisfies, and the log view
+        # shows nothing -- the regression this pins.
+        entry, prefixes = self._fargate_entry()
+        base_name = self.FARGATE_JOB_DEFINITION[:-10]
+        assert self.FARGATE_JOB_DEFINITION.startswith(base_name) and base_name != self.FARGATE_JOB_DEFINITION
+        plan = al.plan_source_read(entry, prefixes,
+                                   resolved_stream=f"{base_name}/default/1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f")
+        assert plan["scoped"] is True
+
     def test_batch_stream_resolves_from_the_stage_of_the_same_name_first(self):
         summaries = [
             {"resourceType": "stepFunctionsExecution", "stageName": "", "stages": [

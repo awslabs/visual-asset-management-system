@@ -26,7 +26,6 @@ import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
-import { batchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
@@ -89,10 +88,16 @@ export function buildVamsExecutePcPotreeViewerPipelineFunction(
     return fun;
 }
 
-/** The two Fargate job definitions whose container log stream prefixes openPipeline registers. */
+/**
+ * The two Fargate job definitions whose container log stream prefixes openPipeline registers, each
+ * with the VAMS-owned group its container output is written to. The two jobs write to two groups,
+ * so the producer is given one group per job rather than a shared `BATCH_JOB_LOG_GROUP_*` pair.
+ */
 export interface OpenPipelineBatchLogProps {
     pdalJobDefinitionName: string;
+    pdalLogGroup: logs.ILogGroup;
     potreeJobDefinitionName: string;
+    potreeLogGroup: logs.ILogGroup;
 }
 
 export function buildOpenPipelineFunction(
@@ -140,10 +145,13 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
-            // Batch default container log group + the PDAL and Potree job definition names, one
-            // registered log source per Batch state (streams are `<jobDefinitionName>/default/<task-id>`).
-            ...batchJobLogGroupEnvironment(),
+            // Each converter's vended container log group + job definition name, one registered log
+            // source per Batch state (streams are `<jobDefinitionName>/default/<task-id>`).
+            PDAL_JOB_LOG_GROUP_NAME: batchLogs.pdalLogGroup.logGroupName,
+            PDAL_JOB_LOG_GROUP_ARN: batchLogs.pdalLogGroup.logGroupArn,
             PDAL_JOB_DEFINITION_NAME: batchLogs.pdalJobDefinitionName,
+            POTREE_JOB_LOG_GROUP_NAME: batchLogs.potreeLogGroup.logGroupName,
+            POTREE_JOB_LOG_GROUP_ARN: batchLogs.potreeLogGroup.logGroupArn,
             POTREE_JOB_DEFINITION_NAME: batchLogs.potreeJobDefinitionName,
         },
     });
