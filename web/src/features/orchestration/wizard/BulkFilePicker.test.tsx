@@ -12,7 +12,11 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import BulkFilePicker, { folderKeyFor } from "./BulkFilePicker";
+import BulkFilePicker, {
+    folderKeyFor,
+    MAX_SELECT_ALL_PAGE_FETCHES,
+    SELECT_ALL_WALK_CAPPED_NOTE,
+} from "./BulkFilePicker";
 import { inputFileKey } from "./selectedInputFiles";
 import type { ResolvedRestrictions } from "./resolveRestrictions";
 import type { ExecuteInputFile } from "../types";
@@ -71,6 +75,60 @@ function pagedListing(pages: string[][]) {
         };
     });
     return { fetchNextPage, state };
+}
+
+/**
+ * A listing whose next page never comes. `fetchNextPage` resolves the way TanStack Query v5 does
+ * when a fetch fails — the error on the result, `data` unchanged, `hasNextPage` still true — or, with
+ * `stall`, the way a listing does when it promises a page that adds nothing. Before the loop read
+ * its result, either shape kept it fetching for as long as the dialog stayed open.
+ */
+function brokenListing(
+    first: string[],
+    { stall = false, error = new Error("Files API unavailable") } = {}
+) {
+    const state = { failed: false };
+    const data = () => ({ pages: [{ items: first.map(item), nextToken: "t1" }] });
+    const fetchNextPage = jest.fn(async () => {
+        if (stall) return { data: data(), hasNextPage: true, isError: false, error: null };
+        state.failed = true;
+        return { data: data(), hasNextPage: true, isError: true, error };
+    });
+    queries().useAssetFilePages.mockImplementation(() => ({
+        data: data(),
+        isLoading: false,
+        isError: state.failed,
+        error: state.failed ? error : null,
+        hasNextPage: true,
+        isFetchingNextPage: false,
+        fetchNextPage,
+    }));
+    return { fetchNextPage };
+}
+
+/** A listing that grows by one file per page and never reports an end. */
+function endlessListing() {
+    const state = { loaded: 1 };
+    const data = () => ({
+        pages: Array.from({ length: state.loaded }, (_, i) => ({
+            items: [item(`/f${i}.glb`)],
+            nextToken: `t${i + 1}`,
+        })),
+    });
+    const fetchNextPage = jest.fn(async () => {
+        state.loaded += 1;
+        return { data: data(), hasNextPage: true, isError: false, error: null };
+    });
+    queries().useAssetFilePages.mockImplementation(() => ({
+        data: data(),
+        isLoading: false,
+        isError: false,
+        error: null,
+        hasNextPage: true,
+        isFetchingNextPage: false,
+        fetchNextPage,
+    }));
+    return { fetchNextPage };
 }
 
 const renderPicker = (props: Partial<React.ComponentProps<typeof BulkFilePicker>> = {}) => {
@@ -231,6 +289,46 @@ describe("BulkFilePicker browsing", () => {
         await waitFor(() => expect(screen.getByText("2 files selected")).toBeInTheDocument());
         expect(fetchNextPage).toHaveBeenCalledTimes(1);
         expect(screen.getByRole("button", { name: "Add 2 files" })).toBeEnabled();
+    });
+
+    it("stops Select all matching at the first page that fails to load, and says so", async () => {
+        const { fetchNextPage } = brokenListing(["/p1.glb", "/p2.glb"]);
+        renderPicker();
+        await userEvent.click(screen.getByRole("button", { name: "Select all matching" }));
+        // One failed fetch ends the walk — not the cap, and not the dialog's lifetime.
+        await waitFor(() =>
+            expect(
+                screen.getByText(/Loading more files failed: Files API unavailable/)
+            ).toBeInTheDocument()
+        );
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+        // The listing's own error is shown, and the pages that did load are still selected.
+        expect(screen.getByText("Files API unavailable")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Add 2 files" })).toBeEnabled();
+    });
+
+    it("stops Select all matching when a page arrives without lengthening the listing", async () => {
+        const { fetchNextPage } = brokenListing(["/p1.glb"], { stall: true });
+        renderPicker();
+        await userEvent.click(screen.getByRole("button", { name: "Select all matching" }));
+        await waitFor(() =>
+            expect(screen.getByText(/The listing stopped advancing/)).toBeInTheDocument()
+        );
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+        expect(screen.getByText("1 file selected")).toBeInTheDocument();
+    });
+
+    it("gives up Select all matching after the page cap on a listing that never ends", async () => {
+        const { fetchNextPage } = endlessListing();
+        renderPicker();
+        await userEvent.click(screen.getByRole("button", { name: "Select all matching" }));
+        await waitFor(() =>
+            expect(screen.getByText(SELECT_ALL_WALK_CAPPED_NOTE)).toBeInTheDocument()
+        );
+        expect(fetchNextPage).toHaveBeenCalledTimes(MAX_SELECT_ALL_PAGE_FETCHES);
+        expect(
+            screen.getByText(`${MAX_SELECT_ALL_PAGE_FETCHES + 1} files selected`)
+        ).toBeInTheDocument();
     });
 
     it("says so when every matching file is already selected or not compatible", async () => {

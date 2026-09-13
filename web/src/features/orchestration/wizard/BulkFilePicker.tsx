@@ -26,6 +26,18 @@ import {
 /** How long a typed folder prefix settles before it becomes the listing's server-side scope. */
 export const PREFIX_COMMIT_DEBOUNCE_MS = 300;
 
+/**
+ * Most listing pages one "Select all matching" may fetch. The walk normally ends when the listing
+ * does, when the run cap is reached, or when a page fails to load or fails to advance the listing;
+ * this is the backstop should the server keep promising a next page it never delivers. At 500 files
+ * a page (BULK_FILE_PAGE_SIZE) it allows a 100,000-file walk — a hundred times what a run may take —
+ * before the picker stops and says so.
+ */
+export const MAX_SELECT_ALL_PAGE_FETCHES = 200;
+
+/** What the picker says when the walk stopped at {@link MAX_SELECT_ALL_PAGE_FETCHES}. */
+export const SELECT_ALL_WALK_CAPPED_NOTE = `Stopped after ${MAX_SELECT_ALL_PAGE_FETCHES} pages — refine the folder prefix or filter to narrow the listing.`;
+
 const PICKER_ROW_HEIGHT = 32;
 const PICKER_LIST_HEIGHT = PICKER_ROW_HEIGHT * 9;
 
@@ -163,8 +175,11 @@ const BulkFilePicker: React.FC<BulkFilePickerProps> = ({
         setNote("");
     };
 
-    /** Add `keys` to the checked set, in order, stopping at what the run can still take. */
-    const checkUpTo = (keys: string[]) => {
+    /**
+     * Add `keys` to the checked set, in order, stopping at what the run can still take. Returns
+     * whether the run cap stopped it, which is also what the note then says.
+     */
+    const checkUpTo = (keys: string[]): boolean => {
         const next = new Set(checked);
         let capped = false;
         for (const key of keys) {
@@ -177,6 +192,7 @@ const BulkFilePicker: React.FC<BulkFilePickerProps> = ({
         }
         setChecked(next);
         setNote(capped ? `Stopped at the ${MAX_INPUT_FILES_PER_EXECUTION}-file limit.` : "");
+        return capped;
     };
 
     const toggle = (key: string) => {
@@ -197,6 +213,10 @@ const BulkFilePicker: React.FC<BulkFilePickerProps> = ({
      * cap is reached, so an asset far larger than a run may take is never pulled down whole. Only a
      * file the run could still take counts toward the cap: a page of already-selected or rejected
      * files would otherwise end the walk before the pages that hold anything to add.
+     *
+     * The walk also stops, and says so, when a page fails to load or fails to lengthen the listing,
+     * and after {@link MAX_SELECT_ALL_PAGE_FETCHES} pages regardless. Whatever was loaded by then is
+     * still selected.
      */
     const selectAllMatching = async () => {
         setWalking(true);
@@ -219,19 +239,43 @@ const BulkFilePicker: React.FC<BulkFilePickerProps> = ({
                         !selectedKeys.has(inputFileKey(entry))
                     );
                 });
+            const pagesLoaded = (data: typeof pages.data) => data?.pages.length ?? 0;
+            let stopped = "";
+            let fetches = 0;
             while (result.hasNextPage && addable(matching(result.data)).length < capacity) {
+                if (fetches >= MAX_SELECT_ALL_PAGE_FETCHES) {
+                    stopped = SELECT_ALL_WALK_CAPPED_NOTE;
+                    break;
+                }
+                fetches += 1;
                 const next = await pages.fetchNextPage();
                 if (unmounted.current) return;
+                // A failed page RESOLVES rather than rejects (TanStack Query v5 keeps fetchNextPage's
+                // error on the result), leaving `data` as it was and `hasNextPage` true — so the
+                // walk must read the result, or it spins against the failing endpoint for as long as
+                // the dialog stays open. A page that arrives without lengthening the listing ends
+                // the walk the same way: continuing could not change the outcome.
+                if (next.isError) {
+                    stopped = `Loading more files failed: ${
+                        (next.error as Error)?.message || "the listing could not be read."
+                    } Only the files loaded so far were considered.`;
+                    break;
+                }
+                if (!next.data || pagesLoaded(next.data) <= pagesLoaded(result.data)) {
+                    stopped =
+                        "The listing stopped advancing before it ended. Only the files loaded so far were considered.";
+                    break;
+                }
                 result = { data: next.data, hasNextPage: !!next.hasNextPage };
-                if (!next.data) break;
             }
             const matched = matching(result.data);
             const keys = addable(matched);
-            if (keys.length === 0 && matched.length > 0) {
+            if (keys.length === 0 && matched.length > 0 && !stopped) {
                 setNote("Every matching file is already selected or not compatible.");
                 return;
             }
-            checkUpTo(keys);
+            // The run cap is the more useful thing to say when both applied: the selection is full.
+            if (!checkUpTo(keys) && stopped) setNote(stopped);
         } finally {
             if (!unmounted.current) setWalking(false);
         }
@@ -453,9 +497,18 @@ const BulkFilePicker: React.FC<BulkFilePickerProps> = ({
                                 Choose a database and an asset to list its files.
                             </p>
                         ) : pages.isError ? (
-                            <Callout tone="error">
-                                {(pages.error as Error)?.message || "Failed to load files."}
-                            </Callout>
+                            <>
+                                <Callout tone="error">
+                                    {(pages.error as Error)?.message || "Failed to load files."}
+                                </Callout>
+                                {/* A walk that stopped on this error still says what it did with the
+                                    pages it had. */}
+                                {note && (
+                                    <p className="text-xs text-yellow-800 dark:text-yellow-300">
+                                        {note}
+                                    </p>
+                                )}
+                            </>
                         ) : pages.isLoading ? (
                             <p className="text-sm text-text-secondary">Loading files…</p>
                         ) : (
