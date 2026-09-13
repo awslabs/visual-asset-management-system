@@ -48,6 +48,9 @@ PIPELINES = (
     ("pcPotreeViewer", "backendPipelines/preview/pcPotreeViewer",
      "infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/"
      "pcPotreeViewer-construct.ts"),
+    ("systemGenAiMetadata", "backendPipelines/system/genAiMetadata",
+     "infra/lib/nestedStacks/pipelines/system/genAiMetadata/constructs/"
+     "systemGenAiMetadata-construct.ts"),
 )
 
 PIPELINE_IDS = [name for name, _, _ in PIPELINES]
