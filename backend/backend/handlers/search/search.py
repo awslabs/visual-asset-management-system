@@ -54,16 +54,18 @@ claims_and_roles = {}
 AUTH_FILTER_BUFFER_MULTIPLIER = 2.0
 OPENSEARCH_MAX_RESULT_WINDOW = 10000
 
-# Load environment variables with error handling
+# Load environment variables with error handling. The OpenSearch parameter names are optional: a
+# deployment without an OpenSearch mode sets OPENSEARCH_DISABLED and this module still imports.
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-    opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
-    opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
-    opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
+    opensearch_asset_index_ssm_param = os.environ.get("OPENSEARCH_ASSET_INDEX_SSM_PARAM", "")
+    opensearch_file_index_ssm_param = os.environ.get("OPENSEARCH_FILE_INDEX_SSM_PARAM", "")
+    opensearch_endpoint_ssm_param = os.environ.get("OPENSEARCH_ENDPOINT_SSM_PARAM", "")
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
+opensearch_disabled = os.environ.get("OPENSEARCH_DISABLED", "false") == "true"
 
 # Get SSM parameter values
 def get_ssm_parameter_value(parameter_name: str) -> str:
@@ -76,10 +78,29 @@ def get_ssm_parameter_value(parameter_name: str) -> str:
         logger.exception(f"Error getting SSM parameter {parameter_name}: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting configuration parameter: {parameter_name}")
 
-# Load OpenSearch configuration from SSM
-opensearch_asset_index = get_ssm_parameter_value(opensearch_asset_index_ssm_param)
-opensearch_file_index = get_ssm_parameter_value(opensearch_file_index_ssm_param)
-opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
+# The three aos/* SSM values, read on first OpenSearch use so a deployment without OpenSearch imports.
+_opensearch_settings: Optional[Dict[str, str]] = None
+
+
+def opensearch_settings() -> Dict[str, str]:
+    global _opensearch_settings
+    if _opensearch_settings is None:
+        _opensearch_settings = {
+            "asset_index": get_ssm_parameter_value(opensearch_asset_index_ssm_param),
+            "file_index": get_ssm_parameter_value(opensearch_file_index_ssm_param),
+            "endpoint": get_ssm_parameter_value(opensearch_endpoint_ssm_param),
+        }
+    return _opensearch_settings
+
+
+SEARCH_NOT_AVAILABLE_MESSAGE = "Search is not available when OpenSearch is not enabled"
+
+
+def _not_available() -> APIGatewayProxyResponseV2:
+    response = dict(STANDARD_JSON_RESPONSE)
+    response["statusCode"] = 404
+    response["body"] = json.dumps({"message": SEARCH_NOT_AVAILABLE_MESSAGE})
+    return response
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
@@ -93,17 +114,21 @@ class DualIndexSearchManager:
     
     def __init__(self):
         self.client = None
-        self.asset_index = opensearch_asset_index
-        self.file_index = opensearch_file_index
-        self._initialize_client()
+        self.asset_index = None
+        self.file_index = None
+        if not opensearch_disabled:
+            settings = opensearch_settings()
+            self.asset_index = settings["asset_index"]
+            self.file_index = settings["file_index"]
+            self._initialize_client(settings["endpoint"])
     
-    def _initialize_client(self):
-        """Initialize OpenSearch client"""
+    def _initialize_client(self, endpoint: str):
+        """Initialize OpenSearch client; on failure the manager stays unavailable."""
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
             
             # Create OpenSearch client
-            host = opensearch_endpoint.replace('https://', '').replace('http://', '')
+            host = endpoint.replace('https://', '').replace('http://', '')
             region = os.environ.get('AWS_REGION', 'us-east-1')
             service = 'aoss' if opensearch_type == 'serverless' else 'es'
             
@@ -126,7 +151,7 @@ class DualIndexSearchManager:
             logger.info(f"Initialized dual-index OpenSearch client - Asset: {self.asset_index}, File: {self.file_index}")
         except Exception as e:
             logger.exception(f"Failed to initialize OpenSearch client: {e}")
-            raise VAMSGeneralErrorResponse("Failed to initialize search service")
+            self.client = None
     
     def is_available(self) -> bool:
         """Check if OpenSearch is available"""
@@ -2105,6 +2130,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         if not method_allowed_on_api:
             return authorization_error()
+
+        if opensearch_disabled:
+            return _not_available()
         
         # Initialize components
         search_manager = DualIndexSearchManager()

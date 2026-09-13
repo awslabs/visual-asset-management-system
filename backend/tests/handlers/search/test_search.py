@@ -367,15 +367,6 @@ class TestSearchHandler:
 class TestSearchManager:
     """Test SearchManager functionality."""
 
-    def test_opensearch_disabled(self):
-        """Test SearchManager when OpenSearch is disabled."""
-        with patch.dict('os.environ', {'AOS_DISABLED': 'true'}):
-            with patch('handlers.search.search.SearchManager') as mock_manager:
-                manager = mock_manager.return_value
-                manager.is_available.return_value = False
-                
-                assert not manager.is_available()
-
     def test_search_query_execution(self):
         """Test search query execution."""
         with patch('handlers.search.search.get_ssm_parameter_value') as mock_ssm:

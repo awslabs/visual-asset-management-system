@@ -95,6 +95,9 @@ def search_module():
         for name, mod in saved.items():
             if mod is not None:
                 sys.modules[name] = mod
+    # The aos/* settings are read from SSM on first OpenSearch use; seeded here with what the stubbed
+    # client answers, so a manager built outside the boto3 patch above needs no SSM call.
+    module._opensearch_settings = {"asset_index": "test-value", "file_index": "test-value", "endpoint": "test-value"}
     return module
 
 

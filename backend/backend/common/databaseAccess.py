@@ -9,7 +9,7 @@ a paginated scan of the database table (rows in a ``#deleted`` partition exclude
 the candidate set and supplies the database clause of the query.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
@@ -71,6 +71,14 @@ class DatabaseAccessManager:
     @staticmethod
     def get_accessible_databases(claims_and_roles: Dict[str, Any], show_deleted: bool = False, max_databases: int = 10000) -> List[str]:
         """Get list of databases accessible to the user with enhanced pagination for large datasets"""
+        return DatabaseAccessManager.get_accessible_databases_with_count(claims_and_roles, show_deleted, max_databases)[0]
+
+    @staticmethod
+    def get_accessible_databases_with_count(claims_and_roles: Dict[str, Any], show_deleted: bool = False, max_databases: int = 10000) -> Tuple[List[str], int]:
+        """The accessible database ids and the number of database rows the scan visited.
+
+        The count is taken before the Casbin check, so a caller can tell an all-access caller (every
+        scanned database accessible) from one whose reach is a subset."""
         try:
             deserializer = TypeDeserializer()
 
@@ -106,6 +114,7 @@ class DatabaseAccessManager:
                 for item in items:
                     try:
                         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+                        processed_count += 1
 
                         # Casbin enforcement of the database record against database constraints;
                         # asset constraints are enforced per search hit by the caller
@@ -114,8 +123,6 @@ class DatabaseAccessManager:
                             casbin_enforcer = CasbinEnforcer(claims_and_roles)
                             if casbin_enforcer.enforce(deserialized_document, "GET"):
                                 accessible_databases.append(deserialized_document['databaseId'])
-
-                        processed_count += 1
 
                         # Log progress for large datasets
                         if processed_count % 1000 == 0:
@@ -135,8 +142,8 @@ class DatabaseAccessManager:
                     break
 
             logger.info(f"Database access scan complete: processed {processed_count} databases, found {len(accessible_databases)} accessible")
-            return accessible_databases
+            return accessible_databases, processed_count
 
         except Exception as e:
             logger.exception(f"Error getting accessible databases: {e}")
-            return []
+            return [], 0

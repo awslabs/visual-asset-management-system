@@ -10,7 +10,7 @@ the pre-filter itself load the real module by path (tests/common/test_databaseAc
 tests/handlers/search/test_database_prefilter_object_type.py).
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class DatabaseAccessManager:
@@ -23,3 +23,9 @@ class DatabaseAccessManager:
         claims_and_roles: Dict[str, Any], show_deleted: bool = False, max_databases: int = 10000
     ) -> List[str]:
         return []
+
+    @staticmethod
+    def get_accessible_databases_with_count(
+        claims_and_roles: Dict[str, Any], show_deleted: bool = False, max_databases: int = 10000
+    ) -> Tuple[List[str], int]:
+        return [], 0
