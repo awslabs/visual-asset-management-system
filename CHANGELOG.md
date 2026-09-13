@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.6.1] (2026-09-13)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+### Chores
+
+-   **MCP** Aligned the `vams-mcp` package `__version__` (`tools/VamsMCP/vams_mcp/__init__.py`) with the VAMS release version; it had remained at `0.3.0`. Corrected the version-roll file list in the root `CLAUDE.md` to name all seven files that carry the VAMS version.
+
+### Known Outstanding Issues
+
+### Troubleshooting
+
 ## [2.6.0] (2026-09-11)
 
 ### Major Change Summary:
