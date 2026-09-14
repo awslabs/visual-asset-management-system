@@ -250,6 +250,10 @@ export default function CreateDatabase({
                                         }
                                     })
                                     .catch((err) => {
+                                        // Console logging only: a % specifier in the interpolated
+                                        // value can at most garble this one log line; nothing is
+                                        // executed, stored or returned from it.
+                                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                         console.log(`${createOrUpdate} database error`, err);
                                         const msg =
                                             err.message ||

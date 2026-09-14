@@ -157,8 +157,11 @@ function readExistingLookup(): ServiceLookup {
         }
     }
     const objText = ts.slice(braceStart, end + 1);
+    // Build-time generator (infra/gen, never deployed) evaluating the object literal it previously
+    // wrote into the repo-owned const.ts; anyone able to alter that input can alter this script
+    // too. ESLint carries the matching disable below.
     // eslint-disable-next-line no-eval
-    return eval("(" + objText + ")") as ServiceLookup;
+    return eval("(" + objText + ")") as ServiceLookup; // nosemgrep: javascript.browser.security.eval-detected.eval-detected
 }
 
 interface MergeReport {

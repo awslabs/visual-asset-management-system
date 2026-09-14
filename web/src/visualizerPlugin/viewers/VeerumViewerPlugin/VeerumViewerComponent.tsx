@@ -263,6 +263,10 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                 const errorMsg = `Auxiliary Preview Files (potree) are not currently available for this point cloud. Run the Potree Pipeline to generate: ${errorDetail}`;
 
                                 console.error(
+                                    // Console logging only: a % specifier in the interpolated value can
+                                    // at most garble this one log line; nothing is executed, stored or
+                                    // returned from it.
+                                    // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                     `VEERUM Viewer: Point cloud URL validation failed for ${fileKey}:`,
                                     fetchError
                                 );
@@ -314,6 +318,10 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                     } catch (fileError: any) {
                         const errorMsg =
                             fileError?.message || fileError?.toString() || "Unknown error";
+                        // Console logging only: a % specifier in the interpolated value can at most
+                        // garble this one log line; nothing is executed, stored or returned from
+                        // it.
+                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.error(`VEERUM Viewer: Error loading file ${fileKey}:`, fileError);
                         errors.push({ file: fileKey, error: errorMsg });
                         // Continue loading other files even if one fails

@@ -201,6 +201,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                 if (!mountedRef.current) return; // Check again after async operation
 
                 setLoadedViewer(viewer);
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.log(`Loaded viewer: ${viewer.config.name}`, viewer);
                 console.log(`Viewer component:`, viewer.component);
             } catch (error) {

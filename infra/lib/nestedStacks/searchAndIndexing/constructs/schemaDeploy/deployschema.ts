@@ -340,6 +340,9 @@ export const handler: Handler = async function (event: any) {
             const exists_resp = await client.indices.exists({
                 index: indexInfo.name,
             });
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`${indexInfo.name} exists_resp`, exists_resp);
 
             if (exists_resp.body) {
@@ -361,6 +364,9 @@ export const handler: Handler = async function (event: any) {
             );
 
             console.log(
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 `Creating ${indexInfo.type} index ${indexInfo.name} with schema:`,
                 JSON.stringify(indexSchema, null, 2)
             );
@@ -370,6 +376,9 @@ export const handler: Handler = async function (event: any) {
                 body: indexSchema as any,
             });
 
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.log(`${indexInfo.name} index_resp`, index_resp);
 
             results.push({
@@ -379,6 +388,9 @@ export const handler: Handler = async function (event: any) {
                 message: "Index created successfully",
             });
         } catch (error) {
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             console.error(`Error creating index ${indexInfo.name}:`, error);
             results.push({
                 index: indexInfo.name,

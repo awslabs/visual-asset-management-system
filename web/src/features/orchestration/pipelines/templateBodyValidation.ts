@@ -90,6 +90,9 @@ export const unreferencedTagKeys = (schema: TagSchemaField[], body: string): str
         .filter(
             (key) =>
                 TAG_KEY_PATTERN.test(key || "") &&
+                // key is admitted only after TAG_KEY_PATTERN (^[A-Za-z0-9_]+$) matches it, so no
+                // regex metacharacter can reach the pattern.
+                // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
                 !new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`).test(body)
         );
 

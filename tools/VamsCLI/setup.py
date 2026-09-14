@@ -8,6 +8,9 @@ def get_version():
     version_file = os.path.join(os.path.dirname(__file__), 'vamscli', 'version.py')
     version_dict = {}
     with open(version_file, 'r') as f:
+        # Standard setuptools idiom: executes only the package's own vamscli/version.py to read
+        # __version__ at build time; no external input reaches it.
+        # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
         exec(f.read(), version_dict)
     return version_dict['__version__']
 
