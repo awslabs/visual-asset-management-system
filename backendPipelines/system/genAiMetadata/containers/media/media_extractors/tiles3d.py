@@ -99,7 +99,7 @@ def extract_tiles3d(tileset: dict, ctx: ExtractContext) -> BranchResult:
     }
     sys_tiles3d.update(walk_tiles(root))
     sys_tiles3d = {key: value for key, value in sys_tiles3d.items() if value is not None}
-    # `region` is a promotion source (master §3.6) and is always present: a list of six floats or null.
+    # `region` is a promotion source (metadataCatalog reads it) and is always present: a list of six floats or null.
     region, region_warning = region_of(bounding_volume)
     sys_tiles3d["region"] = region
     if region_warning:

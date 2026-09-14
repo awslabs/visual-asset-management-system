@@ -3,7 +3,7 @@
 
 """The classification vocabulary the analysis prompt offers and the model reply is checked against:
 the shipped default's shape and size, its normalisation from an admin-edited configBody, the prompt
-section, and the open/closed post-validation rules of spec §6.5 step 4."""
+section, and the open/closed post-validation rules applied to the reply."""
 
 import copy
 import json
@@ -14,10 +14,10 @@ import sysgenai_harness as h
 
 cv = h.load_local("classificationVocabulary")
 
-SPEC_CATEGORIES = ["Vehicle", "Industrial Equipment", "Architecture", "Interior & Furniture", "Terrain & Environment",
+DEFAULT_CATEGORIES = ["Vehicle", "Industrial Equipment", "Architecture", "Interior & Furniture", "Terrain & Environment",
                    "Character & Creature", "Prop & Object", "Infrastructure & Utility", "Medical & Scientific",
                    "Electronics", "Document", "Media", "Data", "Other"]
-SPEC_STYLES = ["realistic", "stylized", "low-poly", "technical/CAD", "scanned", "schematic", "other"]
+DEFAULT_STYLES = ["realistic", "stylized", "low-poly", "technical/CAD", "scanned", "schematic", "other"]
 
 REPLY = {"title": "Gear pump", "description": "A pump.", "keywords": ["pump"], "category": "vehicle",
          "subcategory": "car", "style": "Realistic", "materials": ["Steel", "carbon fibre"], "colors": ["RED", "red"],
@@ -33,14 +33,14 @@ def _closed(**over):
 
 @pytest.mark.unit
 class TestDefaultVocabulary:
-    def test_shape_matches_the_spec(self):
+    def test_shape_of_the_shipped_default(self):
         vocab = cv.DEFAULT_VOCABULARY
-        assert list(vocab["categories"]) == SPEC_CATEGORIES
+        assert list(vocab["categories"]) == DEFAULT_CATEGORIES
         for name, spec in vocab["categories"].items():
             assert isinstance(spec["description"], str) and spec["description"].strip(), name
             assert 3 <= len(spec["subcategories"]) <= 8, name
             assert all(isinstance(sub, str) and sub.strip() for sub in spec["subcategories"]), name
-        assert vocab["styles"] == SPEC_STYLES
+        assert vocab["styles"] == DEFAULT_STYLES
         assert len(vocab["materials"]) == 16 and "metal" in vocab["materials"] and "other" in vocab["materials"]
         assert len(vocab["colors"]) == 16 and {"black", "white", "red", "green", "blue"} <= set(vocab["colors"])
         assert vocab["allowUnlisted"] is True
@@ -103,6 +103,26 @@ class TestNormalize:
         once = cv.normalize_vocabulary({"categories": ["X"], "styles": ["s"], "allowUnlisted": "false"})
         assert cv.normalize_vocabulary(once) == once
 
+    def test_a_vocabulary_over_the_byte_cap_is_replaced_by_the_default(self):
+        """The vocabulary is operator-edited text that reaches the prompt; its canonical JSON may not exceed
+        VOCABULARY_MAX_BYTES. The measure is the canonical form, so whitespace or duplicates the normalisation
+        removes do not count against the cap, and the size check is what the caller consults for its warning."""
+        within = {"categories": {f"Category {i}": {"description": "d" * 50, "subcategories": ["a", "b"]}
+                                 for i in range(40)}}
+        assert cv.encoded_size(cv.normalize_vocabulary(within)) <= cv.VOCABULARY_MAX_BYTES
+        assert not cv.exceeds_cap(within)
+        assert list(cv.normalize_vocabulary(within)["categories"]) == list(within["categories"])
+        over = {"categories": {f"Category {i}": {"description": "d" * 200, "subcategories": []} for i in range(40)}}
+        assert cv.encoded_size(over) > cv.VOCABULARY_MAX_BYTES
+        assert cv.exceeds_cap(over)
+        assert cv.normalize_vocabulary(over) == cv.DEFAULT_VOCABULARY
+        padded = {"categories": {" Widget ": {"description": "  A  thing ", "subcategories": ["a"] * 4000}}}
+        assert cv.encoded_size(padded) > cv.VOCABULARY_MAX_BYTES
+        assert not cv.exceeds_cap(padded)
+        assert cv.normalize_vocabulary(padded)["categories"] == {"Widget": {"description": "A thing", "subcategories": ["a"]}}
+        assert not cv.exceeds_cap(None) and not cv.exceeds_cap("vocabulary")
+        assert cv.encoded_size(cv.DEFAULT_VOCABULARY) < cv.VOCABULARY_MAX_BYTES
+
 
 @pytest.mark.unit
 class TestPromptSection:
@@ -111,7 +131,7 @@ class TestPromptSection:
         lines = section.split("\n")
         assert lines[0].startswith("CATEGORY OPTIONS")
         assert lines[1].startswith("- Vehicle: ") and "Subcategories: Car, Truck" in lines[1]
-        assert lines[1 + len(SPEC_CATEGORIES) - 1].startswith("- Other: ")
+        assert lines[1 + len(DEFAULT_CATEGORIES) - 1].startswith("- Other: ")
         assert "STYLE OPTIONS: realistic, stylized, low-poly, technical/CAD, scanned, schematic, other" in lines
         assert any(line.startswith("MATERIAL OPTIONS: metal, ") for line in lines)
         assert any(line.startswith("COLOR OPTIONS: ") for line in lines)

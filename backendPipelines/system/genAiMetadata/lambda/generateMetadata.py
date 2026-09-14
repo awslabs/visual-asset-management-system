@@ -50,8 +50,11 @@ bedrock_runtime = boto3.client('bedrock-runtime', config=retry_config)
 
 BEDROCK_ANALYSIS_MODEL_ID = os.environ["BEDROCK_ANALYSIS_MODEL_ID"]
 
-# The guardrail applied to every Converse call (bedrockGuardrail: both variables or neither).
+# The guardrail applied to every Converse call (bedrockGuardrail: both variables or neither). Without one the
+# calls run without prompt-attack filters; the one warning at cold start is the operator's signal.
 GUARDRAIL_CONFIG = bedrockGuardrail.guardrail_config_from_env(os.environ)
+if GUARDRAIL_CONFIG is None:
+    logger.warning(bedrockGuardrail.GUARDRAIL_UNCONFIGURED_WARNING)
 GUARDRAIL_STOP_REASON = bedrockGuardrail.GUARDRAIL_STOP_REASON
 GUARD_CONTENT_QUALIFIERS = bedrockGuardrail.GUARD_CONTENT_QUALIFIERS
 
@@ -242,8 +245,9 @@ def existing_metadata_sections(existing_lines):
 
 def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_section,
                      existing_lines, text_excerpt, image_count):
-    """The prompt's parts by name. ``context``, ``identity``, ``attributes``, ``facts``, ``existing`` and
-    ``excerpt`` come from the file and its metadata; ``intro``, ``vocabulary`` and ``closing`` do not."""
+    """The prompt's parts by name. ``intro`` and ``closing`` are the pipeline's own words; ``context``,
+    ``identity``, ``attributes``, ``facts``, ``existing`` and ``excerpt`` come from the file and its metadata,
+    and ``vocabulary`` from the template's operator-edited configuration."""
     context = []
     if asset_data.get("assetName"):
         context.append(f"Asset name: {asset_data['assetName']}")
@@ -276,8 +280,10 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
 
 _USER_TEXT_ORDER = ("intro", "context", "identity", "attributes", "facts", "vocabulary", "existing", "excerpt",
                     "closing")
-_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "existing", "excerpt")
-_UNGUARDED_PARTS = ("intro", "vocabulary", "closing")
+# Every part that is not the pipeline's own words is guarded: the file-derived parts and the vocabulary, which an
+# operator edits on the template without a deploy.
+_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabulary", "existing", "excerpt")
+_UNGUARDED_PARTS = ("intro", "closing")
 
 
 def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_section,
@@ -290,8 +296,8 @@ def build_user_text(asset_data, database_id, relative_path, file_class, file_ext
 def build_user_content(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_section,
                        existing_lines, text_excerpt, image_count, guarded):
     """The user message's text content blocks. Without a guardrail, one text block in prompt order. With one,
-    a text block carrying the instruction, the vocabulary and the render note, then a ``guardContent`` block
-    carrying everything that comes from the file and its metadata, so the guardrail evaluates that input."""
+    a text block carrying the instruction and the render note, then a ``guardContent`` block carrying everything
+    that comes from the file, its metadata and the template's vocabulary, so the guardrail evaluates that input."""
     if not guarded:
         return [{"text": build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest,
                                          vocabulary_section, existing_lines, text_excerpt, image_count)}]
@@ -377,8 +383,9 @@ def parse_model_json(text):
 def analyze(user_blocks, image_blocks):
     """``(result, usage)`` after at most MAX_ATTEMPTS Converse calls. A throttle backs off and
     retries, an unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an
-    exhausted attempt budget are a BedrockAnalysisFailure the caller records."""
-    content = list(user_blocks) + list(image_blocks)
+    exhausted attempt budget are a BedrockAnalysisFailure the caller records. With a guardrail configured the
+    images travel in ``guardContent`` blocks, like the file-derived text."""
+    content = list(user_blocks) + bedrockGuardrail.user_image_blocks(image_blocks, GUARDRAIL_CONFIG)
     request = {
         "modelId": BEDROCK_ANALYSIS_MODEL_ID,
         "system": [{"text": SYSTEM_PROMPT}],
@@ -534,7 +541,11 @@ def lambda_handler(event, context):
     write_asset_keywords = common.as_bool(config.get("writeAssetKeywords"), False)
     write_extracted = common.as_bool(config.get("writeExtractedMetadata"), True)
     extract_geo = common.as_bool(config.get("extractGeoLocation"), True)
-    vocab = vocabulary.normalize_vocabulary(config.get("classificationVocabulary"))
+    raw_vocabulary = config.get("classificationVocabulary")
+    vocab = vocabulary.normalize_vocabulary(raw_vocabulary)
+    if vocabulary.exceeds_cap(raw_vocabulary):
+        warnings.append(f"classificationVocabulary over {vocabulary.VOCABULARY_MAX_BYTES} bytes; the default "
+                        "vocabulary was used")
 
     # The deterministic layer: typed ext_* items and the location, independent of the model.
     promoted = metadataCatalog.promote(attributes, file_class) if write_extracted else []

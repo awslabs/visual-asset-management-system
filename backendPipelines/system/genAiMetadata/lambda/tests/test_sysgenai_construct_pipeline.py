@@ -153,7 +153,7 @@ class TestMeshFile:
 @pytest.mark.unit
 class TestInputConfiguration:
     def test_the_template_values_are_copied_into_the_state(self):
-        """WP06a reads renderViews/maxPointCloudPoints and WP06c reads maxTextChars from their EVENT,
+        """The Blender image reads renderViews/maxPointCloudPoints and the media image reads maxTextChars from their EVENT,
         and an ASL cannot read S3, so the operator's template values reach a render task only through
         the state constructPipeline returns."""
         s3 = _s3_with("xidM/models/pump.glb", b"glTF....",
@@ -187,8 +187,8 @@ class TestInputConfiguration:
         assert state["videoSegmentSeconds"] == 10 and state["contentChunking"] is False
 
     def test_extract_geo_location_is_copied_for_the_media_branch(self):
-        """WP06c's image extractor reads extractGeoLocation from its EVENT to decide whether
-        sys_image.exif.gps is written (registry §3.6), so the template's EXTRACT_GEO_LOCATION reaches
+        """The media image's image extractor reads extractGeoLocation from its EVENT to decide whether
+        sys_image.exif.gps is written, so the template's EXTRACT_GEO_LOCATION reaches
         it only through this copy."""
         s3 = _s3_with("xidM/photos/site.jpg", b"\xff\xd8\xff\xe1" + b"\x00" * 64, "image/jpeg",
                       config=dict(DEFAULT_CONFIG, extractGeoLocation=False))

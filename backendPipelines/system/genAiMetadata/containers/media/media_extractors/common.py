@@ -44,7 +44,7 @@ MEDIA_EXTENSION_CLASSES: Dict[str, str] = {
 }
 
 # Entries the pipeline's classifier treats differently from this table, each with its reason: `.webp` is a
-# spec §6.3 image no viewer serves, so the allow list keeps it out of the pipeline (this image still handles
+# supported image extension no viewer serves, so the allow list keeps it out of the pipeline (this image still handles
 # it on a direct invocation); `.json` is sniffed by the classifier into `text` / `tiles3d` / `data` (GeoJSON) /
 # `other` rather than mapped. Every other extension here carries the classifier's class.
 CLASSIFIER_OVERRIDE_EXTENSIONS: Dict[str, str] = {

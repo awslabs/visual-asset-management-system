@@ -78,7 +78,7 @@ FIXTURES = [(MESH, "mesh"), (MESH, "usd"), (CAD, "cad"), (POINTCLOUD, "pointclou
             (IMAGE, "image"), (IFC, "ifc"), (TILES3D, "tiles3d"), (GEO, "data"), (VIDEO, "video"),
             (AUDIO, "audio"), (DOCUMENT, "document"), (TEXT, "text"), (DATA, "data")]
 
-# Registry §3.6 "Metadata keys — promoted", by type.
+# The promoted metadata keys, by type.
 REGISTRY_EXT_KEYS = {
     "xyz": {"ext_dimensions", "ext_bounds_min", "ext_bounds_max"},
     "string": {"ext_units", "ext_size_category", "ext_crs", "ext_ifc_schema", "ext_project_name", "ext_color_mode",

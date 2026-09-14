@@ -264,7 +264,9 @@ class TestGuardrail:
     def test_a_configured_guardrail_is_applied_and_the_untrusted_content_is_guarded(self, monkeypatch):
         """The asset name, the file path and the whole video's genai_* values come from the file and its
         metadata and travel in a guardContent block; the instruction, the file-type phrase, the window sentence
-        and the frame note stay in the plain block. The same lines reach the model as without a guardrail."""
+        and the frame note stay in the plain block; every frame follows in a guardContent block of its own, since
+        the guardrail evaluates only the tagged blocks of a message. The same lines reach the model as without a
+        guardrail."""
         s3 = _seed(FakeS3())
         bedrock = FakeBedrockRuntime([_reply()])
         module = _load(monkeypatch, s3, bedrock, FakeEvents(), env=GUARDRAIL_ENV)
@@ -274,7 +276,8 @@ class TestGuardrail:
         call = bedrock.calls[0]
         assert call["guardrailConfig"] == {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "2", "trace": "enabled"}
         content = call["messages"][0]["content"]
-        assert [list(block) for block in content] == [["text"], ["guardContent"], ["image"], ["image"], ["image"]]
+        assert [list(block) for block in content] == [["text"], ["guardContent"], ["guardContent"], ["guardContent"],
+                                                      ["guardContent"]]
         plain = content[0]["text"]
         guarded = content[1]["guardContent"]["text"]
         assert guarded["qualifiers"] == ["guard_content"]
@@ -283,12 +286,33 @@ class TestGuardrail:
             assert fragment in guarded["text"] and fragment not in plain, fragment
         for fragment in ("video (footage)", f"Segment {_LABEL} of 1 min 32 s", "3 frames"):
             assert fragment in plain and fragment not in guarded["text"], fragment
+        for block in content[2:]:
+            image = block["guardContent"]["image"]
+            assert list(block["guardContent"]) == ["image"] and image["format"] == "png"
+            assert image["source"]["bytes"].startswith(b"\x89PNG")
+        assert not any("image" in block for block in content), "an untagged frame bypasses the input assessment"
         bedrock_plain = FakeBedrockRuntime([_reply()])
         unguarded = _load(monkeypatch, _seed(FakeS3()), bedrock_plain, FakeEvents())
         _run(unguarded)
         assert bedrock_plain.calls, "no Converse call was made without a guardrail"
-        assert set(bedrock_plain.calls[0]["messages"][0]["content"][0]["text"].split("\n")) == set(
-            plain.split("\n") + guarded["text"].split("\n"))
+        plain_content = bedrock_plain.calls[0]["messages"][0]["content"]
+        assert set(plain_content[0]["text"].split("\n")) == set(plain.split("\n") + guarded["text"].split("\n"))
+        assert [list(block) for block in plain_content[1:]] == [["image"], ["image"], ["image"]]
+
+    def test_a_missing_guardrail_is_warned_once_at_cold_start(self, monkeypatch):
+        """Without a guardrail the Converse calls run without prompt-attack filters; the module logs one warning
+        naming both variables when it loads, and none per window. With one configured, no warning."""
+        module = _load(monkeypatch, _seed(FakeS3()), FakeBedrockRuntime([_reply()]), FakeEvents())
+        assert module.GUARDRAIL_CONFIG is None
+        warnings = [call.args[0] for call in module.logger.warning.call_args_list]
+        assert warnings == [module.bedrockGuardrail.GUARDRAIL_UNCONFIGURED_WARNING]
+        assert "BEDROCK_GUARDRAIL_IDENTIFIER" in warnings[0] and "BEDROCK_GUARDRAIL_VERSION" in warnings[0]
+        assert "prompt-attack" in warnings[0]
+        _run(module)
+        assert len(module.logger.warning.call_args_list) == 1
+        guarded = _load(monkeypatch, _seed(FakeS3()), FakeBedrockRuntime([_reply()]), FakeEvents(), env=GUARDRAIL_ENV)
+        assert guarded.GUARDRAIL_CONFIG is not None
+        guarded.logger.warning.assert_not_called()
 
     def test_an_intervention_is_a_caught_failure_under_its_own_code(self, monkeypatch):
         s3 = _seed(FakeS3())
@@ -308,6 +332,32 @@ class TestGuardrail:
         assert _failed_record(s3)["error"] == "BedrockGuardrailIntervened"
         assert events.entries == [] and _embedding_puts(s3) == []
         module.embeddings.embed_text.assert_not_called()
+
+    def test_an_intervention_cause_records_the_filters_but_never_the_matched_text(self, monkeypatch):
+        """With a word or PII policy the trace's `match` fields are the file text the policy matched; the cause
+        written to execution.status.json, the window's .failed.json and the log carries each filter's policy,
+        type, action and confidence and nothing of the match."""
+        s3 = _seed(FakeS3())
+        secret = "ACCOUNT 4111-1111-1111-1111 belongs to Jane Q. Public"
+        blocked = converse_response("Blocked by the guardrail.", stop_reason="guardrail_intervened",
+                                    trace={"guardrail": {"inputAssessment": {"gr-abc123": {
+                                        "sensitiveInformationPolicy": {"piiEntities": [
+                                            {"match": secret, "type": "CREDIT_DEBIT_CARD_NUMBER", "action": "BLOCKED",
+                                             "detected": True}]},
+                                        "wordPolicy": {"customWords": [{"match": "Jane Q. Public", "action": "BLOCKED",
+                                                                        "detected": True}]}}}}})
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([blocked]), FakeEvents(), env=GUARDRAIL_ENV)
+        response = _run(module)
+        assert response["error"] == "BedrockGuardrailIntervened"
+        recorded = [_status(s3)["cause"], _failed_record(s3)["cause"]]
+        for cause in recorded:
+            for fragment in ("CREDIT_DEBIT_CARD_NUMBER", "wordPolicy", "BLOCKED", "Blocked by the guardrail."):
+                assert fragment in cause, fragment
+        logged = " ".join(str(call) for call in module.logger.error.call_args_list)
+        assert "BedrockGuardrailIntervened" in logged
+        for leaked in ("4111", "Jane", "match"):
+            assert all(leaked not in cause for cause in recorded), leaked
+            assert leaked not in logged, leaked
 
     @pytest.mark.parametrize("env", [{"BEDROCK_GUARDRAIL_IDENTIFIER": "gr-abc123", "BEDROCK_GUARDRAIL_VERSION": ""},
                                      {"BEDROCK_GUARDRAIL_IDENTIFIER": "", "BEDROCK_GUARDRAIL_VERSION": "DRAFT"}])
@@ -362,6 +412,111 @@ class TestFrameFallbacks:
         assert response["status"] == "SUCCEEDED"
         assert len(bedrock.calls[0]["messages"][0]["content"]) == 3
         assert s3.downloads == []
+
+
+_SIGNATURE = "8f3a0c2b9d1e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a"
+_SESSION_TOKEN = "IQoJb3JpZ2luX2VjEBQaCXVzLWVhc3QtMSJHMEUCIQD0zEXAMPLESESSIONTOKEN"
+_SIGNED_QUERY = (f"?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAEXAMPLE%2F20260914%2Fus-east-1%2Fs3%2Faws4_request"
+                 f"&X-Amz-Date=20260914T000000Z&X-Amz-Expires=900&X-Amz-Security-Token={_SESSION_TOKEN}"
+                 f"&X-Amz-SignedHeaders=host&X-Amz-Signature={_SIGNATURE}")
+
+
+class _SigningS3(FakeS3):
+    """FakeS3 whose presigned URL carries the query string of a real SigV4 presign: credential, session token and
+    signature."""
+
+    def generate_presigned_url(self, ClientMethod, Params, ExpiresIn):
+        self.presigns.append((ClientMethod, dict(Params), ExpiresIn))
+        return f"https://{Params['Bucket']}.s3.amazonaws.com/{Params['Key']}{_SIGNED_QUERY}"
+
+
+class _EchoingFfmpeg(FakeFfmpeg):
+    """FakeFfmpeg that fails every URL read the way ffmpeg does, echoing the input URL in its error line (padded
+    beyond the 300-character tail so the URL is cut by a truncation that runs before the scrub); or, with
+    ``timeout=True``, raises TimeoutExpired carrying the whole argv."""
+
+    def __init__(self, timeout=False, **kwargs):
+        super().__init__(**kwargs)
+        self.timeout = timeout
+
+    def __call__(self, argv, **kwargs):
+        import subprocess
+
+        if "-ss" in argv and argv[argv.index("-i") + 1].startswith("https://"):
+            self.calls.append(list(argv))
+            if self.timeout:
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"), stderr=b"")
+            url = argv[argv.index("-i") + 1]
+            stderr = (f"[tls @ 0x5581] Error in the pull function.\n[https @ 0x5582] HTTP error 403 Forbidden\n"
+                      f"{url}: Server returned 403 Forbidden (access denied)\n" + "Conversion failed!\n" * 12)
+            return subprocess.CompletedProcess(argv, 1, stdout=b"", stderr=stderr.encode())
+        return super().__call__(argv, **kwargs)
+
+
+def _everything_logged(module):
+    return str(module.logger.mock_calls)
+
+
+def _everything_written(s3):
+    return "\n".join(s3.objects[(bucket, key)].decode("utf-8", "replace") for bucket, key, _content_type in s3.puts)
+
+
+@pytest.mark.unit
+class TestPresignedUrlNeverLeaves:
+    """ffmpeg reads the video over a presigned URL whose query string is the credential. When a read fails, the
+    ffmpeg stderr the warning quotes echoes that URL, and str(TimeoutExpired) carries the whole argv; neither the
+    signature nor the session token may reach a log line or a record written under the results prefix."""
+
+    def test_a_url_echoed_in_ffmpeg_stderr_is_scrubbed_from_the_log_and_the_records(self, monkeypatch):
+        s3 = _seed(_SigningS3())
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([_reply()]), FakeEvents())
+        module.ffmpeg_run = _EchoingFfmpeg()
+        response = _run(module)
+        assert response["status"] == "SUCCEEDED" and s3.downloads == [(_ASSETS, _INPUT_KEY, "v1")]
+        warnings = [call.args[0] for call in module.logger.warning.call_args_list if "Frame at" in call.args[0]]
+        assert len(warnings) == 3
+        assert all("403 Forbidden" in warning and "<url>" in warning for warning in warnings), warnings
+        for secret in ("X-Amz-Signature", "X-Amz-Security-Token", _SIGNATURE, _SESSION_TOKEN, "https://"):
+            assert secret not in _everything_logged(module), secret
+            assert secret not in _everything_written(s3), secret
+
+    def test_a_url_in_the_failed_record_of_a_skipped_window_is_scrubbed(self, monkeypatch):
+        s3 = _seed(_SigningS3())
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([_reply()]), FakeEvents())
+        module.ffmpeg_run = _EchoingFfmpeg(fail_at=(11.0, 15.0, 19.0))
+        response = _run(module)
+        assert response["status"] == "SKIPPED"
+        failed = _failed_record(s3)
+        assert "no frame could be read" in failed["cause"] and "<url>" in failed["cause"]
+        for secret in ("X-Amz-Signature", "X-Amz-Security-Token", _SIGNATURE, _SESSION_TOKEN, "https://"):
+            assert secret not in failed["cause"], secret
+            assert secret not in _everything_logged(module), secret
+            assert secret not in _everything_written(s3), secret
+
+    def test_a_timeout_is_reported_with_the_budget_and_never_the_command(self, monkeypatch):
+        s3 = _seed(_SigningS3())
+        module = _load(monkeypatch, s3, FakeBedrockRuntime([_reply()]), FakeEvents())
+        module.ffmpeg_run = _EchoingFfmpeg(timeout=True)
+        response = _run(module)
+        assert response["status"] == "SUCCEEDED" and s3.downloads == [(_ASSETS, _INPUT_KEY, "v1")]
+        warnings = [call.args[0] for call in module.logger.warning.call_args_list if "Frame at" in call.args[0]]
+        assert len(warnings) == 3
+        assert all(warning.endswith(f"ffmpeg timed out after {module.SEGMENT_FFMPEG_TIMEOUT_SECONDS}s")
+                   for warning in warnings), warnings
+        for secret in ("X-Amz-Signature", "X-Amz-Security-Token", _SIGNATURE, _SESSION_TOKEN, "https://", "-ss",
+                       "ffmpeg-under-test"):
+            assert secret not in _everything_logged(module), secret
+            assert secret not in _everything_written(s3), secret
+
+    def test_scrub_urls_replaces_urls_and_stray_signed_query_parameters(self, monkeypatch):
+        module = _load(monkeypatch, FakeS3(), FakeBedrockRuntime([_reply()]), FakeEvents())
+        assert module.scrub_urls("read https://b.s3.amazonaws.com/k?X-Amz-Signature=abc failed") == "read <url> failed"
+        assert module.scrub_urls("http://host/a and https://host/b") == "<url> and <url>"
+        # A URL cut by truncation leaves its query parameters without a scheme; those go too.
+        assert module.scrub_urls("amazonaws.com/k?X-Amz-Security-Token=tok&X-Amz-Signature=sig end") == (
+            "amazonaws.com/k?<url> end")
+        assert module.scrub_urls("Output file is empty, nothing was encoded") == "Output file is empty, nothing was encoded"
+        assert module.URL_PLACEHOLDER == "<url>"
 
 
 @pytest.mark.unit

@@ -84,8 +84,8 @@ class TestVendoredCopies:
         assert _digest(_MANIFEST_HELPER) in digests
 
     def test_manifest_helper_exposes_the_results_prefix(self):
-        """WP05 adds ``outputS3AssetResultsPath`` to ``resolve_inputs``; this pipeline writes its
-        analysis summary and failure status there, so a pre-WP05 copy is unusable."""
+        """``resolve_inputs`` returns ``outputS3AssetResultsPath``; this pipeline writes its
+        analysis summary and failure status there, so a copy without it is unusable."""
         mh = h.load_local("manifestHelper")
         manifest = {
             "inputFiles": [{"bucket": "abkt", "key": "xidM/models/pump.glb", "assetId": "xidM",

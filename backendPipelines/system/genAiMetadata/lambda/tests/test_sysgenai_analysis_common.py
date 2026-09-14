@@ -40,8 +40,8 @@ class TestReservedNames:
     def test_status_file_name_matches_the_backend_constant(self):
         backend = _backend_s3_path_patterns()
         assert hasattr(backend, "EXECUTION_STATUS_RESULTS_FILENAME"), (
-            "backend/backend/common/s3PathPatterns.py has no EXECUTION_STATUS_RESULTS_FILENAME: WP05 "
-            "has not landed, so nothing would read the status file this pipeline writes")
+            "backend/backend/common/s3PathPatterns.py has no EXECUTION_STATUS_RESULTS_FILENAME: the backend's "
+            "results-prefix reader has not landed, so nothing would read the status file this pipeline writes")
         assert common.EXECUTION_STATUS_RESULTS_FILENAME == backend.EXECUTION_STATUS_RESULTS_FILENAME
         assert common.EXECUTION_STATUS_RESULTS_FILENAME == "execution.status.json"
 
@@ -176,7 +176,7 @@ class TestExistingMetadata:
         assert common.EXISTING_VALUE_MAX_CHARS == 400
 
     def test_geojson_type_names_match_the_classifier(self):
-        """Restated, not imported (this module stays a leaf); the classifier's set is the one WP06c's
+        """Restated, not imported (this module stays a leaf); the classifier's set is the one the media image's
         text extractor consults too, so the copies must name the same nine types."""
         assert common.GEOJSON_TYPE_NAMES == fc.GEOJSON_ROOT_TYPES
         assert len(common.GEOJSON_TYPE_NAMES) == 9

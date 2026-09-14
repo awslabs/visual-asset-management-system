@@ -29,7 +29,7 @@ fc = h.load_local("fileClassifier")
 
 _FILE_CLASS_INTENT = os.path.join(h.REPO_ROOT, "backend", "backend", "common", "vectorsearch", "fileClassIntent.py")
 
-# Spec §6.6: the phrase per class, mirrored by the query-side intent vocabulary.
+# The phrase per class, mirrored by the query-side intent vocabulary.
 EXPECTED_PHRASES = {
     "mesh": "3D model (mesh)", "usd": "3D model (USD scene)", "cad": "CAD model", "splat": "3D Gaussian splat",
     "pointcloud": "point cloud (LiDAR scan)", "ifc": "BIM building model (IFC)", "tiles3d": "3D Tiles tileset",
@@ -46,7 +46,7 @@ def _backend_file_class_intent():
 
 
 def catalog_extensions():
-    """The spec §6.3 rule applied to the viewer catalog."""
+    """The allow-list rule (only extensions a viewer serves enter the pipeline) applied to the viewer catalog."""
     config = h.read_json_file(h.VIEWER_CONFIG)
     extensions = set()
     for viewer in config["viewers"]:
@@ -256,7 +256,7 @@ class TestJsonSniff:
         assert fc.classify(".json", lambda n: head) == (fc.CLASS_DATA, fc.BRANCH_MEDIA)
 
     def test_a_type_key_that_is_not_geojson_is_text(self):
-        # "type" alone is not a GeoJSON marker; the value must be one of the closed set WP06c consults too.
+        # "type" alone is not a GeoJSON marker; the value must be one of the closed set the media image consults too.
         head = json.dumps({"type": "config", "values": [1]}).encode()
         assert fc.classify(".json", lambda n: head) == (fc.CLASS_TEXT, fc.BRANCH_MEDIA)
         assert fc.GEOJSON_ROOT_TYPES == frozenset({"Point", "MultiPoint", "LineString", "MultiLineString", "Polygon",
@@ -269,7 +269,7 @@ class TestJsonSniff:
             assert fc.classify(".json", lambda n, r=root: json.dumps(r).encode()) == (fc.CLASS_TEXT, fc.BRANCH_MEDIA)
 
     def test_json_outcomes_are_exactly_the_media_branch_hand_off_set(self):
-        """WP06c's MediaExtract handler reclassifies a text .json to tiles3d, data or other; this sniff
+        """The media image's handler reclassifies a text .json to tiles3d, data or other; this sniff
         decides the same four outcomes so state and manifest never disagree before the branch runs."""
         heads = [
             json.dumps({"asset": {"version": "1.1"}, "geometricError": 1, "root": {}}).encode(),
@@ -308,7 +308,7 @@ class TestLasHeader:
 @pytest.mark.unit
 class TestFileClassPhrases:
     def test_every_class_has_a_phrase(self):
-        """One phrase per class, ``other`` included, and the vocabulary is exactly the spec's — the embedding
+        """One phrase per class, ``other`` included, and the vocabulary is exactly this set — the embedding
         step indexes the dict by the manifest's class, so a class without a phrase would fail at run time."""
         assert set(fc.FILE_CLASS_PHRASES) == set(fc.FILE_CLASSES)
         assert fc.FILE_CLASS_PHRASES == EXPECTED_PHRASES
@@ -318,7 +318,7 @@ class TestFileClassPhrases:
         fileClassIntent module carries the same dict for the search API's type-word matching, so a phrase
         changed on one side only would embed words the query side no longer recognises."""
         assert os.path.isfile(_FILE_CLASS_INTENT), (
-            f"{_FILE_CLASS_INTENT} is missing: WP08 (the query-side file-type intent module) has not landed; "
+            f"{_FILE_CLASS_INTENT} is missing: the query-side file-type intent module has not landed; "
             "the phrases this pipeline embeds must match the ones the search API recognises")
         backend = _backend_file_class_intent()
         assert hasattr(backend, "FILE_CLASS_PHRASES"), "fileClassIntent.py has no FILE_CLASS_PHRASES"

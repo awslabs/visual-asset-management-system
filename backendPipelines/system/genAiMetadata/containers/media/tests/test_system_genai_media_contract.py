@@ -2,8 +2,8 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """Every `sys_*` section this image writes carries, under the registry's exact camelCase names, the source
-keys WP06d's `lambda/metadataCatalog.py` promotes to typed `ext_*` metadata and to the `location` GeoJSON
-(master §3.6 "Promotion source contract"; spec §6.3 "complete technical record"). `common.PROMOTION_SOURCE_KEYS`
+keys `lambda/metadataCatalog.py` promotes to typed `ext_*` metadata and to the `location` GeoJSON
+(the promotion source contract; the complete technical record). `common.PROMOTION_SOURCE_KEYS`
 pins the contract; here each extractor runs on a fixture that carries every source and its section is checked
 key by key with the JSON type the catalogue expects. A key renamed in an extractor but not in the constant (or
 the reverse) fails here. Durable (root CLAUDE.md Rule 13): every name stays writable."""

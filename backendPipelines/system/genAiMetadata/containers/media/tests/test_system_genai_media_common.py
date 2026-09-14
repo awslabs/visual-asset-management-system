@@ -1,10 +1,11 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""The MEDIA branch's vocabulary: the extension table equals the spec §6.3 MEDIA rows, every listed
-extension is one a viewer serves (`.webp` excepted -- the spec lists it and no viewer does), the entries
-the pipeline's classifier treats differently are named with their reasons, the promotion source contract
-equals the master §3.6 registry, and the text and result helpers behave as the extractors rely on."""
+"""The MEDIA branch's vocabulary: the extension table equals the supported MEDIA extensions by class, every
+listed extension is one a viewer serves (`.webp` excepted -- supported here, and no viewer serves it), the
+entries the pipeline's classifier treats differently are named with their reasons, the promotion source
+contract equals the keys metadataCatalog reads, and the text and result helpers behave as the extractors
+rely on."""
 
 import json
 import os
@@ -16,8 +17,8 @@ from media_extractors import common
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *([".."] * 6)))
 _VIEWER_CONFIG = os.path.join(_REPO_ROOT, "web", "src", "visualizerPlugin", "config", "viewerConfig.json")
 
-# Spec §6.3, MEDIA rows, transcribed literally.
-SPEC_MEDIA_EXTENSIONS = {
+# The supported MEDIA extensions by class, transcribed literally.
+SUPPORTED_MEDIA_EXTENSIONS = {
     "image": {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"},
     "video": {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"},
     "audio": {".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"},
@@ -26,8 +27,8 @@ SPEC_MEDIA_EXTENSIONS = {
              ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ipynb", ".html", ".htm"},
     "data": {".csv", ".fcs", ".xlsx"},
 }
-# The one spec extension no viewer serves; the allow-list rule (§6.3) keeps it out of the pipeline's
-# allow list, and the image still handles it should a viewer gain it.
+# The one supported extension no viewer serves; the allow-list rule (only viewer-served extensions enter the
+# pipeline) keeps it out of the pipeline's allow list, and the image still handles it should a viewer gain it.
 _NOT_A_VIEWER_EXTENSION = {".webp"}
 # Office formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their text.
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
@@ -43,7 +44,8 @@ def _file_classifier():
     spec.loader.exec_module(module)
     return module
 
-# Master §3.6 "Promotion source contract", MEDIA groups, transcribed literally; nested objects as dotted paths.
+# The promotion source contract (the attribute keys metadataCatalog promotes), MEDIA groups, transcribed
+# literally; nested objects as dotted paths.
 REGISTRY_PROMOTION_SOURCES = {
     "sys_image": ("width", "height", "mode", "exif"),
     "sys_image.exif": ("make", "model", "dateTimeOriginal", "gps"),
@@ -62,13 +64,13 @@ _MEDIA_ATTRIBUTE_GROUPS = {"sys_image", "sys_media", "sys_document", "sys_text",
 
 @pytest.mark.unit
 class TestExtensionTable:
-    def test_every_spec_row_is_present_with_its_class(self):
-        for file_class, extensions in SPEC_MEDIA_EXTENSIONS.items():
+    def test_every_supported_extension_is_present_with_its_class(self):
+        for file_class, extensions in SUPPORTED_MEDIA_EXTENSIONS.items():
             for extension in extensions:
                 assert common.MEDIA_EXTENSION_CLASSES[extension] == file_class, extension
 
-    def test_no_extension_beyond_the_spec_rows(self):
-        expected = set().union(*SPEC_MEDIA_EXTENSIONS.values())
+    def test_no_extension_beyond_the_supported_set(self):
+        expected = set().union(*SUPPORTED_MEDIA_EXTENSIONS.values())
         assert set(common.MEDIA_EXTENSION_CLASSES) == expected
 
     def test_lookup_is_case_insensitive_and_closed(self):
@@ -185,8 +187,8 @@ class TestResultShapes:
 
 @pytest.mark.unit
 def test_promotion_source_contract_is_the_registry():
-    # The names WP06d's metadataCatalog.py reads (master §3.6). A rename in an extractor must land here AND in
-    # the registry; a rename here alone fails this test, a rename in the extractor alone fails Task 12's guard.
+    # The names lambda/metadataCatalog.py reads. A rename in an extractor must land here AND in the catalog; a
+    # rename here alone fails this test, a rename in the extractor alone fails the catalog's own guard.
     assert common.PROMOTION_SOURCE_KEYS == REGISTRY_PROMOTION_SOURCES
     for path in common.PROMOTION_SOURCE_KEYS:
         assert path.split(".")[0] in _MEDIA_ATTRIBUTE_GROUPS, path

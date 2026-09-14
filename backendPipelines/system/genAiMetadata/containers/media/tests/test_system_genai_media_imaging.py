@@ -62,7 +62,7 @@ class TestNormaliseForVision:
         assert max(size) <= 64
         assert data.startswith(_PNG_SIGNATURE)
 
-    def test_defaults_are_the_spec_bounds(self):
+    def test_defaults_are_the_vision_input_bounds(self):
         data, size = imaging.normalise_for_vision(_open(png_bytes(2000, 2000)))
         assert max(size) == VISION_MAX_LONG_EDGE_PX
         assert len(data) <= VISION_MAX_BYTES

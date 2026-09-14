@@ -188,7 +188,7 @@ class TestGuards:
     def test_publishes_when_the_run_carries_no_bucket_id(self):
         """A manifest built from an earlier workflow step's outputs carries no bucketId. The embedding is
         still produced and published with the empty value; the indexer resolves the file's bucket from
-        the asset row (registry §3.5), so a chained-step run is indexed like a first-step one."""
+        the asset row, so a chained-step run is indexed like a first-step one."""
         s3 = _seed(h.FakeS3())
         mod, state = _run(_state(bucketId=""), s3)
         assert state["embeddingStatus"] == "SUCCEEDED" and state["embeddingEventPublished"] is True
@@ -238,7 +238,7 @@ class TestSourceText:
             document["sourceModalities"])
 
     def test_the_file_type_phrase_is_embedded(self):
-        """Spec §6.6: the file-identity part carries the words a user types for a kind of file, between the
+        """The file-identity part carries the words a user types for a kind of file, between the
         database id and the path line, so a type word in a query favours files of that kind. The phrase follows
         the manifest's class, not the state's."""
         s3 = _seed(h.FakeS3())
@@ -266,7 +266,7 @@ class TestSourceText:
         ({"sys_document": {"pageCount": 7}}, "document", ["pages: 7"]),
     ])
     def test_attribute_facts_include_units_camera_and_crs(self, attributes, file_class, expected_lines):
-        """Spec §6.6: the attribute facts carry dimensions with units, counts, duration, resolution, pages,
+        """The attribute facts carry dimensions with units, counts, duration, resolution, pages,
         camera and CRS. They come from the promoted ext_* items, so a branch that writes no `facts` still
         contributes every one of them."""
         manifest = _manifest(fileClass=file_class, attributes=dict({"sys_file": {"name": "f"}}, **attributes), facts={})
@@ -438,7 +438,7 @@ class TestDocumentAndEvent:
         assert state["embeddingDocumentS3Location"] == f"s3://{AUX}/{key}"
         assert state["embeddingStatus"] == "SUCCEEDED"
         assert state["embeddingEventPublished"] is True
-        # Registry §3.6 key set verbatim: the Detail set minus documentS3Location plus embedding and sourceText —
+        # The document key set verbatim: the Detail set minus documentS3Location plus embedding and sourceText —
         # 26 keys, no extra keys (a bucket NAME key is not part of the contract).
         assert set(document) == {
             "schemaVersion", "databaseId", "assetId", "filePath", "versionId", "contentEtag", "bucketId",
@@ -480,7 +480,7 @@ class TestDocumentAndEvent:
         expected = {field: value for field, value in document.items() if field not in ("embedding", "sourceText")}
         expected["documentS3Location"] = f"s3://{AUX}/{key}"
         assert detail == expected
-        # Registry §3.6 Detail key set verbatim — 25 keys, no extra keys; WP07 asserts the same set.
+        # The Detail key set verbatim — 25 keys, no extra keys; the backend consumer asserts the same set.
         assert set(detail) == {
             "schemaVersion", "databaseId", "assetId", "filePath", "versionId", "contentEtag", "bucketId",
             "fileClass", "fileExt", "fileSize", "contentType", "embeddingModelId", "embeddingDimensions",
@@ -518,7 +518,7 @@ class TestDocumentAndEvent:
         assert state["embeddingStatus"] == "SUCCEEDED" and state["embeddingEventPublished"] is False
 
     def test_file_ext_and_file_class_take_the_table_forms(self):
-        """The vector table, WP07's filter attribute and WP08's fileExtensions push-down all use the
+        """The vector table, its filter attribute and the query-side fileExtensions push-down all use the
         un-dotted lower-case extension; fileClass is the manifest's post-branch value."""
         s3 = _seed(h.FakeS3(), manifest=_manifest(fileClass="tiles3d", renderBranch="MEDIA"))
         _mod, state = _run(_state(fileExt=".JSON", fileClass="text"), s3)

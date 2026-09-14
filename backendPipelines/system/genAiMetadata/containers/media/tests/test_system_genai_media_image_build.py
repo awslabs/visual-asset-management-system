@@ -124,7 +124,7 @@ class TestBaseImage:
 
 @pytest.mark.unit
 class TestRequirements:
-    def test_every_line_is_an_exact_pin_and_the_spec_packages_are_present(self):
+    def test_every_line_is_an_exact_pin_and_the_required_packages_are_present(self):
         pins = _requirements()
         for distribution in ("pillow", "imageio-ffmpeg", "pypdfium2", "tinytag", "charset-normalizer", "defusedxml",
                              "boto3", "botocore", "aws-lambda-powertools", "python-docx", "python-pptx", "openpyxl"):

@@ -42,7 +42,7 @@ _PAGES_KEY = _PREFIX + "text/pages.json"
 _SEGMENT_FIELDS = ("videoSegmentPlanS3Location", "videoSegmentItemsS3Location", "videoSegmentItemsBucket",
                    "videoSegmentItemsKey", "videoSegmentResultsBucket", "videoSegmentResultsPrefix", "videoSegmentCount")
 _TEXT_FIELDS = ("fullTextS3Location", "fullTextChars", "fullTextTruncated", "fullTextSkipped", "pageOffsetsS3Location")
-# The rendered template configBody (master §3.6 "Template configuration body"); the handler reads maxTextChars
+# The rendered template configBody; the handler reads maxTextChars
 # only -- extractGeoLocation reaches it as a state field that constructPipeline copies from this body.
 _CONFIG_BODY = {"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
                 "maxTextChars": 12000, "writeAssetKeywords": False, "embeddingIncludeTextExcerpt": True,
@@ -81,7 +81,7 @@ def _pre_manifest(file_class="image", warnings=("pre-existing",)):
 
 
 def _event(name, file_class, content_type="image/png"):
-    """The state constructPipeline returns (WP06d "The pipeline state"), trimmed to the hop fields a later
+    """The state constructPipeline returns, trimmed to the hop fields a later
     task reads back; the handler must return every one of them unchanged."""
     return {
         "jobName": "PipelineJob_20260908_120000_000_1a2b3c4d",

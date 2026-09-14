@@ -4,15 +4,19 @@
 """The classification vocabulary offered to the analysis model and applied to its reply.
 
 The template's configBody carries a ``classificationVocabulary`` object an admin edits without a deploy;
-``DEFAULT_VOCABULARY`` is the shipped value. ``build_vocabulary_prompt_section`` renders it into the
-user message; ``validate_against_vocabulary`` post-checks the reply — an open vocabulary keeps off-list
-values (case-normalised to the vocabulary spelling when one matches), a closed one applies the fallbacks:
-category -> Other, subcategory and style dropped, off-list materials and colors removed.
+``DEFAULT_VOCABULARY`` is the shipped value. ``normalize_vocabulary`` puts a configured vocabulary in its
+canonical shape and caps its size: one whose canonical JSON exceeds ``VOCABULARY_MAX_BYTES`` is replaced by
+the default, so an edit cannot grow the prompt without bound. ``build_vocabulary_prompt_section`` renders it
+into the user message; ``validate_against_vocabulary`` post-checks the reply — an open vocabulary keeps
+off-list values (case-normalised to the vocabulary spelling when one matches), a closed one applies the
+fallbacks: category -> Other, subcategory and style dropped, off-list materials and colors removed.
 """
 
 import copy
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
+# The most bytes a configured vocabulary may take in its canonical JSON; a larger one is replaced by the default.
 VOCABULARY_MAX_BYTES = 6 * 1024
 FALLBACK_CATEGORY = "Other"
 
@@ -125,13 +129,13 @@ def _as_bool(value, default: bool) -> bool:
     return default
 
 
-def normalize_vocabulary(raw: Any) -> dict:
-    """The vocabulary in its canonical shape, every list filled from the default when missing or unusable.
-    ``categories`` may arrive as the ``{name: {description, subcategories}}`` object, as ``{name: [subs]}``,
-    or as a plain list of names. Idempotent."""
-    default = copy.deepcopy(DEFAULT_VOCABULARY)
-    if not isinstance(raw, dict):
-        return default
+def encoded_size(vocab: dict) -> int:
+    """The bytes of a vocabulary's canonical JSON (compact separators, UTF-8), the measure the cap applies to."""
+    return len(json.dumps(vocab, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def _normalize_shape(raw: dict, default: dict) -> dict:
+    """The canonical shape of a vocabulary object, every list filled from the default when missing or unusable."""
     categories: Dict[str, dict] = {}
     raw_categories = raw.get("categories")
     if isinstance(raw_categories, dict):
@@ -156,6 +160,28 @@ def normalize_vocabulary(raw: Any) -> dict:
         "colors": _string_list(raw.get("colors"), default["colors"]),
         "allowUnlisted": _as_bool(raw.get("allowUnlisted"), True),
     }
+
+
+def exceeds_cap(raw: Any) -> bool:
+    """True when ``raw`` is a vocabulary object whose canonical JSON exceeds VOCABULARY_MAX_BYTES, so
+    ``normalize_vocabulary`` replaces it by the default."""
+    if not isinstance(raw, dict):
+        return False
+    return encoded_size(_normalize_shape(raw, copy.deepcopy(DEFAULT_VOCABULARY))) > VOCABULARY_MAX_BYTES
+
+
+def normalize_vocabulary(raw: Any) -> dict:
+    """The vocabulary in its canonical shape, every list filled from the default when missing or unusable.
+    ``categories`` may arrive as the ``{name: {description, subcategories}}`` object, as ``{name: [subs]}``,
+    or as a plain list of names. A vocabulary over VOCABULARY_MAX_BYTES in its canonical JSON is replaced
+    by the default. Idempotent."""
+    default = copy.deepcopy(DEFAULT_VOCABULARY)
+    if not isinstance(raw, dict):
+        return default
+    normalized = _normalize_shape(raw, default)
+    if encoded_size(normalized) > VOCABULARY_MAX_BYTES:
+        return default
+    return normalized
 
 
 def build_vocabulary_prompt_section(vocab: dict) -> str:

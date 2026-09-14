@@ -19,6 +19,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -53,8 +54,11 @@ BEDROCK_ANALYSIS_MODEL_ID = os.environ["BEDROCK_ANALYSIS_MODEL_ID"]
 EMBEDDING_MODEL_ID = os.environ["EMBEDDING_MODEL_ID"]
 EMBEDDING_DIMENSIONS = int(os.environ["EMBEDDING_DIMENSIONS"])
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
-# The guardrail applied to every Converse call (bedrockGuardrail: both variables or neither).
+# The guardrail applied to every Converse call (bedrockGuardrail: both variables or neither). Without one the
+# calls run without prompt-attack filters; the one warning at cold start is the operator's signal.
 GUARDRAIL_CONFIG = bedrockGuardrail.guardrail_config_from_env(os.environ)
+if GUARDRAIL_CONFIG is None:
+    logger.warning(bedrockGuardrail.GUARDRAIL_UNCONFIGURED_WARNING)
 
 # ffmpeg runs through this callable so a test can stand in for it.
 ffmpeg_run: Callable = subprocess.run
@@ -65,6 +69,12 @@ SEGMENT_PRESIGN_SECONDS = 900
 SEGMENT_MAX_LONG_EDGE_PX = 1024
 # Per ffmpeg call; three URL reads, one download and three local reads must fit the function's 300 s.
 SEGMENT_FFMPEG_TIMEOUT_SECONDS = 30
+# ffmpeg reads the video over a presigned URL whose query string is the credential (X-Amz-Signature,
+# X-Amz-Security-Token), and echoes that URL in its error lines. Every URL, and every stray X-Amz-… query
+# parameter, is replaced before an ffmpeg message reaches a log line or the window's results record.
+URL_PLACEHOLDER = "<url>"
+_URL_TEXT = re.compile(r"https?://\S+")
+_SIGNED_QUERY_TEXT = re.compile(r"X-Amz-[A-Za-z-]+=\S*")
 SEGMENT_JSON_KEYS = ("description", "keywords", "objects", "actions", "textSeen")
 ERROR_BEDROCK_SEGMENT = "BedrockSegmentError"
 # A guardrail intervention is a caught failure recorded under its own code, like the whole-file analysis.
@@ -220,9 +230,16 @@ def frame_times(start_ms: int, end_ms: int) -> List[float]:
     return [round((start_ms + (end_ms - start_ms) * position) / 1000.0, 3) for position in SEGMENT_FRAME_POSITIONS]
 
 
+def scrub_urls(text: str) -> str:
+    """``text`` with every URL, and every stray ``X-Amz-…=`` query parameter, replaced by URL_PLACEHOLDER."""
+    return _SIGNED_QUERY_TEXT.sub(URL_PLACEHOLDER, _URL_TEXT.sub(URL_PLACEHOLDER, text))
+
+
 def extract_frames(source: str, times: List[float], work_dir: str, run: Callable) -> Tuple[List[str], List[str]]:
     """PNG paths for the frames that decoded from ``source`` (a URL or a local path), one warning per frame that
-    did not; each frame is fitted to the segment's long edge and the vision byte cap."""
+    did not; each frame is fitted to the segment's long edge and the vision byte cap. A warning carries the tail
+    of ffmpeg's stderr with its URLs scrubbed, or a fixed timeout message: the source may be a presigned URL, and
+    ``str(TimeoutExpired)`` would carry the whole argv."""
     paths: List[str] = []
     warnings: List[str] = []
     for index, seconds in enumerate(times, start=1):
@@ -233,14 +250,16 @@ def extract_frames(source: str, times: List[float], work_dir: str, run: Callable
                 "-vf", f"scale='min({SEGMENT_MAX_LONG_EDGE_PX},iw)':-2", "-y", raw,
             ], run=run, timeout=SEGMENT_FFMPEG_TIMEOUT_SECONDS)
             if proc.returncode != 0 or not os.path.exists(raw):
-                tail = proc.stderr.decode("utf-8", "replace")[-300:].strip()
+                tail = scrub_urls(proc.stderr.decode("utf-8", "replace"))[-300:].strip()
                 warnings.append(f"Frame at {seconds:.1f}s failed (exit {proc.returncode}): {tail}")
                 continue
             with Image.open(raw) as frame:
                 png, _ = normalise_for_vision(frame.copy(), max_long_edge=SEGMENT_MAX_LONG_EDGE_PX)
             paths.append(write_png(png, work_dir, f"segment-{index:02d}.png"))
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            warnings.append(f"Frame at {seconds:.1f}s failed: {exc}")
+        except subprocess.TimeoutExpired:
+            warnings.append(f"Frame at {seconds:.1f}s failed: ffmpeg timed out after {SEGMENT_FFMPEG_TIMEOUT_SECONDS}s")
+        except OSError as exc:
+            warnings.append(f"Frame at {seconds:.1f}s failed: {scrub_urls(str(exc))}")
     return paths, warnings
 
 
@@ -338,8 +357,9 @@ def parse_segment_json(text: str) -> dict:
 def analyze_window(user_blocks: List[dict], image_blocks: List[dict]) -> Tuple[dict, dict]:
     """``(result, usage)`` after at most MAX_ATTEMPTS Converse calls: a throttle backs off and retries, an
     unparsable reply is re-asked; every other Bedrock error, a guardrail intervention and an exhausted attempt
-    budget raise SegmentAnalysisFailure."""
-    content = list(user_blocks) + list(image_blocks)
+    budget raise SegmentAnalysisFailure. With a guardrail configured the frames travel in ``guardContent``
+    blocks, like the file-derived text."""
+    content = list(user_blocks) + bedrockGuardrail.user_image_blocks(image_blocks, GUARDRAIL_CONFIG)
     request = {
         "modelId": BEDROCK_ANALYSIS_MODEL_ID,
         "system": [{"text": SEGMENT_SYSTEM_PROMPT}],
