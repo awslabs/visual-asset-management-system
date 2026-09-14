@@ -184,27 +184,37 @@ def normalize_vocabulary(raw: Any) -> dict:
     return normalized
 
 
-def build_vocabulary_prompt_section(vocab: dict) -> str:
-    """The vocabulary as the prompt offers it: categories with descriptions and subcategories in the
-    vocabulary's own order, then the style, material and color lists, then the open/closed instruction."""
+def vocabulary_prompt_parts(vocab: dict) -> Tuple[str, List[str], str]:
+    """The vocabulary as the prompt offers it, in three pieces: the opening instruction, the option lines
+    (categories with descriptions and subcategories in the vocabulary's own order, then the style, material
+    and color lists), and the closing open/closed instruction. The two instructions are the pipeline's own
+    words; the option lines are what the operator edits on the template."""
     vocab = normalize_vocabulary(vocab)
-    lines = ["CATEGORY OPTIONS (pick one category and, when one fits, one of its subcategories):"]
+    opening = "CATEGORY OPTIONS (pick one category and, when one fits, one of its subcategories):"
+    options = []
     for name, spec in vocab["categories"].items():
         line = f"- {name}"
         if spec["description"]:
             line += f": {spec['description']}"
         if spec["subcategories"]:
             line += ". Subcategories: " + ", ".join(spec["subcategories"])
-        lines.append(line)
-    lines.append("STYLE OPTIONS: " + ", ".join(vocab["styles"]))
-    lines.append("MATERIAL OPTIONS: " + ", ".join(vocab["materials"]))
-    lines.append("COLOR OPTIONS: " + ", ".join(vocab["colors"]))
+        options.append(line)
+    options.append("STYLE OPTIONS: " + ", ".join(vocab["styles"]))
+    options.append("MATERIAL OPTIONS: " + ", ".join(vocab["materials"]))
+    options.append("COLOR OPTIONS: " + ", ".join(vocab["colors"]))
     if vocab["allowUnlisted"]:
-        lines.append("You may use values outside these lists when none fits.")
+        closing = "You may use values outside these lists when none fits."
     else:
-        lines.append('Use only values from these lists. Use the category "Other" when none fits, and omit a '
-                     "subcategory, style, material or color that is not listed.")
-    return "\n".join(lines)
+        closing = ('Use only values from these lists. Use the category "Other" when none fits, and omit a '
+                   "subcategory, style, material or color that is not listed.")
+    return opening, options, closing
+
+
+def build_vocabulary_prompt_section(vocab: dict) -> str:
+    """The three vocabulary pieces joined in prompt order, for a prompt that is not split into guarded and
+    plain blocks."""
+    opening, options, closing = vocabulary_prompt_parts(vocab)
+    return "\n".join([opening, *options, closing])
 
 
 def _match(value: str, options: List[str]) -> Optional[str]:

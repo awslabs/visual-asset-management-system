@@ -615,3 +615,15 @@ def test_confirm_echo_names_the_target_and_what_the_run_will_do(monkeypatch, cap
     assert "Dry run:      True   (pass --execute for a real run)" in caplog.text
     assert "This run will: delete nothing and bill nothing" in caplog.text
     assert f"This run will: {_GATED_SUMMARY}" in caplog.text
+
+
+def test_confirm_echo_names_the_config_when_it_kept_an_execute_run_dry(monkeypatch, caplog):
+    _install_fake_boto3(monkeypatch, _FakeSts(ACCOUNT))
+    _no_prompt(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        _confirm(dry_run=True, args_dry_run=False)
+
+    assert ('Dry run:      True   (--execute was given; the config\'s "dry_run": true keeps this a dry run)'
+            in caplog.text)
+    assert "pass --execute" not in caplog.text

@@ -243,11 +243,13 @@ def existing_metadata_sections(existing_lines):
     return sections
 
 
-def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_section,
+def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                      existing_lines, text_excerpt, image_count):
-    """The prompt's parts by name. ``intro`` and ``closing`` are the pipeline's own words; ``context``,
-    ``identity``, ``attributes``, ``facts``, ``existing`` and ``excerpt`` come from the file and its metadata,
-    and ``vocabulary`` from the template's operator-edited configuration."""
+    """The prompt's parts by name. ``intro``, ``vocabularyOpening``, ``vocabularyClosing`` and ``closing`` are the
+    pipeline's own words; ``context``, ``identity``, ``attributes``, ``facts``, ``existing`` and ``excerpt`` come
+    from the file and its metadata, and ``vocabularyOptions`` from the template's operator-edited configuration.
+    ``vocabulary_parts`` is the ``(opening, options, closing)`` tuple ``vocabulary_prompt_parts`` returns."""
+    vocabulary_opening, vocabulary_options, vocabulary_closing = vocabulary_parts
     context = []
     if asset_data.get("assetName"):
         context.append(f"Asset name: {asset_data['assetName']}")
@@ -271,38 +273,43 @@ def _user_text_parts(asset_data, database_id, relative_path, file_class, file_ex
         "identity": [f"Database: {database_id}", f"File: {relative_path} (class: {file_class}, extension: {file_ext})"],
         "attributes": ["File attributes (JSON): " + attributes_json[:MAX_ATTRIBUTES_CHARS]],
         "facts": ["File facts: " + "; ".join(f"{key}: {value}" for key, value in sorted(facts.items()))] if facts else [],
-        "vocabulary": [vocabulary_section],
+        "vocabularyOpening": [vocabulary_opening],
+        "vocabularyOptions": vocabulary_options,
+        "vocabularyClosing": [vocabulary_closing],
         "existing": existing_metadata_sections(existing_lines),
         "excerpt": ["File text excerpt:\n" + text_excerpt] if text_excerpt else [],
         "closing": [closing] if closing else [],
     }
 
 
-_USER_TEXT_ORDER = ("intro", "context", "identity", "attributes", "facts", "vocabulary", "existing", "excerpt",
-                    "closing")
-# Every part that is not the pipeline's own words is guarded: the file-derived parts and the vocabulary, which an
-# operator edits on the template without a deploy.
-_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabulary", "existing", "excerpt")
-_UNGUARDED_PARTS = ("intro", "closing")
+_USER_TEXT_ORDER = ("intro", "context", "identity", "attributes", "facts", "vocabularyOpening", "vocabularyOptions",
+                    "vocabularyClosing", "existing", "excerpt", "closing")
+# Every part that is not the pipeline's own words is guarded: the file-derived parts and the vocabulary's option
+# lines, which an operator edits on the template without a deploy. The vocabulary's opening and closing sentences
+# are instructions the pipeline wrote, so they stay plain: an imperative sentence inside guardContent is what a
+# prompt-attack filter is built to flag, and a hit there would fail every analysis in the deployment.
+_GUARDED_PARTS = ("context", "identity", "attributes", "facts", "vocabularyOptions", "existing", "excerpt")
+_UNGUARDED_PARTS = ("intro", "vocabularyOpening", "vocabularyClosing", "closing")
 
 
-def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_section,
+def build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                     existing_lines, text_excerpt, image_count):
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                             vocabulary_section, existing_lines, text_excerpt, image_count)
+                             vocabulary_parts, existing_lines, text_excerpt, image_count)
     return "\n".join(line for name in _USER_TEXT_ORDER for line in parts[name])
 
 
-def build_user_content(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_section,
+def build_user_content(asset_data, database_id, relative_path, file_class, file_ext, manifest, vocabulary_parts,
                        existing_lines, text_excerpt, image_count, guarded):
     """The user message's text content blocks. Without a guardrail, one text block in prompt order. With one,
-    a text block carrying the instruction and the render note, then a ``guardContent`` block carrying everything
-    that comes from the file, its metadata and the template's vocabulary, so the guardrail evaluates that input."""
+    a text block carrying the pipeline's own instructions (the intro, the vocabulary's opening and closing
+    sentences, the render note), then a ``guardContent`` block carrying everything that comes from the file, its
+    metadata and the template's vocabulary options, so the guardrail evaluates that input and not the prompt."""
     if not guarded:
         return [{"text": build_user_text(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                                         vocabulary_section, existing_lines, text_excerpt, image_count)}]
+                                         vocabulary_parts, existing_lines, text_excerpt, image_count)}]
     parts = _user_text_parts(asset_data, database_id, relative_path, file_class, file_ext, manifest,
-                             vocabulary_section, existing_lines, text_excerpt, image_count)
+                             vocabulary_parts, existing_lines, text_excerpt, image_count)
     plain = "\n".join(line for name in _UNGUARDED_PARTS for line in parts[name])
     guarded_text = "\n".join(line for name in _GUARDED_PARTS for line in parts[name])
     return bedrockGuardrail.user_content_blocks(plain, guarded_text, GUARDRAIL_CONFIG)
@@ -598,7 +605,7 @@ def lambda_handler(event, context):
 
     user_blocks = build_user_content(asset_data, event.get("databaseId", ""), event.get("relativePath", ""),
                                      file_class, event.get("fileExt", ""), manifest,
-                                     vocabulary.build_vocabulary_prompt_section(vocab), prompt_existing,
+                                     vocabulary.vocabulary_prompt_parts(vocab), prompt_existing,
                                      text_excerpt, len(image_blocks), guarded=GUARDRAIL_CONFIG is not None)
     try:
         result, usage = analyze(user_blocks, image_blocks)

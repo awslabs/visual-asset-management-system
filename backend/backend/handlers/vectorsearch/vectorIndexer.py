@@ -452,7 +452,11 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
         vector_store.put_item(item)
         flipped = 0
     # The whole-file document of a run sweeps the version's segment items an earlier run left behind
-    # (another interval or chunking setting); the current run's own segments are never touched.
+    # (another interval or chunking setting); the current run's own segments are never touched. The sweep
+    # assumes a run's whole-file document arrives before any LATER run's segments for the same version: the
+    # perInputFileVersion lock serialises runs per version, so that holds unless an embedding.ready event is
+    # delayed past an entire subsequent run, in which case that run's segments are swept and the next run
+    # rewrites them.
     stale_segments = 0
     if whole_file:
         stale_segments = vector_store.delete_other_run_segments(pk, key_path, version_id, item.pipelineExecutionId)

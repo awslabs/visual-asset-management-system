@@ -143,6 +143,19 @@ class TestPromptSection:
         assert section.endswith('Use only values from these lists. Use the category "Other" when none fits, and omit a '
                                 "subcategory, style, material or color that is not listed.")
 
+    def test_the_parts_recompose_to_the_section_and_separate_the_instructions_from_the_options(self):
+        """``vocabulary_prompt_parts`` splits the section into the two instruction sentences and the operator's
+        option lines; joined in order they are the section byte for byte, so a prompt that is not split into
+        guarded and plain blocks reads exactly as before."""
+        for vocab in (cv.DEFAULT_VOCABULARY, _closed()):
+            opening, options, closing = cv.vocabulary_prompt_parts(vocab)
+            assert "\n".join([opening, *options, closing]) == cv.build_vocabulary_prompt_section(vocab)
+            assert opening.startswith("CATEGORY OPTIONS (pick one category")
+            assert all(line.startswith(("- ", "STYLE OPTIONS: ", "MATERIAL OPTIONS: ", "COLOR OPTIONS: "))
+                       for line in options)
+        assert cv.vocabulary_prompt_parts(cv.DEFAULT_VOCABULARY)[2].startswith("You may use values outside")
+        assert cv.vocabulary_prompt_parts(_closed())[2].startswith("Use only values from these lists")
+
     def test_a_custom_vocabulary_is_printed_in_its_own_order_and_normalised_first(self):
         section = cv.build_vocabulary_prompt_section({"categories": {"Gadget": {"description": "Small devices",
                                                                                 "subcategories": []},

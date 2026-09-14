@@ -135,8 +135,13 @@ def confirm_migration_target(
     gated: bool,
     gated_summary: str,
     confirm_account: Optional[str],
+    args_dry_run: Optional[bool] = None,
 ) -> bool:
     """Echo the resolved target and, for a gated run, require the operator to confirm the account.
+
+    ``dry_run`` is the effective mode (the command line or the config can each force a dry run);
+    ``args_dry_run`` is what the command line alone said, so the echo can name the config when it is the
+    config that kept an ``--execute`` run dry. It defaults to ``dry_run``.
 
     Returns True to proceed, False to refuse.
 
@@ -154,6 +159,8 @@ def confirm_migration_target(
     --confirm-account is absent, the run is refused. ``--confirm-account`` is checked whenever it is
     given, dry run or not, so a mismatch is caught on the first (dry) run.
     """
+    if args_dry_run is None:
+        args_dry_run = dry_run
     session_kwargs = {}
     if profile:
         session_kwargs['profile_name'] = profile
@@ -184,7 +191,13 @@ def confirm_migration_target(
     logger.info(f"  Caller:       {caller_arn or 'UNRESOLVED'}")
     logger.info(f"  Profile:      {profile or 'none (ambient credentials)'}")
     logger.info(f"  SSM prefix:   {base_param_prefix or 'not configured'}")
-    logger.info(f"  Dry run:      {dry_run}" + ("" if not dry_run else "   (pass --execute for a real run)"))
+    if not dry_run:
+        dry_run_note = ""
+    elif args_dry_run:
+        dry_run_note = "   (pass --execute for a real run)"
+    else:
+        dry_run_note = '   (--execute was given; the config\'s "dry_run": true keeps this a dry run)'
+    logger.info(f"  Dry run:      {dry_run}{dry_run_note}")
     logger.info(f"  This run will: {gated_summary if confirmation_needed else 'delete nothing and bill nothing'}")
     logger.info("############################")
     logger.info("")
@@ -1033,6 +1046,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         region=region,
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
+        args_dry_run=args.dry_run,
         gated=run_orphaned_triggers or run_vector_backfill,
         gated_summary=_gated_summary(run_orphaned_triggers, run_vector_backfill, clears_vectors),
         confirm_account=args.confirm_account,
