@@ -459,11 +459,10 @@ describe("handleExecutionError sub-process stop grants", () => {
         expect(actions).toContain("batch:TerminateJob");
     });
 
-    // FIX-038's rule applies here too: StopExecution acts on an execution ARN, and this file exists
-    // because an unscoped grant reaches every execution in the account driven by registration data
-    // that is validated only for ARN shape. The stack's own cdk-nag suppressions blanket-waive
-    // Resource wildcards, so an accidental `Resource: "*"` would ship with a green nag run and a
-    // green presence test above.
+    // StopExecution acts on an execution ARN, and this file exists because an unscoped grant reaches
+    // every execution in the account driven by registration data that is validated only for ARN
+    // shape. The stack's own cdk-nag suppressions blanket-waive Resource wildcards, so an accidental
+    // `Resource: "*"` would ship with a green nag run and a green presence test above.
     test("scopes StopExecution to the execution ARN patterns rather than every execution", () => {
         const refs = resourcesForAction(
             synthed().template,

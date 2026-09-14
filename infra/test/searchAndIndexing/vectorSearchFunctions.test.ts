@@ -229,7 +229,9 @@ describe("vector-search Lambda builders", () => {
         expect(env.VECTOR_INDEX_NAME).toBe("vec-amazon-titan-embed-text-v2-0-1024");
         expect(env.EMBEDDING_MODEL_ID).toBe("amazon.titan-embed-text-v2:0");
         expect(env.EMBEDDING_DIMENSIONS).toBe("1024");
-        expect(env.AUX_BUCKET_NAME).toEqual({ Ref: expect.stringMatching(/^AuxBucket/) });
+        // The auxiliary bucket is resolved from the SSM resource names at runtime; a second copy
+        // in the environment would let the two disagree.
+        expect(env.AUX_BUCKET_NAME).toBeUndefined();
         expect(env.VECTOR_INDEXER_QUEUE_URL).toBe("https://sqs.example/indexer");
         expect(env.VAMS_RESOURCE_PARAM_PREFIX).toBe("/vams-test-us-east-1/resourceNames");
 

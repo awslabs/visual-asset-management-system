@@ -87,7 +87,6 @@ export function buildVectorIndexerFunction(
         ...vectorLambdaPlacement(config, vpc, subnets),
         environment: {
             ...vectorIndexEnvironment(config),
-            AUX_BUCKET_NAME: storageResources.s3.assetAuxiliaryBucket.bucketName,
             ...(extraEnv ?? {}),
         },
     });

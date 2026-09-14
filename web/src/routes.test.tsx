@@ -91,8 +91,8 @@ function pathsMissingParams(
 
 describe("routeTable", () => {
     it("highlights the Assets and Files navigation item on every search route", () => {
-        // Navigation matches activeHref to a nav item href by string equality. The two /search
-        // routes used to carry "/", which lit up Home while the search page was open.
+        // Navigation matches activeHref to a nav item href by string equality, so a search route
+        // whose active value is "/" lights up Home while the search page is open.
         const searchPage = pageFor("/assets");
         const searchRoutes = routeTable.filter((route) => route.Page === searchPage);
         expect(searchRoutes.map((route) => route.path)).toEqual(

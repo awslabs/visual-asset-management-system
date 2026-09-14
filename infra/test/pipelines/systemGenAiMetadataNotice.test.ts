@@ -90,7 +90,9 @@ describe("NOTICE.md system GenAI metadata section", () => {
         }
     });
 
-    test("the retired pipeline tables are gone", () => {
+    // A durable guard, not a pin on a one-time removal: a merge across the retirement or a
+    // copied table can reintroduce these headings, and nothing else would notice.
+    test("names no retired pipeline table", () => {
         expect(notice).not.toContain("GenAI Metadata 3D Labeling Pipeline");
         expect(notice).not.toContain("Mesh/CAD Metadata Extraction Pipeline");
         expect(notice).not.toContain("GENAI 3D METADATA GENERATION");

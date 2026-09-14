@@ -368,7 +368,7 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 | 2. **Pipeline-only endpoints** — Batch, ECR API, ECR Docker (`"BatchEndpoint"`) | Yes                      | Yes                     |
 | 3. **ECS endpoint** — the `needsEcsPrivate` variable                            | No                       | Yes                     |
 
-Listing an isolated-subnet pipeline in block 1 creates one NAT gateway per Availability Zone that nothing routes through; omitting block 2 for any container pipeline fails the job at task start because the image cannot be pulled. When only an optional branch of the pipeline uses a container (a `useFargateRenderer`-style sub-flag), key the block condition **and** the `vpcRequiringFeatures` entry in `config.ts` on that sub-flag, not on the pipeline's `enabled`.
+Listing an isolated-subnet pipeline in block 1 creates one NAT gateway per Availability Zone that nothing routes through; omitting block 2 for any container pipeline fails the job at task start because the image cannot be pulled. When only an optional branch of the pipeline uses a container (a `useFargateRenderer`-style sub-flag), key the block condition **and** the `vpcRequiringFeatures` entry in `config.ts` on `enabled && <sub-flag>`, not on the pipeline's `enabled` alone.
 
 ### Step 8: Add Config Flag
 

@@ -7,9 +7,8 @@ stays inside the invocation's input directory.
 
 An S3 key is an opaque byte string, so a sibling's key relative to the parent prefix can carry a leading
 separator or `..` segments and resolve anywhere the process can write -- before a subprocess is launched
-in the same environment. These cases are the legacy container's `test_hierarchy_download_confinement.py`
-restated against `download_siblings`, plus the extension filter and the size/count caps that the legacy
-stage did not have.
+in the same environment. These cases pin `download_siblings` against that confinement, plus the
+extension filter and the size/count caps.
 """
 
 import json
