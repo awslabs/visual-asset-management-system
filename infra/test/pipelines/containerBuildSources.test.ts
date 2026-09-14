@@ -371,6 +371,10 @@ describe.each(NON_ROOT_IMAGES)(
         const text = fs.readFileSync(file, "utf-8");
         const stage = runtimeStage(text);
         const userAt = stage.findIndex((l) => /^USER\s+\S/.test(l));
+        // The line that fixes the running process: an explicit ENTRYPOINT, or -- for a Lambda image that
+        // inherits /lambda-entrypoint.sh from its pinned base and restates nothing -- the CMD naming the
+        // handler. Either way a USER after it never applies to the process.
+        const processAt = stage.findIndex((l) => /^(ENTRYPOINT|CMD)\s/.test(l));
 
         it("the runtime stage is isolated from the build stage", () => {
             // Non-vacuity of the slice itself, and the whole point of slicing. `conda-pack` appears only in
@@ -379,7 +383,7 @@ describe.each(NON_ROOT_IMAGES)(
             // make every assertion below reproduce the stage-blind bug it exists to avoid.
             expect(stage.length).toBeGreaterThan(0);
             expect(stage.join("\n")).not.toContain("conda-pack");
-            expect(stage.some((l) => /^ENTRYPOINT\s/.test(l))).toBe(true);
+            expect(processAt).toBeGreaterThan(-1);
         });
 
         it("declares a USER in the stage that runs", () => {
@@ -392,13 +396,12 @@ describe.each(NON_ROOT_IMAGES)(
             expect(name).not.toMatch(/^(root|0)(:|$)/);
         });
 
-        it("switches user after the last COPY and before the ENTRYPOINT", () => {
+        it("switches user after the last COPY and before the ENTRYPOINT or CMD", () => {
             // A USER ahead of the last COPY leaves the copied application root-owned; a USER after
-            // ENTRYPOINT never applies to the running process.
+            // the ENTRYPOINT/CMD never applies to the running process.
             const lastCopyAt = stage.reduce((acc, l, i) => (/^COPY\s/.test(l) ? i : acc), -1);
-            const entrypointAt = stage.findIndex((l) => /^ENTRYPOINT\s/.test(l));
             expect(userAt).toBeGreaterThan(lastCopyAt);
-            expect(userAt).toBeLessThan(entrypointAt);
+            expect(userAt).toBeLessThan(processAt);
         });
 
         it("creates the account it switches to, in the same stage", () => {

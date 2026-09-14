@@ -1354,7 +1354,9 @@ describe("changelog, revision history, and notices", () => {
         ]) {
             expect(release).toContain(s);
         }
-        // Condensed into the bullets that exist, not added as bullets: the Features list is exactly these openers, in order.
+        // Condensed into the bullets that exist, not added as bullets: this branch's Features bullets
+        // are exactly these openers, in order, at the head of the list. Bullets merged in from the
+        // development branch (the workflow orchestration refinements) follow them.
         const featureOpeners = [
             "-   **Search** Natural-language (vector) search",
             "-   **Pipelines** Consolidated `SYSTEM - GenAI Metadata Generation` pipeline",
@@ -1367,8 +1369,12 @@ describe("changelog, revision history, and notices", () => {
         const bullets = section(release, "### Features")
             .split("\n")
             .filter((l) => /^- {3}\*\*/.test(l));
-        expect(bullets).toHaveLength(featureOpeners.length);
-        bullets.forEach((line, i) => expect(line.startsWith(featureOpeners[i])).toBe(true));
+        expect(bullets.length).toBeGreaterThanOrEqual(featureOpeners.length);
+        featureOpeners.forEach((opener, i) => expect(bullets[i].startsWith(opener)).toBe(true));
+        // No segment-vector bullet of its own anywhere in the list.
+        for (const line of bullets.slice(featureOpeners.length)) {
+            expect(line).not.toMatch(/segment vector|content chunk|video window/i);
+        }
         const revisions = section(readDoc("additional/revisions.md"), `### ${version}`);
         for (const s of [
             "`VIDEO_SEGMENT_SECONDS`",
