@@ -263,11 +263,15 @@ paginated request per hit, so its `size` is clamped to 25; use
 `search_nlp` is the natural-language search: the query is embedded with the
 deployment's Amazon Bedrock model and ranked against the vector index, with or
 without OpenSearch (it needs the `VECTORSEARCH` feature switch instead). It takes
-`database_ids`, `entity_type`, `size` (1–100), `include_archived`, `file_classes`,
-`metadata_query` and `include_segments`, and returns `relation`, `nlp` and
-`warnings` beside the hits — a `gte` relation means the total is a lower bound.
-It is a read tool, but every call bills a Bedrock embedding, so it is deliberately
-left out of the `autoApprove` sample above.
+`database_ids`, `entity_type`, `size` (1–100), `include_archived`, `file_classes`
+(validated against the indexed class ids, which the docstring lists),
+`file_extensions`, `metadata_query`, `geo_search`, `tags` and `include_segments`,
+and returns `relation`, `nlp` and `warnings` beside the hits — a `gte` relation
+means the total is a lower bound. `metadata_query`, `geo_search` and `tags` are
+OpenSearch-only constraints: without OpenSearch they are ignored and reported as
+the `opensearch:fields_ignored` warning. It is a read tool, but every call bills a
+Bedrock embedding, so it is deliberately left out of the `autoApprove` sample
+above.
 
 ### Write (require `VAMS_ENABLE_WRITES=true`)
 

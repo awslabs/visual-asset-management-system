@@ -4,15 +4,13 @@
  */
 
 import React from "react";
-import {
-    ExpandableSection,
-    SpaceBetween,
-    FormField,
-    Select,
-    Button,
-    Box,
-    Toggle,
-} from "@cloudscape-design/components";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import FormField from "@cloudscape-design/components/form-field";
+import Select from "@cloudscape-design/components/select";
+import Button from "@cloudscape-design/components/button";
+import Box from "@cloudscape-design/components/box";
+import Toggle from "@cloudscape-design/components/toggle";
 import { SearchPreferences, FIELD_MAPPINGS, SearchFilters } from "../types";
 import { RECORD_TYPE_FIELD } from "../utils/recordType";
 import DraggableColumnList from "./DraggableColumnList";

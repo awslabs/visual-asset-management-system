@@ -566,6 +566,27 @@ def search_files(
 
 _NLP_ENTITY_TYPES = ("file", "asset")
 _NLP_SIZE_MAX = 100
+# The fileClass ids the vector index stores, in the order the backend declares them
+# (backend/backend/common/vectorsearch/fileClassIntent.py FILE_CLASSES). The route does not validate
+# `fileClasses`, so an unknown id is a silent empty result; the tool refuses it here instead.
+# tests/test_search_nlp_tool.py pins this copy to the backend's.
+_NLP_FILE_CLASSES = (
+    "image", "video", "audio", "document", "text", "data", "tiles3d", "mesh", "usd", "cad",
+    "pointcloud", "splat", "ifc", "other",
+)
+
+
+def _normalise_nlp_list(values: Optional[List[str]], strip_dot: bool = False) -> List[str]:
+    """Lower-cased, trimmed, de-duplicated, first-seen order — the backend's own normalisation,
+    applied here so validation sees what the route will see."""
+    seen: List[str] = []
+    for value in values or []:
+        item = value.strip().lower()
+        if strip_dot:
+            item = item.lstrip(".")
+        if item and item not in seen:
+            seen.append(item)
+    return seen
 
 
 def _build_nlp_search_request(
@@ -577,9 +598,18 @@ def _build_nlp_search_request(
     file_classes: Optional[List[str]],
     metadata_query: Optional[str],
     include_segments: bool,
+    file_extensions: Optional[List[str]] = None,
+    geo_search: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     if entity_type not in _NLP_ENTITY_TYPES:
         raise ValueError(f"entity_type must be one of {_NLP_ENTITY_TYPES}, got {entity_type!r}")
+    classes = _normalise_nlp_list(file_classes)
+    unknown = [c for c in classes if c not in _NLP_FILE_CLASSES]
+    if unknown:
+        raise ValueError(
+            f"file_classes must be from {list(_NLP_FILE_CLASSES)}, got {unknown}"
+        )
     request: Dict[str, Any] = {
         "query": query,
         "entityTypes": [entity_type],
@@ -589,11 +619,18 @@ def _build_nlp_search_request(
     scoped = [d for d in (database_ids or []) if d not in _UNSCOPED_DATABASE_IDS]
     if scoped:
         request["databaseIds"] = scoped
-    if file_classes:
-        request["fileClasses"] = list(file_classes)
+    if classes:
+        request["fileClasses"] = classes
+    extensions = _normalise_nlp_list(file_extensions, strip_dot=True)
+    if extensions:
+        request["fileExtensions"] = extensions
     if metadata_query:
         request["metadataQuery"] = metadata_query
         request["metadataSearchMode"] = "both"
+    if geo_search:
+        request["geoSearch"] = geo_search
+    if tags:
+        request["tags"] = list(tags)
     # The server default is to search segments; only the opt-out travels on the wire.
     if not include_segments:
         request["includeSegments"] = False
@@ -609,7 +646,10 @@ def search_nlp(
     size: int = 25,
     include_archived: bool = False,
     file_classes: Optional[List[str]] = None,
+    file_extensions: Optional[List[str]] = None,
     metadata_query: Optional[str] = None,
+    geo_search: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
     include_segments: bool = True,
 ) -> Dict[str, Any]:
     """Natural-language (semantic) search over indexed files, ranked by embedding distance.
@@ -626,13 +666,24 @@ def search_nlp(
     - entity_type: "file" (default) returns one hit per file; "asset" groups file hits by asset,
       keeping the best score.
     - size: 1..100 hits (default 25; values outside are clamped). There is no offset paging on
-      this route — narrow with database_ids or file_classes instead of asking for more.
+      this route — narrow with database_ids, file_classes or file_extensions instead of asking
+      for more.
     - include_archived: also match archived files.
-    - file_classes: hard filter on the indexed file class (e.g. "video", "document", "3d-model").
-      When omitted, type words in the query soft-boost matching classes and the classes detected
-      are echoed in `nlp.classIntent`.
+    - file_classes: hard filter on the indexed file class. The ids are exactly: image, video,
+      audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc, other
+      (case-insensitive; the route does not validate them, so any other value is refused here
+      with an error naming this list rather than returning an empty result). When omitted, type
+      words in the query soft-boost matching classes and the classes detected are echoed in
+      `nlp.classIntent`.
+    - file_extensions: hard filter on the file extension, e.g. ["glb", "pdf"] (a leading dot is
+      dropped; case-insensitive).
     - metadata_query: `key:value` metadata constraint (same syntax as search_assets). OpenSearch-only:
       when OpenSearch is off it is ignored and reported as the warning `opensearch:fields_ignored`.
+    - geo_search: geospatial constraint on `geo_MD_location`, the same shape as search_assets
+      (exactly one of `point`, `bbox` or `geoJson`, plus an optional `relation`). OpenSearch-only,
+      ignored with `opensearch:fields_ignored` when OpenSearch is off.
+    - tags: keep only files whose asset carries at least one of these tags. OpenSearch-only,
+      ignored with `opensearch:fields_ignored` when OpenSearch is off.
     - include_segments: True (default) also searches inside-file segments (video time windows, text
       chunks); a hit found that way carries `source._vector.segmentHits` and
       `source._vector.bestSegment` ({segmentKey, segmentKind, segmentLabel, segmentStartMs,
@@ -650,7 +701,7 @@ def search_nlp(
     embeddingModelId, sourceModalities, indexedAt, fileClass, segmentHits, bestSegment}."""
     request = _build_nlp_search_request(
         query, database_ids, entity_type, size, include_archived, file_classes, metadata_query,
-        include_segments,
+        include_segments, file_extensions=file_extensions, geo_search=geo_search, tags=tags,
     )
     raw = CLIENT.api.search_nlp(request)
     trimmed = CLIENT.trim_search_results(raw, max_hits=request["size"])

@@ -1,20 +1,19 @@
 import Table, { TableProps } from "@cloudscape-design/components/table";
-import {
-    CollectionPreferences,
-    Header,
-    Link,
-    Pagination,
-    Box,
-    Button,
-    SpaceBetween,
-    Alert,
-    Input,
-    Grid,
-    Select,
-    FormField,
-    Modal,
-    Icon,
-} from "@cloudscape-design/components";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
+import Header from "@cloudscape-design/components/header";
+import Link from "@cloudscape-design/components/link";
+import Pagination from "@cloudscape-design/components/pagination";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Alert from "@cloudscape-design/components/alert";
+import Input from "@cloudscape-design/components/input";
+import Grid from "@cloudscape-design/components/grid";
+import Select from "@cloudscape-design/components/select";
+import FormField from "@cloudscape-design/components/form-field";
+import Modal from "@cloudscape-design/components/modal";
+import Icon from "@cloudscape-design/components/icon";
+import Checkbox from "@cloudscape-design/components/checkbox";
 import Popover from "@cloudscape-design/components/popover";
 import { SearchExplanation, getTotalResultCount, FIELD_MAPPINGS } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
@@ -36,7 +35,6 @@ import { useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchtagTypes } from "../../services/APIService";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
-import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
@@ -613,7 +611,13 @@ function columnRender(
                                 </Box>
                             }
                         >
-                            <Icon name="status-info" variant="link" />
+                            {/* A Button, not a bare Icon: a custom trigger is only reachable by
+                                keyboard when the child itself takes focus. */}
+                            <Button
+                                variant="inline-icon"
+                                iconName="status-info"
+                                ariaLabel="Show what this result matched from"
+                            />
                         </Popover>
                     )}
                 </SpaceBetween>

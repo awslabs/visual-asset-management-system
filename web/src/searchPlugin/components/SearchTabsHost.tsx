@@ -46,17 +46,13 @@ interface SearchTabsHostProps {
  * Only the active tab's body is mounted; each body receives the route database and `isActive`.
  */
 export const SearchTabsHost: React.FC<SearchTabsHostProps> = ({ databaseId }) => {
-    const { ready, providers } = useSearchProvidersReady();
+    const { providers } = useSearchProvidersReady();
     const [searchParams, setSearchParams] = useSearchParams();
 
     const requested = searchParams.get(SEARCH_TAB_QUERY_PARAM);
     const activeTabId = providers.some((provider) => provider.id === requested)
         ? (requested as string)
         : defaultProviderId(providers);
-
-    if (!ready) {
-        return <LoadingSpinner text="Loading search..." />;
-    }
 
     if (!activeTabId) {
         return (
@@ -69,6 +65,7 @@ export const SearchTabsHost: React.FC<SearchTabsHostProps> = ({ databaseId }) =>
     return (
         <ErrorBoundary componentName="Search Tabs">
             <Tabs
+                ariaLabel="Search providers"
                 activeTabId={activeTabId}
                 onChange={({ detail }) =>
                     setSearchParams(

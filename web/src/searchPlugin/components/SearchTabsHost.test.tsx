@@ -72,6 +72,11 @@ describe("SearchTabsHost", () => {
         expect(screen.queryByTestId("body-asset-list")).toBeNull();
     });
 
+    it("labels the tab strip for assistive technology", () => {
+        renderHost("/assets");
+        expect(screen.getByRole("tablist")).toHaveAttribute("aria-label", "Search providers");
+    });
+
     it("selects the tab named by ?tab= and passes the database through", async () => {
         renderHost("/databases/db1/assets?tab=asset-list", "db1");
         expect(screen.getByRole("tab", { name: "Asset List" })).toHaveAttribute(

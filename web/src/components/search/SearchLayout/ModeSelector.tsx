@@ -4,13 +4,11 @@
  */
 
 import React from "react";
-import {
-    FormField,
-    SegmentedControl,
-    Box,
-    Toggle,
-    SpaceBetween,
-} from "@cloudscape-design/components";
+import FormField from "@cloudscape-design/components/form-field";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
+import Box from "@cloudscape-design/components/box";
+import Toggle from "@cloudscape-design/components/toggle";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import Synonyms from "../../../synonyms";
 
 interface ModeSelectorProps {

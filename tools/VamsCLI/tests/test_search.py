@@ -1378,18 +1378,19 @@ _NLP_RESULT = {
              "_index_type": "file",
              "_source": {"str_databaseid": "db1", "str_assetid": "a2", "str_assetname": "Valve",
                          "str_key": "scan.glb", "str_fileext": "glb"},
-             "_vector": {"distance": 0.20, "embeddingModelId": "m", "fileClass": "3d-model",
+             "_vector": {"distance": 0.20, "embeddingModelId": "m", "fileClass": "mesh",
                          "segmentHits": 0, "bestSegment": None}},
         ],
     },
     "aggregations": {}, "aggregationTotal": 2,
     "nlp": {"query": "pump manual", "truncated": True, "itemsCollapsed": 2, "classIntent": ["document"]},
-    "warnings": [{"code": "truncated:window"}],
+    "warnings": [{"code": "truncated:window",
+                  "message": "The vector index window filled; the total is a lower bound."}],
 }
 
 
 class TestSearchNlpCommand:
-    def test_help_lists_the_spec_option_set(self, cli_runner):
+    def test_help_lists_the_full_option_set(self, cli_runner):
         result = cli_runner.invoke(cli, ['search', 'nlp', '--help'])
         assert result.exit_code == 0
         for flag in ('--query', '--entity-type', '--database', '--include-archived', '--size',
@@ -1415,7 +1416,56 @@ class TestSearchNlpCommand:
             }
             assert 'Found 2+ files' in result.output           # relation "gte" -> lower bound
             assert 'segment' in result.output and 'chunk 4' in result.output
-            assert 'Warning: truncated:window' in result.output
+            assert ('Warning: truncated:window: The vector index window filled; the total is a lower '
+                    'bound.') in result.output
+
+    def test_a_warning_without_a_message_still_shows_its_code(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            code_only = json.loads(json.dumps(_NLP_RESULT))
+            code_only["warnings"] = [{"code": "segments:window_full"}]
+            mocks['api_client'].search_nlp.return_value = code_only
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'pump manual'])
+            assert result.exit_code == 0, result.output
+            assert 'Warning: segments:window_full\n' in result.output
+
+    @pytest.mark.parametrize("size", ["0", "101", "-1"])
+    def test_size_outside_1_to_100_is_refused_before_any_request(self, cli_runner, search_command_mocks, size):
+        with search_command_mocks as mocks:
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x', '--size', size])
+            assert result.exit_code == 2
+            assert "'--size'" in result.output and 'not in the range 1<=x<=100' in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
+
+    def test_a_query_over_1000_characters_is_refused_before_any_request(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x' * 1001])
+            assert result.exit_code == 2
+            assert "'--query'" in result.output and '1001 characters' in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
+
+    def test_a_1000_character_query_is_at_the_bound_and_accepted(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            mocks['api_client'].search_nlp.return_value = {
+                "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}, "nlp": {}, "warnings": []}
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x' * 1000])
+            assert result.exit_code == 0, result.output
+            assert len(mocks['api_client'].search_nlp.call_args[0][0]["query"]) == 1000
+
+    def test_a_blank_query_is_refused(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', '   '])
+            assert result.exit_code == 2 and 'blank' in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
+
+    def test_more_than_100_databases_are_refused_before_any_request(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            args = ['search', 'nlp', '-q', 'x']
+            for index in range(101):
+                args += ['-d', f'db{index}']
+            result = cli_runner.invoke(cli, args)
+            assert result.exit_code == 2
+            assert "'--database'" in result.output and '101 databases' in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
 
     def test_default_request_omits_the_optional_keys(self, cli_runner, search_command_mocks):
         with search_command_mocks as mocks:

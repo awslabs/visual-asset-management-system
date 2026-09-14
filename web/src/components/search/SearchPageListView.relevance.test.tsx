@@ -164,4 +164,19 @@ describe("SearchPageListView relevance column", () => {
         expect(content).toContain("render, text");
         expect(content).not.toContain("matching");
     });
+
+    it("opens the popover from a focusable, labelled trigger", () => {
+        const { container } = render(
+            <MemoryRouter>
+                <SearchPageListView state={state(["str_key", "relevance"])} dispatch={jest.fn()} />
+            </MemoryRouter>
+        );
+        const trigger = relevancePopover(container)
+            .findTrigger()
+            .getElement()
+            .querySelector("button");
+        expect(trigger).not.toBeNull();
+        expect(trigger).toHaveAttribute("aria-label", "Show what this result matched from");
+        expect(trigger).not.toHaveAttribute("tabindex", "-1");
+    });
 });

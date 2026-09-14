@@ -4,7 +4,9 @@
  */
 
 import React from "react";
-import { Box, SpaceBetween, Checkbox } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Checkbox from "@cloudscape-design/components/checkbox";
 import ModeSelector from "./ModeSelector";
 import BasicFiltersPanel from "./BasicFiltersPanel";
 import AdvancedFiltersPanel from "./AdvancedFiltersPanel";

@@ -1,9 +1,16 @@
-"""No CLI surface names a pipeline identifier this release retired.
+"""No CLI surface names a retired pipeline identifier.
 
-The identifiers are checked in every spelling the repository used (camelCase config keys, the
-CDK/stack names and the hyphenated pipeline ids), across the command docstrings and the
-Docusaurus CLI pages. Job names such as `label-converted-files` are user-chosen and are not
-identifiers, so they are not in the set.
+The identifiers below were removed from VAMS and must never reappear in the CLI or its documentation.
+A copy-paste from an old example, a stale generated help page or a merge across the removal can
+reintroduce one of them, and nothing else would notice: the CLI does not validate pipeline ids
+against a deployment, so a reader would simply be pointed at a pipeline that no longer exists.
+This is a durable guard, not a pin on a one-time change (root CLAUDE.md Rule 13): the forbidden
+spellings remain writable in every file it scans.
+
+Each identifier is checked in every spelling the repository used (camelCase config keys, the
+CDK/stack names and the hyphenated pipeline ids), across the command docstrings and the Docusaurus
+CLI pages. Job names such as `label-converted-files` are user-chosen and are not identifiers, so
+they are not in the set.
 """
 
 import re

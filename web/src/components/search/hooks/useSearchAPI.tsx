@@ -62,7 +62,6 @@ export const useSearchAPI = () => {
             options: NlpRequestOptions
         ): Promise<NlpSearchResponse> => {
             const body = buildNlpSearchRequest(searchQuery, options);
-            console.log("NLP search API request body:", body);
             const [success, result] = await searchNlp(body);
             if (!success) {
                 throw new Error(

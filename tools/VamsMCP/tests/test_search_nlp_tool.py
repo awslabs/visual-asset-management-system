@@ -16,6 +16,7 @@ SERVER_PATH = Path(server.__file__)
 SOURCE_TEXT = SERVER_PATH.read_text(encoding="utf-8")
 README_TEXT = (SERVER_PATH.parents[1] / "README.md").read_text(encoding="utf-8")
 CLAUDE_TEXT = (SERVER_PATH.parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+REPO_ROOT = SERVER_PATH.parents[3]
 
 WARNING_CODES = ("truncated:window", "truncated:targets", "databases:none_accessible",
                  "opensearch:fields_ignored", "opensearch:enrichment_failed", "segments:window_full")
@@ -55,6 +56,14 @@ def _docstring_of(name: str) -> str:
     return match.group(1)
 
 
+def _function_source(name: str) -> str:
+    """The body of a module-level def, up to the next module-level statement (a decorator, def or
+    assignment — the signature's own closing paren also sits in column 0 and must not end it)."""
+    match = re.search(rf"^def {re.escape(name)}\(.*?(?=^(?:@|def |\w))", SOURCE_TEXT, re.S | re.M)
+    assert match, f"no def {name}( in server.py"
+    return match.group(0)
+
+
 @pytest.mark.asyncio
 async def test_search_nlp_is_registered_with_both_gates_off():
     tools = {t.name: t for t in await server.mcp.list_tools()}
@@ -62,8 +71,41 @@ async def test_search_nlp_is_registered_with_both_gates_off():
     schema = getattr(tools["search_nlp"], "input_schema", None) or getattr(tools["search_nlp"], "inputSchema")
     assert schema["required"] == ["query"]
     assert set(schema["properties"]) == {"query", "database_ids", "entity_type", "size",
-                                         "include_archived", "file_classes", "metadata_query",
-                                         "include_segments"}
+                                         "include_archived", "file_classes", "file_extensions",
+                                         "metadata_query", "geo_search", "tags", "include_segments"}
+
+
+def test_search_nlp_forwards_every_field_of_the_route_model():
+    """MCP CLAUDE.md Rule 9: the route's narrowing fields, read from the backend model, must all be
+    reachable — `enrich` is excluded because it is not a narrowing field and the tool always wants
+    the enriched `_source`; `filters` because raw OpenSearch clauses are not a tool-level knob."""
+    model_source = (REPO_ROOT / "backend/backend/models/vectorsearch.py").read_text(encoding="utf-8")
+    model = re.search(r"class NlpSearchRequestModel\(BaseModel\):\n(.*?)\n\n    class Config",
+                      model_source, re.S)
+    assert model, "NlpSearchRequestModel not found in the backend model module"
+    route_fields = set(re.findall(r"^    (\w+): ", model.group(1), re.M))
+    assert route_fields >= {"query", "entityTypes", "databaseIds", "includeArchived", "includeSegments",
+                            "fileClasses", "fileExtensions", "size", "metadataQuery",
+                            "metadataSearchMode", "geoSearch", "tags"}, route_fields
+    not_tool_knobs = {"enrich", "filters", "metadataSearchMode"}  # mode is fixed to "both" beside metadataQuery
+    forwarded = set(re.findall(r'request\["(\w+)"\] = ', _function_source("_build_nlp_search_request")))
+    forwarded |= {"query", "entityTypes", "size", "includeArchived"}  # the literal dict
+    assert route_fields - not_tool_knobs <= forwarded, route_fields - not_tool_knobs - forwarded
+
+
+def test_search_nlp_file_class_ids_match_the_backend_classifier():
+    """The tool validates `file_classes` against a copy of the backend's FILE_CLASSES (the route
+    itself does not validate them); the copy must not drift from the source."""
+    backend_source = (REPO_ROOT / "backend/backend/common/vectorsearch/fileClassIntent.py").read_text(
+        encoding="utf-8")
+    phrases = re.search(r"FILE_CLASS_PHRASES: Dict\[str, str\] = \{(.*?)\n\}", backend_source, re.S)
+    assert phrases, "FILE_CLASS_PHRASES not found in the backend classifier module"
+    backend_ids = re.findall(r'^\s+"([a-z0-9]+)":', phrases.group(1), re.M)
+    assert len(backend_ids) == 14
+    assert list(server._NLP_FILE_CLASSES) == backend_ids
+    doc = " ".join(_docstring_of("search_nlp").split())  # the list wraps across docstring lines
+    assert ", ".join(backend_ids) in doc, "the docstring must list the exact ids an agent may pass"
+    assert "3d-model" not in doc
 
 
 def test_search_nlp_sits_in_the_read_section_beside_the_keyword_search_tools():

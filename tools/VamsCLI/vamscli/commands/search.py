@@ -17,6 +17,12 @@ from ..utils.exceptions import (
 from ..utils.features import is_feature_enabled
 from ..constants import FEATURE_NOOPENSEARCH, FEATURE_VECTORSEARCH
 
+# Bounds of the POST /search/nlp request model (backend/backend/models/vectorsearch.py:
+# MAX_QUERY_LENGTH, MAX_DATABASE_IDS, MAX_SIZE), applied before the request is sent.
+NLP_MAX_QUERY_LENGTH = 1000
+NLP_MAX_DATABASE_IDS = 100
+NLP_MAX_SIZE = 100
+
 
 def _load_json_input(json_input_path: str) -> Dict[str, Any]:
     """Load JSON input from file."""
@@ -1037,15 +1043,34 @@ def mapping(ctx: click.Context, output_format: str, json_output: bool):
         raise click.ClickException(str(e))
 
 
+def _validate_nlp_query(ctx: click.Context, param: click.Parameter, value: str) -> str:
+    """Mirror the route model's 1-1000 character bound so the request is refused before it is sent."""
+    if len(value) > NLP_MAX_QUERY_LENGTH:
+        raise click.BadParameter(
+            f"query is {len(value)} characters; the limit is {NLP_MAX_QUERY_LENGTH}")
+    if not value.strip():
+        raise click.BadParameter("query must not be blank")
+    return value
+
+
+def _validate_nlp_databases(ctx: click.Context, param: click.Parameter, value: tuple) -> tuple:
+    """Mirror the route model's ceiling on databaseIds."""
+    if len(value) > NLP_MAX_DATABASE_IDS:
+        raise click.BadParameter(
+            f"{len(value)} databases given; at most {NLP_MAX_DATABASE_IDS} may be searched at once")
+    return value
+
+
 @search.command()
-@click.option('-q', '--query', required=True,
+@click.option('-q', '--query', required=True, callback=_validate_nlp_query,
               help='Natural-language description of what to find (1-1000 characters)')
 @click.option('--entity-type', type=click.Choice(['file', 'asset']), default='file',
               help='One hit per file (default) or file hits grouped by asset')
-@click.option('-d', '--database', 'databases', multiple=True,
+@click.option('-d', '--database', 'databases', multiple=True, callback=_validate_nlp_databases,
               help='Restrict to a database ID (repeatable, at most 100)')
 @click.option('--include-archived', is_flag=True, help='Include archived files')
-@click.option('--size', type=int, default=25, help='Number of hits to return (1-100, default: 25)')
+@click.option('--size', type=click.IntRange(1, NLP_MAX_SIZE), default=25,
+              help='Number of hits to return (1-100, default: 25)')
 @click.option('--file-class', 'file_classes', multiple=True,
               help='Hard filter on the indexed file class, e.g. video, document (repeatable)')
 @click.option('--file-ext', 'file_exts', multiple=True,
@@ -1135,8 +1160,13 @@ def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, incl
                 """Format natural-language search results for CLI display."""
                 lines = [f"\nFound {total}{bound} {noun}\n", _format_nlp_table_output(data)]
                 for warning in data.get("warnings", []) or []:
-                    code = warning.get("code", warning) if isinstance(warning, dict) else warning
-                    lines.append(f"Warning: {code}")
+                    # The route sends {code, message}; the message is what a person can act on.
+                    if isinstance(warning, dict):
+                        code, message = warning.get("code", ""), warning.get("message", "")
+                        text = f"{code}: {message}" if code and message else (code or message)
+                    else:
+                        text = str(warning)
+                    lines.append(f"Warning: {text}")
                 return '\n'.join(lines)
 
             output_result(

@@ -1038,6 +1038,7 @@ missing constant is a gate no command can name, and an extra one names a gate no
 | `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
 | `FEATURE_PHYSNA_ADDON`                  | `"PHYSNA_ADDON"`                  | Physna add-on features   |
 | `FEATURE_DEADLINECLOUD_PIPELINES`       | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| `FEATURE_VECTORSEARCH`                  | `"VECTORSEARCH"`                  | `search nlp` available   |
 
 ---
 
