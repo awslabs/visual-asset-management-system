@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Execution Commands | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/cli/commands/executions"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Execution Commands | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="Inspect and manage workflow executions across all assets. Executions may span files from multiple"><meta data-rh="true" property="og:description" content="Inspect and manage workflow executions across all assets. Executions may span files from multiple"><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/cli/commands/executions"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/cli/commands/executions" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/cli/commands/executions" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Executions","item":"https://awslabs.github.io/visual-asset-management-system/cli/commands/executions"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/assets/js/runtime~main.a4a2eca1.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/runtime~main.9d2fefaf.js" defer="defer"></script>
 <script src="/visual-asset-management-system/assets/js/main.a4361309.js" defer="defer"></script>
 </head>
 <body>
@@ -99,12 +99,40 @@ writes no files and therefore has no destination asset.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution-details">execution details<a href="#execution-details" class="hash-link" aria-label="Direct link to execution details" title="Direct link to execution details" translate="no">​</a></h2>
 <p>Show an execution&#x27;s full detail and traceability: per-pipeline status, input files, input metadata,
 input configurations, and outputs (files, metadata, results).</p>
-<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution details my-execution-id</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution details my-execution-id --json-output</span><br></div></code></pre></div></div>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution details my-execution-id</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution details my-execution-id --include-sub-executions</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution details my-execution-id --json-output</span><br></div></code></pre></div></div>
 <p>Asset and file metadata and database metadata are reported as separate row counts, each marked
 independently when the response returned only part of that collection, and the metadata sources the run
 read are named. The metadata rows themselves, and the full list of collections the response trimmed,
 are available with <code>--json-output</code>. A pipeline step whose configuration body was too large to store
 inline reports the Amazon S3 location of the complete body.</p>
+<p>Every pipeline step lists the log sources known for it under <code>Logs available</code> — the step&#x27;s own
+invocation log, each location the pipeline registered, and the log group of a registered nested state
+machine — each with the <code>logId</code> that <a href="#execution-logs" class=""><code>execution logs --log-id</code></a> reads one source by.
+With <code>--include-sub-executions</code>, a step that runs its own nested state machine or container job also
+shows <code>Sub-processes</code>: each registered sub-process with its status, and beneath it every stage of that
+sub-process with its own status, start and stop times, and error. A stage that failed but whose failure
+the sub-process caught and reported is marked <code>(caught)</code>. The flag is off by default because deriving
+stage status reads the sub-process&#x27;s execution history; a capped read is marked
+<code>(stages truncated in this response)</code> or <code>(history truncated: later stages may be missing)</code> where it
+occurs.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Option</th><th>Description</th></tr></thead><tbody><tr><td><code>--include-sub-executions</code></td><td>Also report each step&#x27;s registered sub-processes with per-stage status</td></tr><tr><td><code>--json-output</code></td><td>Raw JSON response</td></tr></tbody></table>
 <p>To read the metadata rows themselves in the formatted output — or to read a collection this command
 reports as partial in full — use <a href="#execution-details-metadata" class=""><code>execution details-metadata</code></a>.</p>
 <hr>
@@ -207,12 +235,16 @@ access-key IDs, JSON web tokens, and labelled secret fields such as <code>Secret
 
 
 
-<table><thead><tr><th>Section</th><th>Contents</th></tr></thead><tbody><tr><td><code>Events</code></td><td>The CloudWatch search over the workflow log group, scoped to the execution.</td></tr><tr><td><code>State Machine History</code></td><td>The Step Functions state-transition timeline (whole-execution requests). Available immediately, with no ingestion lag.</td></tr><tr><td><code>Sub-Process Logs</code></td><td>With <code>--pipeline-execution-id</code>: the step invocation log, any logs the pipeline registered, and any sub-execution history. Each line names the log group it came from.</td></tr><tr><td><code>Warnings</code></td><td>Logs that could not be read — a missing permission, or a registration list beyond the per-request cap. Shown rather than dropped, so partial output is not mistaken for complete output.</td></tr></tbody></table>
+
+
+
+
+<table><thead><tr><th>Section</th><th>Contents</th></tr></thead><tbody><tr><td><code>Events</code></td><td>The CloudWatch search over the workflow log group, scoped to the execution.</td></tr><tr><td><code>State Machine History</code></td><td>The Step Functions state-transition timeline (whole-execution requests). Available immediately, with no ingestion lag.</td></tr><tr><td><code>Log sources</code></td><td>With <code>--pipeline-execution-id</code>: every log known for the step — its <code>logId</code>, kind (<code>invocation</code>, <code>registered</code>, <code>subStateMachine</code>, <code>deadlineCloudJob</code>), source type, stage, and log group — and whether it was read: <code>read N</code>, <code>denied</code>, <code>notFound</code>, <code>error</code> (the read failed for another reason — throttling, an invalid CloudWatch token, an unparseable location), <code>empty</code>, <code>skipped</code> (past the per-request cap), or <code>unscoped</code> (a container log prefix searched with the execution-scope terms, which container output does not carry).</td></tr><tr><td><code>Sub-Process Logs</code></td><td>With <code>--pipeline-execution-id</code>: the step invocation log, any logs the pipeline registered, a registered Deadline Cloud job&#x27;s session logs, and any sub-execution history, sorted by time. Each line names the log group it came from and ends with the <code>logId</code> of its source in brackets; a nested state machine&#x27;s history line carries the <code>logId</code> of the log group that machine writes to, and has no bracket when the machine has no logging destination.</td></tr><tr><td><code>Warnings</code></td><td>Logs that could not be read — a missing permission, or a registration list beyond the per-request cap. Shown rather than dropped, so partial output is not mistaken for complete output.</td></tr></tbody></table>
 <p>The <strong>step invocation log</strong> is the log of the resource the workflow invoked for that step — for a
 <code>Lambda</code> step, that function&#x27;s own CloudWatch log group. It holds the reason a launch failed before
 the pipeline&#x27;s own logging began. <code>SQS</code>, <code>EventBridge</code>, and <code>DeadlineCloud</code> steps have no derivable
 invocation log, so nothing is reported for them.</p>
-<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token comment" style="color:#999988;font-style:italic"># Everything reachable for one step, including that step&#x27;s own invocation log</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec </span><span class="token parameter variable" style="color:#36acaa">--mode</span><span class="token plain"> full</span><br></div></code></pre></div></div>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token comment" style="color:#999988;font-style:italic"># Everything reachable for one step, including that step&#x27;s own invocation log</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec </span><span class="token parameter variable" style="color:#36acaa">--mode</span><span class="token plain"> full</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token comment" style="color:#999988;font-style:italic"># One source alone, by the logId shown under Log sources (or under Logs available in execution details)</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec </span><span class="token parameter variable" style="color:#36acaa">--mode</span><span class="token plain"> full --log-id 3f9a0c1d2e4b5a67</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token comment" style="color:#999988;font-style:italic"># Only the sources and history of one stage of the step&#x27;s nested state machine</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec </span><span class="token parameter variable" style="color:#36acaa">--mode</span><span class="token plain"> full --stage-name PdalConverterBatchJob</span><br></div></code></pre></div></div>
 
 
 
@@ -246,11 +278,25 @@ invocation log, so nothing is reported for them.</p>
 
 
 
-<table><thead><tr><th>Option</th><th>Description</th></tr></thead><tbody><tr><td><code>--mode</code></td><td><code>truncated</code> (default) or <code>full</code></td></tr><tr><td><code>--pipeline-execution-id</code></td><td>Scope logs to one pipeline execution</td></tr><tr><td><code>--filter-pattern</code></td><td>(full) additional CloudWatch filter pattern</td></tr><tr><td><code>--limit</code></td><td>(full) max events (capped at 1000)</td></tr><tr><td><code>--start-time</code> / <code>--end-time</code></td><td>(full) epoch-millisecond window</td></tr><tr><td><code>--next-token</code></td><td>(full) CloudWatch pagination token</td></tr></tbody></table>
-<p>The five <code>full</code>-mode options act on the live CloudWatch search only — <code>truncated</code> mode returns one
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Option</th><th>Description</th></tr></thead><tbody><tr><td><code>--mode</code></td><td><code>truncated</code> (default) or <code>full</code></td></tr><tr><td><code>--pipeline-execution-id</code></td><td>Scope logs to one pipeline execution</td></tr><tr><td><code>--filter-pattern</code></td><td>(full) additional CloudWatch filter pattern</td></tr><tr><td><code>--limit</code></td><td>(full) max events (capped at 1000)</td></tr><tr><td><code>--start-time</code> / <code>--end-time</code></td><td>(full) epoch-millisecond window</td></tr><tr><td><code>--next-token</code></td><td>(full) CloudWatch pagination token</td></tr><tr><td><code>--log-id</code></td><td>(full, with <code>--pipeline-execution-id</code>) read one log source by its <code>logId</code></td></tr><tr><td><code>--stage-name</code></td><td>(full, with <code>--pipeline-execution-id</code>) only the sources and history of one stage</td></tr></tbody></table>
+<p>The seven <code>full</code>-mode options act on the live CloudWatch search only — <code>truncated</code> mode returns one
 joined blob of stored text and no continuation token, so there is nothing there for them to narrow.
 Supplying one without <code>--mode full</code> is rejected with a usage error rather than ignored, so a filtered
-search that silently returned an unfiltered log is not mistaken for &quot;no matching events&quot;.</p>
+search that silently returned an unfiltered log is not mistaken for &quot;no matching events&quot;. <code>--log-id</code>
+and <code>--stage-name</code> read a single step&#x27;s sources, so they additionally require <code>--pipeline-execution-id</code>
+and are rejected without it. With <code>--log-id</code>, <code>Events</code> holds that source&#x27;s events and <code>Next token</code>
+continues that source alone; when the source is the log group a registered nested state machine writes
+to (kind <code>subStateMachine</code>, or <code>registered</code> when the pipeline reported that group itself) the response
+also carries its <code>State Machine History</code>. A <code>--log-id</code> the step does not have is reported with the
+server&#x27;s message, <code>Log source not found for this pipeline execution</code>.</p>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution-abort">execution abort<a href="#execution-abort" class="hash-link" aria-label="Direct link to execution abort" title="Direct link to execution abort" translate="no">​</a></h2>
 <p>Abort a running execution, or an entire execution group with <code>--group-id</code>. When aborting a group,
