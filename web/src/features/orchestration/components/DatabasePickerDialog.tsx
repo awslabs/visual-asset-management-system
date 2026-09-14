@@ -69,7 +69,7 @@ const DatabasePickerDialog: React.FC<DatabasePickerDialogProps> = ({
                         <option value="">Select a database…</option>
                         {/* GLOBAL is a valid create target (cross-database pipelines/workflows) but is
                             not a real database record returned by useDatabases, so offer it explicitly. */}
-                        <option value="GLOBAL">GLOBAL (shared across all databases)</option>
+                        <option value="GLOBAL">🌐 GLOBAL (shared across all databases)</option>
                         {databases.map((db) => (
                             <option key={db.databaseId} value={db.databaseId}>
                                 {db.databaseId}

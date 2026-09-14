@@ -16,6 +16,8 @@ export interface FileKey {
     previewFile?: string;
     changeSource?: string;
     changeUserId?: string;
+    changeWorkflowId?: string;
+    changeWorkflowExecutionId?: string;
 }
 
 export interface FileTree {
@@ -37,6 +39,8 @@ export interface FileTree {
     previewFile?: string;
     changeSource?: string;
     changeUserId?: string;
+    changeWorkflowId?: string;
+    changeWorkflowExecutionId?: string;
 }
 
 export type LoadingPhase =
@@ -85,6 +89,9 @@ export interface FileManagerAction {
 export type FileManagerContextType = {
     state: FileManagerState;
     dispatch: React.Dispatch<FileManagerAction>;
+    // Opens the execution quick view for the workflow execution that wrote a file version.
+    // Provided by EnhancedFileManager, which hosts the panel; absent in hosts that do not.
+    onViewExecution?: (executionId: string) => void;
 };
 
 // Props interfaces for components

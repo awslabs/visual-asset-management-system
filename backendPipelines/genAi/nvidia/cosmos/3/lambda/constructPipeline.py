@@ -13,7 +13,7 @@ def lambda_handler(event, context):
     ConstructPipeline
     Builds the pipeline input definition to run the Batch application for Cosmos 3.
     """
-    logger.info(f"Event: {event}")
+    logger.info("Event", event=event)
 
     model_variant = event.get("modelVariant", "nano")
     task_mode = event.get("taskMode", "")

@@ -73,6 +73,7 @@ input configurations, and outputs (files, metadata, results).
 
 ```bash
 vamscli execution details my-execution-id
+vamscli execution details my-execution-id --include-sub-executions
 vamscli execution details my-execution-id --json-output
 ```
 
@@ -81,6 +82,22 @@ independently when the response returned only part of that collection, and the m
 read are named. The metadata rows themselves, and the full list of collections the response trimmed,
 are available with `--json-output`. A pipeline step whose configuration body was too large to store
 inline reports the Amazon S3 location of the complete body.
+
+Every pipeline step lists the log sources known for it under `Logs available` — the step's own
+invocation log, each location the pipeline registered, and the log group of a registered nested state
+machine — each with the `logId` that [`execution logs --log-id`](#execution-logs) reads one source by.
+With `--include-sub-executions`, a step that runs its own nested state machine or container job also
+shows `Sub-processes`: each registered sub-process with its status, and beneath it every stage of that
+sub-process with its own status, start and stop times, and error. A stage that failed but whose failure
+the sub-process caught and reported is marked `(caught)`. The flag is off by default because deriving
+stage status reads the sub-process's execution history; a capped read is marked
+`(stages truncated in this response)` or `(history truncated: later stages may be missing)` where it
+occurs.
+
+| Option                     | Description                                                            |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `--include-sub-executions` | Also report each step's registered sub-processes with per-stage status |
+| `--json-output`            | Raw JSON response                                                      |
 
 To read the metadata rows themselves in the formatted output — or to read a collection this command
 reports as partial in full — use [`execution details-metadata`](#execution-details-metadata).
@@ -167,12 +184,13 @@ vamscli execution logs my-execution-id --mode full --limit 200
 
 `full` mode prints each group of logs under its own heading, and omits a heading it has nothing for:
 
-| Section                 | Contents                                                                                                                                                                                 |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Events`                | The CloudWatch search over the workflow log group, scoped to the execution.                                                                                                              |
-| `State Machine History` | The Step Functions state-transition timeline (whole-execution requests). Available immediately, with no ingestion lag.                                                                   |
-| `Sub-Process Logs`      | With `--pipeline-execution-id`: the step invocation log, any logs the pipeline registered, and any sub-execution history. Each line names the log group it came from.                    |
-| `Warnings`              | Logs that could not be read — a missing permission, or a registration list beyond the per-request cap. Shown rather than dropped, so partial output is not mistaken for complete output. |
+| Section                 | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Events`                | The CloudWatch search over the workflow log group, scoped to the execution.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `State Machine History` | The Step Functions state-transition timeline (whole-execution requests). Available immediately, with no ingestion lag.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `Log sources`           | With `--pipeline-execution-id`: every log known for the step — its `logId`, kind (`invocation`, `registered`, `subStateMachine`, `deadlineCloudJob`), source type, stage, and log group — and whether it was read: `read N`, `denied`, `notFound`, `error` (the read failed for another reason — throttling, an invalid CloudWatch token, an unparseable location), `empty`, `skipped` (past the per-request cap), or `unscoped` (a container log prefix searched with the execution-scope terms, which container output does not carry). |
+| `Sub-Process Logs`      | With `--pipeline-execution-id`: the step invocation log, any logs the pipeline registered, a registered Deadline Cloud job's session logs, and any sub-execution history, sorted by time. Each line names the log group it came from and ends with the `logId` of its source in brackets; a nested state machine's history line carries the `logId` of the log group that machine writes to, and has no bracket when the machine has no logging destination.                                                                              |
+| `Warnings`              | Logs that could not be read — a missing permission, or a registration list beyond the per-request cap. Shown rather than dropped, so partial output is not mistaken for complete output.                                                                                                                                                                                                                                                                                                                                                  |
 
 The **step invocation log** is the log of the resource the workflow invoked for that step — for a
 `Lambda` step, that function's own CloudWatch log group. It holds the reason a launch failed before
@@ -182,21 +200,33 @@ invocation log, so nothing is reported for them.
 ```bash
 # Everything reachable for one step, including that step's own invocation log
 vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec --mode full
+# One source alone, by the logId shown under Log sources (or under Logs available in execution details)
+vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec --mode full --log-id 3f9a0c1d2e4b5a67
+# Only the sources and history of one stage of the step's nested state machine
+vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec --mode full --stage-name PdalConverterBatchJob
 ```
 
-| Option                        | Description                                 |
-| ----------------------------- | ------------------------------------------- |
-| `--mode`                      | `truncated` (default) or `full`             |
-| `--pipeline-execution-id`     | Scope logs to one pipeline execution        |
-| `--filter-pattern`            | (full) additional CloudWatch filter pattern |
-| `--limit`                     | (full) max events (capped at 1000)          |
-| `--start-time` / `--end-time` | (full) epoch-millisecond window             |
-| `--next-token`                | (full) CloudWatch pagination token          |
+| Option                        | Description                                                                      |
+| ----------------------------- | -------------------------------------------------------------------------------- |
+| `--mode`                      | `truncated` (default) or `full`                                                  |
+| `--pipeline-execution-id`     | Scope logs to one pipeline execution                                             |
+| `--filter-pattern`            | (full) additional CloudWatch filter pattern                                      |
+| `--limit`                     | (full) max events (capped at 1000)                                               |
+| `--start-time` / `--end-time` | (full) epoch-millisecond window                                                  |
+| `--next-token`                | (full) CloudWatch pagination token                                               |
+| `--log-id`                    | (full, with `--pipeline-execution-id`) read one log source by its `logId`        |
+| `--stage-name`                | (full, with `--pipeline-execution-id`) only the sources and history of one stage |
 
-The five `full`-mode options act on the live CloudWatch search only — `truncated` mode returns one
+The seven `full`-mode options act on the live CloudWatch search only — `truncated` mode returns one
 joined blob of stored text and no continuation token, so there is nothing there for them to narrow.
 Supplying one without `--mode full` is rejected with a usage error rather than ignored, so a filtered
-search that silently returned an unfiltered log is not mistaken for "no matching events".
+search that silently returned an unfiltered log is not mistaken for "no matching events". `--log-id`
+and `--stage-name` read a single step's sources, so they additionally require `--pipeline-execution-id`
+and are rejected without it. With `--log-id`, `Events` holds that source's events and `Next token`
+continues that source alone; when the source is the log group a registered nested state machine writes
+to (kind `subStateMachine`, or `registered` when the pipeline reported that group itself) the response
+also carries its `State Machine History`. A `--log-id` the step does not have is reported with the
+server's message, `Log source not found for this pipeline execution`.
 
 ---
 

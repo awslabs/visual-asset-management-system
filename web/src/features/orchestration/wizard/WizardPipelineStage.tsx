@@ -9,8 +9,12 @@ import InstructionsPanel from "../components/InstructionsPanel";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm, { formDataToTags } from "../components/DynamicTagForm";
 import SystemTagHelp from "../components/SystemTagHelp";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import { Z } from "../components/zLayers";
 import { useTemplates, useTemplate } from "../api/queries";
 import { resolvePipelineParams, hasDeclaredDefault } from "./resolveTemplate";
+import { resolveEffectivePipelineConfig } from "./resolveRestrictions";
+import Callout from "../components/Callout";
 import type { Workflow, Pipeline, SpecifiedPipelineRef, Template } from "../types";
 import type { PipelineStageData } from "./ExecuteWizard";
 
@@ -152,6 +156,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
         const newData: PipelineStageData = {
             pipelineId: pipeline.pipelineId,
             templateId: selectedTemplateId,
+            templateName: selectedTemplate?.templateName,
             tags,
             customTemplateOverride: customize ? customBody : undefined,
             templateOverrides: selectedTemplate?.overrides,
@@ -176,6 +181,9 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     const allowCustomEdit = selectedTemplate?.allowCustomEdit || false;
     // The unified "Customize configuration" toggle is available when either grant is present.
     const canCustomize = allowOverride || allowCustomEdit;
+    // The catalog is also worth reaching when nothing is editable: it says which placeholder each
+    // template input fills.
+    const hasTemplateTags = (selectedTemplate?.tagSchema?.length || 0) > 0;
 
     // Every block below is conditional, so a pipeline with no templates, no tag schema, and no
     // customize grant rendered nothing but the heading — a blank step that reads as still loading or
@@ -187,9 +195,63 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     const nothingToConfigure =
         !templatesLoading && !hasTemplates && !hasTagFields && !showsConfigBody && !canCustomize;
 
+    // What this step reads, with the chosen template's overrides applied — the same resolution the
+    // Inputs step used to offer files, restated here so the operator does not have to go back.
+    const effective = resolveEffectivePipelineConfig(
+        pipeline.systemConfig,
+        selectedTemplate?.overrides
+    );
+    const effectiveArity = effective.inputFileArity || "one";
+    const allowPatterns = effective.inputFileFilters?.allow || [];
+    const READS_TEXT: Record<string, string> = {
+        none: "no input files",
+        one: "one input file",
+        multi: "one or more input files",
+    };
+
     return (
         <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-text-primary">{pipeline.pipelineName}</h3>
+            <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-lg font-semibold text-text-primary">
+                        {pipeline.pipelineName}
+                    </h3>
+                    {pipeline.category && (
+                        <span className="rounded-full bg-surface-secondary px-2 py-0.5 text-[11px] text-text-secondary">
+                            {pipeline.category}
+                        </span>
+                    )}
+                </div>
+                {pipeline.description && (
+                    <p className="text-sm text-text-secondary">{pipeline.description}</p>
+                )}
+                <p className="flex flex-wrap items-center gap-1.5 text-xs text-text-secondary">
+                    <span>This step reads {READS_TEXT[effectiveArity]}</span>
+                    {effectiveArity !== "none" &&
+                        allowPatterns.slice(0, 6).map((p) => (
+                            <span
+                                key={p}
+                                className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-text-primary"
+                            >
+                                {p}
+                            </span>
+                        ))}
+                    {effectiveArity !== "none" && allowPatterns.length > 6 && (
+                        <span>+{allowPatterns.length - 6} more</span>
+                    )}
+                </p>
+            </div>
+
+            {/* Validation errors sit under the header, before anything the operator may scroll past. */}
+            {validationResult.errors.length > 0 && (
+                <Callout tone="error" title="Validation Errors:">
+                    <ul className="list-disc list-inside">
+                        {validationResult.errors.map((err, idx) => (
+                            <li key={idx}>{err}</li>
+                        ))}
+                    </ul>
+                </Callout>
+            )}
 
             {nothingToConfigure && (
                 <div className="orch-outline p-3 border border-border-default rounded bg-surface-secondary">
@@ -233,6 +295,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                     {selectedTemplate?.inputInstructions && (
                         <div className="mt-2">
                             <InstructionsPanel
+                                inline
                                 text={selectedTemplate.inputInstructions}
                                 title="Instructions for this template"
                             />
@@ -254,6 +317,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                         schema={selectedTemplate.tagSchema}
                         formData={tagFormData}
                         onChange={handleTagChange}
+                        formContext={{ layout: "grid" }}
                     />
                 </div>
             )}
@@ -306,7 +370,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                         onChange={(value) => {
                             if (customize) setCustomBody(value || "");
                         }}
-                        height="300px"
+                        height="380px"
                     />
                     <div className="mt-1 flex items-start gap-1.5">
                         <p className="text-xs text-text-secondary">
@@ -316,40 +380,49 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                         {/* The full catalog is reachable from an icon as well as the panel below:
                             while editing a config body the question is "what can I write here?", and
                             an icon next to the note answers it without scrolling past the editor. */}
-                        {canCustomize && (
-                            <button
-                                type="button"
-                                aria-label="Show available template tags"
-                                aria-expanded={tagHelpOpen}
-                                onClick={() => setTagHelpOpen((o) => !o)}
-                                className="orch-outline inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-text-secondary text-[10px] leading-none text-text-secondary hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            >
-                                i
-                            </button>
+                        {(canCustomize || hasTemplateTags) && (
+                            <Tooltip.Provider delayDuration={150}>
+                                <Tooltip.Root>
+                                    <Tooltip.Trigger asChild>
+                                        <button
+                                            type="button"
+                                            aria-label="Show available template tags"
+                                            aria-expanded={tagHelpOpen}
+                                            onClick={() => setTagHelpOpen((o) => !o)}
+                                            className="orch-outline inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-text-secondary text-[10px] leading-none text-text-secondary hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                            i
+                                        </button>
+                                    </Tooltip.Trigger>
+                                    <Tooltip.Portal>
+                                        <Tooltip.Content
+                                            side="top"
+                                            align="start"
+                                            sideOffset={4}
+                                            style={{ zIndex: Z.tooltip }}
+                                            className="max-w-xs rounded bg-gray-900 dark:bg-gray-700 px-3 py-2 text-xs text-white shadow-lg"
+                                        >
+                                            Click to list every {"{{tag}}"} placeholder this
+                                            configuration can use: this template's own tags and the
+                                            system tags.
+                                            <Tooltip.Arrow className="fill-gray-900 dark:fill-gray-700" />
+                                        </Tooltip.Content>
+                                    </Tooltip.Portal>
+                                </Tooltip.Root>
+                            </Tooltip.Provider>
                         )}
                     </div>
                     {/* Expanded either by the icon or because the run is customizing — that is when
                         the placeholders are actually actionable. */}
                     {(customize || tagHelpOpen) && (
                         <div className="mt-2">
-                            <SystemTagHelp defaultOpen={tagHelpOpen} />
+                            <SystemTagHelp
+                                defaultOpen={tagHelpOpen}
+                                templateTags={selectedTemplate?.tagSchema}
+                            />
                         </div>
                     )}
                 </CollapsibleSection>
-            )}
-
-            {/* Validation errors */}
-            {validationResult.errors.length > 0 && (
-                <div className="orch-outline p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
-                    <p className="text-sm font-semibold text-red-900 dark:text-red-200 mb-1">
-                        Validation Errors:
-                    </p>
-                    <ul className="list-disc list-inside text-sm text-red-800 dark:text-red-300">
-                        {validationResult.errors.map((err, idx) => (
-                            <li key={idx}>{err}</li>
-                        ))}
-                    </ul>
-                </div>
             )}
         </div>
     );

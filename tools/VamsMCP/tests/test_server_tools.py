@@ -732,6 +732,55 @@ def test_get_execution_logs_sends_only_mode_when_nothing_is_narrowed(mock_client
     assert mock_client.api.get_execution_logs.call_args.kwargs["params"] == {"mode": "full"}
 
 
+# --- get_execution_details sub-execution flag ------------------------------
+
+
+def test_get_execution_details_sends_no_params_by_default(mock_client):
+    """The default read is the cheap one: no includeSubExecutions, no history reads server-side."""
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {"pipelines": []}
+
+    server.get_execution_details("e1")
+
+    mock_client.api.get_execution_details.assert_called_once_with("e1", params=None)
+
+
+def test_get_execution_details_forwards_the_sub_execution_flag(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {"pipelines": []}
+
+    server.get_execution_details("e1", include_sub_executions=True)
+
+    params = mock_client.api.get_execution_details.call_args.kwargs["params"]
+    assert params == {"includeSubExecutions": "true"}
+
+
+def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_logs.return_value = {"events": []}
+
+    server.get_execution_logs(
+        "e1", mode="full", pipeline_execution_id="pe1", log_id="3f9a0c1d2e4b5a67",
+        stage_name="PdalConverterBatchJob",
+    )
+
+    params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
+    assert params == {"mode": "full", "pipelineExecutionId": "pe1",
+                      "logId": "3f9a0c1d2e4b5a67", "stageName": "PdalConverterBatchJob"}
+
+
+def test_get_execution_logs_omits_log_id_and_stage_name_in_truncated_mode(mock_client):
+    """Both read a live source, so like the paging options they are not sent in truncated mode."""
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_logs.return_value = {}
+
+    server.get_execution_logs("e1", mode="truncated", pipeline_execution_id="pe1",
+                              log_id="3f9a0c1d2e4b5a67", stage_name="Convert")
+
+    params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
+    assert params == {"mode": "truncated", "pipelineExecutionId": "pe1"}
+
+
 # --- page_execution_detail_metadata ---------------------------------------
 
 
@@ -936,6 +985,26 @@ def test_list_executions_docstring_names_the_output_asset_gate():
 @pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline"])
 def test_pipeline_save_docstrings_tell_the_agent_to_relay_warnings(tool):
     assert "warnings" in _docstring_of(tool)
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # The two new per-step keys and the flag that gates one of them; `logId` is how an agent moves
+    # from a listed source to reading it with get_execution_logs.
+    ["availableLogs", "subExecutions", "include_sub_executions", "logId", "caught",
+     "pipelines.subExecutions"],
+)
+def test_get_execution_details_docstring_describes_sub_processes_and_log_sources(fragment):
+    assert fragment in _docstring_of("get_execution_details")
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # The source list and its statuses, the two narrowing parameters, and the scope they need.
+    ["logSources", "log_id", "stage_name", "pipeline_execution_id", "unscoped", "404"],
+)
+def test_get_execution_logs_docstring_describes_log_sources(fragment):
+    assert fragment in _docstring_of("get_execution_logs")
 
 
 def test_list_workflows_docstring_mentions_archived_discovery():

@@ -24,6 +24,7 @@ import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
@@ -83,6 +84,15 @@ export function buildVamsExecutePreview3dThumbnailPipelineFunction(
     return fun;
 }
 
+/**
+ * The Batch job definition whose container log stream prefix openPipeline registers, and the
+ * VAMS-owned group that job definition writes its container output to.
+ */
+export interface OpenPipelineBatchLogProps {
+    jobDefinitionName: string;
+    logGroup: logs.ILogGroup;
+}
+
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -94,6 +104,7 @@ export function buildOpenPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    batchLogs: OpenPipelineBatchLogProps,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -121,6 +132,10 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // This pipeline's vended container log group + its job definition name, registered as
+            // the Batch state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...vendedBatchJobLogGroupEnvironment(batchLogs.logGroup),
+            BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
         },
     });
 

@@ -224,7 +224,7 @@ def lambda_handler(event, context):
 
             # Log full event if small enough
             if event_size < 2000:
-                logger.info(f"Received event: {event}")
+                logger.info("Received event", event=event)
             else:
                 logger.info("Event too large to log in full")
 

@@ -15,6 +15,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import TriggersEditor from "./TriggersEditor";
+import type { PendingTrigger } from "./TriggersEditor";
 import type { WorkflowTrigger } from "../types";
 import { TRIGGER_TYPES } from "../types";
 
@@ -263,5 +264,181 @@ describe("TriggersEditor cache invalidation", () => {
                 ["workflow", "db1", "wf-1"],
             ])
         );
+    });
+});
+
+describe("TriggersEditor pending triggers", () => {
+    const pendingNightly = {
+        draft: {
+            triggerType: "fileUpload#nightly",
+            enabled: true,
+            inputFileFilters: { allow: ["*.glb"], exclude: [] },
+            defaultTemplateIds: {},
+        },
+        error: "Another trigger of this type already uses the same default templates",
+    };
+    const pendingWeekly = {
+        draft: {
+            triggerType: "fileUpload#weekly",
+            enabled: false,
+            inputFileFilters: { allow: [], exclude: [] },
+            defaultTemplateIds: {},
+        },
+        error: "This workflow restricts concurrency per asset",
+    };
+
+    /**
+     * Holds the hand-off the way the workflow builder does: it owns the list of drafts still to be
+     * written and asks for the first to be opened once, however often the editor mounts.
+     */
+    const PendingOwner: React.FC<{
+        pending: PendingTrigger[];
+        workflowId: string;
+        onChange?: (remaining: PendingTrigger[]) => void;
+    }> = ({ pending, workflowId, onChange }) => {
+        const [pendingTriggers, setPendingTriggers] = React.useState(pending);
+        const [openFirst, setOpenFirst] = React.useState(pending.length > 0);
+        return (
+            <TriggersEditor
+                databaseId="db1"
+                workflowId={workflowId}
+                pipelineRefs={pipelineRefs}
+                pendingTriggers={pendingTriggers}
+                onPendingTriggersChange={(remaining) => {
+                    setPendingTriggers(remaining);
+                    onChange?.(remaining);
+                }}
+                openFirstPending={openFirst}
+                onPendingOpened={() => setOpenFirst(false)}
+            />
+        );
+    };
+
+    const renderWithPending = (
+        triggers: WorkflowTrigger[],
+        pendingTriggers: PendingTrigger[],
+        workflowId = "wf-1",
+        onChange?: (remaining: PendingTrigger[]) => void,
+        isLoading = false
+    ) => {
+        const { useTriggers } = require("../api/queries");
+        useTriggers.mockReturnValue({ data: triggers, isLoading });
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+        });
+        const ui = () => (
+            <QueryClientProvider client={queryClient}>
+                <PendingOwner
+                    pending={pendingTriggers}
+                    workflowId={workflowId}
+                    onChange={onChange}
+                />
+            </QueryClientProvider>
+        );
+        const rendered = render(ui());
+        return { ...rendered, rerenderSame: () => rendered.rerender(ui()) };
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        const { setTrigger } = require("../api/workflows");
+        setTrigger.mockResolvedValue([true, {}]);
+    });
+
+    it("opens the first pending draft in the form with the server's message, and Save re-PUTs it", async () => {
+        const { setTrigger } = require("../api/workflows");
+        renderWithPending([], [pendingNightly, pendingWeekly]);
+
+        expect(await screen.findByLabelText("Trigger name")).toHaveValue("nightly");
+        expect(screen.getByText(/already uses the same default templates/)).toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+        await waitFor(() => expect(setTrigger).toHaveBeenCalled());
+        expect(setTrigger.mock.calls[0][1]).toBe("wf-1");
+        expect(setTrigger.mock.calls[0][2]).toBe("fileUpload#nightly");
+        expect(setTrigger.mock.calls[0][3].inputFileFilters.allow).toEqual(["*.glb"]);
+    });
+
+    it("hands the written draft back to the owner, even when it was renamed before the re-PUT", async () => {
+        const { setTrigger } = require("../api/workflows");
+        const onChange = jest.fn();
+        renderWithPending([], [pendingNightly, pendingWeekly], "wf-1", onChange);
+
+        const name = await screen.findByLabelText("Trigger name");
+        await userEvent.clear(name);
+        await userEvent.type(name, "nightly2");
+        await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+        await waitFor(() => expect(setTrigger).toHaveBeenCalled());
+        expect(setTrigger.mock.calls[0][2]).toBe("fileUpload#nightly2");
+        // The row was written under another key, so a key match alone would leave it "Not saved".
+        await waitFor(() => expect(onChange).toHaveBeenCalledWith([pendingWeekly]));
+        expect(
+            screen.queryByRole("button", { name: "Retry trigger fileUpload#nightly" })
+        ).not.toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: "Retry trigger fileUpload#weekly" })
+        ).toBeInTheDocument();
+    });
+
+    it("opens the first pending draft that is not already stored", async () => {
+        renderWithPending(
+            [trigger({ triggerType: "fileUpload#nightly", triggerId: "nightly" })],
+            [pendingNightly, pendingWeekly]
+        );
+
+        // Opening the stored one would only offer a name collision with a disabled Save.
+        expect(await screen.findByLabelText("Trigger name")).toHaveValue("weekly");
+        expect(screen.getByText(/restricts concurrency per asset/)).toBeInTheDocument();
+    });
+
+    it("waits for the stored list before opening, so what is opened is known to be unsaved", async () => {
+        const { useTriggers } = require("../api/queries");
+        const { rerenderSame } = renderWithPending([], [pendingNightly], "wf-1", undefined, true);
+
+        expect(screen.queryByLabelText("Trigger name")).not.toBeInTheDocument();
+        expect(screen.getByText(/Loading triggers/i)).toBeInTheDocument();
+
+        useTriggers.mockReturnValue({ data: [], isLoading: false });
+        rerenderSame();
+        expect(await screen.findByLabelText("Trigger name")).toHaveValue("nightly");
+    });
+
+    it("lists the remaining pending drafts as Not saved rows whose Retry opens them in the form", async () => {
+        renderWithPending([], [pendingNightly, pendingWeekly]);
+
+        await userEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
+        expect(screen.getByText("Not saved")).toBeInTheDocument();
+        expect(screen.getByText(/restricts concurrency per asset/)).toBeInTheDocument();
+
+        await userEvent.click(
+            screen.getByRole("button", { name: "Retry trigger fileUpload#weekly" })
+        );
+        expect(await screen.findByLabelText("Trigger name")).toHaveValue("weekly");
+        expect(screen.getByText(/restricts concurrency per asset/)).toBeInTheDocument();
+    });
+
+    it("drops a pending draft whose key is already stored", async () => {
+        renderWithPending(
+            [trigger({ triggerType: "fileUpload#weekly", triggerId: "weekly" })],
+            [pendingNightly, pendingWeekly]
+        );
+
+        await userEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
+        expect(
+            screen.getByRole("button", { name: "Retry trigger fileUpload#nightly" })
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole("button", { name: "Retry trigger fileUpload#weekly" })
+        ).not.toBeInTheDocument();
+    });
+
+    it("opens nothing while the workflow id is empty, so no PUT can target a blank id", () => {
+        const { setTrigger } = require("../api/workflows");
+        renderWithPending([], [pendingNightly], "");
+
+        expect(screen.queryByLabelText("Trigger name")).not.toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Triggers" })).toBeInTheDocument();
+        expect(setTrigger).not.toHaveBeenCalled();
     });
 });

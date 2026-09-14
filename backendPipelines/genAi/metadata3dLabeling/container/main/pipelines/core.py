@@ -29,7 +29,9 @@ def run(params: dict) -> PipelineExecutionParams:
     """
     # convert input to data type
     definition = PipelineDefinition(**params)
-    logger.info(f"Pipeline Definition: {definition}")
+    # Log the job name only: the definition carries externalSfnTaskToken, and this container's
+    # plain-logging output is not redacted on its way to CloudWatch.
+    logger.info(f"Pipeline Definition: {definition.jobName}")
 
     # Read metadata + input configuration from S3 (only the locations travel in the definition)
     input_metadata_obj = manifest_io.fetch_metadata(definition.inputMetadataS3Location)

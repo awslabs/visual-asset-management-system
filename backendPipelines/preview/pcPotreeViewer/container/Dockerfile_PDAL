@@ -14,7 +14,11 @@ ARG GITHUB_SERVER_URL="https://github.com"
 
 SHELL ["conda", "run", "-n", "pdal", "/bin/bash", "-c"]
 
-RUN mamba install -c conda-forge git compilers conda-pack cmake make ninja boto3 sysroot_linux-64=2.17 && \
+# The conda-forge toolchain is pinned to the 1.x `compilers` generation (GCC 13/14) that PDAL 2.7.0
+# builds with. `compilers` 2.x moved to GCC 15 and dropped the activation scripts that exported
+# CC/CXX/AR, which breaks this build twice over: CMake finds no `ar` (CMAKE_AR-NOTFOUND at link) and
+# GCC 15's -Wtemplate-body rejects the vendored kazhdan Poisson sources.
+RUN mamba install -c conda-forge git "compilers<2" conda-pack cmake make ninja boto3 sysroot_linux-64=2.17 && \
     mamba install --yes -c conda-forge pdal=2.7.0 --only-deps
 
 RUN git clone "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" pdal && \

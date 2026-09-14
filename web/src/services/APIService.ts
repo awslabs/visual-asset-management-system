@@ -2187,6 +2187,7 @@ export const fetchAssetS3FilesPage = async ({
     startingToken = null,
     pageSize = null,
     assetVersionId = null,
+    prefix = null,
 }: any) => {
     try {
         if (!databaseId || !assetId) {
@@ -2214,6 +2215,11 @@ export const fetchAssetS3FilesPage = async ({
 
         if (assetVersionId) {
             queryParams.assetVersionId = assetVersionId;
+        }
+
+        // Server-side folder scope: only keys under this asset-relative prefix are listed.
+        if (prefix) {
+            queryParams.prefix = prefix;
         }
 
         const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {

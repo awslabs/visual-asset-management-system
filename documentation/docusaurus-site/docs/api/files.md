@@ -53,7 +53,9 @@ Returns a list of all files in the specified asset, including file metadata, siz
             "primaryType": "primary",
             "previewFile": "/models/building.ifc.previewFile.png",
             "changeSource": "upload",
-            "changeUserId": "user@example.com"
+            "changeUserId": "user@example.com",
+            "changeWorkflowId": null,
+            "changeWorkflowExecutionId": null
         },
         {
             "fileName": "textures",
@@ -68,6 +70,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
     "NextToken": "eyJ..."
 }
 ```
+
+`changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
 **Error Responses:**
 
@@ -113,6 +117,8 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
     "previewFile": "/models/building.ifc.previewFile.png",
     "changeSource": "upload",
     "changeUserId": "user@example.com",
+    "changeWorkflowId": null,
+    "changeWorkflowExecutionId": null,
     "versions": [
         {
             "versionId": "abc123",
@@ -124,7 +130,7 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 }
 ```
 
-The `versions` list is present only when `includeVersions` is `true`.
+The `versions` list is present only when `includeVersions` is `true`. `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote the current version when `changeSource` is `workflowExecution`, and are `null` otherwise; each entry in `versions` carries the same pair for that version.
 
 **Error Responses:**
 

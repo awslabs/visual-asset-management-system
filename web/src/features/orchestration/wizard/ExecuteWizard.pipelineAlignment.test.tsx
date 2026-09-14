@@ -151,12 +151,14 @@ describe("ExecuteWizard step-to-pipeline alignment", () => {
     it("reports an archived step as archived rather than not found", () => {
         renderWizard([ALPHA, { ...BRAVO, archived: true } as Pipeline, CHARLIE]);
 
-        // The name appears TWICE once the reference resolves — as the step's own label in the stepper
-        // and as the offending-pipeline entry — so the assertion has to name which one it means.
+        // The name appears TWICE once the reference resolves — as the step's own label in the rail
+        // (itself a list item) and as the offending-pipeline entry — so the assertion has to name
+        // which one it means.
         const matches = screen.getAllByText("Bravo Pipeline");
         expect(matches.length).toBeGreaterThan(1);
 
         const entry = matches
+            .filter((el) => !el.closest("nav"))
             .map((el) => el.closest("li"))
             .find((li): li is HTMLLIElement => li !== null);
         expect(entry).toBeTruthy();

@@ -193,8 +193,37 @@ test.describe("Workflow builder — step definition", () => {
             confirmText = d.message();
             await d.dismiss();
         });
-        await page.getByRole("button", { name: "Cancel" }).click();
+        // exact: the probe job name renders on the DAG node, whose accessible name would otherwise
+        // also match "Cancel".
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
         await expect.poll(() => confirmText, { timeout: 20_000 }).toMatch(/without saving/i);
         await expect(page.getByRole("heading", { name: "Edit Workflow", level: 1 })).toBeVisible();
+    });
+});
+
+/**
+ * The builder in create mode. Uses the GLOBAL database, which every deployment has, so the test holds
+ * in any environment; it skips when the user may not open the create route.
+ */
+test.describe("Workflow builder — create", () => {
+    test("Create Workflow shows a Triggers step", async ({ page }) => {
+        // Land on the list first so Cancel has a page to return to.
+        await gotoOrchestration(page, "workflows", "Workflows");
+        await page.goto("/#/databases/GLOBAL/workflows/create", { waitUntil: "domcontentloaded" });
+
+        const heading = page.getByRole("heading", { name: "Create Workflow", level: 1 });
+        await heading.waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+        test.skip(!(await heading.isVisible()), "The create route is not allowed for this user");
+
+        // Offered before anything is saved; drafted triggers are written after the create.
+        await expect(page.getByText("Triggers (optional)", { exact: true })).toBeVisible();
+
+        // Nothing was entered, so Cancel leaves without a confirm and nothing is written. A confirm
+        // that did appear is dismissed, which keeps the builder on screen and fails the last check.
+        page.once("dialog", (d) => d.dismiss());
+        await page.getByRole("button", { name: "Cancel" }).click();
+        await expect(page.getByRole("heading", { name: "Workflows", level: 1 })).toBeVisible({
+            timeout: 20_000,
+        });
     });
 });
