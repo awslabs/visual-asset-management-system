@@ -42,7 +42,11 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat.
+
 **Other changes:**
+
+-   Third-party GitHub Actions in the CI and docs workflows are pinned to commit SHAs.
 
 **Known issues:**
 

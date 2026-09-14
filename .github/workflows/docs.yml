@@ -59,10 +59,8 @@ jobs:
               run: cd documentation/docusaurus-site && DOCS_BASE_URL="${{ steps.paths.outputs.base_url }}" npm run build
 
             - name: Deploy to gh-pages branch
-              # Third-party action on its major-version tag, the repo's current pinning convention;
-              # commit-SHA pinning is tracked as a 2.6.1 follow-up.
-              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-              uses: peaceiris/actions-gh-pages@v4
+              # Third-party action pinned to the commit its release tag resolved to.
+              uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
               with:
                   github_token: ${{ secrets.GITHUB_TOKEN }}
                   publish_dir: documentation/docusaurus-site/build

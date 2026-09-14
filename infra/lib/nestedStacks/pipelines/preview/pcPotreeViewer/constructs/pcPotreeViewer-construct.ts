@@ -136,7 +136,14 @@ export class PcPotreeViewerConstruct extends NestedStack {
         const stateTaskPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
-                    actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                    // The container reports its result AND heartbeats the parent workflow's
+                    // task token while PDAL/Potree run (pipelines/core.py); without the
+                    // heartbeat grant every SendTaskHeartbeat is an AccessDenied in the job log.
+                    actions: [
+                        "states:SendTaskSuccess",
+                        "states:SendTaskFailure",
+                        "states:SendTaskHeartbeat",
+                    ],
                     resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
                 }),
             ],
