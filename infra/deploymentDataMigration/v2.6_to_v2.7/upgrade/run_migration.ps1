@@ -1,8 +1,11 @@
 # PowerShell script to run the VAMS v2.6 to v2.7 migration (orphaned trigger cleanup, vector index
 # backfill, system-pipeline retirement report)
-# Usage: .\run_migration.ps1 [-ConfigFile <path>] [-DryRun] [-ClearVectors] [-Async] [-Yes]
+# Usage: .\run_migration.ps1 [-ConfigFile <path>] [-Execute] [-ClearVectors] [-Async]
 #                            [-Steps <step>] [-Limit <n>] [-Profile <name>] [-Region <name>]
 #                            [-LogLevel <level>] [-ConfirmAccount <id>]
+#
+# Without -Execute the migration is a DRY RUN. A real run that deletes rows or launches
+# Bedrock-billed executions asks for the resolved AWS account id (or checks -ConfirmAccount).
 #
 # The per-step, per-profile and per-region parameters let a Windows operator run a single step or
 # target a specific deployment without bypassing this wrapper; bypassing it also loses the timestamped
@@ -10,7 +13,7 @@
 
 param(
     [string]$ConfigFile = "v2.6_to_v2.7_migration_config.json",
-    [switch]$DryRun,
+    [switch]$Execute,
     [switch]$ClearVectors,
     [switch]$Async,
     [ValidateSet("all", "orphanedTriggers", "vectorBackfill", "systemPipelineRetirement")]
@@ -20,8 +23,7 @@ param(
     [string]$Region,
     [ValidateSet("DEBUG", "INFO", "WARNING", "ERROR")]
     [string]$LogLevel,
-    [string]$ConfirmAccount,
-    [switch]$Yes
+    [string]$ConfirmAccount
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,10 +67,14 @@ Write-Host "Logs will be saved to: $LogFile"
 Write-Host ""
 
 $ExtraArgs = @()
-if ($DryRun)       { $ExtraArgs += "--dry-run";       Write-Host "Mode: DRY RUN (no changes will be made)" -ForegroundColor Yellow }
+if ($Execute) {
+    $ExtraArgs += "--execute"
+    Write-Host "Mode: EXECUTE (rows are deleted and Bedrock-billed executions launched; the account id is confirmed first)" -ForegroundColor Yellow
+} else {
+    Write-Host "Mode: DRY RUN (no changes will be made; pass -Execute for a real run)" -ForegroundColor Yellow
+}
 if ($ClearVectors) { $ExtraArgs += "--clear-vectors"; Write-Host "Mode: CLEAR VECTORS (every stored vector is deleted before re-embedding)" -ForegroundColor Yellow }
 if ($Async)        { $ExtraArgs += "--async";         Write-Host "Mode: ASYNCHRONOUS (reindexer results in CloudWatch Logs)" -ForegroundColor Yellow }
-if ($Yes)          { $ExtraArgs += "--yes";           Write-Host "Mode: NO CONFIRMATION PROMPT (--yes)" -ForegroundColor Yellow }
 # Valued parameters. PSBoundParameters rather than a truthiness test, so -Limit 0 is passed through
 # instead of being dropped as if it had not been given.
 if ($PSBoundParameters.ContainsKey("Steps"))          { $ExtraArgs += @("--steps", $Steps) }
@@ -91,8 +97,8 @@ try {
         Write-Host "     the workflows it lists as referencing a retired pipeline"
         Write-Host "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL"
         Write-Host "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
-        Write-Host "  3. Confirm the trigger cleanup took effect: re-run with -Steps orphanedTriggers -DryRun and"
-        Write-Host "     check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
+        Write-Host "  3. Confirm the trigger cleanup took effect: re-run with -Steps orphanedTriggers (without -Execute)"
+        Write-Host "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
         Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
     } else {
         Write-Error "Migration failed. Check the logs for details."

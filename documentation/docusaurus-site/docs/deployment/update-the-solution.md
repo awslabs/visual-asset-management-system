@@ -826,28 +826,12 @@ the system pipelines page (`pipelines/system-pipelines`), and the system GenAI m
 
     Every table name and the `vectorReindexer` function name are then resolved from the deployment's SSM resource-name parameters (requires `ssm:GetParametersByPath` on the prefix).
 
-6.  Do a dry run first. `orphanedTriggers` names every row it would delete; `vectorBackfill` passes `dryRun: true` to the reindexer, which counts instead of enqueuing; `systemPipelineRetirement` only reads.
+6.  Do a dry run first. Every run is a dry run until you pass `--execute`, so the bare invocation changes nothing: `orphanedTriggers` names every row it would delete; `vectorBackfill` passes `dryRun: true` to the reindexer, which counts instead of enqueuing; `systemPipelineRetirement` only reads.
 
     **Linux / macOS**
 
     ```bash
     chmod +x run_migration.sh
-    ./run_migration.sh my_migration_config.json --dry-run
-    ```
-
-    **Windows**
-
-    ```powershell
-    .\run_migration.ps1 -ConfigFile my_migration_config.json -DryRun
-    ```
-
-    A dry run reports zero rows when there is nothing to do, so a zero-row result on its own is not evidence that the step is configured correctly — read the counts against what the deployment holds (a deployment that ran either retired pipeline with `autoRegisterAutoTriggerOnFileUpload: true` holds at least one orphaned trigger row).
-
-7.  Run the migration. `orphanedTriggers` deletes rows, so the script echoes the resolved account, Region, and caller and asks you to type the account id (`--confirm-account <id>` for an automated run):
-
-    **Linux / macOS**
-
-    ```bash
     ./run_migration.sh my_migration_config.json
     ```
 
@@ -855,6 +839,22 @@ the system pipelines page (`pipelines/system-pipelines`), and the system GenAI m
 
     ```powershell
     .\run_migration.ps1 -ConfigFile my_migration_config.json
+    ```
+
+    A dry run reports zero rows when there is nothing to do, so a zero-row result on its own is not evidence that the step is configured correctly — read the counts against what the deployment holds (a deployment that ran either retired pipeline with `autoRegisterAutoTriggerOnFileUpload: true` holds at least one orphaned trigger row).
+
+7.  Set `"dry_run": false` in your copy of the config (the shipped template pins `true`, and `--execute` alone does not override it), then run the migration with `--execute`. `orphanedTriggers` deletes rows and `vectorBackfill` launches one Bedrock-billed execution per file, so the script echoes the resolved account, Region, and caller and asks you to type the account id. In automation, where stdin is not a terminal, pass `--confirm-account <12-digit id>`; the resolved account must equal it. No flag skips the check, and a run whose caller identity cannot be resolved is refused.
+
+    **Linux / macOS**
+
+    ```bash
+    ./run_migration.sh my_migration_config.json --execute
+    ```
+
+    **Windows**
+
+    ```powershell
+    .\run_migration.ps1 -ConfigFile my_migration_config.json -Execute
     ```
 
     The migration runs three independent steps in the order below. `--steps` selects a single step; the default (`all`) runs every one.
@@ -870,7 +870,7 @@ the system pipelines page (`pipelines/system-pipelines`), and the system GenAI m
 :::
 
 :::warning[`vectorBackfill` launches one execution per file and bills Amazon Bedrock for each]
-The step returns when the reindexer has **enqueued** the work; the executions run on afterwards, at most `app.vectorSearch.indexingConcurrency` at a time. Each one renders or extracts the file, calls the analysis model, and calls the embedding model. The step prints the reindexer's response (`reindexRunId`, `phase`, `deleted`, `enqueued`, `chunks`, `continued`, `invocations`, and `tableEmpty` once a clear has finished) and the reindex run id as the executions-list filter value: the run's executions carry an execution group id of the form `vec-<runId>-<chunk>` (chunks numbered from 0, one per 1,000 files).
+The step returns when the reindexer has **enqueued** the work; the executions run on afterwards, at most `app.vectorSearch.indexingConcurrency` at a time. Each one renders or extracts the file, calls the analysis model, and calls the embedding model. Because those executions are the cost, a real `vectorBackfill` run — with or without `--clear-vectors` — passes through the same account-id confirmation as the row-deleting step. The step prints the reindexer's response (`reindexRunId`, `phase`, `deleted`, `enqueued`, `chunks`, `continued`, `invocations`, and `tableEmpty` once a clear has finished) and the reindex run id as the executions-list filter value: the run's executions carry an execution group id of the form `vec-<runId>-<chunk>` (chunks numbered from 0, one per 1,000 files).
 
 ```bash
 vamscli execution list --group-id vec-<runId>-0 --auto-paginate
@@ -888,7 +888,7 @@ The vector index is created for one embedding model and dimension count (index n
 1. While vector search is still enabled, invoke the `vectorReindexer` Lambda directly with `{"operation": "clear"}` and wait for it to report the table empty. Clearing first avoids write rejections on old-model items during the swap.
 2. Set `app.vectorSearch.enabled: false` and deploy; wait until `aws dynamodb describe-table` shows no vector index on the table (CloudFormation returns while the index is still deleting, and a create during that window fails with `LimitExceededException`).
 3. Set the new `embeddingModelId`, set `enabled: true`, and deploy. The new index is created on the empty table.
-4. Run the `vectorBackfill` step **without** `--clear-vectors`. `POST /search/nlp` answers `503` until the index is `ACTIVE`.
+4. Run the `vectorBackfill` step with `--execute` and **without** `--clear-vectors`. `POST /search/nlp` answers `503` until the index is `ACTIVE`.
    :::
 
 :::warning[Executions of the retired workflows]

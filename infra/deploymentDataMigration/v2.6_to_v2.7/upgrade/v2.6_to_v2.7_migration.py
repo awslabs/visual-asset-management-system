@@ -34,21 +34,29 @@ Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack outp
 Parameter Store. Explicit ``*_table_name`` / ``vector_reindexer_function_name`` values remain
 supported as optional overrides.
 
-Usage:
-    # Dry run (recommended first step)
-    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --dry-run
+Safety: every run is a DRY RUN unless ``--execute`` is given and the config's ``dry_run`` is false (the
+shipped config sets it true). A real run that deletes trigger rows, deletes vectors, or launches
+Bedrock-billed executions is confirmed against the resolved AWS account id - typed at a prompt or
+passed as ``--confirm-account`` - and refused when the identity cannot be resolved or confirmed.
 
-    # Production migration, all steps
+Usage:
+    # Dry run (the default; nothing is deleted or launched)
     python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json
 
+    # Real run, all steps (asks for the account id)
+    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute
+
+    # Real run without a prompt: the resolved account must equal the id given
+    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --confirm-account <account-id>
+
     # One step
-    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps orphanedTriggers
+    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps orphanedTriggers
 
     # Rebuild the vector index from scratch (deletes every stored vector first)
-    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps vectorBackfill --clear-vectors
+    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps vectorBackfill --clear-vectors
 
     # Fire-and-forget backfill for very large deployments
-    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps vectorBackfill --async
+    python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps vectorBackfill --async
 
 Requirements:
     - Python 3.9+
@@ -124,14 +132,13 @@ def confirm_migration_target(
     region: Optional[str],
     base_param_prefix: Optional[str],
     dry_run: bool,
-    destructive: bool,
-    destructive_summary: str,
+    gated: bool,
+    gated_summary: str,
     confirm_account: Optional[str],
-    assume_yes: bool,
 ) -> bool:
-    """Echo the resolved target and, for a destructive run, require the operator to confirm it.
+    """Echo the resolved target and, for a gated run, require the operator to confirm the account.
 
-    Returns True to proceed, False to abort.
+    Returns True to proceed, False to refuse.
 
     The target comes entirely from the config file and CLI flags, and the shipped template leaves
     aws_profile and aws_region null, so boto3 falls back to whatever is in the environment. The SSM
@@ -139,10 +146,13 @@ def confirm_migration_target(
     so two deployments sharing a config name and stack name resolve the SAME parameter paths and the
     migration would read valid table names out of the wrong account without anything looking unusual.
 
-    Printing sts:GetCallerIdentity is the cheap half and always runs. The prompt is required only when
-    the run will DELETE something (``destructive_summary`` names what). --confirm-account lets an
-    automated run assert the expected account instead of answering a prompt; --yes skips the prompt
-    for an operator who has already checked.
+    Printing sts:GetCallerIdentity is the cheap half and always runs. A run is *gated* when it is not
+    a dry run and it deletes trigger rows, deletes vectors, or launches Bedrock-billed executions
+    (``gated_summary`` names what). A gated run proceeds only when the resolved account id is
+    confirmed: ``--confirm-account`` equals it, or the operator types it at an interactive prompt.
+    Nothing skips the check - when the identity cannot be resolved, or stdin is not a terminal and
+    --confirm-account is absent, the run is refused. ``--confirm-account`` is checked whenever it is
+    given, dry run or not, so a mismatch is caught on the first (dry) run.
     """
     session_kwargs = {}
     if profile:
@@ -156,15 +166,16 @@ def confirm_migration_target(
         account = identity.get('Account')
         caller_arn = identity.get('Arn')
     except Exception as e:
-        # Not fatal on its own: a principal may be denied sts:GetCallerIdentity yet hold every
-        # permission the migration needs. Reported so the operator knows the echo below is incomplete
-        # rather than reassuring.
+        # Not fatal for a dry run or a read-only run: a principal may be denied
+        # sts:GetCallerIdentity yet hold every permission those need. A gated run is refused below,
+        # because an account it cannot name is an account it cannot confirm.
         logger.warning(f"Could not resolve the caller identity (sts:GetCallerIdentity failed: {e}).")
         account, caller_arn = None, None
 
     resolved_region = session_kwargs.get('region_name') or getattr(
         boto3.Session(**session_kwargs), 'region_name', None
     )
+    confirmation_needed = gated and not dry_run
 
     logger.info("")
     logger.info("##### MIGRATION TARGET #####")
@@ -173,9 +184,8 @@ def confirm_migration_target(
     logger.info(f"  Caller:       {caller_arn or 'UNRESOLVED'}")
     logger.info(f"  Profile:      {profile or 'none (ambient credentials)'}")
     logger.info(f"  SSM prefix:   {base_param_prefix or 'not configured'}")
-    logger.info(f"  Dry run:      {dry_run}")
-    logger.info(f"  Deletes data: {destructive and not dry_run}"
-                f"{' (' + destructive_summary + ')' if destructive and not dry_run else ''}")
+    logger.info(f"  Dry run:      {dry_run}" + ("" if not dry_run else "   (pass --execute for a real run)"))
+    logger.info(f"  This run will: {gated_summary if confirmation_needed else 'delete nothing and bill nothing'}")
     logger.info("############################")
     logger.info("")
 
@@ -183,7 +193,7 @@ def confirm_migration_target(
         if account is None:
             logger.error(
                 "--confirm-account was given but the caller identity could not be resolved, so the "
-                "account cannot be checked. Grant sts:GetCallerIdentity or drop the flag."
+                "account cannot be checked. Grant sts:GetCallerIdentity to the principal and re-run."
             )
             return False
         if account != confirm_account:
@@ -195,31 +205,33 @@ def confirm_migration_target(
         logger.info(f"Account {account} matches --confirm-account.")
         return True
 
-    if dry_run or not destructive:
-        # Nothing is deleted, so an interactive gate would only train the operator to dismiss it.
+    if not confirmation_needed:
+        # Nothing is deleted or billed, so an interactive gate would only train the operator to
+        # dismiss it.
         return True
 
-    if assume_yes:
-        logger.info("Proceeding without a prompt (--yes).")
-        return True
+    if account is None:
+        logger.error(
+            f"Refusing to run: this run would {gated_summary}, and the caller identity could not be "
+            "resolved, so the target account cannot be confirmed. Grant sts:GetCallerIdentity to the "
+            "principal and re-run."
+        )
+        return False
 
     if not sys.stdin.isatty():
         logger.error(
-            f"This run deletes {destructive_summary} and stdin is not a terminal, so it cannot be "
-            "confirmed interactively. Re-run with --confirm-account <id> (preferred, it verifies the "
-            "target) or --yes."
+            f"Refusing to run: this run would {gated_summary} and stdin is not a terminal, so the "
+            "account cannot be confirmed interactively. Re-run with --confirm-account <account-id> "
+            "(the resolved account must equal it)."
         )
         return False
 
     answer = input(
-        f"This will DELETE {destructive_summary} in account {account or 'UNKNOWN'} "
+        f"This run will {gated_summary} in account {account} "
         f"({resolved_region or 'UNKNOWN region'}). Type the account id to continue: "
     ).strip()
-    if account and answer != account:
-        logger.error("Aborted: the value entered does not match the resolved account id.")
-        return False
-    if not account and answer.lower() not in ('yes', 'y'):
-        logger.error("Aborted.")
+    if answer != account:
+        logger.error("Refusing to run: the value entered does not match the resolved account id.")
         return False
     return True
 
@@ -862,7 +874,7 @@ def run_system_pipeline_retirement_step(config: dict, args, base_param_prefix, p
     logger.info(f"Executions table: {cfg['workflow_executions_storage_table_name_v2']}")
     logger.info(f"Workflow table:   {cfg['workflow_storage_table_name_v2']}")
     logger.info(f"Pipeline table:   {cfg['pipeline_storage_table_name_v2']}")
-    logger.info(f"Limit: {limit}   (this step only reads; --dry-run changes nothing about it)")
+    logger.info(f"Limit: {limit}   (this step only reads; dry run or not, it changes nothing)")
     logger.info("=" * 80)
 
     try:
@@ -881,39 +893,62 @@ def run_system_pipeline_retirement_step(config: dict, args, base_param_prefix, p
 STEP_CHOICES = ('orphanedTriggers', 'vectorBackfill', 'systemPipelineRetirement', 'all')
 
 
-def _destructive_summary(deletes_triggers: bool, clears_vectors: bool) -> str:
-    """What a run deletes, for the confirmation prompt."""
+def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool) -> str:
+    """What a real run deletes or bills, phrased to follow "This run will"."""
     parts = []
     if deletes_triggers:
-        parts.append('orphaned workflow-trigger rows (orphanedTriggers)')
+        parts.append('delete orphaned workflow-trigger rows (orphanedTriggers)')
     if clears_vectors:
-        parts.append('every stored vector before re-embedding (vectorBackfill --clear-vectors)')
-    return ' and '.join(parts) if parts else 'nothing'
+        parts.append('delete every stored vector (vectorBackfill --clear-vectors)')
+    if backfills_vectors:
+        parts.append('launch one Amazon Bedrock-billed execution per file (vectorBackfill)')
+    if not parts:
+        return 'nothing'
+    if len(parts) == 1:
+        return parts[0]
+    return ', '.join(parts[:-1]) + ' and ' + parts[-1]
+
+
+def _account_id(value: str) -> str:
+    """argparse type for --confirm-account: exactly twelve digits."""
+    if len(value) != 12 or not value.isdigit():
+        raise argparse.ArgumentTypeError('expected a 12-digit AWS account id')
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description='VAMS v2.6 to v2.7 data migration (orphaned trigger cleanup, vector index '
-                    'backfill, system-pipeline retirement report).',
+                    'backfill, system-pipeline retirement report). Dry run by default.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Dry run, all steps
-  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --dry-run
-
-  # Production migration, all steps (prompts for the account id because orphanedTriggers deletes rows)
+  # Dry run, all steps (the default: nothing is deleted or launched)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json
 
+  # Real run, all steps (asks for the account id: orphanedTriggers deletes rows, vectorBackfill bills Bedrock)
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute
+
+  # Real run without a prompt (automation): the resolved account must equal the id given
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --confirm-account <account-id>
+
   # Delete orphaned trigger rows only
-  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps orphanedTriggers
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps orphanedTriggers
 
   # Rebuild the vector index from scratch (clears every stored vector first)
-  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps vectorBackfill --clear-vectors
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps vectorBackfill --clear-vectors
 
-  # Report in-flight retired executions and workflows that still reference a retired pipeline
+  # Report in-flight retired executions and workflows that still reference a retired pipeline (reads only)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps systemPipelineRetirement
 
 Notes:
+  - Every run is a DRY RUN unless --execute is given AND the config's dry_run is false. The shipped
+    config sets "dry_run": true; set it to false once the dry run's counts look right.
+  - A real run that deletes rows (orphanedTriggers), deletes vectors (--clear-vectors), or launches
+    Bedrock-billed executions (vectorBackfill, with or without --clear-vectors) is confirmed against
+    the resolved AWS account id: type it at the prompt, or pass --confirm-account <account-id>. No
+    flag skips the check; an unresolved identity or a non-interactive run without --confirm-account
+    is refused.
   - Run after the v2.7 CDK deploy: the deploy archives the retired built-ins (orphanedTriggers relies
     on it), creates the vector table and index, and publishes the vectorReindexer function name to SSM.
   - vectorBackfill finishes when the reindexer has ENQUEUED the work; the executions it launches run on
@@ -929,9 +964,10 @@ Notes:
                         help='Path to the migration JSON configuration file')
     parser.add_argument('--steps', choices=list(STEP_CHOICES), default='all',
                         help="Which release migration step(s) to run (default: all)")
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Report what would change without deleting or launching anything '
-                             '(also configurable in JSON)')
+    parser.add_argument('--execute', dest='dry_run', action='store_false',
+                        help='Run for real. Without it the migration is a dry run that reports what '
+                             'would change and deletes or launches nothing. The config\'s dry_run '
+                             'must also be false (the shipped config sets it true).')
     parser.add_argument('--limit', type=int,
                         help='Cap on rows examined / files enqueued (testing)')
     parser.add_argument('--clear-vectors', dest='clear_vectors', action='store_true',
@@ -946,15 +982,11 @@ Notes:
                         help='AWS region')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
                         help='Logging level (default: INFO)')
-    parser.add_argument('--confirm-account', dest='confirm_account',
-                        help='Expected AWS account id. The migration refuses to run if the resolved '
-                             'account differs, and no interactive confirmation is then required. '
-                             'Preferred over --yes for automated runs, because it verifies the target '
-                             'rather than only skipping the prompt.')
-    parser.add_argument('--yes', action='store_true',
-                        help='Skip the interactive confirmation before a step that deletes data '
-                             '(orphanedTriggers, vectorBackfill --clear-vectors). Does not verify the '
-                             'target account.')
+    parser.add_argument('--confirm-account', dest='confirm_account', type=_account_id,
+                        help='Expected 12-digit AWS account id. The migration refuses to run when the '
+                             'resolved account differs; when it matches, a real run needs no '
+                             'interactive confirmation (required for automated real runs, where stdin '
+                             'is not a terminal).')
     return parser
 
 
@@ -969,7 +1001,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_vector_backfill = args.steps in ('vectorBackfill', 'all')
     run_retirement_report = args.steps in ('systemPipelineRetirement', 'all')
 
+    # Dry run unless --execute was given (args.dry_run is False only then) AND the config does not
+    # pin dry_run: true. Either source can force a dry run; neither can force a real one alone.
     dry_run = args.dry_run or bool(config.get('dry_run', False))
+    if dry_run and not args.dry_run:
+        logger.warning(
+            "--execute was given but the config sets dry_run: true, so this remains a DRY RUN. Set "
+            f"dry_run to false in {args.config} to run for real."
+        )
     # CLI flag wins; otherwise fall back to config (default false)
     clear_vectors = args.clear_vectors or bool(config.get('clear_vectors', False))
     profile = args.profile or config.get('aws_profile')
@@ -984,16 +1023,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # prefix is /{configName}-{baseStackName}/resourceNames with no account or Region in it. Two
     # deployments that share a config name and stack name therefore resolve identical parameter
     # paths, and nothing else in this script would reveal which account it had reached.
+    #
+    # The gate covers every step that deletes or bills: orphanedTriggers deletes rows, and a real
+    # vectorBackfill launches one Bedrock-billed execution per file whether or not it clears the
+    # stored vectors first. systemPipelineRetirement only reads.
     clears_vectors = run_vector_backfill and clear_vectors
     if not confirm_migration_target(
         profile=profile,
         region=region,
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
-        destructive=run_orphaned_triggers or clears_vectors,
-        destructive_summary=_destructive_summary(run_orphaned_triggers, clears_vectors),
+        gated=run_orphaned_triggers or run_vector_backfill,
+        gated_summary=_gated_summary(run_orphaned_triggers, run_vector_backfill, clears_vectors),
         confirm_account=args.confirm_account,
-        assume_yes=args.yes,
     ):
         return 1
 
