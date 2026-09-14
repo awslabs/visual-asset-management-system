@@ -55,13 +55,13 @@ root/
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
 │   ├── genAi/
-│   │   ├── nvidia/
-│   │   │   ├── cosmos/
-│   │   │   │   ├── 3/         # NVIDIA Cosmos 3 (omni generation)
-│   │   │   │   ├── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
-│   │   │   │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
-│   │   │   │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
-│   │   │   └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
+│   │   └── nvidia/
+│   │       ├── cosmos/
+│   │       │   ├── 3/         # NVIDIA Cosmos 3 (omni generation)
+│   │       │   ├── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │       │   ├── reason/    # NVIDIA Cosmos Reason (video captioning)
+│   │       │   └── transfer/  # NVIDIA Cosmos Transfer (control-signal video restyle)
+│   │       └── gr00t/         # NVIDIA GR00T N1.5 fine-tuning
 │   ├── system/
 │   │   └── genAiMetadata/     # SYSTEM - GenAI metadata pipeline (lambda/, containers/{blender,media}, vamsSchema/)
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/

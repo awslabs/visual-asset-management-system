@@ -237,7 +237,8 @@ class TestKeyPathEncoding:
     def test_the_digest_form_slices_the_encoded_path_and_digests_the_plain_one(self):
         """A path whose plain form fits the budget but whose encoded form does not is shortened: the
         prefix is a slice of the ENCODED bytes, so it carries no separator, and the digest is of the
-        plain path (spec §3.4). The one ``#`` of a shortened key path sits in front of the digest."""
+        plain path, so two paths that encode to the same prefix still differ in their digest. The one
+        ``#`` of a shortened key path sits in front of the digest."""
         path = "/" + "#" * 400 + "/model.glb"  # 411 plain bytes, 1211 encoded
         assert len(path.encode("utf-8")) <= FILE_PATH_KEY_BUDGET
         key_path = vector_file_key_path(path)

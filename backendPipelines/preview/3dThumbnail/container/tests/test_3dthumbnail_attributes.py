@@ -4,7 +4,8 @@
 """The sys_* attribute extractors: each returns {sys_key: dict} of plain JSON values, so the metadata
 step can JSON-stringify every key into a string-only file attribute and promote the contract keys to
 typed ext_* metadata. Library-backed extractors are exercised against fakes of pxr / ezdxf / ifcopenshell
-/ laspy installed per test; the promotion source contract (registry 3.6) is pinned as a literal here."""
+/ laspy installed per test; the promotion source contract — the exact ``sys_*`` key names the SYSTEM GenAI
+metadata pipeline's ``metadataCatalog.py`` promotes to typed ``ext_*`` metadata — is pinned as a literal here."""
 
 import io
 import json
@@ -19,7 +20,10 @@ np = pytest.importorskip("numpy", reason="geometry is numpy arithmetic")
 
 from preview_pipeline.analysis import attributes as attrs  # noqa: E402
 
-# Registry 3.6 "Promotion source contract", copied verbatim: the keys WP06d's metadataCatalog.py reads.
+# The promotion source contract, written out as a literal rather than imported: the exact sys_* group and
+# key names that backendPipelines/system/genAiMetadata/lambda/metadataCatalog.py reads when it promotes
+# attributes to typed ext_* metadata. A literal is what lets a rename here fail loudly instead of both
+# sides drifting together.
 CONTRACT = {
     "sys_geometry": {"boundsMin", "boundsMax", "dimensions", "extentMax", "volume", "surfaceArea", "units"},
     "sys_statistics": {"meshCount", "vertices", "faces", "triangles", "watertight"},
@@ -603,12 +607,12 @@ class TestMergeGroups:
 
 @pytest.mark.unit
 class TestPromotionSourceContract:
-    """Registry 3.6 "Promotion source contract": WP06d's metadataCatalog.py reads these exact key names, so a
-    renamed key would otherwise surface only as a silently absent ext_* field. CONTRACT above is the
-    registry copied verbatim; the module constant and every extractor are held to it (the dxf, ifc, splat
+    """The promotion source contract: the SYSTEM GenAI metadata pipeline's metadataCatalog.py reads these
+    exact key names, so a renamed key would otherwise surface only as a silently absent ext_* field. CONTRACT
+    above is the literal copy; the module constant and every extractor are held to it (the dxf, ifc, splat
     and usd extractors through assert_contract_shape in their own classes)."""
 
-    def test_the_module_constant_is_the_registry_contract(self):
+    def test_the_module_constant_is_the_promotion_source_contract(self):
         assert {group: set(keys) for group, keys in attrs.PROMOTION_SOURCE_KEYS.items()} == CONTRACT
         assert set(attrs.UNIT_TOKENS) == UNIT_TOKENS
 

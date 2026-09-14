@@ -5,10 +5,10 @@
 
 It reads two s3:// locations from the state, downloads the file, analyses it, uploads the still frames
 beside the analysis manifest, merges its results into the manifest constructPipeline pre-wrote (so the
-sys_file attributes survive), and returns the whole state merged with the six branch keys of registry
-3.6. It never reports a task token — PipelineEndTask does — and every fault propagates so the
-RenderDegradePass catch fires. Importing it has no Lambda-only side effect: WP06e's Fargate job entry
-(preview_pipeline/analysis/batch_job.py) imports it too."""
+sys_file attributes survive), and returns the whole state merged with the six branch keys every render
+branch of the SYSTEM GenAI metadata state machine emits. It never reports a task token — PipelineEndTask
+does — and every fault propagates so the RenderDegradePass catch fires. Importing it has no Lambda-only
+side effect: the Fargate renderer's job entry (preview_pipeline/analysis/batch_job.py) imports it too."""
 
 import dataclasses
 import importlib.util
@@ -39,7 +39,7 @@ PREWRITTEN = {
     "attributes": {"sys_file": {"name": "pump.stp", "ext": ".stp", "sizeBytes": 13}},
     "renderImages": [], "textExcerpt": None, "facts": {}, "warnings": ["pre-existing"], "renderSkipped": None,
 }
-# The rendered configBody of system-genai-metadata-default (WP06d), passed inline: manifest_io reads a
+# The rendered configBody of the system-genai-metadata-default template, passed inline: manifest_io reads a
 # non-s3:// location as inline JSON, so no S3 double is needed for the configuration.
 CONFIG = json.dumps({"seedWithExistingMetadata": True, "includeSiblingFiles": True, "renderViews": 8,
                      "maxTextChars": 12000, "writeAssetKeywords": False, "embeddingIncludeTextExcerpt": True,
@@ -148,7 +148,7 @@ class TestParseRequest:
         assert request.input_configuration_s3_location == "s3://abkt/E1/pipeline1/config.json"
 
     def test_the_state_carries_no_render_knobs(self, handler):
-        """renderViews comes from the template configuration (WP06d's constructPipeline sets no knob on the
+        """renderViews comes from the template configuration (constructPipeline sets no render knob on the
         state) and the size gate is constructPipeline's, so the request has no field to hold them."""
         assert {field.name for field in dataclasses.fields(handler.Render3dRequest)} == {
             "analysis_manifest_s3_location", "input_s3_asset_file_path", "input_configuration_s3_location",
@@ -272,8 +272,8 @@ class TestLambdaHandler:
             "renderSkipped": None}
 
     def test_the_response_is_the_whole_state_merged_with_the_branch_keys(self, handler, tmp_path):
-        """Registry 3.6 Branch-task contract: Render3dTask is wired with outputPath "$.Payload" and no
-        resultPath, so the return must carry every input key unchanged plus the six branch keys."""
+        """The branch-task contract with the state machine: Render3dTask is wired with outputPath "$.Payload"
+        and no resultPath, so the return must carry every input key unchanged plus the six branch keys."""
         state = _body(assetId="a1", databaseId="db", relativePath="/parts/pump.stp", versionId="v1",
                       fileExt=".stp", externalSfnTaskToken="tok")
         response, _a, _g, _w = _invoke(handler, tmp_path, _fake(), _result(frames=2, warnings=["w1"]), state)
@@ -378,7 +378,7 @@ print(json.dumps({
 
 @pytest.mark.unit
 class TestImportSideEffects:
-    """Registry 3.6: WP06e's preview_pipeline/analysis/batch_job.py imports lambda_handler.lambda_handler
+    """The Fargate renderer's job entry (preview_pipeline/analysis/batch_job.py) imports lambda_handler.lambda_handler
     inside the Fargate image, where LAMBDA_TASK_ROOT is unset and no /tmp runtime directory exists. Xvfb is
     started by display.ensure_display at render time and the work directories are made per invocation, so
     importing the module must start no process, create no directory and write no environment variable."""

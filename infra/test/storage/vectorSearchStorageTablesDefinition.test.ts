@@ -45,7 +45,11 @@ import { newTestApp } from "../support/testApp";
 const INDEX_NAME = "vec-amazon-titan-embed-text-v2-0-1024";
 const EMBEDDING_DIMENSIONS = 1024;
 
-/** Spec §3.1 SearchSchema: seven INLINE_FILTER attributes, all strings, all written on every item. */
+/**
+ * The vector index's SearchSchema: seven INLINE_FILTER attributes, all strings, all written on every item
+ * (a literal copy of storageBuilder-nestedStack.ts's VECTOR_INDEX_FILTER_ATTRIBUTES, so a drift on either
+ * side fails here rather than surfacing as a filter the index silently cannot apply).
+ */
 const FILTER_ATTRIBUTES = [
     "databaseId",
     "isLatest",
@@ -56,7 +60,10 @@ const FILTER_ATTRIBUTES = [
     "segmentKind",
 ];
 
-/** Spec §3.1 INCLUDE projection, in the order the spec lists it. */
+/**
+ * The INCLUDE projection the vector index carries, in the order the table definition lists it — every
+ * attribute the search Lambda reads from a hit without a follow-up GetItem.
+ */
 const PROJECTED_ATTRIBUTES = [
     "databaseId",
     "assetId",

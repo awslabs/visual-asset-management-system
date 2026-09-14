@@ -162,7 +162,7 @@ describe("WorkflowSystemConfigFields inside a disabled fieldset", () => {
             </fieldset>
         );
         const controls = Array.from(document.querySelectorAll(NATIVE));
-        // The concurrency select is among them, so the WP04 option is locked with the rest.
+        // The concurrency select is among them, so the perInputFileVersion option is locked with the rest.
         expect(controls).toContain(document.getElementById("concurrencyRestriction"));
         for (const control of controls) {
             expect(control).toBeDisabled();

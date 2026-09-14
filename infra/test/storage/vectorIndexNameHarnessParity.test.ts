@@ -17,11 +17,11 @@
  *
  * The harness fill has to run AFTER the arm's mutator. The restricted templates ship with vector
  * search off, so the only way a govcloud or eusovereign synth ever carries the index is a mutator
- * that turns it on (the WP07/WP08 hybrid arms do exactly that), and a fill that ran before the
- * mutator would name the index from the shipped block — or, with no fill at all, hand the synth
- * `IndexName: undefined`, which `toBe(vectorIndexNameFor(...))` alone cannot tell from a correct
- * name when both sides are undefined. `buildConfig()` is exported so the fill is asserted here
- * without a synth.
+ * that turns it on (the partition tests' vector-search-enabled hybrid arms do exactly that), and a
+ * fill that ran before the mutator would name the index from the shipped block — or, with no fill at
+ * all, hand the synth `IndexName: undefined`, which `toBe(vectorIndexNameFor(...))` alone cannot tell
+ * from a correct name when both sides are undefined. `buildConfig()` is exported so the fill is
+ * asserted here without a synth.
  */
 
 import * as fs from "fs";

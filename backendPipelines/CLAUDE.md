@@ -157,6 +157,21 @@ write, including the latest/archived lifecycle of the item.
     bundle and tests are the worked example of the document, the event, and the failure path
     (`execution.status.json` above). The user-facing statement of this contract is
     `documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`.
+-   **Environment variables** (pipeline handlers read `os.environ` directly; none of these resolves
+    through SSM). `EMBEDDING_MODEL_ID` and `EMBEDDING_DIMENSIONS` (`app.vectorSearch.embeddingModelId` /
+    `embeddingDimensions`, the same values the search stack's `vectorIndexEnvironment()` gives the
+    indexer) are set by `systemGenAiMetadataFunctions.ts` on `generateEmbedding` and `segmentAnalyze` and
+    read at import by `containers/media/segment_handler.py` — the model-discipline rule above is what
+    makes them mandatory on every producer. `BEDROCK_GUARDRAIL_IDENTIFIER` and `BEDROCK_GUARDRAIL_VERSION`
+    (`app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.{guardrailIdentifier,guardrailVersion}`, set
+    both or neither — `config.ts` refuses one without the other) are set on `generateMetadata` and
+    `segmentAnalyze` and read through `bedrockGuardrail.py` (byte-identical copy in the media image):
+    when unset, the process logs `GUARDRAIL_UNCONFIGURED_WARNING` once at cold start and every Converse
+    call runs without prompt-attack filters. `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` are **not**
+    environment variables: they are `{{tag}}` keys of the default template
+    (`vamsSchema/templates/system-genai-metadata-default.json`) that `constructPipeline.py` resolves into
+    the state's `videoSegmentSeconds` (0 = whole-file analysis only) / `contentChunking` (default `true`),
+    which the media container reads from its payload with the same defaults.
 
 ## Preserving Relative Paths for Asset-Adjacent Outputs
 
@@ -427,7 +442,7 @@ partition. Author it with the block for your execution type present but empty:
    workflow's triggers** — how a preview or metadata built-in runs on a conversion pipeline's result. A
    workflow never fires on output it wrote itself whatever the value, so it cannot loop on its own
    files; a chained file must still match the trigger's `inputFileFilters`. The Potree preview, 3D
-   preview thumbnail, and GenAI 3D metadata labeling bundles enable it.
+   preview thumbnail, and SYSTEM GenAI metadata bundles enable it.
 7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
    an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
    one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
@@ -484,6 +499,27 @@ partition. Author it with the block for your execution type present but empty:
     per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
     concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
     80-character Step Functions limit and free of `:` and `/`.
+12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned — the
+    importer is the ONLY writer of the flag.** The pipeline and workflow request models ignore the key,
+    so an API caller who supplies it creates an ordinary record. The handlers
+    (`handlers/pipelines/pipelineService.py`, `pipelineTemplateService.py`,
+    `handlers/workflows/workflowService.py`, `workflowTriggerService.py`) refuse every mutation of a
+    system record with a `400` carrying one of the messages in
+    `backend/backend/common/workflows/systemRecords.py` — the only exceptions are the `enabled` switch
+    on the pipeline, the workflow and its triggers, and a template's `configBody` / `tagSchema` /
+    `webFormJson`. Archive, restore, template add/delete and trigger add/delete are refused outright.
+    The importer's own cross-call is exempt because it identifies itself with the `vamsSchemaImport`
+    source marker AND the `SYSTEM_USER` identity on its `lambdaCrossCall` envelope (an API Gateway
+    request cannot carry that envelope). `enabled` is therefore a **pause switch**, not a setting:
+    each deployment that registers the bundle again writes the pipeline and workflow back as enabled
+    and unarchived and sets the trigger from `autoRegisterAutoTriggerOnFileUpload`. The durable way to
+    stop a system pipeline is the deployment configuration (`autoRegisterWithVAMS: false` archives it,
+    `autoRegisterAutoTriggerOnFileUpload: false` keeps its trigger off). Pair the flag with a
+    `SYSTEM - <Area>` category — the shipped bundles are `system/genAiMetadata` (`SYSTEM - GenAI`) and
+    `preview/3dThumbnail` (`SYSTEM - Preview`) — and list the pipeline in
+    `documentation/docusaurus-site/docs/pipelines/system-pipelines.md`. Tests:
+    `backend/tests/common/workflows/test_systemRecords.py` and the `test_*_system_*` cases in the
+    handler test modules.
 
 Verify registration after a deploy rather than assuming it:
 

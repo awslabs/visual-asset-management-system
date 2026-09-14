@@ -874,8 +874,9 @@ self-output, so a workflow with chaining enabled can fire on a file it wrote its
 group of them accepts one another's output in a cycle.
 :::
 
-The built-in Potree point-cloud preview, 3D preview thumbnail, and GenAI 3D metadata labeling workflows
-ship with chaining enabled, so a converted mesh or point cloud still receives a preview and metadata.
+The built-in Potree point-cloud preview, 3D preview thumbnail, and
+[SYSTEM GenAI metadata](../pipelines/system-genai-metadata.md) workflows ship with chaining enabled, so a
+converted mesh or point cloud still receives a preview and metadata.
 
 ### Output path prefix
 

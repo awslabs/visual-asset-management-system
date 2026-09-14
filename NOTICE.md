@@ -220,7 +220,7 @@ This software includes third party software subject to the following copyrights:
 | pye57    | >=0.4.17 | MIT                 | E57 point cloud format support                    |
 | cadquery | >=2.4.0  | Apache-2.0/LGPL-2.1 | STEP/STP CAD file tessellation                    |
 | imageio  | >=2.36.0 | BSD-2-Clause        | GIF/image I/O                                     |
-| Pillow   | >=11.0.0 | HPND                | Image optimization and processing                 |
+| Pillow   | >=11.0.0 | MIT-CMU             | Image optimization and processing                 |
 | DracoPy  | >=1.4.0  | Apache-2.0          | Draco compressed mesh (.drc) support              |
 | open3d   | >=0.19.0 | MIT                 | PCD and FARO point cloud format support           |
 | usd-core | >=24.8   | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |

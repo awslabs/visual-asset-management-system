@@ -848,7 +848,7 @@ The search page is a tab strip of **search providers** under `src/searchPlugin/`
 | `asset-list`     | Asset List | 100      | always                                      |
 | `unified-search` | Search     | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
 
-`config/searchProviderConfig.test.ts` fails when this table and the catalog disagree.
+`config/searchProviderConfig.test.ts` fails when this table and the catalog disagree. The Search provider offers a `Keyword | Natural language` mode toggle when both engines are enabled, a reduced filter sidebar (database, file type, archived, **Search inside files**) when `NOOPENSEARCH` is present, and relevance as a percentage with a modality popover on natural-language hits. Pipeline, workflow, and trigger records with `isSystem: true` show a **System** badge and open read-only except for their `enabled` switches and template `configBody`/`tagSchema`.
 
 ---
 

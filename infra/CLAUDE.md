@@ -198,7 +198,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 
 ### Feature Flags (common/vamsAppFeatures.ts)
 
-`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `PHYSNA_ADDON`, `DEADLINECLOUD_PIPELINES`. Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`.
+`VAMS_APP_FEATURES` enum: `GOVCLOUD`, `ALLOWUNSAFEEVAL`, `LOCATIONSERVICES`, `ALBDEPLOY`, `CLOUDFRONTDEPLOY`, `NOOPENSEARCH`, `AUTHPROVIDER_COGNITO`, `AUTHPROVIDER_COGNITO_SAML`, `AUTHPROVIDER_COGNITO_OIDC`, `AUTHPROVIDER_EXTERNALOAUTHIDP`, `PHYSNA_ADDON`, `DEADLINECLOUD_PIPELINES`, `VECTORSEARCH` (pushed when `app.vectorSearch.enabled`; independent of `NOOPENSEARCH` — a deployment may publish both, either, or neither). Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to DynamoDB by `CustomFeatureEnabledConfigNestedStack`.
 
 ---
 
@@ -509,7 +509,7 @@ A **private** OpenSearch Serverless collection (`allowPublic = false`) is reache
 -   **NEXTGEN** (`nextGen = true`) — hostname `\{collection-id\}.aoss.\{region\}.on.aws`. Reached through a **standard EC2 interface endpoint** (service `com.amazonaws.\{region\}.aoss-data`, `privateDnsEnabled: true`).
 -   **CLASSIC** (`nextGen = false`) — hostname `\{collection-id\}.\{region\}.aoss.amazonaws.com`. Reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`) with its own Route 53 private hosted zone.
 
-The chosen endpoint's id populates the network policy `SourceVPCEs`. Only OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required. Schema-deploy uses a 14-min timeout + readiness poll because a fresh collection/endpoint plus NEXTGEN scale-to-zero cold start (10–30s) can take minutes to become reachable. Backend Lambdas sign SigV4 with service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Only OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, schema-deploy custom resource) and — when `app.vectorSearch.enabled` — the four vector Lambdas (`vectorIndexer`, `vectorReindexer`, `systemWorkflowLauncher`, `vectorSearchService`, built by `lib/lambdaBuilder/vectorSearchFunctions.ts`) run in the VPC — `useForAllLambdas` is not required. The vector Lambdas take the same placement decision as the search Lambdas through `lib/helper/searchPlacement.ts::searchLambdasInVpc` (provisioned OpenSearch, a private Serverless collection, or `useForAllLambdas`), so a private collection also puts them in the VPC and the Amazon Bedrock Runtime interface endpoint is created alongside. Schema-deploy uses a 14-min timeout + readiness poll because a fresh collection/endpoint plus NEXTGEN scale-to-zero cold start (10–30s) can take minutes to become reachable. Backend Lambdas sign SigV4 with service name `aoss` when `OPENSEARCH_TYPE=serverless`.
 
 **`addVpcEndpoints` gating (NEXTGEN only).** NEXTGEN's endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints`. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
 

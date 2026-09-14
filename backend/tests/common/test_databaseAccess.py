@@ -90,7 +90,9 @@ class TestModuleLevelWiring:
         assert module.CasbinEnforcer is _EnforcerSpy
 
     def test_the_patch_points_are_plain_module_attributes(self, loaded):
-        """The four names the NLP search handler's tests patch on this module (registry §3.3)."""
+        """The four names the NLP search handler's tests patch on this module must stay plain module
+        attributes: `unittest.mock.patch("common.dynamodb.databaseAccess.<name>")` resolves them by
+        attribute lookup, so wrapping one in a property or a lazy getter breaks every test that patches it."""
         module, _ = loaded
         assert {"dynamodb_client", "database_storage_table_name", "CasbinEnforcer", "logger"} <= set(vars(module))
 
